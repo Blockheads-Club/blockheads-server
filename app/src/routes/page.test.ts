@@ -2,11 +2,14 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/sv
 import { createRawSnippet } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mock = vi.hoisted(() => ({ api: {} as Record<string, any> }));
-vi.mock('$lib/api', () => ({ api: new Proxy({}, { get: (_t, k: string) => mock.api[k] }) }));
+const mock = vi.hoisted(() => ({ api: {} as Record<string, any>, win: {} as Record<string, any> }));
+vi.mock('$lib/api', () => ({
+  api: new Proxy({}, { get: (_t, k: string) => mock.api[k] }),
+  win: new Proxy({}, { get: (_t, k: string) => mock.win[k] })
+}));
 
 import { setLang } from '$lib/i18n.svelte';
-import { W1, makeApi, makePoll } from '$lib/mock-api';
+import { W1, makeApi, makePoll, makeWin } from '$lib/mock-api';
 import { store } from '$lib/store.svelte';
 import { theme } from '$lib/theme.svelte';
 import { viewport } from '$lib/viewport.svelte';
@@ -31,6 +34,7 @@ function mq(next: Partial<typeof flags>) {
 }
 
 beforeEach(() => {
+  mock.win = makeWin();
   mock.api = makeApi({
     listWorlds: vi.fn(async () => [{ id: W1, name: 'Sunny' }]),
     getSettings: vi.fn(async () => ({ language: 'en', run: { worldId: W1, port: 15151, maxPlayers: 0, password: '', saveDelay: 10 } }))
@@ -53,6 +57,99 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   store.stopPolling();
+});
+
+describe('desktop window frame', () => {
+  it('draws the title bar with the screen as context, the running server and working buttons', async () => {
+    mock.api.poll = vi.fn(async () => makePoll({ state: 'running', worldId: W1 }));
+    render(Page);
+    await screen.findByRole('heading', { name: 'Dashboard' });
+    expect(screen.getByRole('banner', { name: 'Window title bar' })).toHaveTextContent('Blockheads Server · Dashboard');
+    expect(document.documentElement).toHaveClass('desktop');
+    expect(document.title).toBe('Blockheads Server · Dashboard');
+    expect(await screen.findByText('Running · Sunny')).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('button', { name: 'Minimize window' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Close window' }));
+    expect(mock.win.minimize).toHaveBeenCalled();
+    expect(mock.win.close).toHaveBeenCalled();
+    await fireEvent.click(screen.getByRole('button', { name: 'Maximize window' }));
+    expect(mock.win.toggleMaximize).toHaveBeenCalled();
+    expect(document.querySelector('.frame')).toHaveClass('round');
+  });
+
+  it('shows a starting and a failed server in the title bar', async () => {
+    mock.api.poll = vi.fn(async () => makePoll({ state: 'starting' }));
+    mock.api.listWorlds = vi.fn(async () => []);
+    mock.api.getSettings = vi.fn(async () => ({ language: 'en', run: { worldId: '', port: 15151, maxPlayers: 0, password: '', saveDelay: 10 } }));
+    const first = render(Page);
+    await waitFor(() => expect(document.querySelector('.run.warn')).toHaveTextContent(/^Starting$/));
+    first.unmount();
+    store.state = 'stopped';
+    mock.api.poll = vi.fn(async () => makePoll({ state: 'failed' }));
+    render(Page);
+    await waitFor(() => expect(document.querySelector('.run.bad')).toHaveTextContent('Crashed'));
+  });
+
+  it('is square and tracks maximize and focus; window errors are ignored', async () => {
+    const resized: (() => void)[] = [];
+    let focus: (f: boolean) => void = () => {};
+    let max = true;
+    mock.win = makeWin({
+      isMaximized: vi.fn(async () => max),
+      onResized: vi.fn(async (cb: () => void) => { resized.push(cb); return () => {}; }),
+      onFocus: vi.fn(async (cb: (f: boolean) => void) => { focus = cb; return () => {}; })
+    });
+    const r = render(Page);
+    await screen.findByRole('heading', { name: 'Dashboard' });
+    await waitFor(() => expect(document.querySelector('.frame')).not.toHaveClass('round'));
+    expect(screen.getByRole('button', { name: 'Restore window' })).toBeInTheDocument();
+    max = false;
+    resized.forEach((cb) => cb());
+    await waitFor(() => expect(document.querySelector('.frame')).toHaveClass('round'));
+    focus(false);
+    await waitFor(() => expect(document.querySelector('.bar')).toHaveClass('inactive'));
+    r.unmount();
+    mock.win = makeWin({
+      isMaximized: vi.fn(async () => { throw 'x'; }),
+      onResized: vi.fn(async () => { throw 'x'; }),
+      onFocus: vi.fn(async () => { throw 'x'; }),
+      minimize: vi.fn(async () => { throw 'x'; }),
+      toggleMaximize: vi.fn(async () => { throw 'x'; }),
+      close: vi.fn(async () => { throw 'x'; })
+    });
+    render(Page);
+    await screen.findByRole('heading', { name: 'Dashboard' });
+    for (const n of ['Minimize window', 'Maximize window', 'Close window']) await fireEvent.click(screen.getByRole('button', { name: n }));
+  });
+
+  it('releases the window listeners even when it unmounts before they are registered', async () => {
+    const off = vi.fn();
+    mock.win = makeWin({ onResized: vi.fn(async () => off), onFocus: vi.fn(async () => off) });
+    store.info = { version: '1', dataDir: '/d', platform: 'linux', nativeControls: false };
+    render(Page).unmount();
+    await waitFor(() => expect(off).toHaveBeenCalledTimes(2));
+  });
+
+  it('adapts to Windows and macOS, and not at all on Android', async () => {
+    for (const [platform, controls] of [['windows', 3], ['macos', 0]] as const) {
+      mock.win = makeWin({ isMaximized: vi.fn(async () => platform === 'windows') });
+      store.info = null;
+      mock.api.appInfo = vi.fn(async () => ({ version: '9.9.9', dataDir: '/d', platform, nativeControls: platform === 'macos' }));
+      const r = render(Page);
+      await waitFor(() => expect(document.querySelector('.frame')).not.toBeNull());
+      expect(document.querySelectorAll('.bar button')).toHaveLength(controls);
+      // Windows is maximized here, macOS has native rounded corners: neither draws its own.
+      await waitFor(() => expect(document.querySelector('.frame')).not.toHaveClass('round'));
+      r.unmount();
+    }
+    store.info = null;
+    mock.api.appInfo = vi.fn(async () => ({ version: '9.9.9', dataDir: '/d', platform: 'android', nativeControls: false }));
+    render(Page);
+    await screen.findByRole('heading', { name: 'Dashboard' });
+    expect(document.querySelector('.bar')).toBeNull();
+    expect(document.querySelector('.frame')).toBeNull();
+    await waitFor(() => expect(document.documentElement).not.toHaveClass('desktop'));
+  });
 });
 
 describe('app shell', () => {
@@ -122,7 +219,7 @@ describe('app shell', () => {
 
   it('shows the in-app error screen on Android and retries from it', async () => {
     let fail = true;
-    mock.api.appInfo = vi.fn(async () => ({ version: '9.9.9', dataDir: '/d', platform: 'android' }));
+    mock.api.appInfo = vi.fn(async () => ({ version: '9.9.9', dataDir: '/d', platform: 'android', nativeControls: false }));
     mock.api.boot = vi.fn(async () => { if (fail) throw 'no space'; });
     render(Page);
     expect(await screen.findByRole('alert')).toHaveTextContent('Couldn’t open the data folder.');

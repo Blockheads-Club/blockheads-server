@@ -49,6 +49,7 @@
     height: 100vh;
     overflow: auto;
   }
+  :global(.desk) > .side { position: static; height: auto; overflow-y: auto; }
   .side.rail { width: 84px; padding: 12px 6px; align-items: stretch; }
   .brand { display: flex; align-items: center; gap: 10px; padding: 4px 8px 14px; }
   .rail .brand { justify-content: center; padding: 4px 0 12px; }

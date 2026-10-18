@@ -45,7 +45,7 @@ function reset(over: Record<string, unknown> = {}) {
   store.known = [];
   store.offline = false;
   store.now = now;
-  store.info = { version: '1.0.0', dataDir: '/data', platform: 'linux' };
+  store.info = { version: '1.0.0', dataDir: '/data', platform: 'linux', nativeControls: false };
   store.settings = { language: 'en', run: { worldId: W1, port: 15151, maxPlayers: 0, password: '', saveDelay: 10 } };
   store.lists = { admin: ['amy'], mod: [], white: ['zed'], black: [] };
 }
@@ -207,7 +207,7 @@ describe('Worlds', () => {
   });
 
   it('describes Android storage and hides desktop-only actions on phones', () => {
-    store.info = { version: '1', dataDir: '/d', platform: 'android' };
+    store.info = { version: '1', dataDir: '/d', platform: 'android', nativeControls: false };
     viewport.phone = true;
     render(Worlds);
     expect(screen.queryByRole('button', { name: 'Import world' })).toBeNull();
@@ -468,7 +468,7 @@ describe('Settings', () => {
   });
 
   it('hides desktop-only settings on Android and handles a missing info', () => {
-    store.info = { version: '1', dataDir: '/d', platform: 'android' };
+    store.info = { version: '1', dataDir: '/d', platform: 'android', nativeControls: false };
     render(Settings);
     expect(screen.queryAllByText('Start on boot')).toHaveLength(0);
     cleanup();

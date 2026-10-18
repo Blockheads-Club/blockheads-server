@@ -2,6 +2,13 @@ export const en = {
   'app.title': 'Blockheads Server',
   'app.server': 'Server',
 
+  'tb.label': 'Window title bar',
+  'tb.controls': 'Window controls',
+  'tb.minimize': 'Minimize window',
+  'tb.maximize': 'Maximize window',
+  'tb.restore': 'Restore window',
+  'tb.close': 'Close window',
+
   'nav.aria': 'Server',
   'nav.dashboard': 'Dashboard',
   'nav.worlds': 'Worlds',
@@ -313,6 +320,13 @@ export type Key = keyof typeof en;
 export const tr: Record<Key, string> = {
   'app.title': 'Blockheads Sunucu',
   'app.server': 'Sunucu',
+
+  'tb.label': 'Pencere başlık çubuğu',
+  'tb.controls': 'Pencere düğmeleri',
+  'tb.minimize': 'Pencereyi küçült',
+  'tb.maximize': 'Pencereyi büyüt',
+  'tb.restore': 'Pencereyi eski boyutuna getir',
+  'tb.close': 'Pencereyi kapat',
 
   'nav.aria': 'Sunucu',
   'nav.dashboard': 'Panel',

@@ -6,7 +6,17 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke }));
 const listen = vi.hoisted(() => vi.fn(async (_name: string, _cb: (e: { payload: unknown }) => void) => () => {}));
 vi.mock('@tauri-apps/api/event', () => ({ listen }));
 
-import { api } from './api';
+const w = vi.hoisted(() => {
+  const handlers = { onFocusChanged: (cb: (e: { payload: boolean }) => void) => (cb({ payload: true }), 'f') };
+  return {
+    minimize: vi.fn(async () => 'min'), toggleMaximize: vi.fn(async () => 'tog'), close: vi.fn(async () => 'cl'),
+    isMaximized: vi.fn(async () => true), isFullscreen: vi.fn(async () => false),
+    onResized: vi.fn(async (_cb: () => void) => () => {}), ...handlers
+  };
+});
+vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => w }));
+
+import { api, win } from './api';
 
 describe('api', () => {
   beforeEach(() => invoke.mockClear());
@@ -50,5 +60,20 @@ describe('api', () => {
     listen.mock.calls[0][1]({ payload: { boot: 'slow' } });
     listen.mock.calls[1][1]({ payload: null });
     expect(cb.mock.calls).toEqual([[{ boot: 'slow' }], []]);
+  });
+});
+
+describe('win', () => {
+  it('forwards to the current window', async () => {
+    expect(await win.minimize()).toBe('min');
+    expect(await win.toggleMaximize()).toBe('tog');
+    expect(await win.close()).toBe('cl');
+    expect(await win.isMaximized()).toBe(true);
+    expect(await win.isFullscreen()).toBe(false);
+    await win.onResized(() => {});
+    expect(w.onResized).toHaveBeenCalled();
+    const seen: boolean[] = [];
+    await win.onFocus((f) => seen.push(f));
+    expect(seen).toEqual([true]);
   });
 });

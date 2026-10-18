@@ -48,6 +48,8 @@ export interface AppInfo {
   version: string;
   dataDir: string;
   platform: string;
+  /** macOS draws the window buttons itself (overlay title bar). */
+  nativeControls: boolean;
 }
 /** What the hidden main window tells the splash window while it boots. */
 export interface SplashState {

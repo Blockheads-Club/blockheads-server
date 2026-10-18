@@ -84,7 +84,7 @@ describe('init and polling', () => {
 
   it('boots without app info and fetches it once the settings are in', async () => {
     let calls = 0;
-    const s = fresh({ appInfo: vi.fn(async () => { if (calls++ === 0) throw 'x'; return { version: '1.0.0', dataDir: '/d', platform: 'linux' }; }) });
+    const s = fresh({ appInfo: vi.fn(async () => { if (calls++ === 0) throw 'x'; return { version: '1.0.0', dataDir: '/d', platform: 'linux', nativeControls: false }; }) });
     await s.init();
     s.stopPolling();
     expect(s.info?.version).toBe('1.0.0');

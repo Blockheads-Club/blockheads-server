@@ -86,9 +86,9 @@ test('theme switching and Turkish', async ({ page }) => {
   await go(page, 'Settings');
   await page.getByRole('radio', { name: 'Dark' }).click();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
-  await expect(page.locator('body')).toHaveCSS('background-color', 'rgb(20, 17, 15)');
+  await expect(page.locator('.app')).toHaveCSS('background-color', 'rgb(20, 17, 15)');
   await page.getByRole('radio', { name: 'Light' }).click();
-  await expect(page.locator('body')).toHaveCSS('background-color', 'rgb(251, 248, 244)');
+  await expect(page.locator('.app')).toHaveCSS('background-color', 'rgb(251, 248, 244)');
   await page.reload();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
 
@@ -108,4 +108,31 @@ test('no horizontal overflow on any screen', async ({ page }) => {
     const over = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
     expect(over, name).toBe(false);
   }
+});
+
+test('desktop: custom title bar, fixed shell, only the content scrolls', async ({ page }) => {
+  test.skip(phone(page), 'the title bar is desktop only');
+  await mockTauri(page);
+  await page.goto('/');
+  const bar = page.getByRole('banner', { name: 'Window title bar' });
+  await expect(bar).toContainText('Blockheads Server · Dashboard');
+  await expect(bar.getByRole('button', { name: 'Close window' })).toBeVisible();
+  await go(page, 'Settings');
+  await expect(bar).toContainText('· Settings');
+  await page.setViewportSize({ width: 1000, height: 420 });
+  const scrolled = await page.evaluate(() => ({
+    page: document.documentElement.scrollHeight <= innerHeight,
+    content: (document.querySelector('.content') as HTMLElement).scrollHeight > (document.querySelector('.content') as HTMLElement).clientHeight
+  }));
+  expect(scrolled).toEqual({ page: true, content: true });
+  await expect(bar).toBeInViewport();
+  await expect(page.getByRole('navigation', { name: 'Server' })).toBeInViewport();
+});
+
+test('phone: no title bar', async ({ page }) => {
+  test.skip(!phone(page), 'phone only');
+  await mockTauri(page);
+  await page.goto('/');
+  await expect(page.getByRole('heading', { name: 'Server' })).toBeVisible();
+  await expect(page.locator('.bar')).toHaveCount(0);
 });

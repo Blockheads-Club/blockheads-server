@@ -27,7 +27,7 @@ export async function mockTauri(page: Page, opts: { worlds?: boolean; splash?: o
           case 'splash_get': return splash;
           case 'choose_data_folder': return true;
           case 'plugin:event|listen': return 0;
-          case 'app_info': return { version: '1.2.3', dataDir: '/data/TheBlockheads', platform: 'linux' };
+          case 'app_info': return { version: '1.2.3', dataDir: '/data/TheBlockheads', platform: innerWidth < 600 ? 'android' : 'linux', nativeControls: false };
           case 'get_settings': return s.settings;
           case 'set_settings': s.settings = a.settings; return;
           case 'list_worlds': return s.worlds;

@@ -14,7 +14,7 @@ export function makeApi(over: Partial<Record<string, unknown>> = {}) {
   };
   const worlds: World[] = [];
   return {
-    appInfo: vi.fn(async () => ({ version: '9.9.9', dataDir: '/data', platform: 'linux' })),
+    appInfo: vi.fn(async () => ({ version: '9.9.9', dataDir: '/data', platform: 'linux', nativeControls: false })),
     boot: vi.fn(async () => {}),
     splashSet: vi.fn(async () => {}),
     splashGet: vi.fn(async () => null as unknown),
@@ -36,6 +36,19 @@ export function makeApi(over: Partial<Record<string, unknown>> = {}) {
     networkInfo: vi.fn(async (port: number) => [{ ip: '192.168.1.5', endpoint: `192.168.1.5:${port}` }]),
     getSettings: vi.fn(async () => settings),
     setSettings: vi.fn(async () => {}),
+    ...over
+  };
+}
+
+export function makeWin(over: Partial<Record<string, unknown>> = {}) {
+  return {
+    minimize: vi.fn(async () => {}),
+    toggleMaximize: vi.fn(async () => {}),
+    close: vi.fn(async () => {}),
+    isMaximized: vi.fn(async () => false),
+    isFullscreen: vi.fn(async () => false),
+    onResized: vi.fn(async () => () => {}),
+    onFocus: vi.fn(async () => () => {}),
     ...over
   };
 }

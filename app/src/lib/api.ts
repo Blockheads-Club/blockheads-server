@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import type {
   AppInfo, ListKind, NetAddr, NewWorld, Poll, RunOptions, Settings, SplashState, World
 } from './types';
@@ -32,4 +33,15 @@ export const api = {
   networkInfo: (port: number) => invoke<NetAddr[]>('network_info', { port }),
   getSettings: () => invoke<Settings>('get_settings'),
   setSettings: (settings: Settings) => invoke<void>('set_settings', { settings })
+};
+
+/** The main window, for the custom title bar (desktop only). Async so a missing Tauri runtime rejects instead of throwing. */
+export const win = {
+  minimize: async () => getCurrentWindow().minimize(),
+  toggleMaximize: async () => getCurrentWindow().toggleMaximize(),
+  close: async () => getCurrentWindow().close(),
+  isMaximized: async () => getCurrentWindow().isMaximized(),
+  isFullscreen: async () => getCurrentWindow().isFullscreen(),
+  onResized: async (cb: () => void) => getCurrentWindow().onResized(cb),
+  onFocus: async (cb: (focused: boolean) => void) => getCurrentWindow().onFocusChanged((e) => cb(e.payload))
 };
