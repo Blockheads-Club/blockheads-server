@@ -1,0 +1,16 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- Base application theme. -->
+    <style name="Theme.blockheads_server_app" parent="Theme.Material3.DayNight.NoActionBar">
+        <!-- Behind the WebView until the first page is drawn: no light flash after the dark splash. -->
+        <item name="android:windowBackground">@color/splash_background</item>
+    </style>
+
+    <!-- System splash: Android 12+ draws it natively, older versions get the same look from the
+         androidx core-splashscreen compat (no branding image there). -->
+    <style name="Theme.App.Starting" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/splash_background</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/splash_icon</item>
+        <item name="windowSplashScreenIconBackgroundColor">@color/splash_icon_background</item>
+        <item name="postSplashScreenTheme">@style/Theme.blockheads_server_app</item>
+    </style>
+</resources>
