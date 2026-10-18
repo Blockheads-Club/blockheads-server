@@ -285,7 +285,7 @@ fn set_settings(core: State<'_, Arc<Core>>, settings: Settings) -> Res<()> {
 
 /// Smallest main window (logical pixels): the size it opens at, as minWidth/minHeight in tauri.conf.json.
 #[cfg(desktop)]
-const MIN_SIZE: (f64, f64) = (1000.0, 700.0);
+const MIN_SIZE: (f64, f64) = (1120.0, 760.0);
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
