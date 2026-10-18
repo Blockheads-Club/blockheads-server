@@ -11,7 +11,18 @@
   },
   "app": {
     "windows": [
-      { "label": "main", "title": "Blockheads Server", "width": 1000, "height": 700, "minWidth": 360, "minHeight": 480, "center": true, "visible": false }
+      {
+        "label": "main",
+        "title": "Blockheads Server",
+        "width": 1000,
+        "height": 700,
+        "minWidth": 1000,
+        "minHeight": 700,
+        "center": true,
+        "decorations": false,
+        "transparent": true,
+        "visible": false
+      }
     ],
     "security": { "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src ipc: http://ipc.localhost" }
   },

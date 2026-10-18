@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, State};
 #[cfg(desktop)]
-use tauri::{WebviewUrl, WebviewWindowBuilder};
+use tauri::{LogicalSize, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_hostservice::{HostServiceExt, ServiceInfo};
 
 type Res<T> = Result<T, String>;
@@ -58,6 +58,8 @@ struct AppInfo {
     version: &'static str,
     data_dir: String,
     platform: &'static str,
+    /// macOS draws the window buttons (overlay title bar).
+    native_controls: bool,
 }
 
 #[tauri::command]
@@ -66,6 +68,7 @@ fn app_info(core: State<'_, Arc<Core>>) -> AppInfo {
         version: env!("CARGO_PKG_VERSION"),
         data_dir: core.data_dir().to_string_lossy().into_owned(),
         platform: std::env::consts::OS,
+        native_controls: cfg!(target_os = "macos"),
     }
 }
 
@@ -138,6 +141,9 @@ async fn main_ready(app: AppHandle, splash: State<'_, Splash>) -> Res<()> {
     splash.revealed.store(true, Ordering::SeqCst);
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.show();
+        // Frameless windows on Wayland drop the config's size hints when GTK realizes them; set them again.
+        #[cfg(desktop)]
+        let _ = w.set_min_size(Some(LogicalSize::new(MIN_SIZE.0, MIN_SIZE.1)));
         let _ = w.set_focus();
     }
     if let Some(w) = app.get_webview_window("splash") {
@@ -277,6 +283,10 @@ fn set_settings(core: State<'_, Arc<Core>>, settings: Settings) -> Res<()> {
     core.set_settings(&settings)
 }
 
+/// Smallest main window (logical pixels): the size it opens at, as minWidth/minHeight in tauri.conf.json.
+#[cfg(desktop)]
+const MIN_SIZE: (f64, f64) = (1000.0, 700.0);
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default();
@@ -317,6 +327,16 @@ pub fn run() {
             let closing = window.label() == "splash" && matches!(event, tauri::WindowEvent::CloseRequested { .. });
             if closing && !window.state::<Splash>().revealed.load(Ordering::SeqCst) {
                 window.app_handle().exit(0);
+            }
+            // Some compositors ignore the min-size hint of a frameless window: grow it back.
+            #[cfg(desktop)]
+            if let (tauri::WindowEvent::Resized(size), "main") = (event, window.label()) {
+                let scale = window.scale_factor().unwrap_or(1.0);
+                let (w, h) = (f64::from(size.width) / scale, f64::from(size.height) / scale);
+                let maximized = window.is_maximized().unwrap_or(false) || window.is_fullscreen().unwrap_or(false);
+                if !maximized && size.width > 0 && (w < MIN_SIZE.0 || h < MIN_SIZE.1) {
+                    let _ = window.set_size(LogicalSize::new(w.max(MIN_SIZE.0), h.max(MIN_SIZE.1)));
+                }
             }
             // Desktop: closing the window saves and stops the server.
             if let tauri::WindowEvent::Destroyed = event {
