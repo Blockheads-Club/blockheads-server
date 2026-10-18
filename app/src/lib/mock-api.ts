@@ -1,0 +1,41 @@
+import { vi } from 'vitest';
+import type { Poll, Settings, World } from './types';
+
+export const W1 = 'a'.repeat(32);
+
+export function makePoll(over: Partial<Poll> = {}): Poll {
+  return { state: 'stopped', detail: null, worldId: null, port: null, lines: [], times: [], next: 0, players: [], startedAt: null, ...over };
+}
+
+export function makeApi(over: Partial<Record<string, unknown>> = {}) {
+  const settings: Settings = {
+    language: 'en',
+    run: { worldId: '', port: 15151, maxPlayers: 0, password: '', saveDelay: 10 }
+  };
+  const worlds: World[] = [];
+  return {
+    appInfo: vi.fn(async () => ({ version: '9.9.9', dataDir: '/data', platform: 'linux' })),
+    boot: vi.fn(async () => {}),
+    splashSet: vi.fn(async () => {}),
+    splashGet: vi.fn(async () => null as unknown),
+    splashRetry: vi.fn(async () => {}),
+    chooseDataFolder: vi.fn(async () => true),
+    appQuit: vi.fn(async () => {}),
+    mainReady: vi.fn(async () => {}),
+    onSplashState: vi.fn(async () => () => {}),
+    onSplashRetry: vi.fn(async () => () => {}),
+    listWorlds: vi.fn(async () => worlds),
+    createWorld: vi.fn(async (w: { name: string }) => ({ id: 'id1', name: w.name.toUpperCase() })),
+    deleteWorld: vi.fn(async () => {}),
+    startServer: vi.fn(async () => {}),
+    stopServer: vi.fn(async () => {}),
+    poll: vi.fn(async () => makePoll()),
+    sendCommand: vi.fn(async () => {}),
+    getList: vi.fn(async () => ['alice']),
+    setList: vi.fn(async () => {}),
+    networkInfo: vi.fn(async (port: number) => [{ ip: '192.168.1.5', endpoint: `192.168.1.5:${port}` }]),
+    getSettings: vi.fn(async () => settings),
+    setSettings: vi.fn(async () => {}),
+    ...over
+  };
+}
