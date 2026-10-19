@@ -35,10 +35,20 @@ fn splash_hold(var: Option<std::ffi::OsString>) -> Duration {
         .unwrap_or(SPLASH_MIN)
 }
 
+/// The splash page has drawn (its first `splash_get`): the minimum splash time counts from then, not from the
+/// app start, so the splash is seen for all of it.
+fn splash_shown(started: &Mutex<Instant>, shown: &AtomicBool) {
+    if !shown.swap(true, Ordering::SeqCst) {
+        *started.lock().unwrap_or_else(|e| e.into_inner()) = Instant::now();
+    }
+}
+
 /// The splash hand-over between the splash window and the hidden main window.
 struct Splash {
     state: Mutex<Option<SplashState>>,
-    started: Instant,
+    /// When the splash page first drew (app start until then), see [`splash_shown`].
+    started: Mutex<Instant>,
+    shown: AtomicBool,
     hold: Duration,
     /// The main window is on screen: closing the splash is no longer a request to quit.
     revealed: AtomicBool,
@@ -48,7 +58,8 @@ impl Default for Splash {
     fn default() -> Self {
         Splash {
             state: Mutex::default(),
-            started: Instant::now(),
+            started: Mutex::new(Instant::now()),
+            shown: AtomicBool::new(false),
             hold: splash_hold(std::env::var_os("BHS_SPLASH_HOLD_MS")),
             revealed: AtomicBool::new(false),
         }
@@ -90,6 +101,7 @@ fn splash_set(app: AppHandle, splash: State<'_, Splash>, state: SplashState) {
 
 #[tauri::command]
 fn splash_get(splash: State<'_, Splash>) -> Option<SplashState> {
+    splash_shown(&splash.started, &splash.shown);
     splash.state.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
@@ -137,7 +149,7 @@ fn app_quit(app: AppHandle) {
 /// The boot work is done: after the minimum splash time show the main window and close the splash.
 #[tauri::command]
 async fn main_ready(app: AppHandle, splash: State<'_, Splash>) -> Res<()> {
-    let wait = splash.hold.saturating_sub(splash.started.elapsed());
+    let wait = splash.hold.saturating_sub(splash.started.lock().unwrap_or_else(|e| e.into_inner()).elapsed());
     if !wait.is_zero() {
         tauri::async_runtime::spawn_blocking(move || std::thread::sleep(wait)).await.map_err(|e| e.to_string())?;
     }
@@ -377,6 +389,18 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn the_splash_time_counts_from_the_first_draw() {
+        let (started, shown) = (Mutex::new(Instant::now()), AtomicBool::new(false));
+        std::thread::sleep(Duration::from_millis(30));
+        splash_shown(&started, &shown);
+        let first = *started.lock().unwrap();
+        assert!(first.elapsed() < Duration::from_millis(30));
+        std::thread::sleep(Duration::from_millis(5));
+        splash_shown(&started, &shown);
+        assert_eq!(*started.lock().unwrap(), first, "later calls keep the first draw");
+    }
     use super::*;
 
     #[test]
