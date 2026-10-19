@@ -107,8 +107,8 @@
                 {#if isLoaded}{t('worlds.loadedNow', { n: store.players.length })}{:else if isSel}{t('worlds.willStart')}{:else}—{/if}
               </span>
               <span role="cell" class="acts">
-                {#if isLoaded}
-                  <Button size="sm" disabled>{t('worlds.loadedBtn')}</Button>
+                {#if isLoaded || isSel}
+                  <Button size="sm" variant="ok" icon="check" disabled>{t('worlds.loadedBtn')}</Button>
                 {:else}
                   <Button size="sm" icon="play" onclick={() => store.loadWorld(w.id)}>{t('worlds.load')}</Button>
                 {/if}

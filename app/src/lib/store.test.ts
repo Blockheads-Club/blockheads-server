@@ -37,7 +37,33 @@ describe('init and polling', () => {
     expect(s.info?.version).toBe('9.9.9');
     expect(s.lists.admin).toEqual(['alice']);
     expect(s.currentWorld?.name).toBe('Z');
+    expect(mock.api.setSettings).toHaveBeenCalled();
     setLang('en');
+  });
+
+  it('creates and loads a world when there is none', async () => {
+    const list: { id: string; name: string }[] = [];
+    const s = fresh({
+      listWorlds: vi.fn(async () => list),
+      createWorld: vi.fn(async (w: { name: string }) => { const x = { id: 'n1', name: w.name.toUpperCase() }; list.push(x); return x; })
+    });
+    await s.init();
+    s.stopPolling();
+    expect(mock.api.createWorld).toHaveBeenCalledWith({ name: 'My World', size: 'normal', expert: false });
+    expect(s.settings.run.worldId).toBe('n1');
+    expect(mock.api.setSettings).toHaveBeenCalled();
+    expect(toasts.items.map((x) => x.message)).toContain('Created and loaded the world “MY WORLD”');
+  });
+
+  it('leaves a valid selection as it is', async () => {
+    const s = fresh({
+      listWorlds: vi.fn(async () => [{ id: W1, name: 'A' }]),
+      getSettings: vi.fn(async () => ({ language: 'en', run: { worldId: W1, port: 1, maxPlayers: 0, password: '', saveDelay: 10 } }))
+    });
+    await s.init();
+    s.stopPolling();
+    expect(mock.api.createWorld).not.toHaveBeenCalled();
+    expect(mock.api.setSettings).not.toHaveBeenCalled();
   });
 
   it('keeps an empty selection without worlds and survives a failing init', async () => {
@@ -183,7 +209,9 @@ describe('worlds and settings', () => {
     const s = fresh();
     await s.deleteWorld('x');
     expect(mock.api.deleteWorld).toHaveBeenCalledWith('x');
-    expect(toasts.items).toHaveLength(1);
+    // the last world went, so a new one is created and loaded
+    expect(mock.api.createWorld).toHaveBeenCalled();
+    expect(toasts.items).toHaveLength(2);
     mock.api.deleteWorld = vi.fn(async () => { throw 'running'; });
     await s.deleteWorld('x');
     expect(s.error).toBe('Stop the server first.');

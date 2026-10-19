@@ -19,14 +19,17 @@ test('create a world, run the server, moderate, edit lists, change settings', as
   await page.goto('/');
 
   await go(page, 'Worlds');
-  await expect(page.getByRole('heading', { name: 'No worlds yet' })).toBeVisible();
+  // No world yet: one was created and loaded at start.
+  await expect(page.getByTestId('world')).toContainText('MY WORLD');
+  await expect(page.getByRole('button', { name: 'Loaded' })).toBeDisabled();
   await page.getByRole('button', { name: 'Create world' }).first().click();
   const dlg = page.getByRole('dialog', { name: 'Create a world' });
   await dlg.getByLabel('World name').fill('alpha');
   await dlg.getByRole('radio', { name: '4×', exact: true }).click();
   await dlg.getByRole('switch', { name: 'Expert mode' }).check({ force: true });
   await dlg.getByRole('button', { name: 'Create world' }).click();
-  await expect(page.getByTestId('world')).toContainText('ALPHA');
+  await expect(page.getByTestId('world').filter({ hasText: 'ALPHA' })).toContainText('Loaded');
+  await expect(page.getByTestId('world').filter({ hasText: 'MY WORLD' }).getByRole('button', { name: 'Load', exact: true })).toBeEnabled();
   await expect(page.getByText('World “alpha” created')).toBeVisible();
 
   await go(page, 'Dashboard');

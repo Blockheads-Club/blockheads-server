@@ -4,7 +4,7 @@
   import Icon from './Icon.svelte';
 
   interface Props {
-    variant?: 'default' | 'primary' | 'danger' | 'ghost';
+    variant?: 'default' | 'primary' | 'danger' | 'ghost' | 'ok';
     size?: 'sm' | 'md' | 'lg';
     icon?: IconName;
     /** Accessible name; required for icon-only buttons. */
@@ -109,6 +109,9 @@
   .btn.ghost:hover:not(:disabled) { background: var(--surface-2); color: var(--text); }
   .btn.ghost:active:not(:disabled) { box-shadow: none; }
   .btn:disabled { opacity: 0.5; cursor: not-allowed; box-shadow: none; }
+  /* A done state (e.g. the loaded world): green with a tick, readable while disabled. */
+  .btn.ok { --edge-color: var(--ok); background: var(--ok-soft); border-color: var(--ok); color: var(--ok); }
+  .btn.ok:disabled { opacity: 1; cursor: default; }
   .spin {
     width: 20px;
     height: 20px;

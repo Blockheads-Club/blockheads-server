@@ -90,7 +90,7 @@ export class AppStore {
       this.info ??= await api.appInfo();
       this.settings = { ...settings, run: { ...DEFAULT_RUN, ...settings.run } };
       setLang(settings.language);
-      await this.refreshWorlds();
+      await this.ensureWorld(await this.refreshWorlds());
       await this.loadLists();
       await this.pollOnce();
     } catch (e) {
@@ -158,12 +158,25 @@ export class AppStore {
 
   // ---- worlds ----
 
-  async refreshWorlds() {
+  /** Reload the world list; a selection that no longer exists falls back to the first world. True if it changed. */
+  async refreshWorlds(): Promise<boolean> {
     this.worlds = await api.listWorlds();
     const r = this.settings.run;
-    if (!this.worlds.some((w) => w.id === r.worldId)) {
-      r.worldId = this.worlds[0]?.id ?? '';
+    if (this.worlds.some((w) => w.id === r.worldId)) return false;
+    r.worldId = this.worlds[0]?.id ?? '';
+    return true;
+  }
+
+  /** There is always a loaded world: with none, one is created and loaded; a changed selection is saved. */
+  async ensureWorld(changed: boolean) {
+    if (!this.worlds.length) {
+      const w = await api.createWorld({ name: t('worlds.defaultName'), size: 'normal', expert: false });
+      await this.refreshWorlds();
+      this.settings.run.worldId = w.id;
+      toast(t('worlds.autoCreated', { name: w.name }));
+      changed = true;
     }
+    if (changed) await api.setSettings($state.snapshot(this.settings));
   }
 
   /** Run an action, surfacing a backend error code as a message. Returns true on success. */
@@ -204,8 +217,7 @@ export class AppStore {
   async deleteWorld(id: string) {
     const ok = await this.guard(async () => {
       await api.deleteWorld(id);
-      await this.refreshWorlds();
-      await this.saveSettings();
+      await this.ensureWorld(await this.refreshWorlds());
       await this.loadLists();
     });
     if (ok) toast(t('worlds.deleted'));

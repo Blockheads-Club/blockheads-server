@@ -133,7 +133,9 @@ describe('Worlds', () => {
 
   it('loads another world', async () => {
     render(Worlds);
-    await fireEvent.click(screen.getAllByRole('button', { name: 'Load' })[1]);
+    // the selected world is the loaded one: a disabled green "Loaded"; the other can be loaded
+    expect(screen.getByRole('button', { name: 'Loaded' })).toBeDisabled();
+    await fireEvent.click(screen.getByRole('button', { name: 'Load' }));
     await waitFor(() => expect(store.settings.run.worldId).toBe(W2));
   });
 
