@@ -198,3 +198,6 @@ html.phone, html.phone body { height: 100%; overflow: hidden; overscroll-behavio
    errors, fingerprints, legal text). `.selectable` opts any other element in. */
 body { -webkit-user-select: none; user-select: none; }
 input, textarea, [contenteditable], .selectable, pre, [role='log'], .term, .mono, .alert .title, .alert .text, .detail { -webkit-user-select: text; user-select: text; }
+/* Mobile app: no scroll bars, as in native apps (content still scrolls by touch). */
+html.phone * { scrollbar-width: none; }
+html.phone *::-webkit-scrollbar { display: none; }

@@ -28,7 +28,7 @@
 <div class={['wrap', phone && 'ph']} data-tauri-drag-region>
   <section class={['sp', 'bg', phone ? 'phone' : 'card', square && 'sq']} role="status" aria-live="polite" aria-label={t('splash.label')} data-tauri-drag-region>
     {#if phone}
-      <div class="ring ic" aria-hidden="true"><img src="/server-icon.svg" alt="" width="118" height="118" /></div>
+      <img class="ring ic" src="/server-icon-adaptive.svg" alt="" width="168" height="168" />
     {:else}
       <img class="ic" data-tauri-drag-region src="/server-icon.svg" alt="" width="120" height="120" />
     {/if}
@@ -70,8 +70,8 @@
   .card.sq { border-radius: 0; }
   .ic { animation: drop 0.6s cubic-bezier(0.2, 0.9, 0.3, 1.2) both; }
   .card .ic { border-radius: 28px; box-shadow: 0 8px 0 #000; }
-  .ring { width: 168px; height: 168px; border-radius: 50%; background: #56c990; display: grid; place-items: center; box-shadow: 0 6px 0 #1e7a4c; }
-  .ring img { border-radius: 26px; }
+  /* Phone (design: Android 12+ system splash): the adaptive icon in a circle, as the system splash before it. */
+  .ring { width: 168px; height: 168px; border-radius: 50%; box-shadow: 0 6px 0 #1e7a4c; }
   @keyframes drop {
     from { transform: translateY(-28px) rotate(-10deg); opacity: 0; }
     to { transform: translateY(0) rotate(-4deg); opacity: 1; }

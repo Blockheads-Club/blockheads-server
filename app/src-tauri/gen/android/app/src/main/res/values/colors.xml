@@ -7,7 +7,7 @@
     <color name="teal_700">#FF018786</color>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
-    <!-- System splash (design: Server-Splash): warm dark background, icon on a green circle. -->
+    <!-- System splash (design: Server-Splash): warm dark background, the adaptive icon (green rays, rack) in a circle. -->
     <color name="splash_background">#14110F</color>
-    <color name="splash_icon_background">#56C990</color>
+    <color name="splash_icon_background">#1E7A4C</color>
 </resources>
