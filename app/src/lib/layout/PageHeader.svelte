@@ -33,7 +33,7 @@
   .titles { flex: 1 1 auto; min-width: 0; }
   .titles p { font-size: 15px; }
   .actions { display: flex; gap: 10px; flex-wrap: wrap; }
-  .phone { padding: calc(10px + env(safe-area-inset-top)) 16px 10px; border-bottom: 0; flex-wrap: nowrap; gap: 10px; }
+  .phone { padding: 10px 16px; border-bottom: 0; flex-wrap: nowrap; gap: 10px; }
   .phone img { border-radius: 8px; }
   .phone h1 { font-size: 20px; font-weight: 800; }
   .phone .actions { flex-basis: 100%; }
