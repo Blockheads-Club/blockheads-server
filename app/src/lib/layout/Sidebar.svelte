@@ -13,7 +13,7 @@
 
 <nav class={["side", rail && "rail"]} aria-label={t('nav.aria')}>
   <div class="brand">
-    <img src="/logo.svg" alt="" width="40" height="40" />
+    <img src="/server-icon.svg" alt="" width="40" height="40" />
     {#if !rail}<span><small>Blockheads Club</small><b>{t('app.server')}</b></span>{/if}
   </div>
   {#each NAV as it (it.id)}

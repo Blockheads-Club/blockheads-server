@@ -127,7 +127,7 @@
   <Card class="grp" label={t('settings.about')}>
     <h2>{t('settings.about')}</h2>
     <div class="about">
-      <img src="/logo.svg" alt="" width="44" height="44" />
+      <img src="/server-icon-macos.svg" alt="" width="44" height="44" />
       <div class="ab">
         <p class="t">{t('app.title')}</p>
         <p class="hint">{t('settings.version')} <span class="mono">{store.info?.version ?? '-'}</span> · {t('settings.fan')}</p>

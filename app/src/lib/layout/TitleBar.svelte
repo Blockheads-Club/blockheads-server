@@ -41,7 +41,7 @@
     <div class="native" aria-hidden="true" data-tauri-drag-region></div>
   {/if}
   <div class="title" data-tauri-drag-region>
-    <img src="/logo.svg" alt="" width="18" height="18" data-tauri-drag-region />
+    <img src="/server-icon-small.svg" alt="" width="18" height="18" data-tauri-drag-region />
     <span class="name" data-tauri-drag-region>Blockheads <span class="tg">{t('app.server')}</span></span>
     <span class="ctx" data-tauri-drag-region>{`· ${ctx}`}</span>
   </div>

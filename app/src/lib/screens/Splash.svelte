@@ -28,9 +28,9 @@
 <div class={['wrap', phone && 'ph']} data-tauri-drag-region>
   <section class={['sp', 'bg', phone ? 'phone' : 'card', square && 'sq']} role="status" aria-live="polite" aria-label={t('splash.label')} data-tauri-drag-region>
     {#if phone}
-      <div class="ring ic" aria-hidden="true"><img src="/logo.svg" alt="" width="118" height="118" /></div>
+      <div class="ring ic" aria-hidden="true"><img src="/server-icon.svg" alt="" width="118" height="118" /></div>
     {:else}
-      <img class="ic" data-tauri-drag-region src="/logo.svg" alt="" width="120" height="120" />
+      <img class="ic" data-tauri-drag-region src="/server-icon.svg" alt="" width="120" height="120" />
     {/if}
     {#if !phone}<div class="wm" data-tauri-drag-region>Blockheads<span class="tg">Server</span></div>{/if}
 

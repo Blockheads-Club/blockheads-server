@@ -8,7 +8,7 @@
 </script>
 
 <header class="head" class:compact class:phone={viewport.phone}>
-  {#if viewport.phone}<img src="/logo.svg" alt="" width="34" height="34" />{/if}
+  {#if viewport.phone}<img src="/server-icon.svg" alt="" width="34" height="34" />{/if}
   <div class="titles">
     <h1>{title}</h1>
     {#if subtitle && !viewport.phone}<p class="muted">{subtitle}</p>{/if}
