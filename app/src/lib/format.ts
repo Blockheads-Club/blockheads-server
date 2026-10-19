@@ -14,3 +14,9 @@ export function ago(ms: number): string {
   const { h, m } = parts(ms);
   return h === 0 && m === 0 ? t('time.now') : t('time.ago', { d: duration(ms) });
 }
+
+/** `180 MB` / `1.4 GB` (binary units, as system monitors show memory). */
+export function bytes(n: number): string {
+  const mb = n / 2 ** 20;
+  return mb < 1024 ? `${Math.round(mb)} MB` : `${(mb / 1024).toFixed(1)} GB`;
+}

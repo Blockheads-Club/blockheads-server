@@ -89,7 +89,7 @@
 <div class="app" class:phone={viewport.phone} class:mobile class:desk={os !== null}>
   {#if !viewport.phone}<Sidebar rail={viewport.rail} />{/if}
   <div class="content" class:fill={store.screen === 'console'}>
-    <main id="main" tabindex="-1">
+    <main id="main" tabindex="-1" class:fill={store.screen === 'console'}>
       {#if store.error}
         <div class="err" data-testid="error">
           <Alert tone="bad" title={store.error}>
@@ -180,5 +180,8 @@
   .app.mobile { height: 100vh; height: 100dvh; min-height: 0; overflow: hidden; padding-top: env(safe-area-inset-top); box-sizing: border-box; }
   .mobile .content { min-height: 0; }
   .mobile main { overflow-y: auto; overscroll-behavior: contain; }
+  /* Console: the screen fits the shell, only the log itself scrolls. */
+  .mobile .content.fill { height: auto; }
+  .mobile main.fill { overflow: hidden; }
   .mobile :global(.side) { height: auto; position: static; }
 </style>

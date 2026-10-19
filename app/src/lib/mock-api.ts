@@ -30,6 +30,7 @@ export function makeApi(over: Partial<Record<string, unknown>> = {}) {
     startServer: vi.fn(async () => {}),
     stopServer: vi.fn(async () => {}),
     poll: vi.fn(async () => makePoll()),
+    stats: vi.fn(async () => ({ cpu: 12.5, cores: 8, mem: 180 * 2 ** 20, memTotal: 16 * 2 ** 30 })),
     sendCommand: vi.fn(async () => {}),
     getList: vi.fn(async () => ['alice']),
     setList: vi.fn(async () => {}),

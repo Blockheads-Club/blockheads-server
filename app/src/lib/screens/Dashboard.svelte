@@ -9,6 +9,7 @@
   import Badge from '../ui/Badge.svelte';
   import Card from '../ui/Card.svelte';
   import Icon from '../ui/Icon.svelte';
+  import PerfCard from '../ui/PerfCard.svelte';
   import QrCard from '../ui/QrCard.svelte';
   import StatusBanners from '../ui/StatusBanners.svelte';
   import StatusHero from '../ui/StatusHero.svelte';
@@ -106,6 +107,7 @@
       </div>
     </Card>
   </div>
+  <Card><PerfCard stats={store.stats} history={store.statsHistory} /></Card>
 </div>
 
 <style>

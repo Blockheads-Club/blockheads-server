@@ -1,9 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import type {
-  AppInfo, ListKind, NetAddr, NewWorld, Poll, RunOptions, Settings, SplashState, World
-} from './types';
+import type { AppInfo, ListKind, NetAddr, NewWorld, Poll, RunOptions, Settings, SplashState, Stats, World } from './types';
 
 /** Thin typed wrapper over the Tauri commands (see src-tauri/src/lib.rs). */
 export const api = {
@@ -26,6 +24,7 @@ export const api = {
   startServer: (options: RunOptions) => invoke<void>('start_server', { options }),
   stopServer: () => invoke<void>('stop_server'),
   poll: (since: number) => invoke<Poll>('poll', { since }),
+  stats: () => invoke<Stats>('stats'),
   sendCommand: (line: string) => invoke<void>('send_command', { line }),
   getList: (worldId: string, kind: ListKind) => invoke<string[]>('get_list', { worldId, kind }),
   setList: (worldId: string, kind: ListKind, names: string[]) =>

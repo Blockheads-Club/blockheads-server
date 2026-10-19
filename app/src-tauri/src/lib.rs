@@ -2,6 +2,7 @@
 
 pub mod core;
 pub mod notify;
+pub mod stats;
 
 use core::{Core, ListKind, NetAddr, NewWorld, Poll, RunOptions, Settings, World};
 use serde::{Deserialize, Serialize};
@@ -268,6 +269,12 @@ fn poll(core: State<'_, Arc<Core>>, since: u64) -> Poll {
     core.poll(since)
 }
 
+/// CPU and memory use of the app (the server runs in it), for the dashboard.
+#[tauri::command]
+fn stats(meter: State<'_, stats::Meter>) -> stats::Stats {
+    meter.sample()
+}
+
 #[tauri::command]
 fn send_command(core: State<'_, Arc<Core>>, line: String) -> Res<()> {
     core.send_command(&line)
@@ -310,6 +317,7 @@ pub fn run() {
     builder
         .plugin(tauri_plugin_hostservice::init())
         .manage(Splash::default())
+        .manage(stats::Meter::default())
         .setup(|app| {
             let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
             // The data folder is created and checked by `boot`, so a failure shows up on the splash.
@@ -376,6 +384,7 @@ pub fn run() {
             start_server,
             stop_server,
             poll,
+            stats,
             send_command,
             get_list,
             set_list,

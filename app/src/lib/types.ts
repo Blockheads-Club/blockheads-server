@@ -40,6 +40,15 @@ export interface Poll {
   /** Start of the current run (ms since the Unix epoch), null while stopped. */
   startedAt: number | null;
 }
+/** CPU and memory use of the app process (the server runs in it). */
+export interface Stats {
+  /** Share of the whole machine's CPU, 0-100. */
+  cpu: number;
+  cores: number;
+  /** Resident memory, bytes. */
+  mem: number;
+  memTotal: number;
+}
 export interface NetAddr {
   ip: string;
   endpoint: string;

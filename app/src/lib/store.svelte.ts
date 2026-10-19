@@ -1,9 +1,7 @@
 import { api } from './api';
 import { errText, setLang, t } from './i18n.svelte';
 import { toast } from './ui/toast.svelte';
-import type {
-  AppInfo, BootPhase, ListKind, LogEntry, NewWorld, Player, RunOptions, RunState, Screen, Settings, World
-} from './types';
+import type { AppInfo, BootPhase, ListKind, LogEntry, NewWorld, Player, RunOptions, RunState, Screen, Settings, Stats, World } from './types';
 import { classify, storage } from './util';
 
 /** After this long the splash says that opening the data folder is slow. */
@@ -19,6 +17,9 @@ export interface KnownPlayer {
   name: string;
   lastSeen: number;
 }
+
+/** Samples kept for the dashboard's performance graphs (one per second: a minute). */
+export const STATS_KEEP = 60;
 
 const emptyLists = (): Record<ListKind, string[]> => ({ admin: [], mod: [], white: [], black: [] });
 
@@ -47,6 +48,9 @@ export class AppStore {
   lists = $state<Record<ListKind, string[]>>(emptyLists());
   history = $state<string[]>([]);
   known = $state<KnownPlayer[]>([]);
+  /** Latest CPU / memory sample and the last STATS_KEEP of them (one per poll), oldest first. */
+  stats = $state<Stats | null>(null);
+  statsHistory = $state<Stats[]>([]);
   private next = 0;
   private seq = 0;
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -130,6 +134,17 @@ export class AppStore {
       this.next = p.next;
     } catch {
       this.offline = true;
+    }
+    await this.sampleStats();
+  }
+
+  async sampleStats() {
+    try {
+      const s = await api.stats();
+      this.stats = s;
+      this.statsHistory = [...this.statsHistory, s].slice(-STATS_KEEP);
+    } catch {
+      // no sample this time; the card keeps the last one
     }
   }
 

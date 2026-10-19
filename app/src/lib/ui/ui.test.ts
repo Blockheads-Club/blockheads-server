@@ -14,6 +14,7 @@ import EmptyState from './EmptyState.svelte';
 import Field from './Field.svelte';
 import Icon from './Icon.svelte';
 import Menu from './Menu.svelte';
+import PerfCard from './PerfCard.svelte';
 import QrCard from './QrCard.svelte';
 import SelectField from './SelectField.svelte';
 import SettingRow from './SettingRow.svelte';
@@ -434,5 +435,26 @@ describe('StatusHero and StatusBanners', () => {
     cleanup();
     render(StatusBanners, { state: 'running', worldName: 'W', detail: null, offline: false, ...h });
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+});
+
+describe('PerfCard', () => {
+  const at = (cpu: number, mem: number, memTotal = 16 * 2 ** 30) => ({ cpu, cores: 8, mem, memTotal });
+  it('waits for the first sample, then shows CPU and memory with their last minute', () => {
+    const r = render(PerfCard, { stats: null, history: [] });
+    expect(screen.getByText('Measuring…')).toBeInTheDocument();
+    r.unmount();
+    const history = [at(5, 100 * 2 ** 20), at(40, 300 * 2 ** 20), at(12.6, 2.5 * 2 ** 30)];
+    render(PerfCard, { stats: history[2], history });
+    expect(screen.getByTestId('perf-cpu')).toHaveTextContent('13%');
+    expect(screen.getByText('of 8 cores')).toBeInTheDocument();
+    expect(screen.getByTestId('perf-mem')).toHaveTextContent('2.5 GB');
+    expect(screen.getByText('of 16.0 GB')).toBeInTheDocument();
+    expect(document.querySelectorAll('.spark polyline')[0].getAttribute('points')).toMatch(/^0\.0,/);
+  });
+  it('copes with one sample and an unknown total', () => {
+    render(PerfCard, { stats: at(0, 50 * 2 ** 20, 0), history: [at(0, 50 * 2 ** 20, 0)] });
+    expect(screen.getByTestId('perf-mem')).toHaveTextContent('50 MB');
+    expect(document.querySelector('.spark polyline')?.getAttribute('points')).toBe('');
   });
 });

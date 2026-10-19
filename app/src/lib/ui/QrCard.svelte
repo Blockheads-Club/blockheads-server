@@ -2,7 +2,6 @@
   import { t } from '../i18n.svelte';
   import type { NetAddr } from '../types';
   import { copyText } from '../util';
-  import Badge from './Badge.svelte';
   import Button from './Button.svelte';
   import Icon from './Icon.svelte';
   import QrCode from './QrCode.svelte';
@@ -22,7 +21,6 @@
 <div class="qrcard" class:phone>
   <div class="top">
     <h2>{t('qr.title')}</h2>
-    <Badge tone="info" icon="wifi">{t('qr.sameWifi')}</Badge>
   </div>
   {#if !running}
     <div class="off">

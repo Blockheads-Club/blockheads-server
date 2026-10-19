@@ -27,8 +27,8 @@
       {#if !viewport.phone}
         <span class="hint live">{store.active ? t('console.live') : t('console.idle')} · {t('console.lines', { n: store.log.length })}</span>
       {/if}
-      <Button size="sm" icon="pause" pressed={paused} onclick={() => (paused = !paused)}>{t('console.pause')}</Button>
-      <Button size="sm" icon="download" onclick={save}>{t('console.save')}</Button>
+      <Button size="sm" icon="pause" pressed={paused} disabled={!store.active} onclick={() => (paused = !paused)}>{t('console.pause')}</Button>
+      <Button size="sm" icon="download" disabled={store.log.length === 0} onclick={save}>{t('console.save')}</Button>
     {/snippet}
   </PageHeader>
   <ConsoleView
