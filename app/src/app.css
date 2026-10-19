@@ -191,3 +191,8 @@ code, pre, .mono { font-family: var(--f-mono); }
 /* Desktop app: the native window is transparent and frameless; the page draws the rounded window (see +page.svelte).
    The shell is fixed to the window and only the content area scrolls. */
 html.desktop, html.desktop body { background: transparent; height: 100%; overflow: hidden; }
+
+/* Text selection: off for the app chrome, on where people copy things (fields, logs, paths, addresses, versions,
+   errors, fingerprints, legal text). `.selectable` opts any other element in. */
+body { -webkit-user-select: none; user-select: none; }
+input, textarea, [contenteditable], .selectable, pre, [role='log'], .term, .mono, .alert .title, .alert .text, .detail { -webkit-user-select: text; user-select: text; }

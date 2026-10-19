@@ -131,7 +131,7 @@
       <div class="ab">
         <p class="t">{t('app.title')}</p>
         <p class="hint">{t('settings.version')} <span class="mono">{store.info?.version ?? '-'}</span> · {t('settings.fan')}</p>
-        <p class="hint">{t('settings.license')}</p>
+        <p class="hint selectable">{t('settings.license')}</p>
       </div>
       <Button size="sm" icon="code" href="https://github.com/Blockheads-Club/blockheads-server">GitHub</Button>
     </div>
