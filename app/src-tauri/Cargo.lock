@@ -153,6 +153,7 @@ name = "blockheads-server-app"
 version = "0.1.0"
 dependencies = [
  "blockheads_server",
+ "libc",
  "local-ip-address",
  "serde",
  "serde_json",

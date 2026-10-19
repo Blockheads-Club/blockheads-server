@@ -40,3 +40,7 @@ panic = "unwind"
 panic = "unwind"
 opt-level = 3
 strip = true
+
+# Server thread CPU time from /proc (see src/stats.rs).
+[target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
+libc = "0.2"

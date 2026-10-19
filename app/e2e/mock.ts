@@ -47,7 +47,7 @@ export async function mockTauri(page: Page, opts: { worlds?: boolean; splash?: o
             s.players = [{ name: 'MIRA_K', ip: '192.168.1.9', id: '7c1e5b2a90f4', joinedAt: Date.now() - 112 * 60000 }];
             return;
           case 'stop_server': s.state = 'stopped'; s.players = []; s.startedAt = null; return;
-          case 'stats': return { cpu: s.state === 'running' ? 7 + (Date.now() / 1000) % 5 : 0.4, cores: 8, mem: 212 * 2 ** 20, memTotal: 16 * 2 ** 30 };
+          case 'stats': return { cpu: s.state === 'running' ? 7 + (Date.now() / 1000) % 5 : 0, mem: s.state === 'running' ? 212 * 2 ** 20 : 0, threadCpu: true };
           case 'poll': {
             const lines = s.lines.slice(a.since);
             const times = s.times.slice(a.since);

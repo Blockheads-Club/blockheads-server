@@ -40,14 +40,14 @@ export interface Poll {
   /** Start of the current run (ms since the Unix epoch), null while stopped. */
   startedAt: number | null;
 }
-/** CPU and memory use of the app process (the server runs in it). */
+/** What the game server uses. */
 export interface Stats {
-  /** Share of the whole machine's CPU, 0-100. */
+  /** Share of the machine's CPU, 0-100. */
   cpu: number;
-  cores: number;
-  /** Resident memory, bytes. */
+  /** Memory the server holds, bytes. */
   mem: number;
-  memTotal: number;
+  /** `cpu` is the server thread alone (Linux, Android); false: the whole app (Windows, macOS). */
+  threadCpu: boolean;
 }
 export interface NetAddr {
   ip: string;

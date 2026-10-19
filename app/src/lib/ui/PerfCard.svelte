@@ -3,8 +3,8 @@
   import { t } from '../i18n.svelte';
   import type { Stats } from '../types';
 
-  /** CPU and memory of the app (the server runs in it), with the last minute as small graphs. */
-  let { stats, history }: { stats: Stats | null; history: Stats[] } = $props();
+  /** CPU and memory the game server uses, with the last minute as small graphs. Nothing while it is off. */
+  let { stats, history, running }: { stats: Stats | null; history: Stats[]; running: boolean } = $props();
 
   /** Polyline points for `values` (0..max) in a 100 x 28 box, newest at the right. */
   function line(values: number[], max: number): string {
@@ -15,26 +15,27 @@
   const cpuLine = $derived(line(history.map((s) => s.cpu), 100));
   const memMax = $derived(Math.max(1, ...history.map((s) => s.mem)) * 1.2);
   const memLine = $derived(line(history.map((s) => s.mem), memMax));
-  const memPct = $derived(stats && stats.memTotal > 0 ? (stats.mem / stats.memTotal) * 100 : 0);
 </script>
 
 <div class="perf" data-testid="perf">
   <div class="ph"><h2>{t('perf.title')}</h2><p class="hint">{t('perf.hint')}</p></div>
-  {#if stats}
+  {#if !running}
+    <p class="muted">{t('perf.off')}</p>
+  {:else if stats}
     <div class="grid">
       <div class="m">
         <p class="k">{t('perf.cpu')}</p>
-        <p class="v"><span data-testid="perf-cpu">{Math.round(stats.cpu)}%</span> <span class="hint">{t('perf.cpuOf', { n: stats.cores })}</span></p>
+        <p class="v"><span data-testid="perf-cpu">{stats.cpu < 1 && stats.cpu > 0 ? '<1' : Math.round(stats.cpu)}%</span> <span class="hint">{t('perf.cpuOf')}</span></p>
         <div class="meter" aria-hidden="true"><span style:width={`${Math.min(100, stats.cpu)}%`}></span></div>
         <svg class="spark" viewBox="0 0 100 28" preserveAspectRatio="none" aria-hidden="true"><polyline points={cpuLine} /></svg>
       </div>
       <div class="m">
         <p class="k">{t('perf.ram')}</p>
-        <p class="v"><span data-testid="perf-mem">{bytes(stats.mem)}</span> <span class="hint">{t('perf.ramOf', { total: bytes(stats.memTotal) })}</span></p>
-        <div class="meter" aria-hidden="true"><span style:width={`${Math.min(100, memPct)}%`}></span></div>
+        <p class="v"><span data-testid="perf-mem">{bytes(stats.mem)}</span></p>
         <svg class="spark" viewBox="0 0 100 28" preserveAspectRatio="none" aria-hidden="true"><polyline points={memLine} /></svg>
       </div>
     </div>
+    {#if !stats.threadCpu}<p class="hint">{t('perf.appCpu')}</p>{/if}
   {:else}
     <p class="muted">{t('perf.waiting')}</p>
   {/if}
@@ -51,6 +52,6 @@
   .v .hint { font: 400 13.5px var(--f-body); }
   .meter { height: 8px; border-radius: 999px; background: var(--surface-3); overflow: hidden; }
   .meter span { display: block; height: 100%; border-radius: 999px; background: var(--primary); transition: width var(--dur-move, 0.2s); }
-  .spark { width: 100%; height: 36px; }
+  .spark { width: 100%; height: 36px; margin-top: auto; }
   .spark polyline { fill: none; stroke: var(--primary); stroke-width: 1.6; vector-effect: non-scaling-stroke; stroke-linejoin: round; }
 </style>

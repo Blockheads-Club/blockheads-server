@@ -439,22 +439,27 @@ describe('StatusHero and StatusBanners', () => {
 });
 
 describe('PerfCard', () => {
-  const at = (cpu: number, mem: number, memTotal = 16 * 2 ** 30) => ({ cpu, cores: 8, mem, memTotal });
-  it('waits for the first sample, then shows CPU and memory with their last minute', () => {
-    const r = render(PerfCard, { stats: null, history: [] });
-    expect(screen.getByText('Measuring…')).toBeInTheDocument();
+  const at = (cpu: number, mem: number, threadCpu = true) => ({ cpu, mem, threadCpu });
+  it('shows nothing while the server is off, then waits for the first sample', () => {
+    const r = render(PerfCard, { stats: at(3, 1), history: [], running: false });
+    expect(screen.getByText('Start the server to see what it uses.')).toBeInTheDocument();
     r.unmount();
+    render(PerfCard, { stats: null, history: [], running: true });
+    expect(screen.getByText('Measuring…')).toBeInTheDocument();
+  });
+  it('shows the server CPU and memory with their last minute', () => {
     const history = [at(5, 100 * 2 ** 20), at(40, 300 * 2 ** 20), at(12.6, 2.5 * 2 ** 30)];
-    render(PerfCard, { stats: history[2], history });
+    render(PerfCard, { stats: history[2], history, running: true });
     expect(screen.getByTestId('perf-cpu')).toHaveTextContent('13%');
-    expect(screen.getByText('of 8 cores')).toBeInTheDocument();
     expect(screen.getByTestId('perf-mem')).toHaveTextContent('2.5 GB');
-    expect(screen.getByText('of 16.0 GB')).toBeInTheDocument();
+    expect(screen.queryByText('On this system the CPU figure is the whole app.')).toBeNull();
     expect(document.querySelectorAll('.spark polyline')[0].getAttribute('points')).toMatch(/^0\.0,/);
   });
-  it('copes with one sample and an unknown total', () => {
-    render(PerfCard, { stats: at(0, 50 * 2 ** 20, 0), history: [at(0, 50 * 2 ** 20, 0)] });
+  it('marks a whole-app CPU figure, a tiny load, and copes with one sample', () => {
+    render(PerfCard, { stats: at(0.4, 50 * 2 ** 20, false), history: [at(0.4, 50 * 2 ** 20, false)], running: true });
+    expect(screen.getByTestId('perf-cpu')).toHaveTextContent('<1%');
     expect(screen.getByTestId('perf-mem')).toHaveTextContent('50 MB');
+    expect(screen.getByText('On this system the CPU figure is the whole app.')).toBeInTheDocument();
     expect(document.querySelector('.spark polyline')?.getAttribute('points')).toBe('');
   });
 });

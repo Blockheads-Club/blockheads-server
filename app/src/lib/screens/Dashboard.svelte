@@ -107,7 +107,7 @@
       </div>
     </Card>
   </div>
-  <Card><PerfCard stats={store.stats} history={store.statsHistory} /></Card>
+  <Card><PerfCard stats={store.stats} history={store.statsHistory} running={store.state === 'running'} /></Card>
 </div>
 
 <style>
