@@ -191,13 +191,13 @@ code, pre, .mono { font-family: var(--f-mono); }
 /* Desktop app: the native window is transparent and frameless; the page draws the rounded window (see +page.svelte).
    The shell is fixed to the window and only the content area scrolls. */
 html.desktop, html.desktop body { background: transparent; height: 100%; overflow: hidden; }
-/* Phone: the app shell scrolls inside, the page never does. */
-html.phone, html.phone body { height: 100%; overflow: hidden; overscroll-behavior: none; }
+/* Android app: the shell scrolls inside, the page never does. */
+html.mobile, html.mobile body { height: 100%; overflow: hidden; overscroll-behavior: none; }
 
 /* Text selection: off for the app chrome, on where people copy things (fields, logs, paths, addresses, versions,
    errors, fingerprints, legal text). `.selectable` opts any other element in. */
 body { -webkit-user-select: none; user-select: none; }
 input, textarea, [contenteditable], .selectable, pre, [role='log'], .term, .mono, .alert .title, .alert .text, .detail { -webkit-user-select: text; user-select: text; }
 /* Mobile app: no scroll bars, as in native apps (content still scrolls by touch). */
-html.phone * { scrollbar-width: none; }
-html.phone *::-webkit-scrollbar { display: none; }
+html.mobile * { scrollbar-width: none; }
+html.mobile *::-webkit-scrollbar { display: none; }

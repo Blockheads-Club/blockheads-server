@@ -46,7 +46,7 @@
   });
   $effect(() => {
     document.documentElement.classList.toggle('desktop', os !== null);
-    document.documentElement.classList.toggle('phone', viewport.phone);
+    document.documentElement.classList.toggle('mobile', mobile);
   });
   const ctx = $derived(t(`nav.${store.screen}`));
   const run = $derived.by(() => {
@@ -86,7 +86,7 @@
 {:else}
 <a class="skip" href="#main">{t('common.skip')}</a>
 {#snippet shell()}
-<div class="app" class:phone={viewport.phone} class:desk={os !== null}>
+<div class="app" class:phone={viewport.phone} class:mobile class:desk={os !== null}>
   {#if !viewport.phone}<Sidebar rail={viewport.rail} />{/if}
   <div class="content" class:fill={store.screen === 'console'}>
     <main id="main" tabindex="-1">
@@ -174,9 +174,11 @@
   }
   @keyframes sk { to { background-position: -200% 0; } }
   .phone .err { padding: 8px 16px 0; }
-  /* Phone: a fixed-height shell like a native app. The page itself never scrolls (no rubber-banding of the whole
-     page, the bottom nav stays put); only the screen content does. */
-  .app.phone { height: 100vh; height: 100dvh; min-height: 0; overflow: hidden; }
-  .phone .content { min-height: 0; }
-  .phone main { overflow-y: auto; overscroll-behavior: contain; }
+  /* Android app (any width: phone, unfolded, tablet): a fixed-height shell like a native app. The page itself never
+     scrolls (no rubber-banding, the sidebar or bottom nav stays put); only the screen content does. It starts below
+     the status bar (edge-to-edge window). */
+  .app.mobile { height: 100vh; height: 100dvh; min-height: 0; overflow: hidden; padding-top: env(safe-area-inset-top); box-sizing: border-box; }
+  .mobile .content { min-height: 0; }
+  .mobile main { overflow-y: auto; overscroll-behavior: contain; }
+  .mobile :global(.side) { height: auto; position: static; }
 </style>
