@@ -46,6 +46,7 @@
   });
   $effect(() => {
     document.documentElement.classList.toggle('desktop', os !== null);
+    document.documentElement.classList.toggle('phone', viewport.phone);
   });
   const ctx = $derived(t(`nav.${store.screen}`));
   const run = $derived.by(() => {
@@ -173,4 +174,9 @@
   }
   @keyframes sk { to { background-position: -200% 0; } }
   .phone .err { padding: 8px 16px 0; }
+  /* Phone: a fixed-height shell like a native app. The page itself never scrolls (no rubber-banding of the whole
+     page, the bottom nav stays put); only the screen content does. */
+  .app.phone { height: 100vh; height: 100dvh; min-height: 0; overflow: hidden; }
+  .phone .content { min-height: 0; }
+  .phone main { overflow-y: auto; overscroll-behavior: contain; }
 </style>
