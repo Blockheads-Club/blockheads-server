@@ -1,0 +1,18 @@
+{
+  "name": "blockheads-server-release",
+  "private": true,
+  "description": "Tooling only (commitlint). The server itself is a Rust workspace.",
+  "license": "GPL-3.0-only",
+  "scripts": {
+    "commitlint": "commitlint"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^19.8.0",
+    "@commitlint/config-conventional": "^19.8.0",
+    "@semantic-release/exec": "^7.0.3",
+    "semantic-release": "^24.2.3"
+  },
+  "commitlint": {
+    "extends": ["@commitlint/config-conventional"]
+  }
+}

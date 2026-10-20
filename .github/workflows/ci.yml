@@ -1,0 +1,220 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      # Plain clippy: correctness lints are deny-by-default; style lints are still being worked down.
+      # approx_constant / eq_op / erasing_op are allowed in Cargo.toml (`[lints.clippy]`): the faithful float
+      # expressions are behaviour.
+      - run: cargo clippy --workspace --all-targets
+
+  commitlint:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bunx commitlint --from ${{ github.event.pull_request.base.sha }} --to ${{ github.event.pull_request.head.sha }}
+
+  test:
+    name: test (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    # Windows and macOS have only been cross-checked (cargo check) so far; a red job there is reported but does
+    # not block until the first green run. Remove `experimental` for a platform once it is green.
+    continue-on-error: ${{ matrix.experimental }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-x86_64, os: ubuntu-latest, args: "--workspace", experimental: false }
+          - { name: linux-aarch64, os: ubuntu-24.04-arm, args: "--workspace", experimental: false }
+          - { name: macos-aarch64, os: macos-latest, args: "--workspace", experimental: true }
+          # bh_testclient / bh_tools are Unix-only developer tools.
+          - { name: windows-x86_64, os: windows-latest, args: "-p blockheads_server", experimental: true }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test ${{ matrix.args }}
+
+  cross-check:
+    name: check (${{ matrix.target }})
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-unknown-linux-gnu
+            packages: gcc-aarch64-linux-gnu
+            linker: aarch64-linux-gnu-gcc
+          - target: armv7-unknown-linux-gnueabihf
+            packages: gcc-arm-linux-gnueabihf
+            linker: arm-linux-gnueabihf-gcc
+          - target: aarch64-linux-android
+          - target: armv7-linux-androideabi
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cross compiler
+        if: matrix.packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ matrix.packages }}
+          echo "CARGO_TARGET_$(echo '${{ matrix.target }}' | tr 'a-z-' 'A-Z_')_LINKER=${{ matrix.linker }}" >> "$GITHUB_ENV"
+      - name: Select the Android NDK toolchain
+        if: contains(matrix.target, 'android')
+        run: |
+          bin="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          t='${{ matrix.target }}'
+          clang="$bin/$( [ "$t" = armv7-linux-androideabi ] && echo armv7a-linux-androideabi || echo "$t" )24-clang"
+          up="$(echo "$t" | tr 'a-z-' 'A-Z_')"
+          lo="$(echo "$t" | tr '-' '_')"
+          echo "CC_$lo=$clang" >> "$GITHUB_ENV"
+          echo "AR_$lo=$bin/llvm-ar" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_${up}_LINKER=$clang" >> "$GITHUB_ENV"
+      - run: cargo check -p blockheads_server --target ${{ matrix.target }}
+
+  # 32-bit behaviour (usize/isize width, casts, wrapping arithmetic) is exercised on i686; armv7 itself is only
+  # cross-checked above. Experimental until the first green run.
+  test-32bit:
+    runs-on: ubuntu-22.04
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: i686-unknown-linux-gnu
+      - uses: Swatinem/rust-cache@v2
+      - name: 32-bit toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-multilib
+      - run: cargo test -p blockheads_server --target i686-unknown-linux-gnu
+
+  windows-arm-check:
+    runs-on: windows-11-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check -p blockheads_server --all-targets
+
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      # Policy is 100 % line coverage. Until it is reached the gate is the repository variable COVERAGE_MIN
+      # (default 0 = report only); raise it as coverage grows.
+      - name: Measure
+        run: |
+          cargo llvm-cov --workspace --lcov --output-path lcov.info --fail-under-lines "${{ vars.COVERAGE_MIN || 0 }}"
+          cargo llvm-cov report --summary-only | tee summary.txt
+          { echo '### Coverage'; echo '```'; cat summary.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: |
+            lcov.info
+            summary.txt
+
+  # Host app (Tauri 2 + SvelteKit): UI tests, command-layer tests and a debug Android build.
+  app:
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+      - uses: oven-sh/setup-bun@v2
+      - name: System libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev libgtk-3-dev
+      - run: bun install --frozen-lockfile
+      - run: bun run check
+      - run: bun run test
+      - name: Format (app crate)
+        working-directory: app/src-tauri
+        run: cargo fmt --check
+      - run: bunx playwright install --with-deps chromium
+      - run: bun run test:e2e
+      - name: Command layer tests
+        working-directory: app/src-tauri
+        env:
+          RUST_TEST_THREADS: "1"
+        run: cargo test --lib
+
+  app-android:
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - name: Debug APK (arm64-v8a, armeabi-v7a, x86_64)
+        run: |
+          export NDK_HOME="$ANDROID_NDK_LATEST_HOME"
+          bun run tauri android build --debug --apk --target aarch64 --target armv7 --target x86_64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-debug-apk
+          path: app/src-tauri/gen/android/app/build/outputs/apk/universal/debug/*.apk
+          retention-days: 7

@@ -1,0 +1,310 @@
+name: Release
+
+# Push a tag `vX.Y.Z` (or `vX.Y.Z-pre.N`) to build every asset (CLI per target, app bundles, APK) and attach it
+# to a DRAFT GitHub release for that tag (prerelease for 0.x and -pre tags), then push the docker image.
+# Publish the draft by hand once CI is green. Manual runs (workflow_dispatch) take the tag as input.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to build and attach (e.g. v0.1.0)'
+        required: true
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_PROFILE_RELEASE_DEBUG: "0"
+  CARGO_PROFILE_RELEASE_STRIP: symbols
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.v.outputs.tag }}
+      version: ${{ steps.v.outputs.version }}
+      prerelease: ${{ steps.v.outputs.prerelease }}
+    steps:
+      - id: v
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          tag="${INPUT_TAG:-$GITHUB_REF_NAME}"
+          case "$tag" in v[0-9]*) ;; *) echo "::error::not a version tag: $tag"; exit 1 ;; esac
+          pre=false
+          case "$tag" in v0.*|*-*) pre=true ;; esac
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$pre" >> "$GITHUB_OUTPUT"
+
+  cli:
+    name: cli (${{ matrix.target }})
+    needs: plan
+    if: needs.plan.outputs.version != ''
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-gnu, os: ubuntu-22.04 }
+          - { target: aarch64-unknown-linux-gnu, os: ubuntu-22.04, packages: gcc-aarch64-linux-gnu, linker: aarch64-linux-gnu-gcc }
+          - { target: armv7-unknown-linux-gnueabihf, os: ubuntu-22.04, packages: gcc-arm-linux-gnueabihf, linker: arm-linux-gnueabihf-gcc }
+          - { target: x86_64-pc-windows-msvc, os: windows-latest }
+          - { target: aarch64-pc-windows-msvc, os: windows-11-arm }
+          - { target: x86_64-apple-darwin, os: macos-latest }
+          - { target: aarch64-apple-darwin, os: macos-latest }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.tag }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Install cross compiler
+        if: matrix.packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ matrix.packages }}
+          echo "CARGO_TARGET_$(echo '${{ matrix.target }}' | tr 'a-z-' 'A-Z_')_LINKER=${{ matrix.linker }}" >> "$GITHUB_ENV"
+      - name: Build
+        run: cargo build --release --locked -p blockheads_server --bin blockheads_server --target ${{ matrix.target }}
+      - name: Package (unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          name="blockheads-server-v${{ needs.plan.outputs.version }}-${{ matrix.target }}"
+          mkdir -p "pkg/$name" dist
+          cp "target/${{ matrix.target }}/release/blockheads_server" LICENSE README.md "pkg/$name/"
+          tar -C pkg -czf "dist/$name.tar.gz" "$name"
+      - name: Package (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $name = "blockheads-server-v${{ needs.plan.outputs.version }}-${{ matrix.target }}"
+          New-Item -ItemType Directory -Force -Path "pkg/$name", dist | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/blockheads_server.exe", LICENSE, README.md "pkg/$name/"
+          Compress-Archive -Path "pkg/$name" -DestinationPath "dist/$name.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cli-${{ matrix.target }}
+          path: dist/*
+      # The docker job re-packs the Linux binaries per platform.
+      - name: Keep the raw Linux binary for docker
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p docker-bin
+          cp "target/${{ matrix.target }}/release/blockheads_server" docker-bin/blockheads_server
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Linux'
+        with:
+          name: docker-bin-${{ matrix.target }}
+          path: docker-bin/blockheads_server
+
+  # Host app (Tauri 2 + SvelteKit): desktop bundles and the Android APK. Skipped while the app/ directory
+  # does not exist in the repository.
+  app-check:
+    needs: plan
+    if: needs.plan.outputs.version != ''
+    runs-on: ubuntu-latest
+    outputs:
+      present: ${{ steps.c.outputs.present }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.tag }}
+      - id: c
+        run: |
+          if [ -f app/package.json ]; then echo present=true >> "$GITHUB_OUTPUT"; else echo present=false >> "$GITHUB_OUTPUT"; fi
+
+  app-desktop:
+    name: app (${{ matrix.name }})
+    needs: [plan, app-check]
+    if: needs.app-check.outputs.present == 'true'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-x86_64, os: ubuntu-22.04, args: "" }
+          - { name: linux-aarch64, os: ubuntu-22.04-arm, args: "" }
+          - { name: windows-x86_64, os: windows-latest, args: "--bundles nsis" }
+          - { name: windows-aarch64, os: windows-11-arm, args: "--bundles nsis" }
+          - { name: macos-aarch64, os: macos-latest, args: "--target aarch64-apple-darwin", target: aarch64-apple-darwin }
+          - { name: macos-x86_64, os: macos-latest, args: "--target x86_64-apple-darwin", target: x86_64-apple-darwin }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.tag }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: app-${{ matrix.name }}
+      - uses: oven-sh/setup-bun@v2
+      - name: Linux system libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev libgtk-3-dev
+      - name: Build
+        working-directory: app
+        shell: bash
+        run: |
+          bun install --frozen-lockfile
+          # Stamp the release version into the bundle (not committed).
+          bun -e 'const f="src-tauri/tauri.conf.json";const j=JSON.parse(await Bun.file(f).text());j.version="${{ needs.plan.outputs.version }}";await Bun.write(f,JSON.stringify(j,null,2))'
+          bun run tauri build ${{ matrix.args }}
+      - name: Collect bundles
+        shell: bash
+        run: |
+          mkdir -p dist
+          find . -path '*/release/bundle/*' -type f \( -name '*.dmg' -o -name '*-setup.exe' -o -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \) -not -path '*/node_modules/*' -exec cp {} dist/ \;
+          ls -l dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-${{ matrix.name }}
+          path: dist/*
+
+  app-android:
+    needs: [plan, app-check]
+    if: needs.app-check.outputs.present == 'true'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.tag }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: app-android
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: oven-sh/setup-bun@v2
+      - name: Build APK
+        working-directory: app
+        env:
+          CARGO_INCREMENTAL: "0"
+        run: |
+          export NDK_HOME="$ANDROID_NDK_LATEST_HOME"
+          bun install --frozen-lockfile
+          bun -e 'const f="src-tauri/tauri.conf.json";const j=JSON.parse(await Bun.file(f).text());j.version="${{ needs.plan.outputs.version }}";await Bun.write(f,JSON.stringify(j,null,2))'
+          bun run tauri android build --apk --target aarch64 --target armv7 --target x86_64
+      - name: Sign APK
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ALLOW_EPHEMERAL_KEY: ${{ vars.ALLOW_EPHEMERAL_ANDROID_KEY }}
+        run: |
+          mkdir -p dist
+          apk="$(find app -name '*-release-unsigned.apk' -o -name '*release*.apk' | head -n1)"
+          [ -n "$apk" ] || { echo "no release APK found"; exit 1; }
+          bt="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n1)"
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > release.jks
+            ks=release.jks; pass="$KEYSTORE_PASS"; alias="$KEY_ALIAS"
+          elif [ "$ALLOW_EPHEMERAL_KEY" = "true" ]; then
+            # Explicit opt-in only: every release then has a different signature, Android refuses in-place
+            # updates, and reinstalling deletes the app's worlds. Prefer a persistent key (secrets below).
+            keytool -genkeypair -keystore release.jks -storepass android -keypass android -alias release -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=blockheads-server"
+            ks=release.jks; pass=android; alias=release
+          else
+            echo "::error::ANDROID_KEYSTORE_BASE64 / ANDROID_KEYSTORE_PASSWORD / ANDROID_KEY_ALIAS are not set. Create one persistent release key and store it as repository secrets (or set the variable ALLOW_EPHEMERAL_ANDROID_KEY=true to accept a throw-away key; worlds are lost on every reinstall)."
+            exit 1
+          fi
+          "$bt/zipalign" -f -p 4 "$apk" aligned.apk
+          "$bt/apksigner" sign --ks "$ks" --ks-pass "pass:$pass" --ks-key-alias "$alias" --out "dist/blockheads-server-v${{ needs.plan.outputs.version }}-android.apk" aligned.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-android
+          path: dist/*.apk
+
+  publish:
+    needs: [plan, cli, app-check, app-desktop, app-android]
+    # App jobs are optional (skipped without app/); every other job must have succeeded.
+    if: ${{ !cancelled() && !failure() && needs.plan.outputs.version != '' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: "{cli-*,app-*}"
+          merge-multiple: true
+      - name: Collect assets and checksums
+        run: |
+          mkdir -p dist
+          cp artifacts/* dist/
+          (cd dist && sha256sum * > SHA256SUMS.txt)
+          ls -l dist
+      - name: Create or update the draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          PRE: ${{ needs.plan.outputs.prerelease }}
+        run: |
+          if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber -R "$GITHUB_REPOSITORY"
+          else
+            pre=""; [ "$PRE" = true ] && pre="--prerelease"
+            gh release create "$TAG" dist/* --draft $pre --verify-tag --title "$TAG" --generate-notes -R "$GITHUB_REPOSITORY"
+          fi
+
+  docker:
+    needs: [plan, publish]
+    if: ${{ !cancelled() && needs.publish.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.tag }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: docker-bin-*
+          path: artifacts
+      - name: Arrange binaries per platform
+        run: |
+          set -e
+          place() { mkdir -p "docker-bin/$2"; cp "artifacts/docker-bin-$1/blockheads_server" "docker-bin/$2/blockheads_server"; chmod +x "docker-bin/$2/blockheads_server"; }
+          place x86_64-unknown-linux-gnu linux/amd64
+          place aarch64-unknown-linux-gnu linux/arm64
+          place armv7-unknown-linux-gnueabihf linux/arm/v7
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: release
+          platforms: linux/amd64,linux/arm64,linux/arm/v7
+          push: true
+          tags: |
+            ghcr.io/blockheads-club/blockheads-server:${{ needs.plan.outputs.version }}
+            ghcr.io/blockheads-club/blockheads-server:${{ needs.plan.outputs.prerelease == 'true' && 'dev' || 'latest' }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/Blockheads-Club/blockheads-server
+            org.opencontainers.image.version=${{ needs.plan.outputs.version }}
+            org.opencontainers.image.licenses=GPL-3.0-only
