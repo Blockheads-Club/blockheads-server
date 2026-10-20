@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { bytes } from '../format';
+  import { bytes, percent } from '../format';
   import { t } from '../i18n.svelte';
   import type { Stats } from '../types';
 
@@ -25,7 +25,7 @@
     <div class="grid">
       <div class="m">
         <p class="k">{t('perf.cpu')}</p>
-        <p class="v"><span data-testid="perf-cpu">{stats.cpu < 1 && stats.cpu > 0 ? '<1' : Math.round(stats.cpu)}%</span> <span class="hint">{t('perf.cpuOf')}</span></p>
+        <p class="v"><span data-testid="perf-cpu">{percent(stats.cpu)}</span> <span class="hint">{t('perf.cpuOf')}</span></p>
         <div class="meter" aria-hidden="true"><span style:width={`${Math.min(100, stats.cpu)}%`}></span></div>
         <svg class="spark" viewBox="0 0 100 28" preserveAspectRatio="none" aria-hidden="true"><polyline points={cpuLine} /></svg>
       </div>

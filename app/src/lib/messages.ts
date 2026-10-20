@@ -363,7 +363,7 @@ export const tr: Record<Key, string> = {
   'run.state.failed': 'Çöktü',
   'run.noWorld': 'Önce bir dünya seçin',
 
-  'time.hm': '{h} sa {m} dk',
+  'time.hm': '{h}\u00a0sa {m}\u00a0dk',
   'time.m': '{m, plural, one {# dk} other {# dk}}',
   'time.lt1': '1 dk’dan az',
   'time.now': 'az önce',
@@ -644,7 +644,7 @@ export const tr: Record<Key, string> = {
   'splash.label': 'Blockheads Server başlıyor',
   'splash.loading': 'Dünyalar ve ayarlar yükleniyor…',
   'splash.slow': 'Büyük bir veri klasörü açılıyor — biraz sürebilir.',
-  'splash.error': 'Sunucu veri klasörünü açamadı. Dünyalarına dokunulmadı.',
+  'splash.error': 'Sunucu veri klasörünü açamadı. Dünyalarınız değiştirilmedi.',
   'splash.errorShort': 'Veri klasörü açılamadı.',
   'splash.retry': 'Tekrar dene',
   'splash.choose': 'Klasör seç…',

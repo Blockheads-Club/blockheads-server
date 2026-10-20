@@ -166,8 +166,8 @@ class ServerService : Service() {
         private fun ensureChannels(context: Context) {
             if (Build.VERSION.SDK_INT < 26) return
             val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            nm.createNotificationChannel(NotificationChannel(CHANNEL_ID, "Server", NotificationManager.IMPORTANCE_LOW))
-            nm.createNotificationChannel(NotificationChannel(ALERT_CHANNEL_ID, "Alerts", NotificationManager.IMPORTANCE_HIGH))
+            nm.createNotificationChannel(NotificationChannel(CHANNEL_ID, context.getString(R.string.hostservice_channel_server), NotificationManager.IMPORTANCE_LOW))
+            nm.createNotificationChannel(NotificationChannel(ALERT_CHANNEL_ID, context.getString(R.string.hostservice_channel_alerts), NotificationManager.IMPORTANCE_HIGH))
         }
 
         /** The crash alert: not ongoing, on its own high-importance channel. */

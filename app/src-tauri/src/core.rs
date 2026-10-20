@@ -56,17 +56,12 @@ impl Default for RunOptions {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
+    /// UI language code (`en`, `tr`, `ru`, `kk`); empty until the app has picked one from the OS locale.
     pub language: String,
     pub run: RunOptions,
-}
-
-impl Default for Settings {
-    fn default() -> Self {
-        Settings { language: "en".into(), run: RunOptions::default() }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -585,8 +580,8 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let c = Core::new(d.path().to_path_buf());
         assert_eq!(c.get_settings(), Settings::default());
-        let mut s = Settings::default();
-        s.language = "tr".into();
+        assert_eq!(Settings::default().language, "");
+        let mut s = Settings { language: "tr".into(), ..Default::default() };
         s.run.port = 15200;
         c.set_settings(&s).unwrap();
         assert_eq!(c.get_settings(), s);

@@ -55,6 +55,20 @@ describe('init and polling', () => {
     expect(toasts.items.map((x) => x.message)).toContain('Created and loaded the world “MY WORLD”');
   });
 
+  it('saves the language picked from the OS locale on first launch', async () => {
+    const spy = vi.spyOn(navigator, 'languages', 'get').mockReturnValue(['ru-RU']);
+    const s = fresh({
+      listWorlds: vi.fn(async () => [{ id: W1, name: 'A' }]),
+      getSettings: vi.fn(async () => ({ language: '', run: { worldId: W1, port: 1, maxPlayers: 0, password: '', saveDelay: 10 } }))
+    });
+    await s.init();
+    s.stopPolling();
+    expect(s.settings.language).toBe('ru');
+    expect(mock.api.setSettings).toHaveBeenCalledWith(expect.objectContaining({ language: 'ru' }));
+    spy.mockRestore();
+    setLang('en');
+  });
+
   it('leaves a valid selection as it is', async () => {
     const s = fresh({
       listWorlds: vi.fn(async () => [{ id: W1, name: 'A' }]),

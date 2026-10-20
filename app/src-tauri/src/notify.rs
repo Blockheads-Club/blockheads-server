@@ -49,11 +49,43 @@ const TR: Strings = Strings {
     open_log: "Günlüğü aç",
 };
 
+// Russian and Kazakh put the count after a colon, so no plural agreement is needed.
+const RU: Strings = Strings {
+    running: "Работает",
+    starting: "Запуск",
+    stopping: "Остановка",
+    loading: "Загрузка мира {world}…",
+    players_of: "Игроков онлайн: {n} из {max}",
+    players: "Игроков онлайн: {n}",
+    stop: "Остановить сервер",
+    copy: "Скопировать адрес",
+    console: "Консоль",
+    crashed: "Сервер неожиданно остановился",
+    crashed_body: "Нажмите, чтобы узнать причину.",
+    open_log: "Открыть журнал",
+};
+
+const KK: Strings = Strings {
+    running: "Қосулы",
+    starting: "Қосылуда",
+    stopping: "Тоқтауда",
+    loading: "{world} жүктелуде…",
+    players_of: "Желідегі ойыншылар: {n} / {max}",
+    players: "Желідегі ойыншылар: {n}",
+    stop: "Серверді тоқтату",
+    copy: "Мекенжайды көшіру",
+    console: "Консоль",
+    crashed: "Сервер күтпеген жерден тоқтады",
+    crashed_body: "Себебін көру үшін түртіңіз.",
+    open_log: "Журналды ашу",
+};
+
 fn strings(lang: &str) -> &'static Strings {
-    if lang == "tr" {
-        &TR
-    } else {
-        &EN
+    match lang {
+        "tr" => &TR,
+        "ru" => &RU,
+        "kk" => &KK,
+        _ => &EN,
     }
 }
 
@@ -166,5 +198,22 @@ mod tests {
     fn alert_is_translated() {
         assert_eq!(crash_alert("en").open_label, "Open log");
         assert_eq!(crash_alert("tr").open_label, "Günlüğü aç");
+        assert_eq!(crash_alert("ru").title, "Сервер неожиданно остановился");
+        assert_eq!(crash_alert("kk").open_label, "Журналды ашу");
+        assert_eq!(crash_alert("").open_label, "Open log");
+    }
+
+    #[test]
+    fn russian_and_kazakh() {
+        let p = poll("running", vec![player("MIRA")]);
+        let i = service_info("ru", &p, "Ada", None, 8).unwrap();
+        assert_eq!(i.title, "Работает · Ada");
+        assert_eq!(i.text, "Игроков онлайн: 1 из 8");
+        assert_eq!(service_info("ru", &p, "Ada", None, 0).unwrap().text, "Игроков онлайн: 1");
+        let i = service_info("kk", &poll("starting", vec![]), "Ada", None, 0).unwrap();
+        assert_eq!(i.title, "Қосылуда · Ada");
+        assert_eq!(i.text, "Ada жүктелуде…");
+        assert_eq!(service_info("kk", &p, "Ada", None, 8).unwrap().text, "Желідегі ойыншылар: 1 / 8");
+        assert_eq!(service_info("kk", &p, "Ada", None, 0).unwrap().stop_label, "Серверді тоқтату");
     }
 }

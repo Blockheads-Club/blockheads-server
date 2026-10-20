@@ -1,5 +1,5 @@
 import { api } from './api';
-import { errText, setLang, t } from './i18n.svelte';
+import { errText, i18n, setLang, t } from './i18n.svelte';
 import { toast } from './ui/toast.svelte';
 import type { AppInfo, BootPhase, ListKind, LogEntry, NewWorld, Player, RunOptions, RunState, Screen, Settings, Stats, World } from './types';
 import { classify, storage } from './util';
@@ -94,6 +94,12 @@ export class AppStore {
       this.info ??= await api.appInfo();
       this.settings = { ...settings, run: { ...DEFAULT_RUN, ...settings.run } };
       setLang(settings.language);
+      // First launch (no language saved yet): keep the one picked from the OS locale, so the Android
+      // notification that Rust builds speaks it too.
+      if (settings.language !== i18n.lang) {
+        this.settings.language = i18n.lang;
+        await api.setSettings($state.snapshot(this.settings));
+      }
       await this.ensureWorld(await this.refreshWorlds());
       await this.loadLists();
       await this.pollOnce();

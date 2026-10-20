@@ -108,7 +108,7 @@
               </span>
               <span role="cell" class="acts">
                 {#if isLoaded || isSel}
-                  <Button size="sm" variant="ok" icon="check" disabled>{t('worlds.loadedBtn')}</Button>
+                  <Button size="sm" variant="ok" icon="check" disabled><span class="okl">{t('worlds.loadedBtn')}</span></Button>
                 {:else}
                   <Button size="sm" icon="play" onclick={() => store.loadWorld(w.id)}>{t('worlds.load')}</Button>
                 {/if}
@@ -201,5 +201,9 @@
   .warn { color: var(--bad); font-weight: 700; }
   @media (max-width: 599px) {
     .main { padding: 6px 16px 20px; }
+    /* The badge beside the name already says "loaded": on a phone the button keeps only its tick (and its
+       accessible name), so long labels (ru, kk) leave room for the name and badge. */
+    .acts :global(.btn.ok) { gap: 0; }
+    .okl { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
   }
 </style>

@@ -103,6 +103,51 @@ test('theme switching and Turkish', async ({ page }) => {
   await expect(page.locator('html')).toHaveAttribute('lang', 'tr');
 });
 
+/** Labels that are cut off: text wider than its box without wrapping (sidebar items, tiles, buttons, tabs). */
+async function clipped(page: Page) {
+  return page.evaluate(() =>
+    [...document.querySelectorAll<HTMLElement>('nav button, nav a, button, [role="tab"], h1, h2, .k, .v, .t, label')]
+      .filter((e) => e.offsetParent && !e.closest('.sr') && e.scrollWidth > e.clientWidth + 1 && getComputedStyle(e).overflow !== 'visible')
+      .map((e) => e.textContent?.trim())
+  );
+}
+
+for (const [lang, settings, worlds, hello] of [['ru', 'Настройки', 'Миры', 'Запустить сервер'], ['kk', 'Баптаулар', 'Әлемдер', 'Серверді іске қосу']] as const) {
+  test(`switching to ${lang}: every screen translated, nothing overflows`, async ({ page }) => {
+    await mockTauri(page, { worlds: true });
+    await page.goto('/');
+    await go(page, 'Settings');
+    await page.getByLabel('Language').selectOption(lang);
+    await expect(page.getByRole('heading', { name: settings })).toBeVisible();
+    await expect(page.locator('html')).toHaveAttribute('lang', lang);
+    const saved = await page.evaluate(() => (window as any).__calls.filter((c: any[]) => c[0] === 'set_settings').at(-1)[1].settings.language);
+    expect(saved).toBe(lang);
+    await expect(page.getByRole('button', { name: hello })).toHaveCount(0);
+    const nav = page.locator('nav').first();
+    await nav.getByRole('button', { name: new RegExp(worlds) }).click();
+    await expect(page.getByRole('heading', { name: worlds, exact: true })).toBeVisible();
+    for (let i = 0; i < 6; i++) {
+      const items = page.locator('nav').first().getByRole('button');
+      if (i >= (await items.count())) break;
+      await items.nth(i).click();
+      const over = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
+      expect(over).toBe(false);
+      expect(await clipped(page)).toEqual([]);
+    }
+  });
+}
+
+test('first launch follows the OS language', async ({ browser }) => {
+  const ctx = await browser.newContext({ locale: 'ru-RU' });
+  const page = await ctx.newPage();
+  await mockTauri(page, { lang: '' });
+  await page.goto('/');
+  await expect(page.getByRole('button', { name: 'Запустить сервер' }).first()).toBeVisible();
+  const saved = await page.evaluate(() => (window as any).__calls.filter((c: any[]) => c[0] === 'set_settings').at(-1)[1].settings.language);
+  expect(saved).toBe('ru');
+  await ctx.close();
+});
+
 test('no horizontal overflow on any screen', async ({ page }) => {
   await mockTauri(page, { worlds: true });
   await page.goto('/');

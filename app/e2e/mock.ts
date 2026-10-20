@@ -1,8 +1,8 @@
 import type { Page } from '@playwright/test';
 
 /** Replaces the Tauri IPC with an in-page fake server so the built web UI can be exercised in a browser. */
-export async function mockTauri(page: Page, opts: { worlds?: boolean; splash?: object } = {}) {
-  await page.addInitScript(({ withWorlds, splash }) => {
+export async function mockTauri(page: Page, opts: { worlds?: boolean; splash?: object; lang?: string } = {}) {
+  await page.addInitScript(({ withWorlds, splash, lang }) => {
     const s = {
       worlds: withWorlds ? [{ id: 'a'.repeat(32), name: 'Sunny Isle' }, { id: 'b'.repeat(32), name: 'Deep Cave Club' }] : ([] as { id: string; name: string }[]),
       state: 'stopped',
@@ -10,7 +10,7 @@ export async function mockTauri(page: Page, opts: { worlds?: boolean; splash?: o
       lines: [] as string[],
       times: [] as number[],
       lists: { admin: ['MIRA_K'], mod: [], white: [], black: [] } as Record<string, string[]>,
-      settings: { language: 'en', run: { worldId: '', port: 15151, maxPlayers: 0, password: '', saveDelay: 10 } },
+      settings: { language: lang, run: { worldId: '', port: 15151, maxPlayers: 0, password: '', saveDelay: 10 } },
       players: [] as { name: string; ip: string; id: string; joinedAt: number }[]
     };
     const log = (t: string) => {
@@ -64,5 +64,5 @@ export async function mockTauri(page: Page, opts: { worlds?: boolean; splash?: o
         throw new Error('unmocked ' + cmd);
       }
     };
-  }, { withWorlds: opts.worlds ?? false, splash: opts.splash ?? null });
+  }, { withWorlds: opts.worlds ?? false, splash: opts.splash ?? null, lang: opts.lang ?? 'en' });
 }
