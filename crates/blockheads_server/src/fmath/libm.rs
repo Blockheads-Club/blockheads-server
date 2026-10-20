@@ -32,13 +32,22 @@ pub fn floor(x: f64) -> f64 {
 /// C `fmod(x, y)` (result has the sign of `x`, `fmod(x, 0) = NaN`). Exact.
 #[inline]
 pub fn fmod(x: f64, y: f64) -> f64 {
-    x86_nan(x % y, x.is_nan() || y.is_nan())
+    // x86-64 returns the first NaN operand quieted; AArch64 would prefer a signalling `y` over a quiet `x`.
+    if x.is_nan() || y.is_nan() {
+        let v = if x.is_nan() { x } else { y };
+        return f64::from_bits(v.to_bits() | 0x0008_0000_0000_0000);
+    }
+    x86_nan(x % y, false)
 }
 
 /// C `fmodf`. Exact.
 #[inline]
 pub fn fmodf(x: f32, y: f32) -> f32 {
-    x86_nanf(x % y, x.is_nan() || y.is_nan())
+    // See `fmod` for the NaN operand order.
+    if x.is_nan() || y.is_nan() {
+        return nan_add32(x, y);
+    }
+    x86_nanf(x % y, false)
 }
 
 /// `sqrtsd`.
