@@ -32,25 +32,25 @@ pub fn floor(x: f64) -> f64 {
 /// C `fmod(x, y)` (result has the sign of `x`, `fmod(x, 0) = NaN`). Exact.
 #[inline]
 pub fn fmod(x: f64, y: f64) -> f64 {
-    x % y
+    x86_nan(x % y, x.is_nan() || y.is_nan())
 }
 
 /// C `fmodf`. Exact.
 #[inline]
 pub fn fmodf(x: f32, y: f32) -> f32 {
-    x % y
+    x86_nanf(x % y, x.is_nan() || y.is_nan())
 }
 
 /// `sqrtsd`.
 #[inline]
 pub fn sqrt(x: f64) -> f64 {
-    x.sqrt()
+    x86_nan(x.sqrt(), x.is_nan())
 }
 
 /// `sqrtss`.
 #[inline]
 pub fn sqrtf(x: f32) -> f32 {
-    x.sqrt()
+    x86_nanf(x.sqrt(), x.is_nan())
 }
 
 /// `fabsf`: clears the sign bit (also for NaN).
@@ -63,6 +63,29 @@ pub fn fabsf(x: f32) -> f32 {
 #[inline]
 pub fn fabs(x: f64) -> f64 {
     f64::from_bits(x.to_bits() & 0x7fff_ffff_ffff_ffff)
+}
+
+/// x86-64 SSE's default NaN (the "QNaN floating-point indefinite", sign bit set): what an invalid
+/// operation without NaN operands produces there. AArch64 and most other hosts produce the positive
+/// quiet NaN instead, so a NaN created from non-NaN inputs is rewritten to the x86 one. On x86-64 this is
+/// the identity. NaN operands propagate the same way on both (quieted, payload kept).
+#[inline]
+fn x86_nan(r: f64, nan_input: bool) -> f64 {
+    if r.is_nan() && !nan_input {
+        f64::from_bits(0xfff8_0000_0000_0000)
+    } else {
+        r
+    }
+}
+
+/// `f32` version of [`x86_nan`].
+#[inline]
+fn x86_nanf(r: f32, nan_input: bool) -> f32 {
+    if r.is_nan() && !nan_input {
+        f32::from_bits(0xffc0_0000)
+    } else {
+        r
+    }
 }
 
 /// Result of the C expression `a + b` when at least one operand is NaN, with the operand priority
@@ -231,7 +254,7 @@ fn sincosf_very_large(ax_bits: u32, xa: f64) -> (u32, f64) {
 }
 
 /// glibc 2.19 `sinf` (x86-64 assembly version, bit-exact port).
-pub fn sinf(x: f32) -> f32 {
+fn sinf_port(x: f32) -> f32 {
     let bits = x.to_bits();
     let ax = bits & 0x7fff_ffff;
     let xd = x as f64;
@@ -304,7 +327,7 @@ pub fn sinf(x: f32) -> f32 {
 }
 
 /// glibc 2.19 `cosf` (x86-64 assembly version, bit-exact port).
-pub fn cosf(x: f32) -> f32 {
+fn cosf_port(x: f32) -> f32 {
     let bits = x.to_bits();
     let ax = bits & 0x7fff_ffff;
     let xd = x as f64;
@@ -802,7 +825,7 @@ fn kernel_tanf(mut x: f32, mut y: f32, iy: i32) -> f32 {
 }
 
 /// glibc 2.19 `tanf` (flt-32/s_tanf.c).
-pub fn tanf(x: f32) -> f32 {
+fn tanf_port(x: f32) -> f32 {
     let mut y = [0f32; 2];
     let ix = fw(x) & 0x7fff_ffff;
     if ix <= 0x3f49_0fda {
@@ -1186,7 +1209,7 @@ fn ieee754_powf(x: f32, mut y: f32) -> f32 {
 }
 
 /// glibc 2.19 `powf`.
-pub fn powf(x: f32, y: f32) -> f32 {
+fn powf_port(x: f32, y: f32) -> f32 {
     ieee754_powf(x, y)
 }
 
@@ -2185,7 +2208,7 @@ pub fn cos_exact(x: f64) -> f64 {
 }
 
 /// glibc 2.19 `sin` (correctly rounded).
-pub fn sin(x: f64) -> f64 {
+fn sin_port(x: f64) -> f64 {
     let ax = x.abs();
     if !(ax < f64::INFINITY) {
         return x / x; // NaN (inf: invalid -> default NaN)
@@ -2201,7 +2224,7 @@ pub fn sin(x: f64) -> f64 {
 }
 
 /// glibc 2.19 `cos` (correctly rounded).
-pub fn cos(x: f64) -> f64 {
+fn cos_port(x: f64) -> f64 {
     let ax = x.abs();
     if !(ax < f64::INFINITY) {
         return x / x;
@@ -2374,7 +2397,7 @@ fn ieee754_pow(x: f64, y: f64) -> f64 {
 
 /// glibc 2.19 `pow` (correctly rounded; special values of `__ieee754_pow` plus the `_POSIX_` mode
 /// `w_pow.c` wrapper, whose only value change is `pow(NaN, 0) = 1`).
-pub fn pow(x: f64, y: f64) -> f64 {
+fn pow_port(x: f64, y: f64) -> f64 {
     let z = ieee754_pow(x, y);
     if !z.is_finite() && x.is_nan() && y == 0.0 {
         return 1.0;
@@ -2440,4 +2463,43 @@ pub fn pi_rounded_multiples() -> [f64; 4] {
     let q = pi.clone().ldexp(-2);
     let tq = c.mul_u64(&q, 3);
     [big::rne(&pi), big::rne(&pi.clone().ldexp(-1)), big::rne(&q), big::rne(&tq)]
+}
+
+// ---------------------------------------------------------------------------------------------
+// public entry points of the ported functions: x86-64 NaN results on every host
+// ---------------------------------------------------------------------------------------------
+
+/// [`sin_port`] with x86-64's default NaN for NaNs it creates (see [`x86_nan`]).
+pub fn sin(x: f64) -> f64 {
+    x86_nan(sin_port(x), x.is_nan())
+}
+
+/// [`cos_port`] with x86-64's default NaN for NaNs it creates (see [`x86_nan`]).
+pub fn cos(x: f64) -> f64 {
+    x86_nan(cos_port(x), x.is_nan())
+}
+
+/// [`pow_port`] with x86-64's default NaN for NaNs it creates (see [`x86_nan`]).
+pub fn pow(x: f64, y: f64) -> f64 {
+    x86_nan(pow_port(x, y), x.is_nan() || y.is_nan())
+}
+
+/// [`sinf_port`] with x86-64's default NaN for NaNs it creates (see [`x86_nan`]).
+pub fn sinf(x: f32) -> f32 {
+    x86_nanf(sinf_port(x), x.is_nan())
+}
+
+/// [`cosf_port`] with x86-64's default NaN for NaNs it creates (see [`x86_nan`]).
+pub fn cosf(x: f32) -> f32 {
+    x86_nanf(cosf_port(x), x.is_nan())
+}
+
+/// [`tanf_port`] with x86-64's default NaN for NaNs it creates (see [`x86_nan`]).
+pub fn tanf(x: f32) -> f32 {
+    x86_nanf(tanf_port(x), x.is_nan())
+}
+
+/// [`powf_port`] with x86-64's default NaN for NaNs it creates (see [`x86_nan`]).
+pub fn powf(x: f32, y: f32) -> f32 {
+    x86_nanf(powf_port(x, y), x.is_nan() || y.is_nan())
 }
