@@ -1,133 +1,90 @@
-# blockheads-server
+<p align="center">
+  <img width="120" height="120" src="app/static/server-icon.svg" alt="Blockheads Server logo">
+</p>
 
-A clean-room Rust reimplementation of **The Blockheads 1.7.1 dedicated server**.
-Licensed under GPL-3.0-only.
+<h1 align="center">Blockheads Server</h1>
 
-It speaks the same wire protocol, reads and writes the same save format, and
-prints the same command-line help as the original server, so existing clients
-and worlds work unchanged.
+<p align="center">
+  Host your own <b>Blockheads</b> server for friends — on your PC, a Linux box, Docker or even your phone. 🌍
+</p>
 
-## Platforms
+<p align="center">
+  <img src="https://img.shields.io/maintenance/yes/2026?style=for-the-badge" alt="Maintained">
+  <a href="https://github.com/Blockheads-Club/blockheads-server/releases"><img src="https://img.shields.io/github/v/release/Blockheads-Club/blockheads-server?include_prereleases&style=for-the-badge" alt="Release"></a>
+  <a href="https://github.com/Blockheads-Club/blockheads-server/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/Blockheads-Club/blockheads-server/ci.yml?branch=dev&style=for-the-badge&label=CI" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/Blockheads-Club/blockheads-server?style=for-the-badge" alt="License"></a>
+</p>
 
-| OS      | x86_64 | aarch64 | armv7 |
-|---------|:------:|:-------:|:-----:|
-| Linux   | yes    | yes     | yes (Raspberry Pi) |
-| Windows | yes    | yes     | -     |
-| macOS   | yes    | yes     | -     |
-| Android | -      | yes (host app) | - |
+---
 
-An Android host app (and the same app as a desktop GUI) is built from this
-repository as well; see the project releases.
+## 🚀 Project Status
+**Current Status:** Alpha (v0.1.1 pre-release). A from-scratch rewrite of the official Blockheads 1.7.1 dedicated
+server: same network protocol, same save files, same commands. Existing game clients and worlds work unchanged.
 
-## Interoperability and legal notice
+It comes as a command-line server (like the original) and as the **Blockheads Server** app for desktop and Android,
+with a world list, start/stop, live log, connected players and a QR code for phones on your Wi-Fi.
 
-This is an independent reimplementation written for interoperability: it speaks the same wire protocol, reads and
-writes the same save format and prints the same command-line help as the original dedicated server. It contains
-**no original binaries or assets**. Compatibility tables that are required for protocol and save compatibility
-(item ids, recipes, wire and save layouts, loot and price tables, name lists, CLI option table and help text) are
-included as data. Parts of the numeric and text layers are ports of third-party code (glibc, fdlibm, GNUstep-base);
-see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+---
 
-This project is **not affiliated with, endorsed by, or connected to Majic Jungle or Noodlecake Studios**.
-"The Blockheads" is a trademark of its respective owners. You need your own legitimate copy of the game client to play.
+## 📦 Other Blockheads Club Repositories
+- [**blockheads-pc**](https://github.com/Blockheads-Club/blockheads-pc) - Play The Blockheads on your computer
+- [**blockheads-patcher**](https://github.com/Blockheads-Club/blockheads-patcher) - Fix crashes and add small improvements to the game on your phone
+- [**website**](https://github.com/Blockheads-Club/website) - The [Blockheads Club website](https://blockheads-club.github.io/website/): downloads, guides and docs
 
-## Quick start
+---
 
-Build from source (Rust stable, via [rustup](https://rustup.rs)):
+## ⚡ Trying Blockheads Server
+Download from the [latest release](https://github.com/Blockheads-Club/blockheads-server/releases/latest):
 
-```sh
+- **App (easiest):** Windows `.exe`, macOS `.dmg`, Linux `.AppImage` / `.deb` / `.rpm`, or the Android `.apk`.
+- **Command line:** the `.tar.gz` / `.zip` for your system (Linux x86_64, arm64 and armv7 / Raspberry Pi, Windows, macOS).
+
+```bash
+./blockheads_server --new MYWORLD --port 15151
+./blockheads_server --help      # same options as the original server
+```
+
+- **Docker:**
+
+```bash
+docker run -i --rm -p 15151:15151/udp -v bh-data:/data ghcr.io/blockheads-club/blockheads-server:0.1.1 --new MYWORLD
+```
+
+Players join with Join World -> Advanced... -> Online IP/Port. On Android 10+ the game client needs the popup fix from
+the [Blockheads Patcher](https://github.com/Blockheads-Club/blockheads-patcher) before it can connect.
+Guides and docs: [blockheads-club.github.io/website/docs](https://blockheads-club.github.io/website/docs/).
+
+---
+
+## 🛠️ Requirements
+**To host:** Linux, Windows or macOS (x86_64 or arm64; armv7 on Linux), or an Android phone. Players need their own
+copy of the game.
+
+**For contributors / development:** Rust stable ([rustup](https://rustup.rs)). For the app also [bun](https://bun.sh);
+for Android the Android SDK, NDK 27 and JDK 17 to 21.
+
+---
+
+## 🤝 Contributing
+Everyone can open [issues](https://github.com/Blockheads-Club/blockheads-server/issues) and pull requests. Irrelevant
+or abusive issues may be closed or removed. Commits follow [Conventional Commits](https://www.conventionalcommits.org).
+
+### Development Guide
+```bash
+git clone https://github.com/Blockheads-Club/blockheads-server.git
+cd blockheads-server
 cargo build --release -p blockheads_server
-```
-
-**Linux / macOS**
-
-```sh
-./target/release/blockheads_server --help
-./target/release/blockheads_server --new world1 --port 15151
-```
-
-**Windows (PowerShell)**
-
-```powershell
-.\target\release\blockheads_server.exe --help
-.\target\release\blockheads_server.exe --new world1 --port 15151
-```
-
-Prebuilt per-target archives, the Android APK, desktop bundles and a multi-arch
-Docker image (`ghcr.io/blockheads-club/blockheads-server`) are attached to each
-release. Run `--help` for the exact options; its output matches the original.
-
-### Android clients
-
-Modern Android builds of the game client need the popup fix from the
-[Blockheads Patcher](https://github.com/Blockheads-Club/blockheads-patcher)
-before they can connect.
-
-### Data directory
-
-Worlds live in `<home>/GNUstep/Library/ApplicationSupport/TheBlockheads` on every OS (`<home>` is `$HOME`, or
-`%USERPROFILE%` on Windows), exactly like the original. Set `BLOCKHEADS_DATA_DIR` to use another directory as that
-`TheBlockheads` folder (the Docker image uses `/data`). There is no CLI flag for it, so `--help` stays identical to
-the original.
-
-### Docker
-
-```sh
-docker run -i --rm -p 15151:15151/udp -v bh-data:/data ghcr.io/blockheads-club/blockheads-server:alpha --new MYWORLD
-```
-
-Keep `-i` so the console (`/stop`, chat) can be used.
-
-### Embedding
-
-`blockheads_server::host` runs the server inside another program (used by the desktop and Android host app):
-`start(config, log_callback)` returns a handle with `status()`, `send_command()`, `stop()`, and
-`list_worlds` / `create_world` / `delete_world` manage worlds. A server can be started again after it stopped,
-in the same process.
-
-## Development
-
-```sh
-cargo build --workspace
 cargo test --workspace
 ```
 
-Workspace crates: `blockheads_server` (library and binary), `bh_testclient`
-(protocol test client and differential harness), `bh_tools` (probes).
+More: [docs/development.md](docs/development.md) (tests, data directory, embedding, the desktop and Android app,
+releases).
 
-Some tests compare against reference material that is not part of this
-repository. They skip cleanly unless these environment variables are set:
+---
 
-- `BH_PRIVATE_DOCS` - directory with optional golden fixtures (`protocol_vectors/`, `plist_golden/`, `app_cli_getopt/`, `cli_golden.json`, `enums.md`, ...)
-- `BH_REFENV` - reference environment directory (needs docker)
-- `BH_REF_BINARY` - reference binary for gdb RNG traces
-- `BH_PARITY=1` - enable the docker-based parity tests
+## 📄 License
+Blockheads Server is licensed under **GNU GPLv3** (GPL-3.0-only). See the [LICENSE](LICENSE) file for details.
+Third-party code ports are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-Coverage: `cargo llvm-cov --workspace`.
-
-Commits follow [Conventional Commits](https://www.conventionalcommits.org);
-releases are cut by pushing a signed tag `vX.Y.Z` on `dev`: `.github/workflows/release.yml` builds
-every asset into a draft GitHub release, which is published by hand once CI is green.
-
-The `faithful-crashes` cargo feature (emulating original crash behaviour) is
-off by default.
-
-## Host app (desktop and Android)
-
-`app/` is a Tauri 2 + SvelteKit app ("Blockheads Server") that runs the server in-process on a background thread:
-world list/create/delete, start/stop with live log and connected players, LAN address + QR code for phones, admin/mod/
-white/black list editors, English and Turkish UI. On Android a Kotlin foreground service (notification, partial wake
-lock, Wi-Fi lock) keeps it running in the background; the APK contains arm64-v8a, armeabi-v7a and x86_64 libraries.
-
-```sh
-cd app
-bun install
-bun tauri dev                                   # desktop
-bun tauri build                                 # desktop bundle
-bun tauri android build --debug --apk --target aarch64 --target armv7 --target x86_64
-bun run test && bun run test:e2e                # vitest + Playwright (mocked Tauri commands)
-(cd src-tauri && cargo test --lib)              # command layer
-```
-
-Android builds need JDK 17 to 21 (Gradle does not support newer JDKs yet), the Android SDK and NDK 27.
-Set `CARGO_INCREMENTAL=0` when building several ABIs in parallel.
+Unofficial, independent reimplementation for interoperability. It contains no original binaries or assets and is not
+affiliated with Majic Jungle or Noodlecake Studios.
