@@ -1,0 +1,20 @@
+/target
+**/target/
+node_modules/
+.svelte-kit/
+build/
+dist/
+*.apk
+*.aab
+*.keystore
+*.jks
+.env
+.env.*
+.DS_Store
+.idea/
+.vscode/
+# Local-only reference material and fixtures; never committed
+/private/
+.next-version
+dist/
+docker-bin/

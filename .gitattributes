@@ -1,0 +1,2 @@
+*.bin binary
+crates/blockheads_server/tests/data/*.txt -text

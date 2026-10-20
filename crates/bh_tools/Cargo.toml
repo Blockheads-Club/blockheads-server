@@ -1,0 +1,22 @@
+[package]
+name = "bh_tools"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+rusty_enet = { workspace = true }
+heed = { workspace = true }
+anyhow = { workspace = true }
+
+[[bin]]
+name = "enet_probe"
+path = "src/bin/enet_probe.rs"
+
+[[bin]]
+name = "lmdb_probe"
+path = "src/bin/lmdb_probe.rs"
+
+[lints]
+workspace = true

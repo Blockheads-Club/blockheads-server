@@ -1,0 +1,16 @@
+[package]
+name = "tauri-plugin-hostservice"
+version = "0.1.0"
+description = "Android foreground service (notification, wake lock, Wi-Fi lock) that keeps the server alive in the background"
+edition = "2021"
+rust-version = "1.86"
+license = "GPL-3.0-only"
+links = "tauri-plugin-hostservice"
+
+[dependencies]
+tauri = { version = "2" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[build-dependencies]
+tauri-plugin = { version = "2", features = ["build"] }

@@ -1,0 +1,39 @@
+[workspace]
+resolver = "2"
+members = ["crates/blockheads_server", "crates/bh_testclient", "crates/bh_tools"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.86"
+license = "GPL-3.0-only"
+
+[workspace.dependencies]
+rusty_enet = "0.4"
+heed = { version = "0.22", default-features = false }
+flate2 = { version = "1", default-features = false, features = ["zlib"] }
+# Not used directly: forces flate2's zlib backend to build the bundled C zlib (no system zlib needed when cross compiling).
+libz-sys = { version = "1", default-features = false, features = ["static"] }
+md-5 = "0.10"
+base64 = "0.22"
+libc = "0.2"
+socket2 = "0.5"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+lmdb-master-sys = "=0.2.6"
+anyhow = "1"
+
+# The original is a C/ObjC binary: unwinding is needed to emulate its exception catch sites.
+[profile.dev]
+panic = "unwind"
+overflow-checks = true
+
+[profile.release]
+panic = "unwind"
+overflow-checks = false
+debug = 1
+
+# Faithful float expressions (`x - x`, `x / x`, literal PI/TAU constants, `* 0`) are game behaviour, not mistakes.
+[workspace.lints.clippy]
+approx_constant = "allow"
+eq_op = "allow"
+erasing_op = "allow"

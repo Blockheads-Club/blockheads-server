@@ -1,0 +1,49 @@
+[package]
+name = "blockheads_server"
+description = "Clean-room reimplementation of The Blockheads 1.7.1 dedicated server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+name = "blockheads_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "blockheads_server"
+path = "src/main.rs"
+
+[features]
+default = ["trace-rng"]
+# NOTE: faithful-crashes reproduces aborts that only happen in the docker reference env (old libobjc cannot parse
+# block type encodings). Real clients hit them (e.g. 0x4c + 0x05 on join), so keep it OFF for real servers;
+# enable it explicitly for parity tests: --features faithful-crashes
+# log every rand()/MT draw as (caller tag, value)
+trace-rng = []
+# reproduce original-binary crashes (DatabaseConvertor light-block SIGSEGV)
+faithful-crashes = []
+
+[dependencies]
+rusty_enet = { workspace = true }
+heed = { workspace = true }
+flate2 = { workspace = true }
+libz-sys = { workspace = true }
+md-5 = { workspace = true }
+base64 = { workspace = true }
+lmdb-master-sys = { workspace = true }
+socket2 = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+chrono = { workspace = true }
+
+[dev-dependencies]
+serde_json = "1"
+regex = "1"
+tempfile = "3"
+
+[lints]
+workspace = true
