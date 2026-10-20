@@ -307,4 +307,4 @@ jobs:
           labels: |
             org.opencontainers.image.source=https://github.com/Blockheads-Club/blockheads-server
             org.opencontainers.image.version=${{ needs.plan.outputs.version }}
-            org.opencontainers.image.licenses=GPL-3.0-only
+            org.opencontainers.image.licenses=GPL-3.0-or-later

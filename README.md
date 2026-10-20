@@ -83,7 +83,7 @@ releases).
 ---
 
 ## 📄 License
-Blockheads Server is licensed under **GNU GPLv3** (GPL-3.0-only). See the [LICENSE](LICENSE) file for details.
+Blockheads Server is licensed under **GNU GPLv3 or later** (GPL-3.0-or-later). This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version. See the [LICENSE](LICENSE) file for details.
 Third-party code ports are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 Unofficial, independent reimplementation for interoperability. It contains no original binaries or assets and is not

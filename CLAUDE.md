@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Clean-room Rust reimplementation of The Blockheads 1.7.1 dedicated server (GPL-3.0-only).
+Clean-room Rust reimplementation of The Blockheads 1.7.1 dedicated server (GPL-3.0-or-later).
 
 ## Rules
 - Do not change game behaviour, protocol bytes, save formats, RNG order, or CLI output

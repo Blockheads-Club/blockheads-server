@@ -296,7 +296,7 @@ export const kk: Record<Key, string> = {
   'settings.about': 'Бағдарлама туралы',
   'settings.version': 'Нұсқа',
   'settings.fan': 'бейресми жанкүйерлер жобасы',
-  'settings.license': 'The Blockheads арнайы серверінің Rust тілінде нөлден жасалған тәуелсіз нұсқасы. GPL-3.0-only.',
+  'settings.license': 'The Blockheads арнайы серверінің Rust тілінде нөлден жасалған тәуелсіз нұсқасы. GPL-3.0-or-later.',
   'settings.unsaved': 'Сақталмаған өзгерістер',
   'settings.changes': '{n} сақталмаған өзгеріс',
   'settings.needsRestart': 'сақтағанда сервер қайта қосылады',

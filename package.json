@@ -2,7 +2,7 @@
   "name": "blockheads-server-release",
   "private": true,
   "description": "Tooling only (commitlint). The server itself is a Rust workspace.",
-  "license": "GPL-3.0-only",
+  "license": "GPL-3.0-or-later",
   "scripts": {
     "commitlint": "commitlint"
   },

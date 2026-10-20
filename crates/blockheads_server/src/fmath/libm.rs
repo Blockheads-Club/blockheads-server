@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only AND LGPL-2.1-or-later
+// SPDX-License-Identifier: GPL-3.0-or-later AND LGPL-2.1-or-later
 // Contains derived work; see THIRD_PARTY_NOTICES.md.
 //! glibc 2.19 x86-64 libm parity layer.
 //!

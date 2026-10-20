@@ -296,7 +296,7 @@ export const ru: Record<Key, string> = {
   'settings.about': 'О программе',
   'settings.version': 'Версия',
   'settings.fan': 'неофициальный фанатский проект',
-  'settings.license': 'Независимая реализация выделенного сервера The Blockheads на Rust с нуля. GPL-3.0-only.',
+  'settings.license': 'Независимая реализация выделенного сервера The Blockheads на Rust с нуля. GPL-3.0-or-later.',
   'settings.unsaved': 'Несохранённые изменения',
   'settings.changes': '{n, plural, one {# несохранённое изменение} few {# несохранённых изменения} many {# несохранённых изменений} other {# несохранённого изменения}}',
   'settings.needsRestart': 'при сохранении сервер перезапустится',

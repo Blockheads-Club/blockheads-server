@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only AND LGPL-2.1-or-later
+// SPDX-License-Identifier: GPL-3.0-or-later AND LGPL-2.1-or-later
 // Contains derived work; see THIRD_PARTY_NOTICES.md.
 //! `NSString` semantics (GNUstep-base 1.24): UTF-16 lengths/ranges, hash, case mapping, comparison, number parsing,
 //!

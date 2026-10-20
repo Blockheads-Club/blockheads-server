@@ -1,6 +1,6 @@
 # Third-party notices
 
-This repository is licensed under GPL-3.0-only. Some source files contain code or data derived from the projects
+This repository is licensed under GPL-3.0-or-later. Some source files contain code or data derived from the projects
 below. Their licences are compatible with GPL-3.0 and their notices are reproduced or referenced here.
 
 ## glibc 2.19 (LGPL-2.1-or-later)
