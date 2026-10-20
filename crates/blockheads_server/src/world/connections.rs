@@ -1086,7 +1086,7 @@ mod tests {
         let _g = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let home = format!("{}/bhwc_mute_{}", std::env::temp_dir().display(), std::process::id());
         let _ = std::fs::remove_dir_all(&home);
-        std::env::set_var("HOME", &home);
+        crate::foundation::paths::set_home_for_test(&home);
         std::fs::create_dir_all(format!("{}/GNUstep/Library/ApplicationSupport/TheBlockheads/saves/sv", home)).unwrap();
         let f = fixture(32);
         let w = &f.world;

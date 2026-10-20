@@ -614,7 +614,7 @@ mod tests {
     ) -> (Rc<World>, String, Vec<Rc<Database>>, (Rc<DatabaseEnvironment>, std::sync::MutexGuard<'static, ()>)) {
         let guard = crate::world::lifecycle::testkit::HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let home = tmpdir(tag);
-        std::env::set_var("HOME", &home);
+        crate::foundation::paths::set_home_for_test(&home);
         let world = World::alloc(32);
         *world.save_id.borrow_mut() = Some("sv".to_string());
         let wd = format!("{}/saves/sv", paths::appsup());

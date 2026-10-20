@@ -1780,7 +1780,7 @@ mod tests {
         let home = format!("{}/bhwc_{}_{}", std::env::temp_dir().display(), tag, std::process::id());
         let _ = std::fs::remove_dir_all(&home);
         std::fs::create_dir_all(&home).unwrap();
-        std::env::set_var("HOME", &home);
+        crate::foundation::paths::set_home_for_test(&home);
         (g, home)
     }
 

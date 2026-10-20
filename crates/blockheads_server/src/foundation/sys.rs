@@ -68,6 +68,68 @@ pub fn page_size() -> u64 {
     4096
 }
 
+/// Process memory as `(total, resident, shared)` in bytes on hosts without `/proc/self/statm`: the
+/// equivalents of statm's size / resident / share fields. macOS: `task_info(MACH_TASK_BASIC_INFO)` virtual and
+/// resident size; Windows: `GetProcessMemoryInfo` commit charge and working set. Neither reports a shared
+/// (file-backed) resident figure, so that is 0. `None` where no query exists or it fails.
+pub fn process_memory() -> Option<(u64, u64, u64)> {
+    #[cfg(target_vendor = "apple")]
+    {
+        #[allow(deprecated)]
+        // SAFETY: task_info writes at most `count` naturals into the correctly sized, zeroed struct.
+        unsafe {
+            let mut info: libc::mach_task_basic_info = std::mem::zeroed();
+            let mut count = libc::MACH_TASK_BASIC_INFO_COUNT;
+            let kr = libc::task_info(
+                libc::mach_task_self(),
+                libc::MACH_TASK_BASIC_INFO,
+                &mut info as *mut libc::mach_task_basic_info as libc::task_info_t,
+                &mut count,
+            );
+            if kr != libc::KERN_SUCCESS {
+                return None;
+            }
+            Some((info.virtual_size, info.resident_size, 0))
+        }
+    }
+    #[cfg(windows)]
+    {
+        #[repr(C)]
+        struct ProcessMemoryCounters {
+            cb: u32,
+            page_fault_count: u32,
+            peak_working_set_size: usize,
+            working_set_size: usize,
+            quota_peak_paged_pool_usage: usize,
+            quota_paged_pool_usage: usize,
+            quota_peak_non_paged_pool_usage: usize,
+            quota_non_paged_pool_usage: usize,
+            pagefile_usage: usize,
+            peak_pagefile_usage: usize,
+        }
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn GetCurrentProcess() -> *mut std::ffi::c_void;
+            fn K32GetProcessMemoryInfo(process: *mut std::ffi::c_void, pmc: *mut ProcessMemoryCounters, cb: u32)
+                -> i32;
+        }
+        let cb = std::mem::size_of::<ProcessMemoryCounters>() as u32;
+        // SAFETY: the struct matches PROCESS_MEMORY_COUNTERS and `cb` is its size; the pseudo handle needs no close.
+        unsafe {
+            let mut pmc: ProcessMemoryCounters = std::mem::zeroed();
+            pmc.cb = cb;
+            if K32GetProcessMemoryInfo(GetCurrentProcess(), &mut pmc, cb) == 0 {
+                return None;
+            }
+            Some((pmc.pagefile_usage as u64, pmc.working_set_size as u64, 0))
+        }
+    }
+    #[cfg(not(any(target_vendor = "apple", windows)))]
+    {
+        None
+    }
+}
+
 /// `strerror(errno)` text (perror style, without Rust's "(os error N)" suffix).
 pub fn strerror(e: &std::io::Error) -> String {
     #[cfg(unix)]

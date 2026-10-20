@@ -1,10 +1,18 @@
 //! APPSUP paths and GNUstep path-string helpers.
 //!
 
+/// The environment variable that names the home directory: `HOME`, `USERPROFILE` on Windows.
+pub const HOME_VAR: &str = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+
+/// Point the home directory at `dir` (tests: what setting `$HOME` does on Unix, on every host).
+#[cfg(test)]
+pub(crate) fn set_home_for_test(dir: impl AsRef<std::ffi::OsStr>) {
+    std::env::set_var(HOME_VAR, dir);
+}
+
 /// `$HOME` (`%USERPROFILE%` on Windows), else the passwd entry (NSHomeDirectory).
 pub fn home_dir() -> String {
-    let var = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
-    if let Ok(h) = std::env::var(var) {
+    if let Ok(h) = std::env::var(HOME_VAR) {
         if !h.is_empty() {
             return h;
         }

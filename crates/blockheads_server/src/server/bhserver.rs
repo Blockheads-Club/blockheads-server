@@ -1086,7 +1086,7 @@ pub(crate) mod test_support {
         // Other test modules also repoint $HOME; re-assert ours on every call (tests run single-threaded).
         let d = std::env::temp_dir().join(format!("bh_server_tests_{}", std::process::id()));
         let _ = std::fs::create_dir_all(&d);
-        std::env::set_var("HOME", &d);
+        crate::foundation::paths::set_home_for_test(&d);
         INIT.call_once(|| {});
     }
 

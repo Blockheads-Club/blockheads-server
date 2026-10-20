@@ -22,6 +22,12 @@ pub fn gzip_deflate(data: &[u8]) -> Vec<u8> {
             Err(_) => break, // deflate's return code is ignored by the original
         }
     }
+    // The gzip header's OS byte is zlib's compile-time OS_CODE: 3 (Unix) in the original Linux server, but
+    // 19 on macOS and 10 on Windows builds of the bundled zlib. It is not covered by any checksum, so pin it
+    // to the original's value: the bytes on the wire and in saves are then identical on every host.
+    if out.len() > 9 {
+        out[9] = 3;
+    }
     out
 }
 

@@ -550,8 +550,7 @@ impl BHServer {
         result.push_str("server version:1.7.1\n");
         result.push_str(&format!("connectedClients:{}\n", self.connected_clients.borrow().len()));
         if let Some((size, resident, share)) = read_off_memory_status() {
-            let page = crate::foundation::sys::page_size();
-            let mb = |pages: u64| -> f64 { ((pages.wrapping_mul(page)) as f32 / 1048576.0f32) as f64 };
+            let mb = |bytes: u64| -> f64 { (bytes as f32 / 1048576.0f32) as f64 };
             result.push_str(&format!(
                 "memory usage: total:{:.2} MB resident:{:.2} MB share:{:.2} MB\n",
                 mb(size),
@@ -566,8 +565,10 @@ impl BHServer {
     }
 }
 
-/// `read_off_memory_status`: the first three numbers of `/proc/self/statm` (pages), `None` on failure
-/// (then `perror("/proc/self/statm")` goes to stderr).
+/// `read_off_memory_status`: the first three numbers of `/proc/self/statm` (pages), as bytes; `None` on failure
+/// (then `perror("/proc/self/statm")` goes to stderr). Hosts without procfs (macOS, Windows) report the same
+/// three figures from the native process-memory query instead.
+#[cfg(not(any(target_vendor = "apple", windows)))]
 fn read_off_memory_status() -> Option<(u64, u64, u64)> {
     match std::fs::read_to_string("/proc/self/statm") {
         Err(e) => {
@@ -582,9 +583,15 @@ fn read_off_memory_status() -> Option<(u64, u64, u64)> {
                 eprintln!("/proc/self/statm: Success");
                 return None;
             }
-            Some((nums[0], nums[1], nums[2]))
+            let page = crate::foundation::sys::page_size();
+            Some((nums[0].wrapping_mul(page), nums[1].wrapping_mul(page), nums[2].wrapping_mul(page)))
         }
     }
+}
+
+#[cfg(any(target_vendor = "apple", windows))]
+fn read_off_memory_status() -> Option<(u64, u64, u64)> {
+    crate::foundation::sys::process_memory()
 }
 
 #[cfg(test)]
