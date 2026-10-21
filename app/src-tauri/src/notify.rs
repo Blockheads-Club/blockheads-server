@@ -45,7 +45,7 @@ const TR: Strings = Strings {
     copy: "Adresi kopyala",
     console: "Konsol",
     crashed: "Sunucu beklenmedik şekilde durdu",
-    crashed_body: "Nedenini görmek için dokunun.",
+    crashed_body: "Nedenini görmek için dokun.",
     open_log: "Günlüğü aç",
 };
 
