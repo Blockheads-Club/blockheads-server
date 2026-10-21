@@ -27,7 +27,7 @@ describe('splash window page', () => {
     expect(screen.queryByRole('status')).toBeNull();
     await waitFor(() => expect(mock.api.onSplashState).toHaveBeenCalled());
     push(st({ lang: 'tr' }));
-    expect(await screen.findByRole('status', { name: 'Blockheads Server başlıyor' })).toBeVisible();
+    expect(await screen.findByRole('status', { name: 'Blockheads Sunucusu başlıyor' })).toBeVisible();
   });
 
   it('picks up the state set before it opened and wires its buttons', async () => {

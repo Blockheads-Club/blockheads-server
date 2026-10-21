@@ -37,7 +37,7 @@ const EN: Strings = Strings {
 const TR: Strings = Strings {
     running: "Çalışıyor",
     starting: "Başlıyor",
-    stopping: "Duruyor",
+    stopping: "Durduruluyor",
     loading: "{world} yükleniyor…",
     players_of: "{n}/{max} oyuncu çevrimiçi",
     players: "{n} oyuncu çevrimiçi",
@@ -67,8 +67,8 @@ const RU: Strings = Strings {
 
 const KK: Strings = Strings {
     running: "Қосулы",
-    starting: "Қосылуда",
-    stopping: "Тоқтауда",
+    starting: "Іске қосылуда",
+    stopping: "Тоқтатылуда",
     loading: "{world} жүктелуде…",
     players_of: "Желідегі ойыншылар: {n} / {max}",
     players: "Желідегі ойыншылар: {n}",
@@ -211,7 +211,7 @@ mod tests {
         assert_eq!(i.text, "Игроков онлайн: 1 из 8");
         assert_eq!(service_info("ru", &p, "Ada", None, 0).unwrap().text, "Игроков онлайн: 1");
         let i = service_info("kk", &poll("starting", vec![]), "Ada", None, 0).unwrap();
-        assert_eq!(i.title, "Қосылуда · Ada");
+        assert_eq!(i.title, "Іске қосылуда · Ada");
         assert_eq!(i.text, "Ada жүктелуде…");
         assert_eq!(service_info("kk", &p, "Ada", None, 8).unwrap().text, "Желідегі ойыншылар: 1 / 8");
         assert_eq!(service_info("kk", &p, "Ada", None, 0).unwrap().stop_label, "Серверді тоқтату");
