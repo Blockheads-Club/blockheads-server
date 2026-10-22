@@ -76,14 +76,12 @@ impl HostServer {
         cfg.port = Some(port);
         let log = Arc::new(Mutex::new(String::new()));
         let l2 = log.clone();
-        let h = host::start(
-            cfg,
-            Arc::new(move |s: &str| {
-                let mut g = l2.lock().unwrap_or_else(|e| e.into_inner());
-                g.push_str(s);
-                g.push('\n');
-            }),
-        )?;
+        let sink: host::LogCallback = Arc::new(move |s: &str| {
+            let mut g = l2.lock().unwrap_or_else(|e| e.into_inner());
+            g.push_str(s);
+            g.push('\n');
+        });
+        let h = host::start(cfg, sink)?;
         Ok(HostServer { name: format!("host-{}", spec.tag), h: Some(h), port, data, log, tmp, exit: None })
     }
 
@@ -142,10 +140,7 @@ impl ServerHandle for HostServer {
     /// Stops the server. Unlike SIGINT on the reference this also saves; callers wait for saves first anyway.
     fn stop_sigint(&mut self, _grace: Duration) -> Result<Option<i32>> {
         if let Some(mut h) = self.h.take() {
-            self.exit = Some(match h.stop() {
-                Status::Stopped(c) => c,
-                _ => -1,
-            });
+            self.exit = Some(if let Status::Stopped(c) = h.stop() { c } else { -1 });
         }
         Ok(self.exit)
     }
@@ -218,5 +213,39 @@ mod tests {
         assert!(host_config(&a(&["--new"])).is_err());
         assert!(host_config(&a(&["--save_delay", "x"])).is_err());
         assert!(host_config(&a(&["--max_players", "x"])).is_err());
+    }
+
+    /// The whole handle on a small new world: log waits, saves, console, stop, keep_data, drop while running.
+    #[test]
+    fn host_server_lifecycle() {
+        let spec = |tag: &str| RunSpec {
+            tag: tag.into(),
+            args: a(&["--new", "x", "--world_width", "1/16"]),
+            ..Default::default()
+        };
+        let mut s = HostServer::start(&spec("inproc")).unwrap();
+        assert_eq!(s.name(), "host-inproc");
+        assert!(s.port() > 0);
+        s.wait_for_log("World load complete.", Duration::from_secs(120)).unwrap();
+        assert!(matches!(s.wait_for_log("never printed", Duration::from_millis(100)), Err(HarnessError::Timeout(_))));
+        assert!(matches!(
+            s.wait_for_saves("no-such-world", 1, Duration::from_millis(100)),
+            Err(HarnessError::Timeout(_))
+        ));
+        s.send_console("/help").unwrap();
+        assert!(s.is_running());
+        assert_eq!(s.stop_sigint(Duration::from_secs(1)).unwrap(), Some(0));
+        assert_eq!(s.stop_sigint(Duration::from_secs(1)).unwrap(), Some(0), "already stopped");
+        assert!(!s.is_running());
+        assert!(matches!(s.send_console("/help"), Err(HarnessError::Usage(_))));
+        let kept = s.keep_data();
+        assert_eq!(kept, s.data_dir());
+        drop(s);
+        assert!(kept.exists());
+        std::fs::remove_dir_all(kept.parent().unwrap()).unwrap();
+        // dropped while running: stopped by Drop
+        let mut s = HostServer::start(&spec("inproc-drop")).unwrap();
+        s.wait_for_log("World load complete.", Duration::from_secs(120)).unwrap();
+        drop(s);
     }
 }

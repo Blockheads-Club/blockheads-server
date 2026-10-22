@@ -31,9 +31,7 @@ pub trait ServerHandle {
     /// Data root (the reference's `DATA_DIR`, our `HOME/GNUstep`).
     fn data_dir(&self) -> PathBuf;
     /// Type a line into the server console (needs `RunSpec::console`).
-    fn send_console(&mut self, _line: &str) -> Result<()> {
-        Err(HarnessError::Usage(format!("{}: no console (RunSpec::console not set)", self.name())))
-    }
+    fn send_console(&mut self, line: &str) -> Result<()>;
     /// Do not delete the data dir when the handle is dropped; returns its path.
     fn keep_data(&mut self) -> PathBuf;
 }
@@ -633,5 +631,79 @@ mod tests {
         assert!(!s.is_running());
         let e = s.wait_for_log("never printed", Duration::from_millis(200));
         assert!(matches!(e, Err(HarnessError::Timeout(_))));
+    }
+
+    fn script(dir: &Path, name: &str, body: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let p = dir.join(name);
+        std::fs::write(&p, format!("#!/bin/sh\n{}", body)).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        p
+    }
+
+    /// Prints the load line, then echoes every console line it reads.
+    const CONSOLE: &str = "echo \"2026-10-16 20:30:41.724 x[6] World load complete.\" >&2\n\
+                           while read l; do echo \"console: $l\" >&2; done\nsleep 30\n";
+
+    /// Restores an environment variable when dropped (the test binaries run single-threaded).
+    struct EnvGuard(&'static str, Option<std::ffi::OsString>);
+    impl EnvGuard {
+        fn set(k: &'static str, v: impl AsRef<std::ffi::OsStr>) -> EnvGuard {
+            let g = EnvGuard(k, std::env::var_os(k));
+            std::env::set_var(k, v);
+            g
+        }
+    }
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.1 {
+                Some(v) => std::env::set_var(self.0, v),
+                None => std::env::remove_var(self.0),
+            }
+        }
+    }
+
+    /// Console input reaches our server's stdin; without `RunSpec::console` there is none.
+    #[test]
+    fn our_server_console_with_fake_binary() {
+        let tmp = TempDir::new("fake-console").unwrap();
+        let bin = script(tmp.path(), "fake_server.sh", CONSOLE);
+        let _g = EnvGuard::set("BH_SERVER_BIN", &bin);
+        let spec = RunSpec { tag: "fake-console".into(), console: true, ..Default::default() };
+        let mut s = OurServer::start(&spec).unwrap();
+        s.wait_for_log("World load complete.", Duration::from_secs(5)).unwrap();
+        s.send_console("/list").unwrap();
+        s.wait_for_log("console: /list", Duration::from_secs(5)).unwrap();
+        let mut s = OurServer::start(&RunSpec { console: false, ..spec }).unwrap();
+        assert!(matches!(s.send_console("/list"), Err(HarnessError::Usage(_))));
+        // the RNG trace runner stops when the server exits without writing a trace
+        let _g2 = EnvGuard::set("BH_SERVER_BIN", script(tmp.path(), "exits.sh", "exit 0\n"));
+        let out = tmp.path().join("rng.txt");
+        let _ = crate::harness::gdb_rng::run_our_trace(&[], Some(1), 10, &out);
+    }
+
+    /// The reference launchers with a fake reference environment and a fake `docker` on `PATH`: `run_ref.sh`,
+    /// `docker run -i` for a console, and `run_ref_debug.sh`.
+    #[test]
+    fn reference_launchers_with_fakes() {
+        let tmp = TempDir::new("fake-ref").unwrap();
+        let bin = tmp.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        script(&bin, "docker", &format!("if [ \"$1\" = run ]; then\n{}fi\nexit 0\n", CONSOLE));
+        script(tmp.path(), "run_ref.sh", "echo \"x[1] World load complete.\" >&2\nsleep 30\n");
+        script(tmp.path(), "run_ref_debug.sh", "echo \"Listening on port $GDBPORT\" >&2\nsleep 30\n");
+        let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default());
+        let _p = EnvGuard::set("PATH", path);
+        let _r = EnvGuard::set("BH_REFENV", tmp.path());
+        let spec = RunSpec { tag: "fake-ref".into(), ..Default::default() };
+        let mut r = RefServer::start(&spec).unwrap();
+        r.wait_for_log("World load complete.", Duration::from_secs(5)).unwrap();
+        assert!(matches!(r.send_console("/list"), Err(HarnessError::Usage(_))));
+        let mut c = RefServer::start(&RunSpec { console: true, ..spec.clone() }).unwrap();
+        c.wait_for_log("World load complete.", Duration::from_secs(5)).unwrap();
+        c.send_console("/list").unwrap();
+        c.wait_for_log("console: /list", Duration::from_secs(5)).unwrap();
+        let d = RefDebugServer::start(&spec).unwrap();
+        assert!(d.gdb_port() > 0);
     }
 }
