@@ -36,6 +36,10 @@ use crate::worldgen::tile_loader::{DynamicObjectsNetData, WorldTileLoader, World
 
 mod actor_hosts;
 mod blockhead_host;
+#[cfg(test)]
+mod hook_fixture;
+#[cfg(test)]
+mod hook_tests;
 
 /// The dynamic object type whose class is `name` (`classNameForDynamicObjectType`); 0 when unknown.
 fn dyn_type_named(name: &str) -> usize {

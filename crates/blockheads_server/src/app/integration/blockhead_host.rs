@@ -31,7 +31,7 @@ thread_local! {
     /// The object entries of the last `infoForPathRecalculation` extra data per (blockhead, path type): the path
     /// request goes through the path creator as a plist, which cannot hold the workbench / interaction object /
     /// craftable item object the original's dictionary carries; `setPath:...extraData:` gets them back from here.
-    static PENDING_PATH_OBJECTS: RefCell<HashMap<(u64, i32), PathExtraData>> = RefCell::new(HashMap::new());
+    pub(super) static PENDING_PATH_OBJECTS: RefCell<HashMap<(u64, i32), PathExtraData>> = RefCell::new(HashMap::new());
 }
 
 /// Temporary `SubSlot`s sharing the items of `subs` (the inherent methods take shared slots).
@@ -135,10 +135,9 @@ impl crate::blockhead::blockhead::BlockheadHost for BlockheadGlue {
                 }
             }
         });
-        match PlistValue::dict(d) {
-            PlistValue::Dict(d) => Some(d),
-            _ => None,
-        }
+        let mut out = crate::objects::base::new_mutable_dict();
+        out.map = d;
+        Some(out)
     }
     fn set_path_type_goal_interaction_extra_data(
         &self,

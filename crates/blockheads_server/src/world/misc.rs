@@ -921,10 +921,9 @@ fn events_record(ev: &crate::world::simulation::BlockheadEvents) -> PlistDict {
         };
         rec.insert(ty.to_string(), v);
     }
-    match PlistValue::dict(rec) {
-        PlistValue::Dict(d) => d,
-        _ => unreachable!("PlistValue::dict makes a dictionary"),
-    }
+    let mut d = crate::objects::base::new_mutable_dict();
+    d.map = rec;
+    d
 }
 
 impl World {
@@ -1590,6 +1589,38 @@ mod tests {
         PlistValue::array(vec![PlistValue::string("fell")])
     }
     const P: &str = "While you were away, Bob";
+
+    /// The away-simulation events recorded by `addSimulationEventOfType:forBlockhead:extraData:` (typed, world::
+    /// simulation) are what the welcome-back text is made of.
+    #[test]
+    fn welcome_back_from_recorded_away_events() {
+        use crate::world::simulation::{with_away_client_simulation_events, BlockheadEvents, SimEvent};
+        let w = World::alloc(32);
+        let mut events = GsDict::new();
+        events.insert(0, SimEvent::Count(1)); // slept
+        events.insert(1, SimEvent::Items(GsDict::from_pairs([(1048i64, 2i32)]))); // crafted
+        events.insert(2, SimEvent::Items(GsDict::from_pairs([(1048i64, 3i32)]))); // got
+        events.insert(3, SimEvent::Places(GsDict::from_pairs([("sow".to_string(), 2i32)])));
+        events.insert(4, SimEvent::Damage(GsDict::from_pairs([("hurt".to_string(), "hurt".to_string())])));
+        events.insert(5, SimEvent::Count(1)); // collapsed
+        let mut per_bh = GsDict::new();
+        per_bh.insert(7u64, BlockheadEvents { name: Some("bob".into()), events });
+        per_bh.insert(8u64, BlockheadEvents { name: None, events: GsDict::new() });
+        with_away_client_simulation_events(|a| {
+            let mut m = GsDict::new();
+            m.insert("cid".to_string(), per_bh);
+            *a = Some(m);
+        });
+        let msg = w.welcome_back_events_message_for_client_id("cid").expect("message");
+        assert!(msg.starts_with("While you were away,"), "{msg}");
+        for part in ["Bob", "was hurt", "slept", "crafted", "planted 2 seeds", "collapsing from exhaustion", "(null)"] {
+            assert!(msg.contains(part), "{part} missing in {msg}");
+        }
+        assert_eq!(w.welcome_back_events_message_for_client_id("other"), None);
+        // the offline catch-up simulation reads `simulationEvents`
+        assert_eq!(w.welcome_back_message_for_simulation_events(), None);
+        with_away_client_simulation_events(|a| *a = None);
+    }
 
     #[test]
     fn welcome_back_degenerate_inputs() {

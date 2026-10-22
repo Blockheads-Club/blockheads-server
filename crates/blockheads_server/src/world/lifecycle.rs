@@ -597,6 +597,12 @@ impl World {
         DELEGATE.with(|d| d.borrow().as_ref().and_then(|w| w.upgrade()))
     }
 
+    /// Test helper: the delegate `World::init` would store.
+    #[cfg(test)]
+    pub(crate) fn set_core_delegate_for_tests(d: Option<Weak<dyn WorldDelegate>>) {
+        DELEGATE.with(|x| *x.borrow_mut() = d);
+    }
+
     /// `[server sendNetworkData:data toPeers:peers reliable:reliable]` (no-op without a server).
     pub(crate) fn send_to_peers(&self, data: &[u8], peers: Option<&[String]>, reliable: bool) {
         if self.server.borrow().is_some() {
