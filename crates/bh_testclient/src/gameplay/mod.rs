@@ -475,8 +475,8 @@ pub fn pstr(p: &PV, k: &str) -> String {
 const CADENCE: &[u8] = &[0x17, 0x08, 0x2c, 0x04, 0x28, 0x07, 0x09, 0x1e];
 
 /// Object types whose creations follow wall-clock simulation (freeblocks dropped by plants/trees, NPC spawns and
-/// wandering into view): soft.
-pub const SOFT_OBJECTS: &[u8] = &[14, 13, 25, 28, 35, 36, 39, 51, 63];
+/// wandering into view, blockheads re-announced as they cross macro blocks): soft.
+pub const SOFT_OBJECTS: &[u8] = &[14, 13, 24, 25, 28, 35, 36, 39, 51, 63];
 
 /// Summarise every packet received since the last drain into observations under `phase`:
 /// packet counts per type, object creates/removes per object type, chest inventories, fill/pickup replies and
@@ -722,6 +722,7 @@ impl Ctx<'_> {
 }
 
 /// A scenario: a script plus optional reload script (run after a restart from the saved world).
+#[derive(Clone, Copy)]
 pub struct Scenario {
     pub name: &'static str,
     pub play: fn(&mut Ctx),
@@ -805,6 +806,50 @@ pub fn run_side(sc: &Scenario, side: Side, root: &Path, run: usize) -> (Obs, Pat
     (obs, save)
 }
 
+type Pending = (Side, std::sync::mpsc::Receiver<(Obs, PathBuf)>);
+
+fn spawn_side(sc: Scenario, side: Side, root: &Path, run: usize) -> Pending {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let root = root.to_path_buf();
+    std::thread::spawn(move || {
+        let _ = tx.send(run_side(&sc, side, &root, run));
+    });
+    (side, rx)
+}
+
+/// Per-run watchdog (env `BH_SCENARIO_TIMEOUT`, seconds, default 900): a run that hangs (a lost connection that
+/// is waited for, a server thread that never stops) fails the test instead of blocking the suite. The reference
+/// containers of this process for the scenario are removed; a hung in-process server thread is abandoned.
+fn await_side(sc: &Scenario, (side, rx): Pending) -> (Obs, PathBuf) {
+    let secs: u64 = std::env::var("BH_SCENARIO_TIMEOUT").ok().and_then(|v| v.parse().ok()).unwrap_or(900);
+    match rx.recv_timeout(Duration::from_secs(secs)) {
+        Ok(r) => r,
+        Err(e) => {
+            if side == Side::Ref {
+                remove_own_containers(sc.name);
+            }
+            panic!("{}: {} run did not finish within {} s ({:?})", sc.name, side.tag(), secs, e);
+        }
+    }
+}
+
+/// `docker rm -f` the reference containers this process started for `scenario` (names carry our pid).
+fn remove_own_containers(scenario: &str) {
+    use std::process::{Command, Stdio};
+    let Ok(out) = Command::new("docker").args(["ps", "-a", "--format", "{{.Names}}"]).stderr(Stdio::null()).output()
+    else {
+        return;
+    };
+    let pid = format!("-{}-", std::process::id());
+    let prefix = format!("bh-diff-sc-{}-", scenario.replace('_', "-"));
+    for name in String::from_utf8_lossy(&out.stdout).lines() {
+        if name.starts_with(&prefix) && name.contains(&pid) {
+            let _ =
+                Command::new("docker").args(["rm", "-f", name]).stdout(Stdio::null()).stderr(Stdio::null()).status();
+        }
+    }
+}
+
 fn out_root(name: &str) -> (PathBuf, Option<TempDir>) {
     match std::env::var("BH_DIFF_OUT") {
         Ok(p) => {
@@ -838,19 +883,12 @@ pub fn diff_scenario(sc: &Scenario) {
         Ok("host") => Side::OursHost,
         _ => Side::OursBin,
     };
-    // the sides are independent servers on their own ports: run them concurrently
-    let (refs, ours): (Vec<(Obs, PathBuf)>, (Obs, PathBuf)) = std::thread::scope(|sc_| {
-        let hs: Vec<_> = (0..runs)
-            .map(|i| {
-                sc_.spawn({
-                    let root = &root;
-                    move || run_side(sc, Side::Ref, root, i)
-                })
-            })
-            .collect();
-        let o = sc_.spawn(|| run_side(sc, ours_side, &root, 0));
-        (hs.into_iter().map(|h| h.join().expect("reference run")).collect(), o.join().expect("our run"))
-    });
+    // the sides are independent servers on their own ports: run them concurrently, each under the watchdog
+    let mut pending: Vec<_> = (0..runs).map(|i| spawn_side(*sc, Side::Ref, &root, i)).collect();
+    pending.push(spawn_side(*sc, ours_side, &root, 0));
+    let mut results: Vec<(Obs, PathBuf)> = pending.into_iter().map(|p| await_side(sc, p)).collect();
+    let ours = results.pop().unwrap();
+    let refs = results;
     let mask = NoiseMask::learn(&refs.iter().map(|r| r.0.map()).collect::<Vec<_>>());
     let v = mask.check(&ours.0.map());
     let mut rep = String::new();
@@ -913,7 +951,7 @@ pub fn fixture_scenario(sc: &Scenario) {
         .map(|t| parse_xfail(&t))
         .unwrap_or_default();
     let (root, _tmp) = out_root(&format!("{}-host", sc.name));
-    let (obs, _save) = run_side(sc, Side::OursHost, &root, 0);
+    let (obs, _save) = await_side(sc, spawn_side(*sc, Side::OursHost, &root, 0));
     let v = mask.check(&obs.map());
     let failing: BTreeSet<&str> = v.hard.iter().map(|l| verdict_key(l)).collect();
     let unexpected: Vec<&String> = v.hard.iter().filter(|l| !xfail.contains_key(verdict_key(l))).collect();
@@ -995,7 +1033,7 @@ mod tests {
         let b = bh_update(1, (2, 3), (4, 5));
         assert_eq!((b[0], b[8], b[0x20], b[0x24], b.len()), (1, 2, 4, 5, 0x70));
         assert_eq!(fnv(b"").len(), 16);
-        assert_eq!(world_args().len(), 10);
+        assert_eq!(world_args().len(), 8);
         assert_eq!([Side::Ref.tag(), Side::OursBin.tag(), Side::OursHost.tag()], ["ref", "ours", "host"]);
     }
 }

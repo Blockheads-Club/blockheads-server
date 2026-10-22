@@ -12,27 +12,26 @@ S	furnace.created	type=9 level=0 inUse=0 hasFuel=1 fuel~15 inUseFuel=0
 S	furnace.fuel.echo	type=9 level=0 inUse=1 hasFuel=1 fuel~7 inUseFuel=1
 S	join.create.t10	1
 S	join.create.t11	1
-S	join.create.t24	1
+S	~join.create.t24	1
 S	join.create.t45	1
 S	join.create.t59	2
 S	join.rx.01	1
 S	join.rx.06	1
-S	~join.rx.1e	1
 S	join.rx.23	1
 S	kiln.burn_last	type=8 level=0 inUse=1 hasFuel=1 fuel~2 inUseFuel=1
 S	kiln.burn_updates	2
 S	kiln.close.echo	type=8 level=0 inUse=0 hasFuel=1 fuel~15 inUseFuel=0
 S	kiln.create.t45	1
 S	kiln.created	type=8 level=0 inUse=0 hasFuel=1 fuel~15 inUseFuel=0
+S	kiln.fuel.echo	type=8 level=0 inUse=1 hasFuel=1 fuel~3 inUseFuel=1
 S	reload.create.t10	1
 S	reload.create.t11	1
-S	reload.create.t24	1
+S	~reload.create.t24	1
 S	reload.create.t45	4
 S	reload.create.t59	1
 S	reload.freeblocks	1
 S	reload.rx.01	1
 S	reload.rx.06	1
-S	~reload.rx.1e	1
 S	reload.rx.23	1
 S	reload.workbench.type1	type=1 level=0 inUse=0 hasFuel=0 fuel~0 inUseFuel=0
 S	reload.workbench.type2	type=2 level=0 inUse=0 hasFuel=0 fuel~0 inUseFuel=0
@@ -60,7 +59,6 @@ S	save.world_db.main.H_blockhead_N_inventory	1
 S	save.world_db.main.blockheads	1
 S	save.world_db.main.dynamicWorldv2	1
 S	save.world_db.main.worldv2	1
-S	~spots	[(2666, 553), (2681, 557), (2687, 558)]
 S	workbench.close.echo	type=2 level=0 inUse=0 hasFuel=0 fuel~0 inUseFuel=0
 S	workbench.create.t45	1
 S	workbench.created	type=2 level=0 inUse=0 hasFuel=0 fuel~0 inUseFuel=0
@@ -76,6 +74,7 @@ S	~join.create.t63	2
 S	~join.rx.04	18
 S	~join.rx.07	10
 S	~join.rx.08	12
+S	~join.rx.1e	1
 S	~join.rx.28	1
 S	~kiln.create.t14	1
 S	~kiln.rx.04	7
@@ -86,15 +85,16 @@ S	~reload.create.t28	1
 S	~reload.create.t63	1
 S	~reload.rx.04	13
 S	~reload.rx.07	10
+S	~reload.rx.1e	1
 S	~save.world_db.dw.N_N/14	1
 S	~save.world_db.dw.N_N/28	1
 S	~save.world_db.dw.N_N/63	1
+S	~spots	[(2666, 553), (2681, 557), (2687, 558)]
 S	~workbench.create.t14	1
 S	~workbench.remove.t14	1
 S	~workbench.rx.04	3
 S	~workbench.rx.07	2
 S	~workbench.rx.09	1
-V	kiln.fuel.echo
 V	~furnace.rx.08
 V	~kiln.rx.08
 V	~reload.rx.08

@@ -57,7 +57,7 @@ fn run_on(h: &mut dyn ServerHandle, script: &str) -> (Vec<TraceEvent>, Option<i3
 }
 
 fn parity(tag: &str, script: &str) {
-    parity_with(tag, script, server_args());
+    parity_with(tag, script, server_args(), false);
 }
 
 /// The sample world of the built-in scripts: width 1 (their block indices go up to 16383).
@@ -70,10 +70,10 @@ fn builtin_args() -> Vec<String> {
 /// A built-in `bh_client` scenario (scenario.rs) under the same strict trace parity.
 fn builtin(name: &str) {
     let script = bh_testclient::scenario::builtin_script(name).unwrap_or_else(|| panic!("no builtin {}", name));
-    parity_with(&format!("builtin-{}", name), script, builtin_args());
+    parity_with(&format!("builtin-{}", name), script, builtin_args(), true);
 }
 
-fn parity_with(tag: &str, script: &str, args: Vec<String>) {
+fn parity_with(tag: &str, script: &str, args: Vec<String>, mask_relayed_chat_date: bool) {
     if !parity_enabled() {
         eprintln!("SKIP: {} (BH_PARITY=1 + docker required)", tag);
         return;
@@ -88,7 +88,7 @@ fn parity_with(tag: &str, script: &str, args: Vec<String>) {
     let mut o = OurServer::start(&spec("ours")).unwrap();
     let (t3, c3) = run_on(&mut o, script);
     assert_eq!(c1, c3, "{}: server liveness after the script differs (ref {:?} ours {:?})", tag, c1, c3);
-    let mut opts = NormalizeOptions::default();
+    let mut opts = NormalizeOptions { mask_relayed_chat_date, ..NormalizeOptions::default() };
     let (n1, n2) = (normalize_trace(&t1, &opts), normalize_trace(&t2, &opts));
     opts.volatile = Some(VolatileMask::learn(&[n1, n2]));
     let (a, b) = (normalize_trace(&t1, &opts), normalize_trace(&t3, &opts));
@@ -156,7 +156,10 @@ fn builtin_chat_relay() {
 fn builtin_blockhead_create() {
     builtin("blockhead_create");
 }
+/// The script's `hb-old` (0x18) gets the client kicked on a custom-rules world (reference and ours alike), and the
+/// scenario worlds need the custom seed to be identical: runs on demand only.
 #[test]
+#[ignore = "hb-old kicks on the seeded custom-rules world; see the doc comment"]
 fn builtin_heartbeat() {
     builtin("heartbeat");
 }

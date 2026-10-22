@@ -445,6 +445,9 @@ pub struct NormalizeOptions {
     pub burst_gap_ms: f64,
     /// extra packet-offset masks `(type, range)` (CLI `--mask-type`)
     pub extra_masks: Vec<(u8, Range<usize>)>,
+    /// also mask `date` of relayed (client-written) 0x24 chat: scripts stamp their messages with the wall clock,
+    /// so runs at different times differ there by construction
+    pub mask_relayed_chat_date: bool,
 }
 impl Default for NormalizeOptions {
     fn default() -> Self {
@@ -464,6 +467,7 @@ impl Default for NormalizeOptions {
             sort_bursts: false,
             burst_gap_ms: 5.0,
             extra_masks: vec![],
+            mask_relayed_chat_date: false,
         }
     }
 }
@@ -542,11 +546,12 @@ fn normalize_one(e: &TraceEvent, o: &NormalizeOptions) -> NormMsg {
                     _ => false,
                 })
                 .unwrap_or(false);
-            let skip: Vec<String> = if server_generated && o.mask_plist_keys.iter().any(|k| k == "date") {
-                vec!["date".into()]
-            } else {
-                vec![]
-            };
+            let skip: Vec<String> =
+                if (server_generated || o.mask_relayed_chat_date) && o.mask_plist_keys.iter().any(|k| k == "date") {
+                    vec!["date".into()]
+                } else {
+                    vec![]
+                };
             sections.push(plist_section("chat", body, &skip));
         }
         0x04 if body.len() > 4 => {
@@ -793,6 +798,9 @@ mod tests {
         let srv = "<key>mod</key><string>owner</string>";
         assert_eq!(n(chat(srv, "2026-01-01T00:00:00Z")), n(chat(srv, "2027-01-01T00:00:00Z")));
         assert_ne!(n(chat("", "2026-01-01T00:00:00Z")), n(chat("", "2027-01-01T00:00:00Z")));
+        let o = NormalizeOptions { mask_relayed_chat_date: true, ..opts() };
+        let nr = |b: Vec<u8>| normalize_trace(&[ev(b)], &o)[0].sections.clone();
+        assert_eq!(nr(chat("", "2026-01-01T00:00:00Z")), nr(chat("", "2027-01-01T00:00:00Z")));
     }
 
     #[test]

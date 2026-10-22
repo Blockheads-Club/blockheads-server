@@ -6,7 +6,7 @@ S	boat.water	None
 S	hand_car.created	true
 S	join.create.t10	8
 S	join.create.t11	2
-S	join.create.t24	2
+S	~join.create.t24	2
 S	join.create.t27	10
 S	join.create.t45	2
 S	join.create.t59	3
@@ -25,7 +25,7 @@ S	~rails.spots	[(2659, 552), (2660, 552), (2661, 552), (2662, 552)]
 S	reload.boats	0
 S	reload.create.t10	5
 S	reload.create.t11	2
-S	reload.create.t24	2
+S	~reload.create.t24	2
 S	reload.create.t27	5
 S	reload.create.t40	8
 S	reload.create.t41	2

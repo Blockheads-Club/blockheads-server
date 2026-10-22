@@ -69,7 +69,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       # --no-fail-fast: a failing unit-test binary must not hide the integration tests behind it.
+      # On the unix runners this includes bh_testclient's docker-free gameplay scenarios (tests/scenarios_ours.rs:
+      # our server in-process against reference fixtures); the differential suite itself runs in parity.yml.
       - run: cargo test --no-fail-fast ${{ matrix.args }}
+        env:
+          BH_SCENARIO_TIMEOUT: "900"
 
   cross-check:
     name: check (${{ matrix.target }})

@@ -672,9 +672,9 @@ fn bench_update(ctx: &mut Ctx, a: &mut Session, blob: &[u8], label: &str, f: imp
     let b = update_blob(blob, WB_HEADER, Some(tail), f);
     a.send_object_batch(BatchKind::Update, obj::WORKBENCH, &[b]).unwrap();
     a.wait_quiet(800, 4000).unwrap();
-    let echo: Vec<String> =
-        objects_since(a, mark, obj::WORKBENCH).iter().filter(|(k, _)| *k == 0x08).map(|(_, b)| wb_summary(b)).collect();
-    ctx.obs.add(format!("{}.echo", label), echo.join(" / "));
+    // the first echo only: the periodic fuel-burn update (every 6 s) may land in the same window
+    let echo = objects_since(a, mark, obj::WORKBENCH).iter().find(|(k, _)| *k == 0x08).map(|(_, b)| wb_summary(b));
+    ctx.obs.add(format!("{}.echo", label), echo.unwrap_or_default());
 }
 
 fn craft_play(ctx: &mut Ctx) {

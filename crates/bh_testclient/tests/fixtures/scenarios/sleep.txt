@@ -6,7 +6,7 @@ S	bed.item	63
 S	bed_place.create.t23	1
 S	join.create.t10	1
 S	join.create.t11	1
-S	join.create.t24	1
+S	~join.create.t24	1
 S	join.create.t45	1
 S	join.create.t59	2
 S	join.rx.01	1

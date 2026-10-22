@@ -2,7 +2,7 @@
 # regenerate: see README.md in this directory
 S	AUDITA.blockhead	true
 S	AUDITA.blockhead#2	true
-S	A_B_join.create.t24	1
+S	~A_B_join.create.t24	1
 S	~A_B_join.rx.1e	1
 S	A_chest_open3.chest_inventory	s0:1047x1,s3:1048x4
 S	A_chest_open3.rx.32	1
@@ -10,7 +10,7 @@ S	B_chest_open.chest_inventory	s3:1048x4
 S	B_chest_open.rx.32	1
 S	B_join.create.t10	1
 S	B_join.create.t11	1
-S	B_join.create.t24	2
+S	~B_join.create.t24	2
 S	B_join.create.t45	1
 S	B_join.create.t46	1
 S	B_join.create.t59	1
@@ -20,7 +20,7 @@ S	~B_join.rx.1e	2
 S	B_join.rx.23	1
 S	bh_create.create.t10	1
 S	bh_create.create.t11	1
-S	bh_create.create.t24	1
+S	~bh_create.create.t24	1
 S	bh_create.create.t45	1
 S	bh_create.create.t59	2
 S	bh_create.rx.01	1
@@ -38,7 +38,7 @@ S	reload_chest_open.chest_inventory	s0:1047x1,s3:1048x4
 S	reload_chest_open.rx.32	1
 S	reload_join.create.t10	1
 S	reload_join.create.t11	1
-S	reload_join.create.t24	1
+S	~reload_join.create.t24	1
 S	reload_join.create.t45	2
 S	reload_join.create.t46	1
 S	reload_join.create.t59	1
@@ -80,7 +80,7 @@ S	walk.explored_total	~11500
 S	walk_left.create.t10	50
 S	walk_left.create.t11	16
 S	walk_left.create.t17	48
-S	walk_left.create.t24	29
+S	~walk_left.create.t24	29
 S	walk_left.create.t27	45
 S	walk_left.create.t45	32
 S	walk_left.create.t46	16
@@ -90,7 +90,7 @@ S	walk_left.end	2507,487
 S	walk_right.create.t10	15
 S	walk_right.create.t11	11
 S	walk_right.create.t17	9
-S	walk_right.create.t24	20
+S	~walk_right.create.t24	20
 S	walk_right.create.t27	20
 S	walk_right.create.t45	22
 S	walk_right.create.t46	11

@@ -13,7 +13,7 @@ S	feed2_cooldown.reply	fed=1 tameType=0 cooldown=true fullness~7
 S	feed3_tame.reply	fed=0 tameType=0 cooldown=false fullness~6
 S	join.create.t10	8
 S	join.create.t11	2
-S	join.create.t24	2
+S	~join.create.t24	2
 S	join.create.t27	2
 S	join.create.t45	2
 S	join.create.t59	3
@@ -25,7 +25,7 @@ S	join.rx.23	1
 S	reload.create.t10	5
 S	reload.create.t11	2
 S	reload.create.t23	2
-S	reload.create.t24	2
+S	~reload.create.t24	2
 S	reload.create.t27	1
 S	reload.create.t30	2
 S	reload.create.t45	2

@@ -7,7 +7,7 @@ S	chest.created	true
 S	door.created	true
 S	join.create.t10	1
 S	join.create.t11	1
-S	join.create.t24	1
+S	~join.create.t24	1
 S	join.create.t45	1
 S	join.create.t59	2
 S	join.rx.01	1
@@ -47,7 +47,7 @@ S	reload.create.t10	1
 S	reload.create.t11	1
 S	reload.create.t20	1
 S	reload.create.t23	1
-S	reload.create.t24	1
+S	~reload.create.t24	1
 S	reload.create.t45	1
 S	reload.create.t46	1
 S	reload.create.t47	1
