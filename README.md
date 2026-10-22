@@ -29,7 +29,7 @@ with a world list, start/stop, live log, connected players and a QR code for pho
 ## 📦 Other Blockheads Club Repositories
 - [**blockheads-pc**](https://github.com/Blockheads-Club/blockheads-pc) - Play The Blockheads on your computer
 - [**blockheads-patcher**](https://github.com/Blockheads-Club/blockheads-patcher) - Fix crashes and add small improvements to the game on your phone
-- [**website**](https://github.com/Blockheads-Club/website) - The [Blockheads Club website](https://blockheads-club.github.io/website/): downloads, guides and docs
+- [**website**](https://github.com/Blockheads-Club/website) - The [Blockheads Club website](https://blockheads.club): downloads, guides and docs
 
 ---
 
@@ -52,7 +52,7 @@ docker run -i --rm -p 15151:15151/udp -v bh-data:/data ghcr.io/blockheads-club/b
 
 Players join with Join World -> Advanced... -> Online IP/Port. On Android 10+ the game client needs the popup fix from
 the [Blockheads Patcher](https://github.com/Blockheads-Club/blockheads-patcher) before it can connect.
-Guides and docs: [blockheads-club.github.io/website/docs](https://blockheads-club.github.io/website/docs/).
+Guides and docs: [blockheads.club/docs](https://blockheads.club/docs).
 
 ### Mods (preview)
 Server-side Lua (Luau) and WASM (Rust, C, Zig, Go) mods from the [mod SDK](https://github.com/Blockheads-Club/mod-sdk): put `.bhmod` files or
