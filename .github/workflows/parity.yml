@@ -3,7 +3,11 @@ name: Parity
 # The full differential suite against the original 1.7.1 server. The reference environment (Dockerfile + original
 # binary) is private and never part of this repository: it is checked out from the private repository named by the
 # repository variable REFENV_REPO (owner/name, the reference environment at REFENV_PATH inside it, default the
-# root) with the secret REFENV_TOKEN (read access). Without them the job only reports that it was skipped.
+# root) with the secret REFENV_TOKEN (read access).
+#
+# Skip: when REFENV_REPO or REFENV_TOKEN is not configured (the default; the original server is not hosted in any
+# repository), the `refenv` job reports a notice and the `differential` job is skipped. The workflow then succeeds
+# without checking out, building or running anything. Configure both to enable the suite.
 #
 # Normal CI runs the docker-free variants (`tests/scenarios_ours.rs`, fixtures under
 # crates/bh_testclient/tests/fixtures/scenarios).
@@ -34,12 +38,13 @@ env:
   CARGO_INCREMENTAL: "0"
 
 jobs:
-  differential:
+  refenv:
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    outputs:
+      ok: ${{ steps.check.outputs.ok }}
     steps:
-      - name: Reference environment available?
-        id: refenv
+      - name: Reference environment configured?
+        id: check
         env:
           REPO: ${{ vars.REFENV_REPO }}
           TOKEN: ${{ secrets.REFENV_TOKEN }}
@@ -48,33 +53,36 @@ jobs:
             echo "ok=true" >> "$GITHUB_OUTPUT"
           else
             echo "ok=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::REFENV_REPO / REFENV_TOKEN not configured: differential suite skipped"
+            msg="REFENV_REPO / REFENV_TOKEN not configured: differential suite skipped"
+            echo "::notice::$msg"
+            echo "### Parity: skipped" >> "$GITHUB_STEP_SUMMARY"
+            echo "$msg" >> "$GITHUB_STEP_SUMMARY"
           fi
+
+  differential:
+    needs: refenv
+    if: needs.refenv.outputs.ok == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
       - uses: actions/checkout@v4
-        if: steps.refenv.outputs.ok == 'true'
       - uses: actions/checkout@v4
-        if: steps.refenv.outputs.ok == 'true'
         with:
           repository: ${{ vars.REFENV_REPO }}
           token: ${{ secrets.REFENV_TOKEN }}
           path: .refenv-src
       - name: Build the reference image
-        if: steps.refenv.outputs.ok == 'true'
         run: |
           dir=".refenv-src/${{ vars.REFENV_PATH }}"
           docker build -t blockheads-ref:1.7.1 "$dir"
           echo "BH_REFENV=$(realpath "$dir")" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@stable
-        if: steps.refenv.outputs.ok == 'true'
       - uses: Swatinem/rust-cache@v2
-        if: steps.refenv.outputs.ok == 'true'
       - name: Build our server
-        if: steps.refenv.outputs.ok == 'true'
         run: |
           cargo build --release -p blockheads_server
           echo "BH_SERVER_BIN=$PWD/target/release/blockheads_server" >> "$GITHUB_ENV"
       - name: Differential suite
-        if: steps.refenv.outputs.ok == 'true'
         env:
           BH_PARITY: "1"
           BH_DIFF_OUT: ${{ github.workspace }}/parity-out
@@ -87,7 +95,7 @@ jobs:
             --test diff_gameplay --test parity_session --test gameplay_regressions \
             -- --nocapture $TESTS 2>&1 | tee "$BH_DIFF_OUT/test.log"
       - name: Summary
-        if: always() && steps.refenv.outputs.ok == 'true'
+        if: always()
         run: |
           {
             echo '### Differential scenarios'
@@ -101,7 +109,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
       # Observations, traces, logs and reports only: saves and data dirs stay on the runner.
       - uses: actions/upload-artifact@v4
-        if: always() && steps.refenv.outputs.ok == 'true'
+        if: always()
         with:
           name: parity-out
           path: |

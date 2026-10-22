@@ -35,3 +35,10 @@ BH_SCENARIO_BLESS=1 BH_DIFF_REF_RUNS=3 BH_DIFF_OUT=/some/dir \
 - Use at least 3 reference runs: with fewer, a timing-dependent value that happens to repeat becomes a hard check.
 - Review the diff, then run `cargo test -p bh_testclient --test scenarios_ours` and update the `.xfail` files.
 - To bless a single scenario, append its test name, for example `diff_commands`.
+
+## Nightly differential workflow
+
+`.github/workflows/parity.yml` runs the differential suite nightly and on manual dispatch, but only when the
+repository variable `REFENV_REPO` and the secret `REFENV_TOKEN` point at a private copy of the reference
+environment. Neither is configured by default, so the `differential` job is skipped and the run succeeds with a
+notice. Normal CI does not depend on it.
