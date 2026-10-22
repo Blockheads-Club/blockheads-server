@@ -37,6 +37,16 @@ fn server_args() -> Vec<String> {
     .collect()
 }
 
+/// SERVER_LIGHT_BLOCK. The server pushes light blocks from its own timer, not as the reply to a request, so where
+/// the push lands among the replies (even whether it lands before the script ends) depends on scheduling: two plain
+/// vanilla runs under CPU load differ in exactly this way. It is therefore left out of the ordered trace; every
+/// other message keeps its strict, ordered comparison.
+const TIMER_PUSH: u8 = 0x28;
+
+fn without_timer_pushes(trace: Vec<TraceEvent>) -> Vec<TraceEvent> {
+    trace.into_iter().filter(|e| e.bytes.first() != Some(&TIMER_PUSH)).collect()
+}
+
 struct Run {
     trace: Vec<TraceEvent>,
     save: PathBuf,
@@ -51,7 +61,7 @@ fn run(tag: &str, mods_dir: Option<&Path>) -> Run {
     h.wait_for_log("World load complete.", Duration::from_secs(90)).expect("load");
     let dir = TempDir::new("modtrace").unwrap();
     let addr: SocketAddr = format!("127.0.0.1:{}", h.port()).parse().unwrap();
-    let trace = run_script(SOLO, addr, dir.path()).expect("script");
+    let trace = without_timer_pushes(run_script(SOLO, addr, dir.path()).expect("script"));
     h.wait_for_saves(WORLD, 2, Duration::from_secs(30)).unwrap();
     h.stop_sigint(Duration::from_secs(10)).unwrap();
     Run { trace, save: h.save_dir(WORLD), log: h.log(), _h: h }
