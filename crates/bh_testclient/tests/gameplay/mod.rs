@@ -142,6 +142,22 @@ pub fn timing_count(key: &str) -> bool {
         || k == "save.lightBlocks.main.H_N_N"
 }
 
+/// The value as compared. `/debug-log` lists the loaded objects per class (`AppleTree:#`, `Dodo:#`, ...), and which
+/// classes are loaded when the command runs follows how far world loading and simulation got: that census is left
+/// out (the fixed fields, `total objects` included, are still compared).
+pub fn comparable<'a>(key: &str, value: &'a str) -> std::borrow::Cow<'a, str> {
+    if !key.ends_with("/debug-log") {
+        return value.into();
+    }
+    let census = |t: &str| {
+        t.strip_suffix(":#").is_some_and(|n| {
+            n.starts_with(|c: char| c.is_ascii_uppercase()) && n.chars().all(|c| c.is_ascii_alphabetic())
+        })
+    };
+    let sep = if value.contains(" | ") { " | " } else { " " };
+    value.split(sep).filter(|t| !census(t)).collect::<Vec<_>>().join(sep).into()
+}
+
 /// How far a [`timing_count`] may drift from the reference: 2, or a quarter of the reference value when larger.
 pub fn count_tolerance(want: u64) -> u64 {
     want.div_ceil(4).max(2)
@@ -189,7 +205,7 @@ impl NoiseMask {
         for (k, want) in &self.stable {
             let got = ours.get(k);
             let line = match got {
-                Some(got) if got == want => continue,
+                Some(got) if comparable(k, got) == comparable(k, want) => continue,
                 Some(got) => format!("{}: ref `{}` ours `{}`", k, want, got),
                 None => format!("{}: ref `{}` ours <missing>", k, want),
             };
@@ -1110,6 +1126,18 @@ mod tests {
                 "p.rx.30: ref <missing> ours `9`"
             ]
         );
+    }
+
+    #[test]
+    fn debug_log_census_is_not_compared() {
+        let k = "console./debug-log";
+        assert_eq!(comparable(k, "a:# | AppleTree:# | Dodo:# | total objects:#"), "a:# | total objects:#");
+        assert_eq!(comparable("admin./debug-log", "blocks:#  AppleTree:# Workbench:# total:#"), "blocks:#  total:#");
+        assert_eq!(comparable("x./players", "AppleTree:#"), "AppleTree:#");
+        assert_eq!(comparable(k, "SERVER: x:# | lower:# | Mixed1:#"), "SERVER: x:# | lower:# | Mixed1:#");
+        let mask = NoiseMask::learn(&[m(&[(k, "a:# | total objects:#")])]);
+        assert!(mask.check(&m(&[(k, "a:# | Dodo:# | total objects:#")])).hard.is_empty());
+        assert_eq!(mask.check(&m(&[(k, "b:# | total objects:#")])).hard.len(), 1);
     }
 
     #[test]
