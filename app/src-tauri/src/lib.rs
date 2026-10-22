@@ -3,6 +3,7 @@
 pub mod core;
 pub mod notify;
 pub mod stats;
+pub mod update;
 
 use core::{Core, ListKind, NetAddr, NewWorld, Poll, RunOptions, Settings, World};
 use serde::{Deserialize, Serialize};
@@ -13,6 +14,8 @@ use tauri::{AppHandle, Emitter, Manager, State};
 #[cfg(desktop)]
 use tauri::{LogicalSize, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_hostservice::{HostServiceExt, ServiceInfo};
+use tauri_plugin_opener::OpenerExt;
+use update::{Mode, Pending, Platform, Progress, UpdateInfo, Updater};
 
 type Res<T> = Result<T, String>;
 
@@ -305,6 +308,113 @@ fn set_settings(core: State<'_, Arc<Core>>, settings: Settings) -> Res<()> {
     core.set_settings(&settings)
 }
 
+// ---- app updates (see src/update.rs; the game server itself is not touched) ----
+
+#[tauri::command]
+async fn update_check(updater: State<'_, Arc<Updater>>, beta: bool) -> Res<Option<UpdateInfo>> {
+    let u = updater.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || u.check(env!("CARGO_PKG_VERSION"), beta, &Platform::current()))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Start downloading the update of the last check on a worker thread; the UI polls [`update_progress`].
+#[tauri::command]
+fn update_download(app: AppHandle, updater: State<'_, Arc<Updater>>) -> Res<()> {
+    if updater.last().is_none() {
+        return Err("nothing".into());
+    }
+    if !updater.begin() {
+        return Ok(());
+    }
+    let u = updater.inner().clone();
+    std::thread::spawn(move || {
+        let _ = u.download(&|p| taskbar(&app, p));
+    });
+    Ok(())
+}
+
+/// Download progress on the Windows taskbar button / macOS dock icon / Linux launcher.
+fn taskbar(app: &AppHandle, p: &Progress) {
+    #[cfg(desktop)]
+    if let Some(w) = app.get_webview_window("main") {
+        use tauri::window::{ProgressBarState, ProgressBarStatus};
+        let busy = p.stage == "downloading" || p.stage == "verifying";
+        let pct = if p.total > 0 { (p.done * 100 / p.total).min(100) } else { 0 };
+        let _ = w.set_progress_bar(ProgressBarState {
+            status: Some(if busy { ProgressBarStatus::Normal } else { ProgressBarStatus::None }),
+            progress: busy.then_some(pct),
+        });
+    }
+    #[cfg(not(desktop))]
+    let _ = (app, p);
+}
+
+#[tauri::command]
+fn update_progress(updater: State<'_, Arc<Updater>>) -> Progress {
+    updater.progress()
+}
+
+#[tauri::command]
+fn update_cancel(updater: State<'_, Arc<Updater>>) {
+    updater.cancel();
+}
+
+/// Restart for the downloaded update: save and stop the server, back up its world, start the installer (or swap
+/// the AppImage) and leave a note for the next start. The UI quits the app afterwards.
+#[tauri::command]
+async fn update_install(
+    app: AppHandle,
+    core: State<'_, Arc<Core>>,
+    updater: State<'_, Arc<Updater>>,
+    backup: bool,
+) -> Res<()> {
+    let (file, info) = updater.downloaded().ok_or("nothing")?;
+    let (c, u) = (core.inner().clone(), updater.inner().clone());
+    tauri::async_runtime::spawn_blocking(move || {
+        let world_id = c.poll(u64::MAX).world_id.unwrap_or_else(|| c.get_settings().run.world_id);
+        let was_running = c.is_active();
+        c.stop()?;
+        let at = crate::core::now_ms();
+        if backup {
+            update::backup_world(&c.data_dir(), &world_id, at).map_err(|_| "backup".to_string())?;
+        }
+        launch(&app, &file, info.mode)?;
+        u.note(&Pending { version: info.version, from: info.current, at, was_running, world_id })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+fn launch(app: &AppHandle, file: &std::path::Path, mode: Mode) -> Res<()> {
+    let fail = |_| "launch".to_string();
+    match mode {
+        Mode::Replace => {
+            let target = Platform::current().appimage.ok_or("launch")?;
+            update::replace_file(file, &target)?;
+            std::process::Command::new(&target).spawn().map(drop).map_err(fail)
+        }
+        Mode::Installer if cfg!(windows) => std::process::Command::new(file).spawn().map(drop).map_err(fail),
+        Mode::Installer => app.opener().open_path(file.to_string_lossy(), None::<&str>).map_err(|_| "launch".into()),
+        Mode::Browser => Err("nothing".into()),
+    }
+}
+
+/// After a restart for an update: what was installed (read once).
+#[tauri::command]
+fn update_resume(updater: State<'_, Arc<Updater>>) -> Option<Pending> {
+    updater.resume()
+}
+
+/// Opens a release page or download of this repository in the browser (Android: the APK download).
+#[tauri::command]
+fn open_url(app: AppHandle, url: String) -> Res<()> {
+    if !update::allowed_url(&url) {
+        return Err("url".into());
+    }
+    app.opener().open_url(url, None::<&str>).map_err(|e| e.to_string())
+}
+
 /// Smallest main window (logical pixels): the size it opens at, as minWidth/minHeight in tauri.conf.json.
 #[cfg(desktop)]
 const MIN_SIZE: (f64, f64) = (1120.0, 760.0);
@@ -316,14 +426,18 @@ pub fn run() {
     let builder = builder.plugin(tauri_plugin_dialog::init());
     builder
         .plugin(tauri_plugin_hostservice::init())
+        .plugin(tauri_plugin_opener::init())
         .manage(Splash::default())
         .manage(stats::Meter::default())
         .setup(|app| {
             let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
             // The data folder is created and checked by `boot`, so a failure shows up on the splash.
             let _ = std::fs::create_dir_all(&dir);
-            let core = Arc::new(Core::open(dir, std::env::var_os("BHS_DATA_DIR")));
+            let core = Arc::new(Core::open(dir.clone(), std::env::var_os("BHS_DATA_DIR")));
             app.manage(core.clone());
+            // Test builds may point the update check at another feed.
+            let feed = std::env::var("BHS_UPDATE_FEED").ok().filter(|_| cfg!(debug_assertions));
+            app.manage(Arc::new(Updater::new(dir.join("updates"), feed.unwrap_or_else(|| update::FEED.into()))));
             // "Stop server" in the Android notification: save and stop, then release the service.
             let handle = app.handle().clone();
             let _ = app.hostservice().on_stop_requested(move || {
@@ -390,7 +504,14 @@ pub fn run() {
             set_list,
             network_info,
             get_settings,
-            set_settings
+            set_settings,
+            update_check,
+            update_download,
+            update_progress,
+            update_cancel,
+            update_install,
+            update_resume,
+            open_url
         ])
         .run(tauri::generate_context!())
         .expect("error while running the Blockheads Server app");

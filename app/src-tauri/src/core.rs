@@ -62,6 +62,39 @@ pub struct Settings {
     /// UI language code (`en`, `tr`, `ru`, `kk`); empty until the app has picked one from the OS locale.
     pub language: String,
     pub run: RunOptions,
+    /// App update preferences (older settings files have none: defaults).
+    #[serde(default)]
+    pub updates: UpdatePrefs,
+}
+
+/// How the app looks for its own updates (the game server is not involved).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct UpdatePrefs {
+    /// Check at start and once a day.
+    pub auto_check: bool,
+    /// "stable" (plain vX.Y.Z releases) or "beta" (test versions too).
+    pub channel: String,
+    /// Download by itself and restart while no one is online.
+    pub install_when_empty: bool,
+    /// Last check (ms since the Unix epoch), 0 = never; `last_ok` is the last one that worked.
+    pub last_checked: u64,
+    pub last_ok: u64,
+    /// The newest version the popup has already opened by itself for.
+    pub seen_version: String,
+}
+
+impl Default for UpdatePrefs {
+    fn default() -> Self {
+        UpdatePrefs {
+            auto_check: true,
+            channel: "stable".into(),
+            install_when_empty: false,
+            last_checked: 0,
+            last_ok: 0,
+            seen_version: String::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -170,7 +203,7 @@ impl Shared {
     }
 }
 
-fn now_ms() -> u64 {
+pub fn now_ms() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
 }
 
@@ -587,6 +620,12 @@ mod tests {
         assert_eq!(c.get_settings(), s);
         std::fs::write(d.path().join("app-settings.json"), b"garbage").unwrap();
         assert_eq!(c.get_settings(), Settings::default());
+        // Settings from before app updates: the update preferences take their defaults.
+        let old = br#"{"language":"en","run":{"worldId":"","port":15151,"maxPlayers":0,"password":"","saveDelay":10}}"#;
+        std::fs::write(d.path().join("app-settings.json"), old).unwrap();
+        let u = c.get_settings().updates;
+        assert!(u.auto_check && !u.install_when_empty);
+        assert_eq!((u.channel.as_str(), u.last_checked), ("stable", 0));
     }
 
     #[test]
