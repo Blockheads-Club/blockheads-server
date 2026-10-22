@@ -443,7 +443,9 @@ pub fn overview(dir: &Path, ctx: &Context) -> Overview {
     };
     let (pkgs, problems) = discover(dir);
     ov.problems = problems.into_iter().map(|p| Problem { file: file_name(&p.origin), message: p.message }).collect();
-    let kinds: Vec<_> = bhmod_core::default_runtimes().iter().map(|r| r.kind()).collect();
+    // The server adds the WASM runtime (bhmod-wasm) to the built-in ones.
+    let mut kinds: Vec<_> = bhmod_core::default_runtimes().iter().map(|r| r.kind()).collect();
+    kinds.push(bhmod_manifest::manifest::Runtime::Wasm);
     let (ordered, resolve_problems, _) = bhmod_core::resolve::resolve(pkgs.clone(), &cfg, Side::Server, &kinds);
     let ok: BTreeSet<&str> = ordered.iter().map(|p| p.manifest.id.as_str()).collect();
     let ok_origins: BTreeSet<&Path> = ordered.iter().map(|p| p.origin.as_path()).collect();

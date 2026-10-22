@@ -25,10 +25,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 local-ip-address = "0.6"
 sysinfo = { version = "0.36", default-features = false, features = ["system"] }
-# Mods: the same discovery, manifest checks and dependency rules as the server's mod host. Path dependencies on a
-# sibling mod-sdk checkout, like the server workspace (see its Cargo.toml).
-bhmod-core = { path = "../../../../mod-sdk/crates/bhmod-core" }
-bhmod-manifest = { path = "../../../../mod-sdk/crates/bhmod-manifest" }
+# Mods: the same discovery, manifest checks and dependency rules as the server's mod host, from mod-sdk at the rev the
+# server workspace pins (keep them equal; see docs/development.md for a local mod-sdk override).
+bhmod-core = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "f8f4f93" }
+bhmod-manifest = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "f8f4f93" }
 semver = "1"
 toml = "0.9"
 # Downloads of the public mod list and packages (HTTPS, rustls with bundled roots: works on Android too).
