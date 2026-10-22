@@ -741,6 +741,18 @@ impl WorldCoreHooks for Glue {
     fn blockhead_client_id(&self, b: &ObjRef) -> Option<String> {
         bh_of(b).and_then(|bh| bh.client_id())
     }
+    // ---- Blockhead: PvP damage (`remoteBlockheadDamageRequest:`); inert defaults made 0x2a a no-op in production.
+    fn blockhead_name(&self, b: &ObjRef) -> Option<String> {
+        bh_of(b).and_then(|bh| bh.name())
+    }
+    fn blockhead_is_client_blockhead_being_controlled_by_server(&self, b: &ObjRef) -> bool {
+        bh_of(b).is_some_and(|bh| bh.is_client_blockhead_being_controlled_by_server())
+    }
+    fn blockhead_suffer_damage_is_simulation_recoil(&self, b: &ObjRef, damage: f32, sim: bool, recoil: bool) {
+        if let Some(bh) = bh_of(b) {
+            bh.suffer_damage_is_simulation_recoil(damage, sim, recoil);
+        }
+    }
 }
 
 // =====================================================================================================

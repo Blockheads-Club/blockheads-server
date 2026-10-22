@@ -1401,8 +1401,13 @@ pub trait BlockheadHost {
     fn report_achievement_with_identifier(&self, id: &str) {}
     /// `-[World abortInProgressPathIfForBlockhead:]`
     fn abort_in_progress_path_if_for_blockhead(&self, b: &ObjRef) {}
-    /// `-[World sendDamage:forNetBlockhead:recoil:]`
-    fn send_damage_for_net_blockhead_recoil(&self, damage: f32, b: &ObjRef, recoil: bool) {}
+    /// `-[World sendDamage:forNetBlockhead:recoil:]`: forwarded to the blockhead's world (an inert default left PvP
+    /// damage unsent in production).
+    fn send_damage_for_net_blockhead_recoil(&self, damage: f32, b: &ObjRef, recoil: bool) {
+        if let Some(w) = crate::objects::handle::downcast::<Blockhead>(b).and_then(|x| x.world_rc()) {
+            w.send_damage_for_net_blockhead_recoil(damage, b, recoil);
+        }
+    }
     /// `-[World fireProjectileFrom:to:at:fireItemType:firer:]`
     fn fire_projectile_from_to_at_fire_item_type_firer(
         &self,
