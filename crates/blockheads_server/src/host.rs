@@ -56,6 +56,8 @@ pub struct HostConfig {
     /// Console lines sent once, on the server thread, right after `World load complete.` and before any other
     /// console input is read (e.g. `/set-password ...`). Independent of any UI polling.
     pub on_ready_commands: Vec<String>,
+    /// `--world_id` of a new world (`None`: a random id).
+    pub world_id: Option<String>,
 }
 
 impl Default for HostConfig {
@@ -71,6 +73,7 @@ impl Default for HostConfig {
             expert_mode: false,
             custom_rules_json: None,
             on_ready_commands: Vec::new(),
+            world_id: None,
         }
     }
 }
@@ -168,6 +171,7 @@ pub fn start(cfg: HostConfig, log: LogCallback) -> std::io::Result<ServerHandle>
             owner_name: cfg.owner_name.clone(),
             privacy: cfg.privacy.clone(),
             expert_mode: cfg.expert_mode,
+            world_id: cfg.world_id.clone(),
             custom_rules_json: cfg.custom_rules_json.clone(),
             ..InitParams::default()
         };
