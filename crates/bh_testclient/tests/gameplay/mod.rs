@@ -15,6 +15,10 @@
 //!
 //! Regenerating fixtures: `BH_PARITY=1 BH_REFENV=<refenv> BH_SCENARIO_BLESS=1 cargo test -p bh_testclient
 //! --test diff_gameplay -- --nocapture` (see `tests/fixtures/scenarios/README.md`).
+//!
+//! This kit and its scripts are test code shared by the `diff_gameplay` and `scenarios_ours` test binaries
+//! (`mod gameplay;` in each); each binary uses only part of it.
+#![allow(dead_code)]
 
 pub mod scenarios;
 
@@ -29,12 +33,12 @@ use blockheads_server::plist::value::PlistValue as PV;
 use blockheads_server::protocol::codec::{gz_plist_from, plist_gz};
 use blockheads_server::protocol::object_batches::decode_batch;
 
-use crate::harness::inproc::HostServer;
-use crate::harness::refenv::{copy_dir_all, OurServer, RefServer, RunSpec, ServerHandle};
-use crate::harness::save_diff::{diff_saves, load_records, SaveDiffOptions};
-use crate::harness::{parity_enabled, to_hex, TempDir};
-use crate::session::BatchKind;
-use crate::{BlockheadSpec, ClientConfig, Identity, JoinOutcome, Session, TraceSink};
+use bh_testclient::harness::inproc::HostServer;
+use bh_testclient::harness::refenv::{copy_dir_all, OurServer, RefServer, RunSpec, ServerHandle};
+use bh_testclient::harness::save_diff::{diff_saves, load_records, SaveDiffOptions};
+use bh_testclient::harness::{parity_enabled, to_hex, TempDir};
+use bh_testclient::session::BatchKind;
+use bh_testclient::{BlockheadSpec, ClientConfig, Identity, JoinOutcome, Session, TraceSink};
 
 // ------------------------------------------------------------------------------------------------ constants
 
@@ -471,7 +475,7 @@ pub fn pstr(p: &PV, k: &str) -> String {
 
 /// Packet types whose count is soft: wall-clock cadence (heartbeat, object updates, electricity, the 2 s coalesced player list), and block /
 /// light-block / object-batch counts, which follow the client's request throttling and simulation timing. The
-/// content checks (inventories, object counts per type, explored totals) stay hard.
+/// content checks (inventories, object counts per type, explored block counts) stay hard.
 const CADENCE: &[u8] = &[0x17, 0x08, 0x2c, 0x04, 0x28, 0x07, 0x09, 0x1e];
 
 /// Object types whose creations follow wall-clock simulation (freeblocks dropped by plants/trees, NPC spawns and
@@ -591,8 +595,9 @@ pub fn light_and_block_summary(s: &Session, obs: &mut Obs, phase: &str) {
     obs.add(format!("{}.blocks", phase), blocks.len());
     let explored: usize = blocks.values().map(|b| b.2).sum();
     let lit = blocks.values().filter(|b| b.2 > 0).count();
-    // bucketed so that a few fog-edge tiles of timing jitter do not count as a difference
-    obs.add(format!("{}.explored_total", phase), format!("~{}00", explored / 100));
+    // Soft: the tile total follows how far the blockhead got while the client watched, which drifts with build
+    // speed (a slow instrumented build crossed the 100-tile bucket). The explored block count stays hard.
+    obs.soft(format!("{}.explored_total", phase), format!("~{}00", explored / 100));
     obs.add(format!("{}.explored_blocks", phase), lit);
 }
 
@@ -715,7 +720,7 @@ impl Ctx<'_> {
         log.get(from..)
             .unwrap_or("")
             .lines()
-            .map(|l| mask_digits(crate::harness::strip_nslog_prefix(l)))
+            .map(|l| mask_digits(bh_testclient::harness::strip_nslog_prefix(l)))
             .filter(|l| !l.trim().is_empty())
             .collect()
     }

@@ -1,6 +1,6 @@
 # Scenario fixtures
 
-Reference observations for the gameplay scenarios in `src/gameplay/scenarios.rs`. The docker-free tests in
+Reference observations for the gameplay scenarios in `tests/gameplay/scenarios.rs`. The docker-free tests in
 `tests/scenarios_ours.rs` use them: our server runs in-process and must reproduce every stable value.
 
 ## Files

@@ -1,5 +1,5 @@
 //! The scenario scripts. Each one records observations into `ctx.obs`; see the module docs of
-//! [`crate::gameplay`] for how they are compared.
+//! [`super`] for how they are compared.
 
 use std::collections::BTreeMap;
 
@@ -8,7 +8,7 @@ use blockheads_server::plist::value::PlistValue as PV;
 use blockheads_server::protocol::codec::{gz_plist_from, plist_gz};
 
 use super::*;
-use crate::{FillNetRequest, PlaceInteractionObjectNetRequest, PlaceWorkbenchNetRequest, RemoveNetRequest};
+use bh_testclient::{FillNetRequest, PlaceInteractionObjectNetRequest, PlaceWorkbenchNetRequest, RemoveNetRequest};
 
 pub const ITEM_STICK: u16 = 4;
 pub const ITEM_CHEST: u16 = 1043;
@@ -211,7 +211,7 @@ fn chest_walk_reload(ctx: &mut Ctx) {
     let obs = &mut ctx.obs;
     obs.add(
         "reload.initial_blockheads",
-        a.state.initial_plist.as_ref().map(crate::decode::pv_json).unwrap_or_default().len(),
+        a.state.initial_plist.as_ref().map(bh_testclient::decode::pv_json).unwrap_or_default().len(),
     );
     absorb(&mut a, obs, "reload_join");
     let Some((_, cblob)) = last_object(&a, obj::CHEST) else {
@@ -508,7 +508,7 @@ const RED: u16 = 0x3000;
 
 fn paint_at(ctx: &mut Ctx, a: &mut Session, bh: u64, label: &str, ty: Option<u8>, pos: (i32, i32)) {
     let mark = a.received().len();
-    a.paint(crate::PaintNetRequest {
+    a.paint(bh_testclient::PaintNetRequest {
         paint_blockhead_id: bh,
         pos_x: pos.0 as u32,
         pos_y: pos.1 as u32,
@@ -757,7 +757,8 @@ fn craft_reload(ctx: &mut Ctx) {
     for b in benches.values() {
         ctx.obs.add(format!("reload.workbench.type{}", b.get(0x32).copied().unwrap_or(0)), wb_summary(b));
     }
-    ctx.obs.add("reload.freeblocks", creation_blobs(&a, T_FREEBLOCK).len());
+    // soft, like freeblock creations elsewhere: plants and trees drop more of them the longer the world ran
+    ctx.obs.soft("reload.freeblocks", creation_blobs(&a, T_FREEBLOCK).len());
     absorb(&mut a, &mut ctx.obs, "reload");
     a.disconnect();
 }

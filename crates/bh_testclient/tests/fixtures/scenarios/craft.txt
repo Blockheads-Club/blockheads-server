@@ -29,7 +29,7 @@ S	reload.create.t11	1
 S	~reload.create.t24	1
 S	reload.create.t45	4
 S	reload.create.t59	1
-S	reload.freeblocks	1
+S	~reload.freeblocks	1
 S	reload.rx.01	1
 S	reload.rx.06	1
 S	reload.rx.23	1

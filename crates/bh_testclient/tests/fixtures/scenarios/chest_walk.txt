@@ -76,7 +76,7 @@ S	save.world_db.main.dynamicWorldv2	1
 S	save.world_db.main.worldv2	1
 S	walk.blocks	75
 S	walk.explored_blocks	33
-S	walk.explored_total	~11500
+S	~walk.explored_total	~11500
 S	walk_left.create.t10	50
 S	walk_left.create.t11	16
 S	walk_left.create.t17	48

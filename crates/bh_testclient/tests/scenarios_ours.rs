@@ -3,7 +3,9 @@
 //! `tests/fixtures/scenarios` (see the README there for how to regenerate them). Known, not yet fixed differences
 //! are listed in `<scenario>.xfail` and must keep failing until they are fixed (then the entry must go).
 
-use bh_testclient::gameplay::{fixture_scenario, scenarios};
+mod gameplay;
+
+use gameplay::{fixture_scenario, scenarios};
 
 fn run(name: &str) {
     fixture_scenario(&scenarios::by_name(name).unwrap_or_else(|| panic!("no scenario {}", name)));

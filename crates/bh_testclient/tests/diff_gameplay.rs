@@ -1,4 +1,4 @@
-//! Differential gameplay scenarios: each scenario of `bh_testclient::gameplay::scenarios` runs against the
+//! Differential gameplay scenarios: each scenario of `tests/gameplay/scenarios.rs` runs against the
 //! reference server (refenv docker image, several runs to learn which observations are noise) and against ours,
 //! all from the same seeded `--new` world, and every observation that is stable across the reference runs must
 //! match. Saves are diffed too (report only).
@@ -11,7 +11,9 @@
 //! * `BH_SCENARIO_BLESS=1` writes the learned masks to `tests/fixtures/scenarios/<name>.txt` (used by the
 //!   docker-free `scenarios_ours` tests).
 
-use bh_testclient::gameplay::{diff_scenario, scenarios};
+mod gameplay;
+
+use gameplay::{diff_scenario, scenarios};
 
 fn run(name: &str) {
     diff_scenario(&scenarios::by_name(name).unwrap_or_else(|| panic!("no scenario {}", name)));
