@@ -3617,3 +3617,17 @@ fn beds_orphan_glue_and_delegate() {
         crate::world::state::World::set_core_delegate_for_tests(None);
     });
 }
+
+/// `teleportBlockhead:toWorkbench:` (what a portal / mod teleport uses) moves a blockhead through the production
+/// hook (it was inert: the teleport always failed).
+#[test]
+fn teleport_moves_the_blockhead_through_the_production_hook() {
+    isolated(|| {
+        let f = fx("hk_teleport");
+        crate::blockhead::interaction_rules::testhost::light_all(&f.world);
+        let wb = f.obj("workbench").clone();
+        assert!(f.dw.teleport_blockhead_to_workbench(&f.bh_obj, Some(&wb)), "teleport refused");
+        assert_eq!(f.bh_obj.pos(), wb.pos());
+        assert!(!crate::dynworld::lookups::DwOpsHooks::blockhead_teleport_to_pos(&*f.g, &f.stub, wb.pos()));
+    });
+}

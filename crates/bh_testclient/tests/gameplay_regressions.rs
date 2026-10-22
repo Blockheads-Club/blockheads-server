@@ -22,7 +22,8 @@ use bh_testclient::harness::refenv::{RefServer, RunSpec, ServerHandle};
 use bh_testclient::harness::{free_udp_port, parity_enabled, TempDir};
 use bh_testclient::session::BatchKind;
 use bh_testclient::{
-    BlockheadSpec, ClientConfig, FillNetRequest, Identity, JoinOutcome, PlaceInteractionObjectNetRequest, Session,
+    BlockheadSpec, ClientConfig, FillNetRequest, Identity, JoinOutcome, PaintNetRequest,
+    PlaceInteractionObjectNetRequest, Session,
 };
 use blockheads_server::host::{self, HostConfig, Status, WorldSelect};
 use blockheads_server::plist::value::PlistValue as PV;
@@ -47,6 +48,11 @@ const ITEM_RAIL: u16 = 199;
 const ITEM_HAND_CAR: u16 = 204;
 const ITEM_PAINTING: u16 = 212;
 const ITEM_GATE: u16 = 304;
+const ITEM_COLUMN: u16 = 222;
+const ITEM_BOAT: u16 = 111;
+const ITEM_WATER: u16 = 1044;
+const OBJECT_TYPE_COLUMN: u8 = 53;
+const OBJECT_TYPE_BOAT: u8 = 32;
 const CLIENT_REQUEST_PAINTING_DATA: u8 = 0x30;
 const SERVER_PAINTING_DATA: u8 = 0x31;
 /// A valid 1x1 PNG (the server checks paintings with `pnginfo` when it is installed).
@@ -675,6 +681,34 @@ fn found_items(s: &Session) -> Option<Vec<u8>> {
     }
 }
 
+/// Places a column, then paints it (0x19). Returns the column's net data before and after the paint.
+fn object_paint_flow(s: &mut Session) -> (Vec<u8>, Vec<u8>) {
+    let spot = ground_spots(s, 1)[0];
+    fill(s, spot, ITEM_COLUMN, None);
+    s.run_for(1000).unwrap();
+    let id = object_at(s, OBJECT_TYPE_COLUMN, spot).expect("column not placed");
+    let before = s.state.objects_seen[&(OBJECT_TYPE_COLUMN, id)].clone();
+    let r = PaintNetRequest {
+        pos_x: spot.0 as u32,
+        pos_y: spot.1 as u32,
+        color_index: 5,
+        face_index: 0,
+        ..Default::default()
+    };
+    s.paint(r).unwrap();
+    s.run_for(2000).unwrap();
+    (before, s.state.objects_seen[&(OBJECT_TYPE_COLUMN, id)].clone())
+}
+
+/// Pours a bucket of water on the ground and puts a boat on it. Returns where.
+fn boat_flow(s: &mut Session) -> (i32, i32) {
+    let spot = ground_spots(s, 1)[0];
+    fill(s, spot, ITEM_WATER, None);
+    fill(s, spot, ITEM_BOAT, None);
+    s.run_for(1500).unwrap();
+    spot
+}
+
 // ------------------------------------------------------------------------------------------------ tests
 
 #[test]
@@ -782,6 +816,50 @@ fn placed_torch_egg_painting_rail_and_hand_car_exist_and_survive_a_restart() {
     s.run_for(2000).unwrap();
     check_placed(&mut s, &p, "after restart");
     s.disconnect();
+}
+
+#[test]
+fn painting_an_object_changes_its_colour() {
+    let o = Ours::start_seeded("objpaint", None);
+    let mut s = join(o.port, "PAINTER");
+    let (before, after) = object_paint_flow(&mut s);
+    assert_ne!(before, after, "the column's net data did not change after painting it");
+    s.disconnect();
+}
+
+#[test]
+fn a_boat_put_on_water_exists() {
+    let o = Ours::start_seeded("boat", None);
+    let mut s = join(o.port, "SAILOR");
+    let spot = boat_flow(&mut s);
+    assert!(
+        object_positions(&s, OBJECT_TYPE_BOAT).iter().any(|p| (p.0 - spot.0).abs() <= 1 && (p.1 - spot.1).abs() <= 1),
+        "no boat near {:?}: {:?}",
+        spot,
+        object_positions(&s, OBJECT_TYPE_BOAT)
+    );
+    s.disconnect();
+}
+
+#[test]
+fn parity_object_paint_and_boat_match_reference() {
+    if !parity_enabled() {
+        eprintln!("SKIP: parity_object_paint_and_boat_match_reference (BH_PARITY=1 + docker required)");
+        return;
+    }
+    let r = reference_seeded("objpaint");
+    let mut s = join(r.port(), "PAINTER");
+    let (before, after) = object_paint_flow(&mut s);
+    let spot = boat_flow(&mut s);
+    let boats = object_positions(&s, OBJECT_TYPE_BOAT);
+    s.disconnect();
+    assert_ne!(before, after, "reference: painting the column changed nothing");
+    assert!(
+        boats.iter().any(|p| (p.0 - spot.0).abs() <= 1 && (p.1 - spot.1).abs() <= 1),
+        "reference: {:?} {:?}",
+        spot,
+        boats
+    );
 }
 
 #[test]
