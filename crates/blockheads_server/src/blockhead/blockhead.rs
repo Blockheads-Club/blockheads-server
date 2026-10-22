@@ -969,7 +969,16 @@ impl DynamicObject for Blockhead {
     /// `-updatePosition:`.
     fn update_position(&self, me: &ObjRef, new_position: IntPair) {
         let _ = me;
-        host().update_position(self, new_position)
+        let before = self.pos();
+        host().update_position(self, new_position);
+        // Mods (not in the original; `None` without mods): `player-move` when a player's blockhead changed tile.
+        if let Some(m) = crate::mods::hooks().filter(|m| m.wants(crate::mods::Optional::PlayerMove)) {
+            if let (Some(c), after) = (self.client_id(), self.pos()) {
+                if after != before {
+                    m.player_move(&c, before, after);
+                }
+            }
+        }
     }
     /// `-worldChanged:` is empty.
     fn world_changed(&self, _me: &ObjRef, _positions: &mut Vec<IntPair>) {}
@@ -1401,8 +1410,13 @@ pub trait BlockheadHost {
     fn report_achievement_with_identifier(&self, id: &str) {}
     /// `-[World abortInProgressPathIfForBlockhead:]`
     fn abort_in_progress_path_if_for_blockhead(&self, b: &ObjRef) {}
-    /// `-[World sendDamage:forNetBlockhead:recoil:]`
-    fn send_damage_for_net_blockhead_recoil(&self, damage: f32, b: &ObjRef, recoil: bool) {}
+    /// `-[World sendDamage:forNetBlockhead:recoil:]`: forwarded to the blockhead's world (an inert default left PvP
+    /// damage unsent in production).
+    fn send_damage_for_net_blockhead_recoil(&self, damage: f32, b: &ObjRef, recoil: bool) {
+        if let Some(w) = crate::objects::handle::downcast::<Blockhead>(b).and_then(|x| x.world_rc()) {
+            w.send_damage_for_net_blockhead_recoil(damage, b, recoil);
+        }
+    }
     /// `-[World fireProjectileFrom:to:at:fireItemType:firer:]`
     fn fire_projectile_from_to_at_fire_item_type_firer(
         &self,

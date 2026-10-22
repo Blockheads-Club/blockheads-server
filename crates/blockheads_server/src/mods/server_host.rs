@@ -8,13 +8,16 @@ use std::path::{Path, PathBuf};
 use std::rc::{Rc, Weak};
 
 use bhmod_core::storage::{KvBackend, StorageProvider};
-use bhmod_core::types::{CommandSender, Event, LogLevel, Role, SavePhase, Side};
+use bhmod_core::types::{
+    BreakLayer, CommandSender, Event, EventKind, LogLevel, ObjectKind, Pos, RejectReason, Role, SavePhase, Side,
+};
 use bhmod_core::{GameBridge, HostOptions, ModHost};
 use bhmod_wasm::{WasmConfig, WasmRuntime};
 
-use super::{ChatVerdict, ModHooks};
+use super::{ChatVerdict, ModHooks, Optional};
 use crate::server::bhserver::BHServer;
 use crate::storage::lmdb::{Database, DatabaseEnvironment};
+use crate::types::structs::IntPair;
 
 /// Built-in command names (`handleCommand:issueClient:`); mods may not register them.
 pub const BUILTIN_COMMANDS: &[&str] = &[
@@ -131,6 +134,16 @@ impl GameBridge for Bridge {
     fn is_builtin_command(&self, name: &str) -> bool {
         BUILTIN_COMMANDS.contains(&name)
     }
+    fn player_pos(&self, id: &str) -> Option<Pos> {
+        // The player's (first) blockhead in the dynamic world.
+        let h = crate::world::lifecycle::core_hooks();
+        let all = h.dynamic_world_all_blockheads_including_net();
+        all.iter().find(|b| h.blockhead_client_id(b).as_deref() == Some(id)).map(|b| pos(b.pos()))
+    }
+}
+
+fn pos(p: IntPair) -> Pos {
+    Pos { x: p.x, y: p.y }
 }
 
 /// Mod storage: one LMDB environment per world, one named database per mod, created on first use.
@@ -251,6 +264,71 @@ impl ModHooks for ServerMods {
     }
     fn server_stop(&self) {
         self.with((), |h| h.disable_all());
+    }
+    fn wants(&self, what: Optional) -> bool {
+        let kind = match what {
+            Optional::BlockChanged => EventKind::BlockChanged,
+            Optional::PlayerMove => EventKind::PlayerMove,
+        };
+        self.with(false, |h| h.wants(kind))
+    }
+    fn pre_login(&self, player_id: &str, alias: &str) -> Option<u8> {
+        let ev = Event::PlayerPreLogin {
+            player: player_id.to_string(),
+            alias: alias.to_string(),
+            cancelled: false,
+            reason: RejectReason::Kicked,
+        };
+        self.with(None, |h| match h.fire(ev) {
+            Event::PlayerPreLogin { cancelled: true, reason, .. } => Some(reason.code()),
+            _ => None,
+        })
+    }
+    fn block_place(&self, player_id: &str, at: IntPair, item: u32, data_a: u16, data_b: u16) -> bool {
+        let ev =
+            Event::BlockPlace { player: player_id.to_string(), pos: pos(at), item, data_a, data_b, cancelled: false };
+        self.with(false, |h| h.fire(ev).cancelled())
+    }
+    fn block_break(&self, player_id: &str, at: IntPair, back_wall: bool, tile: u32) -> bool {
+        let layer = if back_wall { BreakLayer::BackWall } else { BreakLayer::Block };
+        let ev = Event::BlockBreak { player: player_id.to_string(), pos: pos(at), layer, tile, cancelled: false };
+        self.with(false, |h| h.fire(ev).cancelled())
+    }
+    fn block_changed(&self, at: IntPair, tile: u32, player_id: Option<&str>) {
+        let ev = Event::BlockChanged { pos: pos(at), tile, player: player_id.map(str::to_string) };
+        self.with((), |h| {
+            h.fire(ev);
+        });
+    }
+    fn object_place(&self, player_id: &str, at: IntPair, workbench: bool, item: u32) -> bool {
+        let object = if workbench { ObjectKind::Workbench } else { ObjectKind::InteractionObject };
+        let ev = Event::ObjectPlace { player: player_id.to_string(), pos: pos(at), object, item, cancelled: false };
+        self.with(false, |h| h.fire(ev).cancelled())
+    }
+    fn damage(&self, player_id: Option<&str>, blockhead: u64, amount: f32, attacker: Option<&str>) -> Option<f32> {
+        let ev = Event::Damage {
+            player: player_id.map(str::to_string),
+            blockhead,
+            amount,
+            attacker: attacker.map(str::to_string),
+            cancelled: false,
+        };
+        self.with(Some(amount), |h| match h.fire(ev) {
+            Event::Damage { cancelled: false, amount, .. } => Some(amount),
+            _ => None,
+        })
+    }
+    fn death(&self, player_id: Option<&str>, blockhead: u64) {
+        let ev = Event::Death { player: player_id.map(str::to_string), blockhead };
+        self.with((), |h| {
+            h.fire(ev);
+        });
+    }
+    fn player_move(&self, player_id: &str, from: IntPair, to: IntPair) {
+        let ev = Event::PlayerMove { player: player_id.to_string(), from: pos(from), to: pos(to) };
+        self.with((), |h| {
+            h.fire(ev);
+        });
     }
 }
 
