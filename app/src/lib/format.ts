@@ -30,3 +30,10 @@ export function percent(v: number): string {
   const f = new Intl.NumberFormat(i18n.lang, { style: 'percent', maximumFractionDigits: 0 });
   return v > 0 && v < 1 ? f.format(0.01).replace(/1/, '<1') : f.format(Math.round(v) / 100);
 }
+
+/** File sizes: `186 kB` / `2.1 MB` / `0 kB`, with the language's unit names. */
+export function fileSize(n: number): string {
+  const kb = n / 1024;
+  const [v, unit, digits] = kb < 1024 ? [Math.ceil(kb), 'kilobyte', 0] : [kb / 1024, 'megabyte', 1];
+  return new Intl.NumberFormat(i18n.lang, { style: 'unit', unit, unitDisplay: 'short', minimumFractionDigits: digits, maximumFractionDigits: digits }).format(v);
+}

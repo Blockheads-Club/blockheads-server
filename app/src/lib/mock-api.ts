@@ -1,5 +1,5 @@
 import { vi } from 'vitest';
-import type { Poll, Settings, World } from './types';
+import type { ModsOverview, ModSummary, Poll, Settings, World } from './types';
 
 export const W1 = 'a'.repeat(32);
 
@@ -37,6 +37,18 @@ export function makeApi(over: Partial<Record<string, unknown>> = {}) {
     networkInfo: vi.fn(async (port: number) => [{ ip: '192.168.1.5', endpoint: `192.168.1.5:${port}` }]),
     getSettings: vi.fn(async () => settings),
     setSettings: vi.fn(async () => {}),
+    modsOverview: vi.fn(async () => makeOverview()),
+    modsSetEnabled: vi.fn(async () => {}),
+    modsSetGrant: vi.fn(async () => {}),
+    modsRemove: vi.fn(async () => {}),
+    modsClearData: vi.fn(async () => {}),
+    modsOpenFolder: vi.fn(async () => {}),
+    modsBrowse: vi.fn(async () => ({ generated: '2026-10-21T00:00:00Z', offline: false, error: null, mods: [], hidden: 0 })),
+    modsPlan: vi.fn(async () => ({ items: [], satisfied: [], missing: [], totalBytes: 0 })),
+    modsInspectUrl: vi.fn(async () => ({ source: 'x.bhmod', sha256: 'f'.repeat(64), plan: { items: [], satisfied: [], missing: [], totalBytes: 0 } })),
+    modsInspectFile: vi.fn(async () => ({ source: 'x.bhmod', sha256: 'f'.repeat(64), plan: { items: [], satisfied: [], missing: [], totalBytes: 0 } })),
+    modsInstall: vi.fn(async () => ({ ids: [], restart: false })),
+    onModsProgress: vi.fn(async () => () => {}),
     ...over
   };
 }
@@ -50,6 +62,58 @@ export function makeWin(over: Partial<Record<string, unknown>> = {}) {
     isFullscreen: vi.fn(async () => false),
     onResized: vi.fn(async () => () => {}),
     onFocus: vi.fn(async () => () => {}),
+    ...over
+  };
+}
+
+/** An installed mod as `mods_overview` returns it. */
+export function makeMod(over: Partial<ModSummary> = {}): ModSummary {
+  const id = over.id ?? 'land-claims';
+  return {
+    id,
+    name: { en: 'Land Claims' },
+    description: { en: 'Protect your land.' },
+    version: '1.4.2',
+    authors: ['tobyblock'],
+    license: 'MIT',
+    homepage: 'https://github.com/tobyblock/land-claims',
+    sides: { server: true, client: false, clientRequired: false },
+    runtime: 'lua',
+    native: false,
+    permissions: ['world:read'],
+    granted: ['world:read'],
+    missing: [],
+    enabled: true,
+    status: 'running',
+    detail: null,
+    dependencies: [],
+    file: `${id}-1.4.2.bhmod`,
+    packed: true,
+    sha256: 'a'.repeat(64),
+    size: 186000,
+    reviewed: true,
+    update: null,
+    faults: [],
+    lines: [],
+    slowestMs: null,
+    storageBytes: null,
+    ...over
+  };
+}
+
+export function makeOverview(over: Partial<ModsOverview> = {}): ModsOverview {
+  return {
+    dir: '/data/mods',
+    size: 0,
+    mods: [],
+    problems: [],
+    clientMods: [],
+    changes: [],
+    running: false,
+    error: null,
+    softMs: 5,
+    hardMs: 25,
+    hostLines: [],
     ...over
   };
 }

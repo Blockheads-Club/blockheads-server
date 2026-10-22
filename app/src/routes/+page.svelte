@@ -8,6 +8,8 @@
   import Access from '$lib/screens/Access.svelte';
   import Console from '$lib/screens/Console.svelte';
   import Dashboard from '$lib/screens/Dashboard.svelte';
+  import { mods } from '$lib/mods/mods.svelte';
+  import Mods from '$lib/screens/Mods.svelte';
   import More from '$lib/screens/More.svelte';
   import Players from '$lib/screens/Players.svelte';
   import Settings from '$lib/screens/Settings.svelte';
@@ -37,6 +39,13 @@
     if (store.boot !== 'done' || revealed) return;
     revealed = true;
     void api.mainReady().catch(() => {});
+  });
+
+  /** Mods: loaded once the app is up, then again whenever the log or the run state says something changed. */
+  $effect(() => {
+    if (!store.ready) return;
+    void store.modsDirty;
+    void mods.refresh();
   });
 
   /** The custom title bar and rounded frame: desktop Tauri only (Android keeps its layout). */
@@ -112,6 +121,8 @@
         <Console />
       {:else if store.screen === 'players'}
         <Players />
+      {:else if store.screen === 'mods'}
+        <Mods />
       {:else if store.screen === 'access'}
         <Access />
       {:else if store.screen === 'settings'}

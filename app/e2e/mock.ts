@@ -1,8 +1,8 @@
 import type { Page } from '@playwright/test';
 
 /** Replaces the Tauri IPC with an in-page fake server so the built web UI can be exercised in a browser. */
-export async function mockTauri(page: Page, opts: { worlds?: boolean; splash?: object; lang?: string } = {}) {
-  await page.addInitScript(({ withWorlds, splash, lang }) => {
+export async function mockTauri(page: Page, opts: { worlds?: boolean; splash?: object; lang?: string; mods?: 'demo' | 'none' } = {}) {
+  await page.addInitScript(({ withWorlds, splash, lang, demo }) => {
     const s = {
       worlds: withWorlds ? [{ id: 'a'.repeat(32), name: 'Sunny Isle' }, { id: 'b'.repeat(32), name: 'Deep Cave Club' }] : ([] as { id: string; name: string }[]),
       state: 'stopped',
@@ -13,6 +13,66 @@ export async function mockTauri(page: Page, opts: { worlds?: boolean; splash?: o
       settings: { language: lang, run: { worldId: '', port: 15151, maxPlayers: 0, password: '', saveDelay: 10 } },
       players: [] as { name: string; ip: string; id: string; joinedAt: number }[]
     };
+    // ---- mods: a small fake of src-tauri/src/mods.rs ----
+    type M = {
+      id: string; name: string; version: string; author: string; perms: string[]; granted: string[]; enabled: boolean;
+      server: boolean; client: boolean; native?: boolean; deps?: Record<string, string>; fail?: string; budget?: boolean;
+      reviewed?: boolean; update?: string;
+    };
+    const mk = (id: string, name: string, version: string, author: string, perms: string[], extra: Partial<M> = {}): M =>
+      ({ id, name, version, author, perms, granted: perms.filter((p) => p !== 'native'), enabled: true, server: true, client: false, reviewed: true, ...extra });
+    const mods: M[] = demo
+      ? [
+          mk('better-chat', 'Better Chat', '2.1.0', 'mira_k', ['players:chat', 'channels']),
+          mk('land-claims', 'Land Claims', '1.4.2', 'tobyblock', ['world:read', 'world:write', 'players:teleport'], { update: '1.5.0' }),
+          mk('minimap', 'Minimap', '0.9.1', 'pixelpan', ['world:read'], { client: true }),
+          mk('weather-plus', 'Weather Plus', '3.0.0', 'sunnyside', ['world:write'], { budget: true }),
+          mk('shop-signs', 'Shop Signs', '1.2.0', 'mira_k', ['world:read', 'players:inventory'], { deps: { 'economy-core': '^2' } }),
+          { ...mk('discord-bridge', 'Discord Bridge', '1.0.3', 'hexwright', ['players:chat', 'net-http:discord.com']), granted: ['players:chat'] },
+          { ...mk('fast-tools', 'Fast Tools', '0.4.0', 'blockmonk', ['native'], { native: true, fail: 'missing symbol bh_world_get', reviewed: false }), granted: ['native'] },
+          { ...mk('hats-capes', 'Hats & Capes', '1.1.0', 'pixelpan', []), server: false, client: true, enabled: false }
+        ]
+      : [];
+    const vjson = (id: string, version: string, size: number, permissions: object, more: object = {}) => ({
+      version, url: `https://example.invalid/${id}.bhmod`, sha256: 'a'.repeat(64), size, sides: ['server'], api: '^0.1', permissions, published: '2026-10-15', ...more
+    });
+    const index = [
+      { id: 'economy-core', name: 'Economy Core', description: 'Coins, wallets and payments. Other mods use it for shops and jobs.', owners: ['mira_k'], tags: ['economy'], v: vjson('economy-core', '2.3.1', 226000, { players: ['chat', 'inventory'] }) },
+      { id: 'auction-house', name: 'Auction House', description: 'Players sell items to each other with timed auctions.', owners: ['tobyblock'], tags: ['economy'], v: vjson('auction-house', '1.3.0', 186000, { players: ['inventory', 'chat'] }, { depends: { 'economy-core': '^2' } }) },
+      { id: 'pet-companions', name: 'Pet Companions', description: 'Tame a dodo and it follows you, with its own little hat.', owners: ['pixelpan'], tags: ['cosmetic'], v: vjson('pet-companions', '1.0.0', 312000, { world: 'read', channels: true }, { sides: ['server', 'client'], clientRequired: true }) },
+      { id: 'turbo-lighting', name: 'Turbo Lighting', description: 'Smooth lighting and coloured torches. Uses native code for speed.', owners: ['lumen'], tags: ['world'], v: vjson('turbo-lighting', '0.8.0', 540000, { native: true }, { sides: ['server', 'client'], clientRequired: true }) },
+      { id: 'land-claims', name: 'Land Claims', description: 'Protect your land with a claim stick.', owners: ['tobyblock'], tags: ['building'], v: vjson('land-claims', '1.5.0', 200000, { world: 'write', players: ['teleport'] }) }
+    ];
+    const permNames = (p: any) => [
+      ...(p.world ? [`world:${p.world}`] : []), ...(p.players ?? []).map((x: string) => `players:${x}`), ...(p.channels ? ['channels'] : []), ...(p.native ? ['native'] : [])
+    ];
+    const mstatus = (m: M) => {
+      const missing = m.perms.filter((p) => !m.granted.includes(p));
+      const dep = Object.keys(m.deps ?? {}).find((d) => !mods.some((x) => x.id === d && x.enabled));
+      if (!m.enabled) return ['off', null];
+      if (!m.server) return [s.state === 'running' ? 'running' : 'ready', null];
+      if (missing.length) return ['permissions', missing.join(', ')];
+      if (dep) return ['dependency', `${dep} ${m.deps![dep]}`];
+      if (m.fail) return ['failed', m.fail];
+      if (s.state !== 'running') return ['ready', null];
+      if (m.budget) return ['budget', '3 faults within 60 s'];
+      return ['running', null];
+    };
+    const summary = (m: M) => {
+      const [status, detail] = mstatus(m);
+      return {
+        id: m.id, name: { en: m.name }, description: { en: index.find((i) => i.id === m.id)?.description ?? `${m.name} for your server.` },
+        version: m.version, authors: [m.author], license: 'MIT', homepage: `https://github.com/${m.author}/${m.id}`,
+        sides: { server: m.server, client: m.client, clientRequired: m.client }, runtime: m.native ? 'jvm' : 'lua', native: !!m.native,
+        permissions: m.perms, granted: m.granted, missing: m.perms.filter((p) => !m.granted.includes(p)), enabled: m.enabled, status, detail,
+        dependencies: Object.entries(m.deps ?? {}).map(([id, req]) => ({ id, req, installed: mods.find((x) => x.id === id)?.version ?? null, ok: mods.some((x) => x.id === id && x.enabled), soft: false })),
+        file: `${m.id}-${m.version}.bhmod`, packed: true, sha256: 'a'.repeat(64), size: 186000, reviewed: !!m.reviewed, update: m.update ?? null,
+        faults: m.budget && s.state === 'running' ? [{ at: Date.now() - 60000, kind: 'slow', text: 'tick took 7.9 ms (budget 5 ms)', ms: 7.9 }, { at: Date.now() - 30000, kind: 'error', text: 'tick: timeout' }] : [],
+        lines: s.state === 'running' ? [{ at: Date.now() - 90000, level: 'info', text: 'enabled' }, ...(m.budget ? [{ at: Date.now() - 30000, level: 'warn', text: 'tick took 7.9 ms (budget 5 ms)' }, { at: Date.now() - 1000, level: 'info', text: 'disabled: 3 faults within 60 s' }] : [])] : [],
+        slowestMs: s.state === 'running' && m.server && !m.native ? (m.budget ? 7.9 : 1.2) : null, storageBytes: s.state === 'running' ? null : 2200000
+      };
+    };
+    (window as any).__mods = mods;
     const log = (t: string) => {
       s.lines.push(t);
       s.times.push(Date.now());
@@ -60,9 +120,56 @@ export async function mockTauri(page: Page, opts: { worlds?: boolean; splash?: o
           case 'get_list': return s.lists[a.kind] ?? [];
           case 'set_list': s.lists[a.kind] = a.names; return;
           case 'network_info': return [{ ip: '192.168.1.42', endpoint: `192.168.1.42:${a.port}` }];
+          case 'mods_overview':
+            return {
+              dir: '/data/TheBlockheads/mods', size: mods.length * 186000, mods: mods.map(summary), problems: [],
+              clientMods: mods.filter((m) => m.enabled && m.client).map((m) => m.id), changes: [], running: s.state === 'running',
+              error: null, softMs: 5, hardMs: 25, hostLines: []
+            };
+          case 'mods_set_enabled': mods.find((m) => m.id === a.id)!.enabled = a.on; return;
+          case 'mods_set_grant': {
+            const m = mods.find((x) => x.id === a.id)!;
+            m.granted = a.on ? [...m.granted, a.perm] : m.granted.filter((p) => p !== a.perm);
+            return;
+          }
+          case 'mods_remove': mods.splice(mods.findIndex((m) => `${m.id}-${m.version}.bhmod` === a.file), 1); return;
+          case 'mods_clear_data': case 'mods_open_folder': return;
+          case 'mods_browse':
+            return {
+              generated: '2026-10-21T12:00:00Z', offline: false, error: null, hidden: 0,
+              mods: index.map((i) => ({
+                id: i.id, name: i.name, description: i.description, owners: i.owners, repo: '', tags: i.tags, version: i.v.version,
+                sides: i.v.sides, clientRequired: !!(i.v as any).clientRequired, permissions: permNames(i.v.permissions), native: !!(i.v.permissions as any).native,
+                depends: (i.v as any).depends ?? {}, size: i.v.size, published: i.v.published, firstPublished: '2026-09-01',
+                installed: mods.find((m) => m.id === i.id)?.version ?? null
+              }))
+            };
+          case 'mods_plan': {
+            const root = index.find((i) => i.id === a.id)!;
+            const item = (i: typeof root, neededBy: string | null) => ({
+              id: i.id, name: i.name, version: i.v.version, size: i.v.size, sides: i.v.sides, clientRequired: !!(i.v as any).clientRequired,
+              permissions: permNames(i.v.permissions), native: !!(i.v.permissions as any).native, neededBy, replaces: mods.find((m) => m.id === i.id)?.version ?? null, reviewed: true
+            });
+            const items = [item(root, null)];
+            for (const d of Object.keys((root.v as any).depends ?? {})) if (!mods.some((m) => m.id === d)) items.push(item(index.find((i) => i.id === d)!, root.id));
+            return { items, satisfied: [], missing: [], totalBytes: items.reduce((n, i) => n + i.size, 0) };
+          }
+          case 'mods_inspect_url': throw { code: 'checksum', file: 'fast-tools-0.4.0.bhmod', expected: '9f2c' + 'a'.repeat(56) + 'a71e', got: '41b0' + 'b'.repeat(56) + '0c3d' };
+          case 'mods_install': {
+            for (const it of a.request.items) {
+              const i = index.find((x) => x.id === it.id)!;
+              const old = mods.findIndex((m) => m.id === it.id);
+              const m = mk(i.id, i.name, i.v.version, i.owners[0], permNames(i.v.permissions), { client: !!(i.v as any).clientRequired, native: !!(i.v.permissions as any).native, deps: (i.v as any).depends });
+              m.granted = a.request.grants[i.id] ?? [];
+              m.enabled = a.request.enable;
+              if (old >= 0) mods[old] = m;
+              else mods.push(m);
+            }
+            return { ids: a.request.items.map((i: any) => i.id), restart: s.state === 'running' };
+          }
         }
         throw new Error('unmocked ' + cmd);
       }
     };
-  }, { withWorlds: opts.worlds ?? false, splash: opts.splash ?? null, lang: opts.lang ?? 'en' });
+  }, { withWorlds: opts.worlds ?? false, splash: opts.splash ?? null, lang: opts.lang ?? 'en', demo: opts.mods === 'demo' });
 }

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { tick } from 'svelte';
+  import { tick, untrack } from 'svelte';
   import { t } from '../i18n.svelte';
   import type { LogEntry, LogLevel } from '../types';
   import { LEVEL_TAGS, clock } from '../util';
@@ -14,9 +14,11 @@
     active: boolean;
     history: string[];
     phone?: boolean;
+    /** Search to start with (e.g. a mod's log lines). */
+    initialQuery?: string;
     onsend: (line: string) => void;
   }
-  let { entries, paused = $bindable(false), active, history, phone = false, onsend }: Props = $props();
+  let { entries, paused = $bindable(false), active, history, phone = false, initialQuery = '', onsend }: Props = $props();
 
   const COMMANDS = [
     '/help', '/players', '/kick', '/ban', '/unban', '/admin', '/unadmin', '/mod', '/unmod',
@@ -32,7 +34,7 @@
   ];
   const QUICK = ['/players', '/help', '/kick '];
 
-  let query = $state('');
+  let query = $state(untrack(() => initialQuery));
   let shown = $state<Set<LogLevel>>(new Set());
   let match = $state(0);
   let cmd = $state('');

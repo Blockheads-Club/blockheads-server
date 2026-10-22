@@ -8,6 +8,7 @@
   import Avatar from '../ui/Avatar.svelte';
   import Badge from '../ui/Badge.svelte';
   import Card from '../ui/Card.svelte';
+  import ModsCard from '../mods/ModsCard.svelte';
   import Icon from '../ui/Icon.svelte';
   import PerfCard from '../ui/PerfCard.svelte';
   import QrCard from '../ui/QrCard.svelte';
@@ -76,6 +77,8 @@
       {#if store.currentWorld}<span class="hint mono">{shortId(store.currentWorld.id)}</span>{/if}
     </Card>
   </div>
+
+  <ModsCard />
 
   <div class="two">
     <Card class="col"><QrCard {addrs} port={run.port} running={store.state === 'running'} phone={viewport.phone} /></Card>

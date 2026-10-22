@@ -256,8 +256,12 @@ describe('app shell', () => {
     await fireEvent.click(screen.getByRole('button', { name: /Settings/ }));
     expect(await screen.findByRole('heading', { name: 'Settings' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'More' })).toHaveAttribute('aria-current', 'page');
-    await fireEvent.click(screen.getByRole('button', { name: 'Console' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    await fireEvent.click(await screen.findByRole('button', { name: /Console/ }));
     expect(await screen.findByRole('heading', { name: 'Console' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'More' })).toHaveAttribute('aria-current', 'page');
+    await fireEvent.click(screen.getByRole('button', { name: 'Mods' }));
+    expect(await screen.findByRole('heading', { name: 'Mods' })).toBeInTheDocument();
   });
 
   it('reacts to viewport changes', async () => {
