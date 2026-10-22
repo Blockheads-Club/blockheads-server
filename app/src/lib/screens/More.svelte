@@ -10,6 +10,7 @@
 
   /** Phone only: what does not fit in the bottom bar. */
   const items: { id: Screen; icon: IconName }[] = [
+    { id: 'console', icon: 'terminal' },
     { id: 'access', icon: 'shield' },
     { id: 'settings', icon: 'sliders' }
   ];

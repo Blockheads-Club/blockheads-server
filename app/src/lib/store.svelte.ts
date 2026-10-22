@@ -51,6 +51,12 @@ export class AppStore {
   /** Latest CPU / memory sample and the last STATS_KEEP of them (one per poll), oldest first. */
   stats = $state<Stats | null>(null);
   statsHistory = $state<Stats[]>([]);
+  /** Bumped when the mods may have changed state (a `[mods]` log line, the server started or stopped). */
+  modsDirty = $state(0);
+  /** Restart as soon as nobody is online (mods waiting for a restart). */
+  restartWhenEmpty = $state(false);
+  /** A search for the console to start with (set by "Open in console" on a mod). */
+  consoleQuery = $state('');
   private next = 0;
   private seq = 0;
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -127,6 +133,7 @@ export class AppStore {
       const p = await api.poll(this.next);
       this.offline = false;
       this.now = Date.now();
+      if (p.state !== this.state || p.lines.some((l) => l.includes('[mods'))) this.modsDirty++;
       this.state = p.state;
       this.detail = p.detail;
       this.runningWorldId = p.worldId;
@@ -138,6 +145,10 @@ export class AppStore {
         this.log = [...this.log, ...fresh].slice(-MAX_LINES);
       }
       this.next = p.next;
+      if (this.restartWhenEmpty && p.state === 'running' && p.players.length === 0) {
+        this.restartWhenEmpty = false;
+        void this.restart();
+      }
     } catch {
       this.offline = true;
     }

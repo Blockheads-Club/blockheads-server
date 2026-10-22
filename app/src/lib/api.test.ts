@@ -76,6 +76,48 @@ describe('api', () => {
   });
 });
 
+describe('mods api', () => {
+  beforeEach(() => {
+    invoke.mockClear();
+    listen.mockClear();
+  });
+
+  it('maps the mod calls onto their commands', async () => {
+    await api.modsOverview();
+    await api.modsSetEnabled('a', true);
+    await api.modsSetGrant('a', 'players:chat', false);
+    await api.modsRemove('a.bhmod');
+    await api.modsClearData('a');
+    await api.modsOpenFolder();
+    await api.modsOpenFolder('a');
+    await api.modsBrowse();
+    await api.modsPlan('a');
+    await api.modsPlan('a', '1.0.0');
+    await api.modsInspectUrl('https://x/a.bhmod');
+    const bytes = new Uint8Array([1, 2]);
+    await api.modsInspectFile('fast tools.bhmod', bytes);
+    const request = { items: [{ id: 'a', version: '1.0.0' }], grants: {}, enable: true, local: false };
+    await api.modsInstall(request);
+    expect(invoke.mock.calls.map((c: any[]) => c[0])).toEqual([
+      'mods_overview', 'mods_set_enabled', 'mods_set_grant', 'mods_remove', 'mods_clear_data', 'mods_open_folder',
+      'mods_open_folder', 'mods_browse', 'mods_plan', 'mods_plan', 'mods_inspect_url', 'mods_inspect_file', 'mods_install'
+    ]);
+    expect(invoke).toHaveBeenCalledWith('mods_open_folder', { id: null });
+    expect(invoke).toHaveBeenCalledWith('mods_plan', { id: 'a', version: null });
+    expect(invoke).toHaveBeenCalledWith('mods_plan', { id: 'a', version: '1.0.0' });
+    expect(invoke).toHaveBeenCalledWith('mods_inspect_file', bytes, { headers: { 'x-file-name': 'fast%20tools.bhmod' } });
+    expect(invoke).toHaveBeenCalledWith('mods_install', { request });
+  });
+
+  it('hands install progress over', async () => {
+    const cb = vi.fn();
+    await api.onModsProgress(cb);
+    expect(listen.mock.calls[0][0]).toBe('mods-progress');
+    listen.mock.calls[0][1]({ payload: { step: 'download', done: 0, total: 2 } });
+    expect(cb).toHaveBeenCalledWith({ step: 'download', done: 0, total: 2 });
+  });
+});
+
 describe('win', () => {
   it('forwards to the current window', async () => {
     expect(await win.minimize()).toBe('min');

@@ -4,9 +4,9 @@ import { mockTauri } from './mock';
 const phone = (page: Page) => (page.viewportSize()?.width ?? 1000) < 600;
 
 /** Open a screen from the sidebar (desktop) or the bottom bar (phone, with "More" for the rest). */
-async function go(page: Page, name: 'Dashboard' | 'Worlds' | 'Console' | 'Players' | 'Access lists' | 'Settings') {
+async function go(page: Page, name: 'Dashboard' | 'Worlds' | 'Console' | 'Players' | 'Mods' | 'Access lists' | 'Settings') {
   const nav = page.getByRole('navigation', { name: 'Server' });
-  if (phone(page) && (name === 'Access lists' || name === 'Settings')) {
+  if (phone(page) && (name === 'Console' || name === 'Access lists' || name === 'Settings')) {
     await nav.getByRole('button', { name: 'More' }).click();
     await page.getByRole('button', { name }).click();
   } else {

@@ -8,6 +8,9 @@
   import { viewport } from '../viewport.svelte';
 
   let paused = $state(false);
+  /** A search handed over by another screen (a mod's "Open in console"), used once. */
+  const initialQuery = store.consoleQuery;
+  store.consoleQuery = '';
 
   /** Download the buffered log as a text file. */
   function save() {
@@ -37,6 +40,7 @@
     active={store.state === 'running'}
     history={store.history}
     phone={viewport.phone}
+    {initialQuery}
     onsend={(line) => store.sendCommand(line)}
   />
 </div>

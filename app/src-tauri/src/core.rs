@@ -12,6 +12,8 @@ use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 use blockheads_server::host::{self, HostConfig, ServerHandle, Status, WorldSelect};
 use serde::{Deserialize, Serialize};
 
+use crate::mods;
+
 const LOG_CAP: usize = 3000;
 pub const DEFAULT_PORT: u16 = 15151;
 
@@ -182,6 +184,8 @@ struct Shared {
     /// Sequence number of the first line in `lines`.
     first: u64,
     players: Vec<Player>,
+    /// Mod events of the current run.
+    mods: crate::mods::Live,
 }
 
 impl Shared {
@@ -194,6 +198,7 @@ impl Shared {
         self.lines.push_back(line.to_string());
         self.times.push_back(now_ms());
         track_player(&mut self.players, line);
+        self.mods.push(line, now_ms());
     }
     fn next(&self) -> u64 {
         self.first + self.lines.len() as u64
@@ -240,6 +245,13 @@ pub struct Core {
     data_dir: RwLock<PathBuf>,
     shared: Arc<Mutex<Shared>>,
     running: Mutex<Option<Running>>,
+    /// The mods the running server loaded (taken at start).
+    mods_loaded: Mutex<Option<crate::mods::Snapshot>>,
+    /// A package picked from a file or link, waiting for the install step.
+    candidate: Mutex<Option<crate::mods::Candidate>>,
+    /// The public mod list. `BHS_MODS_INDEX` overrides it with a URL, a `file://` URL or an absolute path, e.g.
+    /// `src-tauri/fixtures/mods-index.json` (sample entries for development; their packages do not exist).
+    index_url: String,
 }
 
 impl Core {
@@ -256,7 +268,19 @@ impl Core {
             .map(PathBuf::from)
             .or_else(|| saved_data_dir(&app_dir))
             .unwrap_or_else(|| app_dir.join("TheBlockheads"));
-        Core { app_dir, data_dir: RwLock::new(data_dir), shared: Arc::default(), running: Mutex::new(None) }
+        let index_url = std::env::var("BHS_MODS_INDEX")
+            .ok()
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| crate::mods::INDEX_URL.to_string());
+        Core {
+            app_dir,
+            data_dir: RwLock::new(data_dir),
+            shared: Arc::default(),
+            running: Mutex::new(None),
+            mods_loaded: Mutex::new(None),
+            candidate: Mutex::new(None),
+            index_url,
+        }
     }
 
     pub fn data_dir(&self) -> PathBuf {
@@ -332,9 +356,11 @@ impl Core {
         {
             let mut s = lock(&self.shared);
             s.players.clear();
+            s.mods = crate::mods::Live::default();
             s.push(&format!("--- starting world {} on port {} ---", o.world_id, o.port));
         }
         let shared = self.shared.clone();
+        *lock(&self.mods_loaded) = Some(crate::mods::snapshot(&self.mods_dir()));
         let cfg = HostConfig {
             data_dir: Some(self.data_dir()),
             world: WorldSelect::Load(o.world_id.clone()),
@@ -348,6 +374,7 @@ impl Core {
             } else {
                 vec![format!("/set-password {}", o.password)]
             },
+            mods: blockheads_server::mods::ModsConfig { dir: Some(self.mods_dir()), disabled: false },
             ..HostConfig::default()
         };
         let handle = host::start(cfg, Arc::new(move |l: &str| lock(&shared).push(l))).map_err(|e| e.to_string())?;
@@ -491,6 +518,184 @@ impl Core {
 }
 
 const DATA_DIR_FILE: &str = "data-dir.txt";
+
+/// One mod version to install from the public list.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallItem {
+    pub id: String,
+    pub version: String,
+}
+
+/// An install the admin confirmed: the packages (dependencies first or not, order does not matter), the permissions
+/// granted per mod and whether the mods are turned on. With `local`, the package picked from a file or link is one
+/// of `items` and is not downloaded.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallRequest {
+    pub items: Vec<InstallItem>,
+    #[serde(default)]
+    pub grants: std::collections::BTreeMap<String, Vec<String>>,
+    pub enable: bool,
+    #[serde(default)]
+    pub local: bool,
+}
+
+/// The package picked from a file or link and what installing it involves.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Inspected {
+    pub source: String,
+    pub sha256: String,
+    pub plan: mods::Plan,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Installed {
+    pub ids: Vec<String>,
+    /// The server is running: the new mods load after a restart.
+    pub restart: bool,
+}
+
+impl Core {
+    /// `<data dir>/mods`, the folder the server loads mods from.
+    pub fn mods_dir(&self) -> PathBuf {
+        self.data_dir().join("mods")
+    }
+
+    fn index_cache(&self) -> PathBuf {
+        self.app_dir.join("mods-index.json")
+    }
+
+    /// Mod storage of the loaded (or selected) world.
+    fn mods_storage(&self) -> Option<PathBuf> {
+        let id = lock(&self.running)
+            .as_ref()
+            .map(|r| r.world_id.clone())
+            .unwrap_or_else(|| self.get_settings().run.world_id);
+        valid_world_id(&id).then(|| self.data_dir().join("saves").join(id).join("mods/storage"))
+    }
+
+    pub fn mods_overview(&self) -> mods::Overview {
+        let running = self.is_active();
+        let index = mods::cached_index(&self.index_cache());
+        let loaded = lock(&self.mods_loaded).clone();
+        let shared = lock(&self.shared);
+        let ctx = mods::Context {
+            running,
+            live: running.then_some(&shared.mods),
+            loaded: loaded.as_ref(),
+            index: index.as_ref(),
+            storage: self.mods_storage(),
+        };
+        mods::overview(&self.mods_dir(), &ctx)
+    }
+
+    pub fn mods_set_enabled(&self, id: &str, on: bool) -> mods::MRes<()> {
+        mods::set_enabled(&self.mods_dir(), id, on)
+    }
+
+    pub fn mods_set_grant(&self, id: &str, perm: &str, on: bool) -> mods::MRes<()> {
+        mods::set_grant(&self.mods_dir(), id, perm, on)
+    }
+
+    pub fn mods_remove(&self, file: &str) -> mods::MRes<()> {
+        mods::remove(&self.mods_dir(), file)
+    }
+
+    /// Deletes a mod's stored data for the selected world (only while the server is stopped).
+    pub fn mods_clear_data(&self, id: &str) -> mods::MRes<()> {
+        if self.is_active() {
+            return Err(mods::ModError::new("running"));
+        }
+        let Some(dir) = self.mods_storage() else { return Ok(()) };
+        if mods::StorageReader::open(&dir).clear(id) {
+            Ok(())
+        } else {
+            Err(mods::ModError::with("io", "storage"))
+        }
+    }
+
+    /// The folder to show for a mod (its unpacked directory, else the mods folder), created when missing.
+    pub fn mods_folder(&self, id: Option<&str>) -> mods::MRes<PathBuf> {
+        let dir = self.mods_dir();
+        if let Some(id) = id {
+            let p = mods::find_package(&dir, id)?;
+            if p.origin.is_dir() {
+                return Ok(p.origin);
+            }
+        }
+        std::fs::create_dir_all(&dir).map_err(|e| mods::ModError::with("io", e.to_string()))?;
+        Ok(dir)
+    }
+
+    /// The public list (fetched; the cached copy when offline).
+    pub fn mods_browse(&self) -> mods::MRes<mods::Browse> {
+        let (idx, offline, err) = mods::load_index(&self.index_url, &self.index_cache())?;
+        Ok(mods::browse(&idx, &mods::installed_versions(&self.mods_dir()), offline, err))
+    }
+
+    fn index(&self) -> mods::MRes<mods::IndexFile> {
+        match mods::cached_index(&self.index_cache()) {
+            Some(i) => Ok(i),
+            None => mods::load_index(&self.index_url, &self.index_cache()).map(|x| x.0),
+        }
+    }
+
+    pub fn mods_plan(&self, id: &str, version: Option<&str>) -> mods::MRes<mods::Plan> {
+        mods::plan_index(&self.index()?, &mods::installed_versions(&self.mods_dir()), id, version)
+    }
+
+    fn keep_candidate(&self, c: mods::Candidate) -> Inspected {
+        let plan = mods::plan_candidate(&c, self.index().ok().as_ref(), &mods::installed_versions(&self.mods_dir()));
+        let out = Inspected { source: c.source.clone(), sha256: c.sha256.clone(), plan };
+        *lock(&self.candidate) = Some(c);
+        out
+    }
+
+    /// Checks a package file the admin picked (bytes from the file chooser or a drop).
+    pub fn mods_inspect_bytes(&self, name: &str, bytes: Vec<u8>) -> mods::MRes<Inspected> {
+        Ok(self.keep_candidate(mods::inspect(bytes, name)?))
+    }
+
+    /// Downloads and checks a package from a link (HTTPS).
+    pub fn mods_inspect_url(&self, url: &str) -> mods::MRes<Inspected> {
+        let url = url.trim();
+        let name = url.rsplit('/').next().unwrap_or(url).to_string();
+        let bytes =
+            mods::fetch(url, mods::MAX_PACKAGE).map_err(|e| mods::ModError { file: Some(name.clone()), ..e })?;
+        Ok(self.keep_candidate(mods::inspect(bytes, &name)?))
+    }
+
+    /// Downloads and checks every package first, then writes them all: a failed check installs nothing.
+    pub fn mods_install(&self, req: &InstallRequest, progress: &dyn Fn(&str, usize, usize)) -> mods::MRes<Installed> {
+        let local = if req.local { lock(&self.candidate).clone() } else { None };
+        if req.local && local.is_none() {
+            return Err(mods::ModError::new("noFile"));
+        }
+        let downloads: Vec<&InstallItem> =
+            req.items.iter().filter(|i| local.as_ref().is_none_or(|c| c.manifest.id != i.id)).collect();
+        let index = if downloads.is_empty() { None } else { Some(self.index()?) };
+        let total = downloads.len();
+        let mut cands: Vec<mods::Candidate> = local.into_iter().collect();
+        for (n, it) in downloads.iter().enumerate() {
+            progress("download", n, total);
+            let m = index.as_ref().and_then(|i| i.mods.iter().find(|m| m.id == it.id));
+            let v = m
+                .and_then(|m| m.versions.iter().find(|v| v.version == it.version))
+                .ok_or_else(|| mods::ModError::with("notListed", &it.id))?;
+            cands.push(mods::download(v, &it.id)?);
+        }
+        progress("write", total, total);
+        mods::write_packages(&self.mods_dir(), &cands, &req.grants, req.enable)?;
+        if req.local {
+            *lock(&self.candidate) = None;
+        }
+        progress("done", total, total);
+        Ok(Installed { ids: cands.into_iter().map(|c| c.manifest.id).collect(), restart: self.is_active() })
+    }
+}
 
 fn saved_data_dir(app_dir: &Path) -> Option<PathBuf> {
     let text = std::fs::read_to_string(app_dir.join(DATA_DIR_FILE)).ok()?;
@@ -733,5 +938,119 @@ mod tests {
         assert!(c.get_list(&w.id, ListKind::Mod).unwrap().iter().any(|n| n.eq_ignore_ascii_case("zed")));
         c.delete_world(&w.id).unwrap();
         assert!(c.list_worlds().is_empty());
+    }
+
+    #[test]
+    fn mods_through_the_core() {
+        use crate::mods::tests::{fixture_index, spec, write_dir, Spec};
+        use std::collections::BTreeMap;
+        let d = tempfile::tempdir().unwrap();
+        let fx = tempfile::tempdir().unwrap();
+        let (_, shop) = fixture_index(fx.path());
+        // The fixture index again, as a file the core reads through BHS_MODS_INDEX (tests run single-threaded).
+        let index = fx.path().join("index.json");
+        {
+            use crate::mods::tests::{index_json, mod_json, version_json};
+            let base = std::fs::read(fx.path().join("base.bhmod")).unwrap();
+            let url = fx.path().join("base.bhmod").to_string_lossy().into_owned();
+            std::fs::write(&index, index_json(&[mod_json("base", &[version_json("1.0.0", &url, &base, "")])])).unwrap();
+        }
+        std::env::set_var("BHS_MODS_INDEX", &index);
+        let c = Core::new(d.path().join("app"));
+        std::env::remove_var("BHS_MODS_INDEX");
+        c.set_data_dir(&d.path().join("data")).unwrap();
+        let o = c.mods_overview();
+        assert!(o.mods.is_empty() && !o.running);
+
+        // The public list and an install from it.
+        // Nothing cached yet: the plan fetches the list.
+        assert_eq!(c.mods_plan("base", None).unwrap().items.len(), 1);
+        let b = c.mods_browse().unwrap();
+        assert_eq!(b.mods[0].id, "base");
+        let steps = std::cell::RefCell::new(Vec::new());
+        let req = InstallRequest {
+            items: vec![InstallItem { id: "base".into(), version: "1.0.0".into() }],
+            grants: BTreeMap::new(),
+            enable: true,
+            local: false,
+        };
+        let done = c.mods_install(&req, &|s, n, t| steps.borrow_mut().push(format!("{s} {n}/{t}"))).unwrap();
+        assert_eq!(done, Installed { ids: vec!["base".into()], restart: false });
+        assert_eq!(*steps.borrow(), vec!["download 0/1", "write 1/1", "done 1/1"]);
+        let bad = InstallRequest { items: vec![InstallItem { id: "nope".into(), version: "1".into() }], ..req.clone() };
+        assert_eq!(c.mods_install(&bad, &|_, _, _| {}).unwrap_err().code, "notListed");
+        assert_eq!(
+            c.mods_install(&InstallRequest { local: true, ..req.clone() }, &|_, _, _| {}).unwrap_err().code,
+            "noFile"
+        );
+
+        // A file the admin picked: its dependencies come from the list.
+        let ins = c.mods_inspect_bytes("shop.bhmod", shop.clone()).unwrap();
+        assert_eq!(ins.plan.items[0].id, "shop");
+        assert!(!ins.plan.items[0].reviewed, "the list the core reads does not have it");
+        assert_eq!(ins.plan.missing.len(), 1, "economy is not on this list");
+        let mut grants = BTreeMap::new();
+        grants.insert("shop".to_string(), vec![]);
+        let local = InstallRequest {
+            items: vec![InstallItem { id: "shop".into(), version: "1.0.0".into() }],
+            grants,
+            enable: false,
+            local: true,
+        };
+        assert_eq!(c.mods_install(&local, &|_, _, _| {}).unwrap().ids, vec!["shop"]);
+        assert_eq!(c.mods_inspect_bytes("x", b"junk".to_vec()).unwrap_err().code, "invalid");
+        let url = fx.path().join("shop.bhmod");
+        assert_eq!(c.mods_inspect_url(&format!(" {} ", url.display())).unwrap().plan.items[0].id, "shop");
+        let e = c.mods_inspect_url("http://example.com/x.bhmod").unwrap_err();
+        assert_eq!((e.code.as_str(), e.file.as_deref()), ("insecure", Some("x.bhmod")));
+
+        let o = c.mods_overview();
+        let ids: Vec<(&str, &str)> = o.mods.iter().map(|m| (m.id.as_str(), m.status.as_str())).collect();
+        assert_eq!(ids, vec![("base", "ready"), ("shop", "off")]);
+        assert!(o.mods[0].reviewed);
+        c.mods_set_enabled("shop", true).unwrap();
+        assert_eq!(c.mods_overview().mods[1].status, "dependency");
+        assert_eq!(c.mods_set_grant("shop", "native", true).unwrap_err().code, "permission");
+        assert_eq!(c.mods_folder(None).unwrap(), c.mods_dir());
+        assert_eq!(c.mods_folder(Some("base")).unwrap(), c.mods_dir(), "a packed mod shows the mods folder");
+        assert_eq!(c.mods_folder(Some("nope")).unwrap_err().code, "missing");
+        c.mods_remove("shop-1.0.0.bhmod").unwrap();
+        // No world selected: nothing to clear.
+        c.mods_clear_data("base").unwrap();
+
+        // A Luau mod on a running server: live state from the log, changes wait for a restart.
+        let dir = c.mods_dir();
+        let main = "local m = {}\nfunction m.on_enable() end\nreturn m\n";
+        let h = write_dir(&dir, "hello", &Spec { extra: "[permissions]\nplayers = [\"chat\"]\n", ..spec("hello") });
+        std::fs::write(h.join("server/main.luau"), main).unwrap();
+        c.mods_set_grant("hello", "players:chat", true).unwrap();
+        assert_eq!(c.mods_folder(Some("hello")).unwrap(), h);
+        let w = c.create_world(&NewWorld { name: "Modded".into(), size: "tiny".into(), expert: false }).unwrap();
+        c.set_settings(&Settings {
+            language: "en".into(),
+            run: RunOptions { world_id: w.id.clone(), ..RunOptions::default() },
+            ..Settings::default()
+        })
+        .unwrap();
+        c.mods_clear_data("hello").unwrap();
+        let o = RunOptions { world_id: w.id.clone(), port: 15391, ..RunOptions::default() };
+        c.start(&o).unwrap();
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        let status = |c: &Core| c.mods_overview().mods.iter().find(|m| m.id == "hello").map(|m| m.status.clone());
+        while status(&c).as_deref() != Some("running") {
+            assert!(std::time::Instant::now() < end, "never ran: {:?} {:?}", c.mods_overview(), c.poll(0).lines);
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        let ov = c.mods_overview();
+        assert!(ov.running && ov.changes.is_empty());
+        assert!(ov.mods.iter().all(|m| m.storage_bytes.is_none()));
+        assert_eq!(c.mods_clear_data("hello").unwrap_err().code, "running");
+        c.mods_set_enabled("base", false).unwrap();
+        let ov = c.mods_overview();
+        assert_eq!(ov.changes.len(), 1);
+        let again = InstallRequest { enable: true, ..req };
+        assert!(c.mods_install(&again, &|_, _, _| {}).unwrap().restart);
+        c.stop().unwrap();
+        assert!(!c.mods_overview().running);
     }
 }

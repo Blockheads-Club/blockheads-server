@@ -25,11 +25,17 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 local-ip-address = "0.6"
 sysinfo = { version = "0.36", default-features = false, features = ["system"] }
-# App updates: GitHub release feed, download, SHA-256 check (see src/update.rs).
+# App updates: GitHub release feed, download, SHA-256 check (see src/update.rs). Also the mod list and mod packages
+# (HTTPS, rustls with bundled roots: works on Android too).
 ureq = { version = "3", features = ["json"] }
 sha2 = "0.10"
 semver = "1"
 tauri-plugin-opener = "2"
+# Mods: the same discovery, manifest checks and dependency rules as the server's mod host, from mod-sdk at the rev the
+# server workspace pins (keep them equal; see docs/development.md for a local mod-sdk override).
+bhmod-core = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "3651df5" }
+bhmod-manifest = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "3651df5" }
+toml = "0.9"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-dialog = "2"

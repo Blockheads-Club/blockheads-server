@@ -5,7 +5,7 @@
   import { PHONE_NAV } from './nav';
 
   /** The "More" item also lights up for the screens it contains. */
-  const current = $derived(store.screen === 'access' || store.screen === 'settings' ? 'more' : store.screen);
+  const current = $derived(store.screen === 'console' || store.screen === 'access' || store.screen === 'settings' ? 'more' : store.screen);
 </script>
 
 <nav class="bnav" aria-label={t('nav.aria')}>

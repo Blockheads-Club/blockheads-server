@@ -2,7 +2,26 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import type {
-  AppInfo, ListKind, NetAddr, NewWorld, Poll, RunOptions, Settings, SplashState, Stats, UpdateInfo, UpdatePending, UpdateProgress, World
+  AppInfo,
+  Browse,
+  Inspected,
+  Installed,
+  InstallProgress,
+  InstallRequest,
+  ListKind,
+  ModsOverview,
+  NetAddr,
+  NewWorld,
+  Plan,
+  Poll,
+  RunOptions,
+  Settings,
+  SplashState,
+  Stats,
+  UpdateInfo,
+  UpdatePending,
+  UpdateProgress,
+  World
 } from './types';
 
 /** Thin typed wrapper over the Tauri commands (see src-tauri/src/lib.rs). */
@@ -45,7 +64,22 @@ export const api = {
   /** After an in-place update: start the new version. */
   appRestart: () => invoke<void>('app_restart'),
   /** Release pages and downloads of the server repository only. */
-  openUrl: (url: string) => invoke<void>('open_url', { url })
+  openUrl: (url: string) => invoke<void>('open_url', { url }),
+  // Mods: rejections carry a ModError ({ code, detail, ... }).
+  modsOverview: () => invoke<ModsOverview>('mods_overview'),
+  modsSetEnabled: (id: string, on: boolean) => invoke<void>('mods_set_enabled', { id, on }),
+  modsSetGrant: (id: string, perm: string, on: boolean) => invoke<void>('mods_set_grant', { id, perm, on }),
+  modsRemove: (file: string) => invoke<void>('mods_remove', { file }),
+  modsClearData: (id: string) => invoke<void>('mods_clear_data', { id }),
+  modsOpenFolder: (id?: string) => invoke<void>('mods_open_folder', { id: id ?? null }),
+  modsBrowse: () => invoke<Browse>('mods_browse'),
+  modsPlan: (id: string, version?: string) => invoke<Plan>('mods_plan', { id, version: version ?? null }),
+  modsInspectUrl: (url: string) => invoke<Inspected>('mods_inspect_url', { url }),
+  /** The file's bytes go as the raw request body; the name in a header. */
+  modsInspectFile: (name: string, bytes: Uint8Array) =>
+    invoke<Inspected>('mods_inspect_file', bytes, { headers: { 'x-file-name': encodeURIComponent(name) } }),
+  modsInstall: (request: InstallRequest) => invoke<Installed>('mods_install', { request }),
+  onModsProgress: (cb: (p: InstallProgress) => void) => listen<InstallProgress>('mods-progress', (e) => cb(e.payload))
 };
 
 /** The main window, for the custom title bar (desktop only). Async so a missing Tauri runtime rejects instead of throwing. */

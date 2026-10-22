@@ -3,6 +3,7 @@
   import { store } from '../store.svelte';
   import Badge from '../ui/Badge.svelte';
   import Icon from '../ui/Icon.svelte';
+  import { mods } from '../mods/mods.svelte';
   import StatusPill from '../ui/StatusPill.svelte';
   import { NAV } from './nav';
   import UpdateButton from './UpdateButton.svelte';
@@ -23,6 +24,9 @@
       <span class="lbl">{t(`nav.${it.id}`)}</span>
       {#if it.id === 'players' && store.players.length > 0}
         <span class="cnt"><Badge label={t('players.onlineCount', { n: store.players.length })}>{store.players.length}</Badge></span>
+      {/if}
+      {#if it.id === 'mods' && mods.attention.length > 0}
+        <span class="cnt"><Badge tone="warn" icon="alert" label={t('mods.attentionCount', { n: mods.attention.length })}>{mods.attention.length}</Badge></span>
       {/if}
     </button>
   {/each}

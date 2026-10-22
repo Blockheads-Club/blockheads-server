@@ -4,7 +4,7 @@
   import Icon from './Icon.svelte';
 
   interface Props {
-    variant?: 'default' | 'primary' | 'danger' | 'ghost' | 'ok';
+    variant?: 'default' | 'primary' | 'danger' | 'ghost' | 'ok' | 'quiet-bad';
     size?: 'sm' | 'md' | 'lg';
     icon?: IconName;
     /** Accessible name; required for icon-only buttons. */
@@ -18,6 +18,8 @@
     haspopup?: boolean;
     block?: boolean;
     title?: string;
+    /** The dialog puts the focus here first. */
+    autofocus?: boolean;
     onclick?: (e: MouseEvent) => void;
     children?: Snippet;
   }
@@ -35,6 +37,7 @@
     haspopup,
     block = false,
     title,
+    autofocus = false,
     onclick,
     children
   }: Props = $props();
@@ -58,6 +61,7 @@
     aria-pressed={pressed}
     aria-expanded={expanded}
     aria-haspopup={haspopup ? 'menu' : undefined}
+    data-autofocus={autofocus || undefined}
   >
     {#if loading}<span class="spin" aria-hidden="true"></span>{:else if icon}<Icon name={icon} size={size === 'sm' ? 18 : 20} />{/if}
     {@render children?.()}
@@ -105,6 +109,9 @@
     color: var(--on-bad);
   }
   .btn.danger:hover:not(:disabled) { background: var(--bad); color: var(--on-bad); filter: brightness(1.06); }
+  /* A destructive action that is not the main one (remove, revoke native). */
+  .btn.quiet-bad { color: var(--bad); border-color: color-mix(in oklab, var(--bad), transparent 50%); }
+  .btn.quiet-bad:hover:not(:disabled) { color: var(--bad); background: var(--bad-soft); }
   .btn.ghost { background: transparent; border-color: transparent; box-shadow: none; color: var(--text-2); }
   .btn.ghost:hover:not(:disabled) { background: var(--surface-2); color: var(--text); }
   .btn.ghost:active:not(:disabled) { box-shadow: none; }
