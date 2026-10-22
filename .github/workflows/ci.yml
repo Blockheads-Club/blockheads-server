@@ -107,6 +107,7 @@ jobs:
           up="$(echo "$t" | tr 'a-z-' 'A-Z_')"
           lo="$(echo "$t" | tr '-' '_')"
           echo "CC_$lo=$clang" >> "$GITHUB_ENV"
+          echo "CXX_$lo=$clang++" >> "$GITHUB_ENV"
           echo "AR_$lo=$bin/llvm-ar" >> "$GITHUB_ENV"
           echo "CARGO_TARGET_${up}_LINKER=$clang" >> "$GITHUB_ENV"
       - run: cargo check -p blockheads_server --target ${{ matrix.target }}
