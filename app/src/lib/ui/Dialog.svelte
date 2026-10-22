@@ -11,10 +11,16 @@
     icon?: IconName;
     tone?: 'bad' | 'plain';
     description?: string;
+    /** Replaces the icon: for example an app icon with a status badge. */
+    lead?: Snippet;
+    /** Above the title, e.g. a status badge. */
+    eyebrow?: Snippet;
+    /** Id of the element that describes the dialog. */
+    describedby?: string;
     children?: Snippet;
     footer?: Snippet;
   }
-  let { title, onclose, icon, tone = 'plain', description, children, footer }: Props = $props();
+  let { title, onclose, icon, tone = 'plain', description, lead, eyebrow, describedby, children, footer }: Props = $props();
   const uid = $props.id();
   let box: HTMLElement | undefined = $state();
 
@@ -49,10 +55,11 @@
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="scrim" onkeydown={keydown} onmousedown={(e) => e.target === e.currentTarget && onclose()}>
-  <div class="dlg" role="dialog" aria-modal="true" aria-labelledby="{uid}-t" bind:this={box}>
+  <div class="dlg" role="dialog" aria-modal="true" aria-labelledby="{uid}-t" aria-describedby={describedby} bind:this={box}>
     <header>
-      {#if icon}<span class={['ic', tone]}><Icon name={icon} /></span>{/if}
+      {#if lead}{@render lead()}{:else if icon}<span class={['ic', tone]}><Icon name={icon} /></span>{/if}
       <div class="head">
+        {@render eyebrow?.()}
         <h2 id="{uid}-t">{title}</h2>
         {#if description}<p class="muted">{description}</p>{/if}
       </div>

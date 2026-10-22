@@ -10,8 +10,10 @@
     ctx: string;
     /** Running-server indicator; null while stopped. macOS draws its own buttons (overlay title bar). */
     run?: { label: string; tone: 'ok' | 'warn' | 'bad' } | null;
+    /** Update state while the update popup is hidden (a button that opens it again); null: no update activity. */
+    chip?: { label: string; tone: 'primary' | 'ok' | 'bad' | 'plain'; pct: number | null; onclick: () => void } | null;
   }
-  let { os, ctx, run = null }: Props = $props();
+  let { os, ctx, run = null, chip = null }: Props = $props();
 
   let isMax = $state(false);
   let inactive = $state(false);
@@ -44,6 +46,13 @@
     <img src="/server-icon-small.svg" alt="" width="18" height="18" data-tauri-drag-region />
     <span class="name" data-tauri-drag-region>Blockheads <span class="tg">{t('app.server')}</span></span>
     <span class="ctx" data-tauri-drag-region>{`· ${ctx}`}</span>
+    {#if chip}
+      <button class={['chip', chip.tone]} aria-haspopup="dialog" aria-label={t('upd.chip.aria', { s: chip.label })} onclick={chip.onclick}>
+        <svg class="ci" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 16.5v-9M8 11l4-4 4 4" /></svg>
+        <span>{chip.label}</span>
+        {#if chip.pct !== null}<span class="cb" style:width={`${chip.pct}%`}></span>{/if}
+      </button>
+    {/if}
   </div>
   {#if run}
     <span class={['run', run.tone]} role="status" data-tauri-drag-region><i aria-hidden="true"></i>{run.label}</span>
@@ -135,5 +144,13 @@
   .l { width: 28px; height: 28px; border-radius: 50%; background: var(--b-round); }
   .l:hover { background: var(--b-round-hov); }
   .l.close:hover { background: #c8301e; color: #fff; }
+  .chip { position: relative; overflow: hidden; display: inline-flex; gap: 6px; align-items: center; flex: none; height: 24px; padding: 0 10px; border-radius: 999px; border: 1px solid var(--b-line); background: var(--surface); font: 700 12px/1 var(--f-body); cursor: pointer; }
+  .chip:focus-visible { outline-offset: 1px; }
+  .chip.primary { color: var(--primary-ink); }
+  .chip.ok { color: var(--ok); }
+  .chip.bad { color: var(--bad); }
+  .chip.plain { color: var(--text-2); }
+  .ci { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+  .cb { position: absolute; left: 0; bottom: 0; height: 3px; background: var(--primary); }
   .native { width: 78px; height: 100%; flex: none; }
 </style>

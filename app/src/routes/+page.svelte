@@ -11,6 +11,7 @@
   import More from '$lib/screens/More.svelte';
   import Players from '$lib/screens/Players.svelte';
   import Settings from '$lib/screens/Settings.svelte';
+  import UpdateDialog from '$lib/screens/UpdateDialog.svelte';
   import Splash from '$lib/screens/Splash.svelte';
   import Worlds from '$lib/screens/Worlds.svelte';
   import { store } from '$lib/store.svelte';
@@ -18,6 +19,8 @@
   import Alert from '$lib/ui/Alert.svelte';
   import Button from '$lib/ui/Button.svelte';
   import Toasts from '$lib/ui/Toasts.svelte';
+  import { updates } from '$lib/update.svelte';
+  import { percent } from '$lib/format';
   import { viewport, watchViewport } from '$lib/viewport.svelte';
 
   /**
@@ -58,6 +61,21 @@
   $effect(() => {
     if (os) document.title = `${t('app.title')} · ${ctx}`;
   });
+  // Updates start once the main UI is up (a failed check never blocks it).
+  $effect(() => {
+    if (store.ready) void updates.start();
+  });
+  /** While the update popup is hidden, the title bar keeps the update state as a chip that reopens it. */
+  const chip = $derived.by(() => {
+    if (updates.open || !updates.active) return null;
+    const onclick = () => void updates.openPopup();
+    const s = updates.stage;
+    if (s === 'available') return { label: t('upd.icon.available'), tone: 'primary', pct: null, onclick } as const;
+    if (s === 'downloading') return { label: t('upd.chip.downloading', { p: percent(updates.percent) }), tone: 'primary', pct: updates.percent, onclick } as const;
+    if (s === 'installing') return { label: t('upd.chip.installing'), tone: 'plain', pct: null, onclick } as const;
+    if (s === 'ready') return { label: t('upd.icon.ready'), tone: 'ok', pct: null, onclick } as const;
+    return { label: t('upd.icon.failed'), tone: 'bad', pct: null, onclick } as const;
+  });
   /** Maximized or fullscreen: the window fills the screen, so no rounded corners. */
   let square = $state(false);
   const round = $derived(os !== null && os !== 'macos' && !square);
@@ -77,6 +95,7 @@
       offResize?.();
       offRetry?.();
       store.stopPolling();
+      updates.stop();
     };
   });
 </script>
@@ -124,10 +143,11 @@
   </div>
 </div>
 {/snippet}
+{#if updates.open && store.ready}<UpdateDialog />{/if}
 {#if os}
   <div class={['frame', round && 'round']}>
     <div class="win">
-      <TitleBar {os} {ctx} {run} />
+      <TitleBar {os} {ctx} {run} {chip} />
       <div class="body">{@render shell()}</div>
     </div>
     <Toasts />

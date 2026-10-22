@@ -71,3 +71,32 @@ bun run test && bun run test:e2e                # vitest + Playwright (mocked Ta
 
 Android builds need JDK 17 to 21 (Gradle does not support newer JDKs yet), the Android SDK and NDK 27.
 Set `CARGO_INCREMENTAL=0` when building several ABIs in parallel.
+
+### App updates
+
+The app checks the GitHub releases of this repository (`src-tauri/src/update.rs`, UI in `src/lib/update.svelte.ts`).
+Only the app is updated; the game server code is not involved.
+
+- Feed: `https://api.github.com/repos/Blockheads-Club/blockheads-server/releases`. Drafts are ignored. The stable
+  channel takes plain `vX.Y.Z` tags that are not marked as prerelease; the "Stable and test versions" setting also
+  takes prereleases and `vX.Y.Z-pre.N` tags. Automatic checks run at start and at most once a day.
+- Assets are matched by the Tauri bundle names that `release.yml` uploads: `*_x64-setup.exe` / `*_arm64-setup.exe`
+  (Windows), `*_aarch64.dmg` / `*_x64.dmg` (macOS), `*_amd64.AppImage` / `*_aarch64.AppImage`, `*_amd64.deb` /
+  `*_arm64.deb`, `*.x86_64.rpm` (Linux) and `*-android.apk`. Renaming bundles in the workflow breaks this matching.
+- Desktop: the asset is downloaded into `<app data>/updates`, checked against the release's `SHA256SUMS.txt` (a
+  release without it, or without a matching asset, falls back to opening the download page), then the restart
+  saves and stops the server, copies the loaded world to `<data dir>/update-backups/<world>-<ms>` (newest three
+  kept), and hands over: Windows runs the NSIS setup, macOS opens the disk image, Linux opens the .deb/.rpm with the
+  system installer or, inside an AppImage (`$APPIMAGE`), swaps the AppImage file and starts it. A note in
+  `updates/pending.json` tells the next start which version was expected and whether to start the server again.
+- Android: the APK download opens in the browser; Android asks the user to confirm the install. This needs the APK
+  to be signed with the same persistent release key every time (see the `ANDROID_KEYSTORE_*` secrets).
+- Debug builds can point the check at another feed with `BHS_UPDATE_FEED=<url>`.
+
+Fully in-place updates (download, install and relaunch without an installer window) would use the Tauri updater
+plugin, which needs a signing key that this repository does not have yet. To enable it: generate a key pair with
+`bun tauri signer generate -w ~/.tauri/blockheads-server.key`, keep the private key and its password only as the
+repository secrets `TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, put the public key in
+`tauri.conf.json` under `plugins.updater.pubkey` with an endpoint for a `latest.json`, set
+`bundle.createUpdaterArtifacts: true`, and have `release.yml` upload the `.sig` files and `latest.json`. The
+installer hand-off above can then be replaced by `tauri-plugin-updater` on desktop.

@@ -5,6 +5,7 @@
   import Icon from '../ui/Icon.svelte';
   import StatusPill from '../ui/StatusPill.svelte';
   import { NAV } from './nav';
+  import UpdateButton from './UpdateButton.svelte';
 
   /** `rail` is the 72px tablet variant: icons with labels below, no status card. */
   let { rail = false }: { rail?: boolean } = $props();
@@ -30,7 +31,10 @@
       <StatusPill state={store.state} />
       {#if store.currentWorld}<p class="world">{store.currentWorld.name}</p>{/if}
       <p class="hint mono">{meta}</p>
+      <UpdateButton />
     </div>
+  {:else}
+    <div class="rupd"><UpdateButton variant="icon" /></div>
   {/if}
 </nav>
 
@@ -85,6 +89,7 @@
     gap: 8px;
   }
   .sstat :global(span[role='status']) { align-self: flex-start; }
+  .rupd { margin-top: auto; display: flex; justify-content: center; padding-top: 8px; }
   .world { font-weight: 700; font-size: 14.5px; overflow-wrap: anywhere; }
   .hint.mono { font-size: 12.5px; }
 </style>

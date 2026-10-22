@@ -12,6 +12,8 @@ import { setLang } from '$lib/i18n.svelte';
 import { W1, makeApi, makePoll, makeWin } from '$lib/mock-api';
 import { store } from '$lib/store.svelte';
 import { theme } from '$lib/theme.svelte';
+import { updates } from '$lib/update.svelte';
+import { makeUpdate } from '$lib/mock-api';
 import { viewport } from '$lib/viewport.svelte';
 import Page from './+page.svelte';
 import Layout from './+layout.svelte';
@@ -57,6 +59,33 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   store.stopPolling();
+});
+
+describe('updates in the shell', () => {
+  it('checks after start-up and keeps the update state in the title bar while the popup is hidden', async () => {
+    mock.api.updateCheck = vi.fn(async () => makeUpdate());
+    render(Page);
+    await screen.findByRole('heading', { name: 'Dashboard' });
+    expect(await screen.findByRole('dialog', { name: 'Server 2.0.0 is here' })).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('button', { name: 'Later' }));
+    const chip = (label: string) => screen.findByRole('button', { name: `${label}: open the update window` });
+    await fireEvent.click(await chip('Update available'));
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    updates.open = false;
+    const states: [Record<string, unknown>, string][] = [
+      [{ stage: 'downloading', progress: { stage: 'downloading', done: 1, total: 4, bytesPerS: 0, etaS: 0, error: null } }, 'Updating 25%'],
+      [{ stage: 'installing' }, 'Installing update…'],
+      [{ stage: 'ready' }, 'Restart to update'],
+      [{ stage: 'error', failed: 'install' }, 'Update failed']
+    ];
+    for (const [patch, label] of states) {
+      Object.assign(updates, patch);
+      expect(await chip(label)).toBeInTheDocument();
+    }
+    updates.failed = 'check';
+    await waitFor(() => expect(document.querySelector('.chip')).toBeNull());
+    Object.assign(updates, { stage: 'idle', failed: null, info: null });
+  });
 });
 
 describe('desktop window frame', () => {

@@ -44,11 +44,22 @@ describe('api', () => {
     await api.chooseDataFolder();
     await api.appQuit();
     await api.mainReady();
+    await api.updateCheck(true);
+    await api.updateDownload();
+    await api.updateProgress();
+    await api.updateCancel();
+    await api.updateInstall(true);
+    await api.updateResume();
+    await api.openUrl('https://x');
     expect(invoke.mock.calls.map((c: any[]) => c[0])).toEqual([
       'app_info', 'list_worlds', 'create_world', 'delete_world', 'start_server', 'stop_server', 'poll', 'stats',
       'send_command', 'get_list', 'set_list', 'network_info', 'get_settings', 'set_settings',
-      'boot', 'splash_set', 'splash_get', 'splash_retry', 'choose_data_folder', 'app_quit', 'main_ready'
+      'boot', 'splash_set', 'splash_get', 'splash_retry', 'choose_data_folder', 'app_quit', 'main_ready',
+      'update_check', 'update_download', 'update_progress', 'update_cancel', 'update_install', 'update_resume', 'open_url'
     ]);
+    expect(invoke).toHaveBeenCalledWith('update_check', { beta: true });
+    expect(invoke).toHaveBeenCalledWith('update_install', { backup: true });
+    expect(invoke).toHaveBeenCalledWith('open_url', { url: 'https://x' });
     expect(invoke).toHaveBeenCalledWith('set_list', { worldId: 'w', kind: 'mod', names: ['a'] });
     expect(invoke).toHaveBeenCalledWith('poll', { since: 3 });
   });

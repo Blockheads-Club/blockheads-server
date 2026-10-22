@@ -18,6 +18,48 @@ export interface RunOptions {
 export interface Settings {
   language: string;
   run: RunOptions;
+  /** App update preferences (missing in settings saved before updates existed). */
+  updates?: UpdatePrefs;
+}
+export type UpdateChannel = 'stable' | 'beta';
+export interface UpdatePrefs {
+  autoCheck: boolean;
+  channel: UpdateChannel;
+  installWhenEmpty: boolean;
+  /** ms since the Unix epoch, 0 = never; `lastOk` is the last check that worked. */
+  lastChecked: number;
+  lastOk: number;
+  /** The popup opened by itself for this version already. */
+  seenVersion: string;
+}
+/** installer: download, verify, run the setup; replace: swap the AppImage; browser: open the download page. */
+export type UpdateMode = 'installer' | 'replace' | 'browser';
+export interface UpdateInfo {
+  version: string;
+  current: string;
+  /** Release notes (Markdown). */
+  notes: string;
+  page: string;
+  publishedAt: string | null;
+  prerelease: boolean;
+  asset: { name: string; url: string; size: number } | null;
+  mode: UpdateMode;
+}
+export interface UpdateProgress {
+  stage: 'idle' | 'downloading' | 'verifying' | 'ready' | 'error' | 'cancelled';
+  done: number;
+  total: number;
+  bytesPerS: number;
+  etaS: number;
+  error: string | null;
+}
+/** Left by the app before it restarted for an update. */
+export interface UpdatePending {
+  version: string;
+  from: string;
+  at: number;
+  wasRunning: boolean;
+  worldId: string;
 }
 export interface Player {
   name: string;

@@ -37,6 +37,13 @@ export function makeApi(over: Partial<Record<string, unknown>> = {}) {
     networkInfo: vi.fn(async (port: number) => [{ ip: '192.168.1.5', endpoint: `192.168.1.5:${port}` }]),
     getSettings: vi.fn(async () => settings),
     setSettings: vi.fn(async () => {}),
+    updateCheck: vi.fn(async () => null as unknown),
+    updateDownload: vi.fn(async () => {}),
+    updateProgress: vi.fn(async () => ({ stage: 'idle', done: 0, total: 0, bytesPerS: 0, etaS: 0, error: null }) as unknown),
+    updateCancel: vi.fn(async () => {}),
+    updateInstall: vi.fn(async () => {}),
+    updateResume: vi.fn(async () => null as unknown),
+    openUrl: vi.fn(async () => {}),
     ...over
   };
 }
@@ -50,6 +57,20 @@ export function makeWin(over: Partial<Record<string, unknown>> = {}) {
     isFullscreen: vi.fn(async () => false),
     onResized: vi.fn(async () => () => {}),
     onFocus: vi.fn(async () => () => {}),
+    ...over
+  };
+}
+
+export function makeUpdate(over: Record<string, unknown> = {}) {
+  return {
+    version: '2.0.0',
+    current: '9.9.9',
+    notes: '## New\n- Faster saves\n- **Bold** fix with `code`\n\nSee [the page](https://x).',
+    page: 'https://github.com/Blockheads-Club/blockheads-server/releases/tag/v2.0.0',
+    publishedAt: null,
+    prerelease: false,
+    asset: { name: 'setup.exe', url: 'https://github.com/Blockheads-Club/blockheads-server/releases/download/v2.0.0/setup.exe', size: 31.9 * 2 ** 20 },
+    mode: 'installer',
     ...over
   };
 }

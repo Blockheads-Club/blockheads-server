@@ -6,6 +6,7 @@
   import type { Screen } from '../types';
   import Card from '../ui/Card.svelte';
   import Icon from '../ui/Icon.svelte';
+  import UpdateButton from '../layout/UpdateButton.svelte';
 
   /** Phone only: what does not fit in the bottom bar. */
   const items: { id: Screen; icon: IconName }[] = [
@@ -22,6 +23,7 @@
         <Icon name={it.icon} /><span class="grow">{t(`nav.${it.id}`)}</span><Icon name="chev-r" />
       </button>
     {/each}
+    <UpdateButton variant="item" />
   </Card>
 </div>
 

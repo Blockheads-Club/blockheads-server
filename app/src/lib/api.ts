@@ -1,7 +1,9 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import type { AppInfo, ListKind, NetAddr, NewWorld, Poll, RunOptions, Settings, SplashState, Stats, World } from './types';
+import type {
+  AppInfo, ListKind, NetAddr, NewWorld, Poll, RunOptions, Settings, SplashState, Stats, UpdateInfo, UpdatePending, UpdateProgress, World
+} from './types';
 
 /** Thin typed wrapper over the Tauri commands (see src-tauri/src/lib.rs). */
 export const api = {
@@ -31,7 +33,17 @@ export const api = {
     invoke<void>('set_list', { worldId, kind, names }),
   networkInfo: (port: number) => invoke<NetAddr[]>('network_info', { port }),
   getSettings: () => invoke<Settings>('get_settings'),
-  setSettings: (settings: Settings) => invoke<void>('set_settings', { settings })
+  setSettings: (settings: Settings) => invoke<void>('set_settings', { settings }),
+  /** Newer release of the app, or null when up to date. `beta` also accepts test versions. */
+  updateCheck: (beta: boolean) => invoke<UpdateInfo | null>('update_check', { beta }),
+  updateDownload: () => invoke<void>('update_download'),
+  updateProgress: () => invoke<UpdateProgress>('update_progress'),
+  updateCancel: () => invoke<void>('update_cancel'),
+  /** Stop the server, back up the world, start the installer; the app quits afterwards. */
+  updateInstall: (backup: boolean) => invoke<void>('update_install', { backup }),
+  updateResume: () => invoke<UpdatePending | null>('update_resume'),
+  /** Release pages and downloads of the server repository only. */
+  openUrl: (url: string) => invoke<void>('open_url', { url })
 };
 
 /** The main window, for the custom title bar (desktop only). Async so a missing Tauri runtime rejects instead of throwing. */
