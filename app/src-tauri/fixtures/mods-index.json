@@ -1,0 +1,184 @@
+{
+  "schema": 1,
+  "generated": "2026-10-21T12:00:00Z",
+  "api": [
+    "0.1.0"
+  ],
+  "mods": [
+    {
+      "id": "admin-toolkit",
+      "name": "Admin Toolkit",
+      "description": "Mute, freeze, jail and inspect players from chat.",
+      "owners": [
+        "hexwright"
+      ],
+      "repo": "https://github.com/hexwright/admin-toolkit",
+      "tags": [
+        "admin-tools"
+      ],
+      "versions": [
+        {
+          "version": "2.0.1",
+          "url": "https://example.invalid/admin-toolkit/admin-toolkit-2.0.1.bhmod",
+          "sha256": "dbd9b3316cd41035503eed7696380848229769a5664da2fc02c7c67de070fd1c",
+          "size": 201000,
+          "sides": [
+            "server"
+          ],
+          "api": "^0.1",
+          "permissions": {
+            "players": [
+              "kick",
+              "ban",
+              "teleport"
+            ]
+          },
+          "published": "2026-10-17"
+        }
+      ]
+    },
+    {
+      "id": "auction-house",
+      "name": "Auction House",
+      "description": "Players sell items to each other with timed auctions.",
+      "owners": [
+        "tobyblock"
+      ],
+      "repo": "https://github.com/tobyblock/auction-house",
+      "tags": [
+        "economy"
+      ],
+      "versions": [
+        {
+          "version": "1.3.0",
+          "url": "https://example.invalid/auction-house/auction-house-1.3.0.bhmod",
+          "sha256": "095afde53ab11426500b6733b82df4897662c6b4e5a6b8e2a7000993e5b10ea4",
+          "size": 186000,
+          "sides": [
+            "server"
+          ],
+          "api": "^0.1",
+          "permissions": {
+            "players": [
+              "inventory",
+              "chat"
+            ]
+          },
+          "published": "2026-10-15",
+          "depends": {
+            "economy-core": "^2"
+          }
+        }
+      ]
+    },
+    {
+      "id": "economy-core",
+      "name": "Economy Core",
+      "description": "Coins, wallets and payments. Other mods use it for shops and jobs.",
+      "owners": [
+        "mira_k"
+      ],
+      "repo": "https://github.com/mira-k/economy-core",
+      "tags": [
+        "economy"
+      ],
+      "versions": [
+        {
+          "version": "2.2.0",
+          "url": "https://example.invalid/economy-core/economy-core-2.2.0.bhmod",
+          "sha256": "78c8e815e8b81d8ed981e7029f03075c9ff61a223a1befeaf1d4174c4821bf90",
+          "size": 220000,
+          "sides": [
+            "server"
+          ],
+          "api": "^0.1",
+          "permissions": {
+            "players": [
+              "chat",
+              "inventory"
+            ]
+          },
+          "published": "2026-09-01"
+        },
+        {
+          "version": "2.3.1",
+          "url": "https://example.invalid/economy-core/economy-core-2.3.1.bhmod",
+          "sha256": "d2abf3fcf8f75c9fdef562e80d56ac1f29cf2a2e5b64893c912760e5b19046ac",
+          "size": 226000,
+          "sides": [
+            "server"
+          ],
+          "api": "^0.1",
+          "permissions": {
+            "players": [
+              "chat",
+              "inventory"
+            ]
+          },
+          "published": "2026-10-19"
+        }
+      ]
+    },
+    {
+      "id": "pet-companions",
+      "name": "Pet Companions",
+      "description": "Tame a dodo and it follows you, with its own little hat.",
+      "owners": [
+        "pixelpan"
+      ],
+      "repo": "https://github.com/pixelpan/pets",
+      "tags": [
+        "cosmetic"
+      ],
+      "versions": [
+        {
+          "version": "1.0.0",
+          "url": "https://example.invalid/pet-companions/pet-companions-1.0.0.bhmod",
+          "sha256": "dcc32f6a01168e4a104686cf6d2717622a3e80580f7d9950f9d22b09c3670703",
+          "size": 312000,
+          "sides": [
+            "server",
+            "client"
+          ],
+          "api": "^0.1",
+          "permissions": {
+            "world": "read",
+            "channels": true
+          },
+          "published": "2026-10-08",
+          "client-required": true
+        }
+      ]
+    },
+    {
+      "id": "turbo-lighting",
+      "name": "Turbo Lighting",
+      "description": "Smooth lighting and coloured torches. Uses native code for speed.",
+      "owners": [
+        "lumen"
+      ],
+      "repo": "https://github.com/lumen/turbo-lighting",
+      "tags": [
+        "world"
+      ],
+      "versions": [
+        {
+          "version": "0.8.0",
+          "url": "https://example.invalid/turbo-lighting/turbo-lighting-0.8.0.bhmod",
+          "sha256": "20a9a648206550697e6e36713493dc5a8214fca11d321fabe86050e757153098",
+          "size": 540000,
+          "sides": [
+            "server",
+            "client"
+          ],
+          "api": "^0.1",
+          "permissions": {
+            "native": true
+          },
+          "published": "2026-08-22",
+          "client-required": true
+        }
+      ]
+    }
+  ]
+}

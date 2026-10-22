@@ -1,6 +1,7 @@
 //! Blockheads Server host app: Tauri commands over [`core::Core`].
 
 pub mod core;
+pub mod mods;
 pub mod notify;
 pub mod stats;
 
@@ -305,6 +306,152 @@ fn set_settings(core: State<'_, Arc<Core>>, settings: Settings) -> Res<()> {
     core.set_settings(&settings)
 }
 
+// ---- mods ----
+
+type MRes<T> = Result<T, mods::ModError>;
+
+/// Runs blocking mod work (file I/O, downloads) off the main thread.
+async fn blocking<T: Send + 'static>(f: impl FnOnce() -> MRes<T> + Send + 'static) -> MRes<T> {
+    tauri::async_runtime::spawn_blocking(f).await.map_err(|e| mods::ModError::with("io", e.to_string()))?
+}
+
+#[tauri::command]
+async fn mods_overview(core: State<'_, Arc<Core>>) -> MRes<mods::Overview> {
+    let c = core.inner().clone();
+    blocking(move || Ok(c.mods_overview())).await
+}
+
+#[tauri::command]
+async fn mods_set_enabled(core: State<'_, Arc<Core>>, id: String, on: bool) -> MRes<()> {
+    let c = core.inner().clone();
+    blocking(move || c.mods_set_enabled(&id, on)).await
+}
+
+#[tauri::command]
+async fn mods_set_grant(core: State<'_, Arc<Core>>, id: String, perm: String, on: bool) -> MRes<()> {
+    let c = core.inner().clone();
+    blocking(move || c.mods_set_grant(&id, &perm, on)).await
+}
+
+#[tauri::command]
+async fn mods_remove(core: State<'_, Arc<Core>>, file: String) -> MRes<()> {
+    let c = core.inner().clone();
+    blocking(move || c.mods_remove(&file)).await
+}
+
+#[tauri::command]
+async fn mods_clear_data(core: State<'_, Arc<Core>>, id: String) -> MRes<()> {
+    let c = core.inner().clone();
+    blocking(move || c.mods_clear_data(&id)).await
+}
+
+/// Shows the mods folder (or an unpacked mod's folder) in the system file manager (desktop only).
+#[tauri::command]
+async fn mods_open_folder(core: State<'_, Arc<Core>>, id: Option<String>) -> MRes<()> {
+    let c = core.inner().clone();
+    blocking(move || {
+        let dir = c.mods_folder(id.as_deref())?;
+        open_folder(&dir)
+    })
+    .await
+}
+
+#[cfg(desktop)]
+fn open_folder(dir: &std::path::Path) -> MRes<()> {
+    let program = if cfg!(target_os = "windows") {
+        "explorer"
+    } else if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    std::process::Command::new(program)
+        .arg(dir)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| mods::ModError::with("io", e.to_string()))
+}
+
+#[cfg(not(desktop))]
+fn open_folder(_dir: &std::path::Path) -> MRes<()> {
+    Err(mods::ModError::new("unsupported"))
+}
+
+#[tauri::command]
+async fn mods_browse(core: State<'_, Arc<Core>>) -> MRes<mods::Browse> {
+    let c = core.inner().clone();
+    blocking(move || c.mods_browse()).await
+}
+
+#[tauri::command]
+async fn mods_plan(core: State<'_, Arc<Core>>, id: String, version: Option<String>) -> MRes<mods::Plan> {
+    let c = core.inner().clone();
+    blocking(move || c.mods_plan(&id, version.as_deref())).await
+}
+
+#[tauri::command]
+async fn mods_inspect_url(core: State<'_, Arc<Core>>, url: String) -> MRes<core::Inspected> {
+    let c = core.inner().clone();
+    blocking(move || c.mods_inspect_url(&url)).await
+}
+
+/// A package file from the file chooser or a drop: the raw bytes as the request body, its name in `x-file-name`.
+#[tauri::command]
+async fn mods_inspect_file(core: State<'_, Arc<Core>>, request: tauri::ipc::Request<'_>) -> MRes<core::Inspected> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err(mods::ModError::new("noFile"));
+    };
+    let name = request.headers().get("x-file-name").and_then(|v| v.to_str().ok()).unwrap_or("mod.bhmod");
+    let name = percent_decode(name);
+    let (c, bytes) = (core.inner().clone(), bytes.clone());
+    blocking(move || c.mods_inspect_bytes(&name, bytes)).await
+}
+
+/// `encodeURIComponent` undone (header values are ASCII).
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        let hex =
+            b.get(i + 1..i + 3).and_then(|h| std::str::from_utf8(h).ok()).and_then(|h| u8::from_str_radix(h, 16).ok());
+        match (b[i], hex) {
+            (b'%', Some(v)) => {
+                out.push(v);
+                i += 3;
+            }
+            (c, _) => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+#[derive(Clone, Serialize)]
+struct InstallProgress {
+    step: String,
+    done: usize,
+    total: usize,
+}
+
+/// Installs after the admin confirmed the plan and the permissions; progress arrives as `mods-progress` events.
+#[tauri::command]
+async fn mods_install(
+    app: AppHandle,
+    core: State<'_, Arc<Core>>,
+    request: core::InstallRequest,
+) -> MRes<core::Installed> {
+    let c = core.inner().clone();
+    blocking(move || {
+        c.mods_install(&request, &|step, done, total| {
+            let _ = app.emit("mods-progress", InstallProgress { step: step.into(), done, total });
+        })
+    })
+    .await
+}
+
 /// Smallest main window (logical pixels): the size it opens at, as minWidth/minHeight in tauri.conf.json.
 #[cfg(desktop)]
 const MIN_SIZE: (f64, f64) = (1120.0, 760.0);
@@ -390,7 +537,18 @@ pub fn run() {
             set_list,
             network_info,
             get_settings,
-            set_settings
+            set_settings,
+            mods_overview,
+            mods_set_enabled,
+            mods_set_grant,
+            mods_remove,
+            mods_clear_data,
+            mods_open_folder,
+            mods_browse,
+            mods_plan,
+            mods_inspect_url,
+            mods_inspect_file,
+            mods_install
         ])
         .run(tauri::generate_context!())
         .expect("error while running the Blockheads Server app");
@@ -411,6 +569,13 @@ mod tests {
         assert_eq!(*started.lock().unwrap(), first, "later calls keep the first draw");
     }
     use super::*;
+
+    #[test]
+    fn file_names_are_percent_decoded() {
+        assert_eq!(percent_decode("fast%20tools-%C3%A7.bhmod"), "fast tools-ç.bhmod");
+        assert_eq!(percent_decode("100%"), "100%");
+        assert_eq!(percent_decode("a%zz"), "a%zz");
+    }
 
     #[test]
     fn splash_hold_parses_milliseconds() {

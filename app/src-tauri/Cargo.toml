@@ -25,6 +25,14 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 local-ip-address = "0.6"
 sysinfo = { version = "0.36", default-features = false, features = ["system"] }
+# Mods: the same discovery, manifest checks and dependency rules as the server's mod host. Path dependencies on a
+# sibling mod-sdk checkout, like the server workspace (see its Cargo.toml).
+bhmod-core = { path = "../../../../mod-sdk/crates/bhmod-core" }
+bhmod-manifest = { path = "../../../../mod-sdk/crates/bhmod-manifest" }
+semver = "1"
+toml = "0.9"
+# Downloads of the public mod list and packages (HTTPS, rustls with bundled roots: works on Android too).
+ureq = { version = "2", default-features = false, features = ["tls"] }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-dialog = "2"
