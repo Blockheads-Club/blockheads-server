@@ -222,9 +222,25 @@ fn tile(s: &Session, x: i32, y: i32) -> Option<(u8, u8, u8)> {
     Some((t[0], t[3], t[0xb]))
 }
 
-/// An empty air tile standing on solid ground, a few tiles east of `(x, y)` (both in loaded blocks).
-fn free_spot_near(s: &Session, x: i32, y: i32) -> (i32, i32) {
+/// An empty air tile standing on solid ground, a few tiles east of `(x, y)`. Requests (and waits for) every macro
+/// block the search window touches first, so the result does not depend on which neighbours the server happened to
+/// have streamed already (a portal near a block edge has its whole window in the next block).
+fn free_spot_near(s: &mut Session, x: i32, y: i32) -> (i32, i32) {
     const AIR: u8 = 2;
+    let mut wanted = Vec::new();
+    for bx in [x + 3, x + 24] {
+        for by in [y - 9, y + 8] {
+            let i = s.macro_index_for_tile(bx, by);
+            if !wanted.iter().any(|&(w, _, _)| w == i) {
+                wanted.push((i, bx, by));
+            }
+        }
+    }
+    for (i, bx, by) in wanted {
+        if !s.state.block_msgs.contains_key(&(i as u32)) {
+            load_block_at(s, bx, by);
+        }
+    }
     for cx in x + 3..x + 24 {
         for cy in (y - 8..y + 8).rev() {
             let (Some(here), Some(below)) = (tile(s, cx, cy), tile(s, cx, cy - 1)) else { continue };
@@ -611,6 +627,14 @@ fn place_flow(s: &mut Session) -> Placed {
     let p = Placed { torch: spots[0], egg: spots[1], painting: wall, rail: spots[2] };
     fill(s, p.torch, ITEM_TORCH, None);
     fill(s, p.egg, ITEM_EGG, None);
+    if std::process::Command::new("sh")
+        .args(["-c", "command -v pnginfo >/dev/null"])
+        .status()
+        .map_or(true, |s| !s.success())
+    {
+        // the server (like the original) accepts every image when `pnginfo` is missing; the image is valid anyway
+        eprintln!("NOTE: pnginfo is not installed; the server's painting image check is not exercised here");
+    }
     let mut sd = PV::mutable_dict();
     if let PV::Dict(d) = &mut sd {
         d.map.insert("outputImageData".into(), PV::data(PNG_1X1.to_vec()));
@@ -726,7 +750,7 @@ fn chest_contents_survive_closing_and_reopening() {
     let mut s = join(o.port, "CHESTER");
     let (px, py) = portal(&s);
     load_block_at(&mut s, px, py);
-    let (cx, cy) = free_spot_near(&s, px, py);
+    let (cx, cy) = free_spot_near(&mut s, px, py);
     load_block_at(&mut s, cx, cy); // the chest's block (may be the portal's)
     let (chest, blob) = wait_for_chest(&mut s);
     let bh = spawn_blockhead(&mut s, px, py);

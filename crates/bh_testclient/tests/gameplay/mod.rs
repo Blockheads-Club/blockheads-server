@@ -26,7 +26,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use blockheads_server::foundation::gsdict::GsDict;
 use blockheads_server::plist::value::PlistValue as PV;
@@ -752,6 +752,8 @@ pub struct Ctx<'a> {
     pub side: Side,
     /// `play` or `reload` (trace file names)
     pub phase: &'static str,
+    /// The script typed `/stop`: only then is the server's exit part of the scenario (see `run_side`).
+    pub stop_sent: bool,
 }
 
 impl Ctx<'_> {
@@ -760,13 +762,14 @@ impl Ctx<'_> {
     }
     /// Type a console line and wait a little for the server to act on it.
     pub fn console(&mut self, line: &str) {
+        self.stop_sent |= line.trim() == "/stop";
         let before = self.server.log().len();
         if let Err(e) = self.server.send_console(line) {
             self.obs.soft(format!("console_failed.{}", line), mask_digits(&e.to_string()));
             return;
         }
-        let end = std::time::Instant::now() + Duration::from_millis(1500);
-        while std::time::Instant::now() < end {
+        let end = Instant::now() + Duration::from_millis(1500);
+        while Instant::now() < end {
             std::thread::sleep(Duration::from_millis(100));
             if self.server.log().len() > before {
                 std::thread::sleep(Duration::from_millis(300));
@@ -827,13 +830,32 @@ pub fn run_side(sc: &Scenario, side: Side, root: &Path, run: usize) -> (Obs, Pat
     h.wait_for_log("World load complete.", Duration::from_secs(180)).expect("load");
     let addr = format!("127.0.0.1:{}", h.port()).parse().unwrap();
     eprintln!("== {} {} on {}", sc.name, tag, addr);
-    let mut ctx = Ctx { addr, dir: dir.clone(), obs: Obs::default(), server: h.as_mut(), side, phase: "play" };
+    let mut ctx =
+        Ctx { addr, dir: dir.clone(), obs: Obs::default(), server: h.as_mut(), side, phase: "play", stop_sent: false };
     guarded(&mut ctx, sc.play, "script");
     let mut obs = std::mem::take(&mut ctx.obs);
-    if h.is_running() {
+    let stop_sent = ctx.stop_sent;
+    if stop_sent {
+        // The exit is the scenario's point: wait for it instead of sampling it once.
+        let end = Instant::now() + Duration::from_secs(20);
+        while h.is_running() && Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        if !h.is_running() {
+            obs.add("server.exited", true);
+        }
+    } else if h.is_running() {
         let _ = h.wait_for_saves(WORLD, 2, Duration::from_secs(30));
     } else {
-        obs.add("server.exited", true);
+        // Not observed: once the last client has left, the server may shut itself down at any moment, so whether
+        // that has happened by now follows the machine's speed. Its log tail is kept for diagnosis.
+        let log = h.log();
+        let tail: Vec<&str> = log.lines().rev().take(15).collect();
+        eprintln!(
+            "server of {} was already down after the script; log tail:\n{}",
+            sc.name,
+            tail.into_iter().rev().collect::<Vec<_>>().join("\n")
+        );
     }
     let _ = h.stop_sigint(Duration::from_secs(15));
     std::fs::write(dir.join("server.log"), h.log()).unwrap();
@@ -855,7 +877,15 @@ pub fn run_side(sc: &Scenario, side: Side, root: &Path, run: usize) -> (Obs, Pat
         let mut h2 = side.start(&rspec);
         if h2.wait_for_log("World load complete.", Duration::from_secs(180)).is_ok() {
             let addr2 = format!("127.0.0.1:{}", h2.port()).parse().unwrap();
-            let mut ctx = Ctx { addr: addr2, dir: dir.clone(), obs, server: h2.as_mut(), side, phase: "reload" };
+            let mut ctx = Ctx {
+                addr: addr2,
+                dir: dir.clone(),
+                obs,
+                server: h2.as_mut(),
+                side,
+                phase: "reload",
+                stop_sent: false,
+            };
             guarded(&mut ctx, reload, "reload_script");
             obs = std::mem::take(&mut ctx.obs);
         } else {
