@@ -119,6 +119,42 @@ pub struct NoiseMask {
     pub volatile: BTreeSet<String>,
 }
 
+/// Counts that follow wall-clock timing and machine speed rather than game logic: packets received per type in a
+/// phase, objects created/removed per type in a phase, block resends after an action, how many blocks a phase
+/// received or explored, and how many block / light-block records the save holds (the area the server happened to
+/// load). Fixtures learned on one fast machine pin them exactly, but slower runners drift by a few, so they are
+/// compared with [`count_tolerance`]. Object counts per type in the save, inventories, paint, sign text, replies and
+/// chat stay exact.
+pub fn timing_count(key: &str) -> bool {
+    let k = key.trim_start_matches('~');
+    let last = k.rsplit('.').next().unwrap_or("");
+    let per_type = |kind: &str| {
+        k.rsplit('.').nth(1) == Some(kind)
+            && last.len() > 1
+            && last.starts_with('t')
+            && last[1..].chars().all(|c| c.is_ascii_digit())
+    };
+    k.rsplit('.').nth(1) == Some("rx")
+        || per_type("create")
+        || per_type("remove")
+        || matches!(last, "block_resends" | "blocks" | "light_blocks" | "explored_blocks")
+        || k == "save.world_db.blocks.N_N"
+        || k == "save.lightBlocks.main.H_N_N"
+}
+
+/// How far a [`timing_count`] may drift from the reference: 2, or a quarter of the reference value when larger.
+pub fn count_tolerance(want: u64) -> u64 {
+    want.div_ceil(4).max(2)
+}
+
+/// Both values are counts within [`count_tolerance`] of each other.
+pub fn counts_close(want: &str, got: &str) -> bool {
+    match (want.parse::<u64>(), got.parse::<u64>()) {
+        (Ok(w), Ok(g)) => w.abs_diff(g) <= count_tolerance(w),
+        _ => false,
+    }
+}
+
 /// Result of checking one run against a mask.
 #[derive(Clone, Debug, Default)]
 pub struct Verdict {
@@ -146,16 +182,19 @@ impl NoiseMask {
         m
     }
 
-    /// Hard: a stable non-`~` key differs or is missing, or a key that no reference run had shows up.
+    /// Hard: a stable non-`~` key differs or is missing, or a key that no reference run had shows up. A
+    /// [`timing_count`] key is hard only when it is off by more than [`count_tolerance`] (a missing count is 0).
     pub fn check(&self, ours: &BTreeMap<String, String>) -> Verdict {
         let mut v = Verdict::default();
         for (k, want) in &self.stable {
-            let line = match ours.get(k) {
+            let got = ours.get(k);
+            let line = match got {
                 Some(got) if got == want => continue,
                 Some(got) => format!("{}: ref `{}` ours `{}`", k, want, got),
                 None => format!("{}: ref `{}` ours <missing>", k, want),
             };
-            if k.starts_with('~') {
+            let near = timing_count(k) && counts_close(want, got.map_or("0", String::as_str));
+            if k.starts_with('~') || near {
                 v.soft.push(line);
             } else {
                 v.hard.push(line);
@@ -166,7 +205,7 @@ impl NoiseMask {
                 continue;
             }
             let line = format!("{}: ref <missing> ours `{}`", k, got);
-            if k.starts_with('~') {
+            if k.starts_with('~') || (timing_count(k) && counts_close("0", got)) {
                 v.soft.push(line);
             } else {
                 v.hard.push(line);
@@ -970,6 +1009,9 @@ pub fn fixture_scenario(sc: &Scenario) {
     for l in &v.hard {
         eprintln!("{} {}", if xfail.contains_key(verdict_key(l)) { "xfail" } else { "HARD " }, l);
     }
+    for l in v.soft.iter().filter(|l| !l.starts_with('~')) {
+        eprintln!("drift {}", l);
+    }
     assert!(unexpected.is_empty(), "{}: differs from the reference fixture:\n{:#?}", sc.name, unexpected);
     assert!(
         fixed.is_empty(),
@@ -1017,6 +1059,57 @@ mod tests {
         let fx = mask.to_fixture("h1\nh2");
         assert!(fx.starts_with("# h1\n# h2\nS\ts\t1\n"));
         assert_eq!(NoiseMask::from_fixture(&(fx + "junk\n")), mask);
+    }
+
+    #[test]
+    fn timing_counts_have_a_tolerance() {
+        for k in [
+            "plain_rx.rx.26",
+            "~join.rx.04",
+            "walk_left.create.t17",
+            "B_join.remove.t52",
+            "paint.chest.block_resends",
+            "walk.blocks",
+            "walk.light_blocks",
+            "walk.explored_blocks",
+            "save.world_db.blocks.N_N",
+            "save.lightBlocks.main.H_N_N",
+        ] {
+            assert!(timing_count(k), "{k}");
+        }
+        for k in [
+            "a.chest_inventory",
+            "save.world_db.dw.N_N/17",
+            "save.lightBlocks.main.H_allIndexes",
+            "x.create.tx",
+            "x.create.t",
+            "paint.door.tile_paint",
+            "/players",
+        ] {
+            assert!(!timing_count(k), "{k}");
+        }
+        assert_eq!((count_tolerance(0), count_tolerance(8), count_tolerance(9), count_tolerance(48)), (2, 2, 3, 12));
+        assert!(
+            counts_close("0", "2") && !counts_close("0", "3") && counts_close("48", "36") && !counts_close("48", "61")
+        );
+        assert!(!counts_close("1", "x"));
+        let mask = NoiseMask::learn(&[m(&[("p.rx.26", "3"), ("p.create.t17", "48"), ("s.blocks", "5"), ("t", "1")])]);
+        let v = mask.check(&m(&[
+            ("p.rx.26", "4"),
+            ("p.create.t17", "70"),
+            ("p.create.t5", "1"),
+            ("p.rx.30", "9"),
+            ("t", "1"),
+        ]));
+        assert_eq!(v.soft, vec!["p.rx.26: ref `3` ours `4`", "p.create.t5: ref <missing> ours `1`"]);
+        assert_eq!(
+            v.hard,
+            vec![
+                "p.create.t17: ref `48` ours `70`",
+                "s.blocks: ref `5` ours <missing>",
+                "p.rx.30: ref <missing> ours `9`"
+            ]
+        );
     }
 
     #[test]

@@ -9,6 +9,11 @@ Reference observations for the gameplay scenarios in `tests/gameplay/scenarios.r
   seeded world. Lines starting with `#` are comments.
   - `S<TAB>key<TAB>value`: the value was identical in every reference run. It is a hard check. Keys starting
     with `~` are compared but only reported, because they count wall-clock cadence packets.
+  - Timing counts (`gameplay::timing_count`: packets received per type, objects created/removed per type in a
+    phase, block resends, blocks received/explored in a phase, block and light-block records in the save) follow
+    wall-clock timing and machine speed. They are hard only when they are off by more than 2 or a quarter of the
+    reference value (`count_tolerance`); smaller drifts are reported. Everything else (object counts per type in the
+    save, inventories, paint, sign text, command replies, chat) must match exactly.
   - `V<TAB>key`: the value differed between reference runs, or the key was missing from some of them. It is never
     checked.
   - Any other key that our server reports is a difference, because no reference run produced it.
