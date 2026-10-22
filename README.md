@@ -55,7 +55,7 @@ the [Blockheads Patcher](https://github.com/Blockheads-Club/blockheads-patcher) 
 Guides and docs: [blockheads-club.github.io/website/docs](https://blockheads-club.github.io/website/docs/).
 
 ### Mods (preview)
-Server-side Lua (Luau) mods from the [mod SDK](https://github.com/Blockheads-Club/mod-sdk): put `.bhmod` files or
+Server-side Lua (Luau) and WASM (Rust, C, Zig, Go) mods from the [mod SDK](https://github.com/Blockheads-Club/mod-sdk): put `.bhmod` files or
 unpacked mod folders in `<data dir>/mods/` (or the folder named by `BLOCKHEADS_MODS_DIR`) and grant what they ask
 for in `mods.toml` next to them:
 
@@ -92,10 +92,10 @@ cargo build --release -p blockheads_server
 cargo test --workspace
 ```
 
-The mod host (feature `mods`, on by default) uses `bhmod-core` from a sibling checkout of
-[mod-sdk](https://github.com/Blockheads-Club/mod-sdk) (`path = "../../mod-sdk/crates/bhmod-core"` in `Cargo.toml`)
-until that repository is published; it then becomes a git dependency. Build without it:
-`cargo build -p blockheads_server --no-default-features --features trace-rng`.
+The mod host (feature `mods`, on by default) uses `bhmod-core` and `bhmod-wasm` from
+[mod-sdk](https://github.com/Blockheads-Club/mod-sdk) as git dependencies pinned to one commit (to work on both
+repositories at once, see [docs/development.md](docs/development.md#developing-against-a-local-mod-sdk)). Build
+without it: `cargo build -p blockheads_server --no-default-features --features trace-rng`.
 
 More: [docs/development.md](docs/development.md) (tests, data directory, embedding, the desktop and Android app,
 releases).

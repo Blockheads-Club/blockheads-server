@@ -31,6 +31,31 @@ repository. They skip cleanly unless these environment variables are set:
 
 Coverage: `cargo llvm-cov --workspace`. The mod host seam has its own 100 % line gate: `scripts/mods-coverage.sh`.
 
+### Developing against a local mod-sdk
+
+`bhmod-core` and `bhmod-wasm` come from `https://github.com/Blockheads-Club/mod-sdk` at the `rev` pinned in the
+workspace `Cargo.toml`. To build against a local checkout instead (for example `../mod-sdk` next to this repository),
+patch the git source on the command line; nothing in the repository changes except `Cargo.lock`, which you must not
+commit in that state:
+
+```sh
+P='patch."https://github.com/Blockheads-Club/mod-sdk"'
+cargo test --workspace \
+  --config "$P.bhmod-core.path=\"../mod-sdk/crates/bhmod-core\"" \
+  --config "$P.bhmod-wasm.path=\"../mod-sdk/crates/bhmod-wasm\""
+git checkout Cargo.lock   # before committing
+```
+
+When a mod-sdk change lands, bump both `rev`s to its commit and run `cargo update -p bhmod-core -p bhmod-wasm`.
+
+### Mod runtimes on every target
+
+- WASM (`bhmod-wasm`, wasmtime): Cranelift on x86_64 and arm64, the Pulley interpreter on armv7. armv7 builds use
+  `--cfg pulley_assume_llvm_makes_tail_calls` (set in `.cargo/config.toml`), which makes Pulley 1.3–2x faster.
+  Compiled mods are cached in `<mods dir>/.cache/`.
+- Luau (`mlua`) is C++: Android builds link the static C++ runtime (`CXXSTDLIB_<target>=c++_static` in
+  `.cargo/config.toml`, `c++abi` from the build script) so the app ships no `libc++_shared.so`.
+
 Commits follow [Conventional Commits](https://www.conventionalcommits.org);
 releases are cut by pushing a signed tag `vX.Y.Z` on `dev`: `.github/workflows/release.yml` builds
 every asset into a draft GitHub release, which is published by hand once CI is green.
