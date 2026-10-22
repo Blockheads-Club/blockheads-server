@@ -288,6 +288,7 @@ impl Glue {
         crate::npc::npc::set_npc_env(self.clone());
         crate::npc::egg::set_passive_env(self.clone());
         crate::crafting::workbench::install_host(self.clone());
+        crate::blockhead::blockhead::set_host(Rc::new(BlockheadGlue(self.weak_self.clone())));
     }
 
     /// Install the seams that need the `World` handle; called right after `World::init` returned `Some(w)`.
@@ -328,6 +329,51 @@ impl Glue {
     /// The `ServerDynamicWorld` face of the live DynamicWorld (`None` until stage 12).
     pub fn dw_face(&self) -> Option<Rc<dyn ServerDynamicWorld>> {
         self.dw().map(|d| Rc::new(DwFace(d)) as Rc<dyn ServerDynamicWorld>)
+    }
+}
+
+// =====================================================================================================
+// BlockheadHost
+// =====================================================================================================
+
+/// The production [`BlockheadHost`](crate::blockhead::blockhead::BlockheadHost). Only the World / DynamicWorld
+/// calls reached from `-[Blockhead updatePosition:]` (world loading, doors) are forwarded; every other method keeps
+/// its inert default. The `ActionsHost` part of `updatePosition:` (glow blocks, torches, cave treasure) is not
+/// wired yet.
+///
+/// Without it `updatePosition:` of a client's blockhead was the bare `DynamicObject` version: walking never ran
+/// `fullyLoadIfNeededAroundPos:clientLightBlockIndex:forBlockhead:`, so the macro blocks the player walked into were
+/// never loaded / explored for that client and stayed dark.
+struct BlockheadGlue(Weak<Glue>);
+
+impl BlockheadGlue {
+    fn glue(&self) -> Option<Rc<Glue>> {
+        self.0.upgrade()
+    }
+}
+
+impl crate::blockhead::blockhead::BlockheadHost for BlockheadGlue {
+    fn update_position(&self, b: &crate::blockhead::blockhead::Blockhead, p: IntPair) {
+        b.update_position(p)
+    }
+    fn server_client_light_block_index_for_net_id(&self, net_id: Option<&str>) -> Option<i32> {
+        let client = self.glue()?.client(net_id?)?;
+        Some(client.light_block_index())
+    }
+    fn fully_load_if_needed_around_pos_client_light_block_index_for_blockhead(
+        &self,
+        pos: IntPair,
+        light_block_index: i32,
+        b: Option<&ObjRef>,
+    ) {
+        if let Some(w) = self.glue().and_then(|g| g.world()) {
+            w.fully_load_if_needed_around_pos_client_light_block_index_for_blockhead(pos, light_block_index, b);
+        }
+    }
+    fn set_door_at_pos_to_open_direction(&self, pos: IntPair, open: bool, direction: i32) {
+        if let Some(d) = self.glue().and_then(|g| g.dw()) {
+            d.set_door_at_pos_to_open_direction(pos, open, direction);
+        }
     }
 }
 
@@ -2655,6 +2701,47 @@ mod tests {
             } else {
                 panic!("freight car not constructed");
             }
+        });
+    }
+
+    /// The blockhead seams installed in production: `updatePosition:` of a client's blockhead loads / explores the
+    /// area around it (the "new area stays dark" bug) and reaches doors.
+    #[test]
+    fn blockhead_glue_forwards_world_loading_and_is_inert_without_a_world() {
+        isolated(|| {
+            use crate::blockhead::blockhead::BlockheadHost;
+            let (bw, _mock, bdw) = crate::blockhead::blockhead::testutil::setup();
+            let bh_obj = crate::blockhead::blockhead::testutil::new_bh(&bw, &bdw, 1);
+            let b = crate::blockhead::blockhead::testutil::bh_of(&bh_obj);
+            let p = IntPair { x: 6, y: 8 };
+
+            // no glue / no world / no DynamicWorld: inert
+            let dead = BlockheadGlue(Weak::new());
+            assert_eq!(dead.server_client_light_block_index_for_net_id(Some("x")), None);
+            dead.fully_load_if_needed_around_pos_client_light_block_index_for_blockhead(p, 0, None);
+            dead.set_door_at_pos_to_open_direction(p, true, 1);
+
+            let h = Harness::new("glue_bh");
+            let g = Glue::new(&h.srv);
+            let live = BlockheadGlue(Rc::downgrade(&g));
+            assert_eq!(live.server_client_light_block_index_for_net_id(None), None);
+            assert_eq!(live.server_client_light_block_index_for_net_id(Some("nobody")), None);
+            g.install_pre_init();
+            core_hooks().server_client_create("abc", 7, None);
+            assert_eq!(live.server_client_light_block_index_for_net_id(Some("abc")), Some(7));
+
+            // update_position runs the full Blockhead version (moves the blockhead)
+            live.update_position(b, p);
+            assert_eq!(bh_obj.pos(), p);
+
+            // with a world and a DynamicWorld the calls reach them
+            let d = crate::dynworld::state::testutil::dw("glue_bh", 4);
+            let w = d.world();
+            *g.world.borrow_mut() = Rc::downgrade(&w);
+            *g.dw.borrow_mut() = Some(d.clone());
+            live.fully_load_if_needed_around_pos_client_light_block_index_for_blockhead(p, -1, None);
+            live.set_door_at_pos_to_open_direction(p, true, 1);
+            g.shutdown();
         });
     }
 

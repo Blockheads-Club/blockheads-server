@@ -1,6 +1,8 @@
 //! End-to-end gameplay regressions, driven through the real wire protocol:
 //!
-//! * chests: items put into a chest are still there when the chest is opened again (and survive a reload).
+//! * chests: items put into a chest are still there when the chest is opened again (and survive a reload);
+//! * walking: a client's blockhead walking into a far part of the world gets that area loaded and explored (light
+//!   light is sent), instead of it staying dark.
 //!
 //! Our server runs in-process (`blockheads_server::host`), so these always run. With `BH_PARITY=1` (+ docker and
 //! the reference environment) the same flows also run against the reference server and must behave the same.
@@ -15,9 +17,10 @@ use bh_testclient::session::BatchKind;
 use bh_testclient::{BlockheadSpec, ClientConfig, Identity, JoinOutcome, PlaceInteractionObjectNetRequest, Session};
 use blockheads_server::host::{self, HostConfig, Status, WorldSelect};
 use blockheads_server::plist::value::PlistValue as PV;
-use blockheads_server::protocol::codec;
+use blockheads_server::protocol::{block_wire, codec};
 
 const SERVER_CHEST_INVENTORY: u8 = 0x32;
+const SERVER_LIGHT_BLOCK: u8 = 0x28;
 const OBJECT_TYPE_BLOCKHEAD: u8 = 24;
 const OBJECT_TYPE_CHEST: u8 = 46;
 const ITEM_CHEST: u16 = 0x413;
@@ -149,6 +152,20 @@ fn spawn_blockhead(s: &mut Session, x: i32, y: i32) -> u64 {
     panic!("blockhead was not created");
 }
 
+/// `BlockheadUpdateData` (0x70 bytes) of a blockhead standing on / walking to `(x, y)`.
+fn blockhead_update(id: u64, x: i32, y: i32) -> Vec<u8> {
+    let mut b = vec![0u8; 0x70];
+    b[0..8].copy_from_slice(&id.to_le_bytes());
+    for off in [0x08, 0x18, 0x20, 0x28] {
+        b[off..off + 4].copy_from_slice(&(x as u32).to_le_bytes());
+        b[off + 4..off + 8].copy_from_slice(&(y as u32).to_le_bytes());
+    }
+    b[0x33] = 127; // happiness
+    b[0x3c] = 1; // isCurrentlyActive
+    b[0x3f] = 127; // health
+    b
+}
+
 /// One inventory item's `saveData` (no extra dictionary).
 fn item(ty: u16) -> Vec<u8> {
     let mut v = ty.to_le_bytes().to_vec();
@@ -245,6 +262,62 @@ fn chest_flow(s: &mut Session) -> (Vec<Vec<u16>>, Vec<Vec<u16>>) {
     (first, second)
 }
 
+/// The newest light data (the client's explored light block) the server sent for a macro block: from a 0x04 block
+/// or a 0x28 light block, whichever came last. `None` if neither was received.
+fn latest_light(s: &Session, macro_index: u32) -> Option<Vec<u8>> {
+    let mut light = None;
+    for rx in s.received() {
+        match rx.data.first() {
+            Some(0x04) => {
+                if let Some(b) = block_wire::decode_server_block(&rx.data[1..]) {
+                    if b.macro_index == macro_index {
+                        light = Some(b.light);
+                    }
+                }
+            }
+            Some(&SERVER_LIGHT_BLOCK) => {
+                if let Some(l) = block_wire::decode_light_block(&rx.data[1..]) {
+                    if l.macro_index == macro_index {
+                        light = Some(l.light);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    light
+}
+
+/// Like a client whose view follows the blockhead: request the macro blocks along the way, then walk the blockhead
+/// `tiles` tiles east of the portal, one tile per update. Returns the explored light of the destination block
+/// before and after the walk.
+fn walk_flow(s: &mut Session, tiles: i32) -> (Vec<u8>, Vec<u8>) {
+    let (px, py) = portal(s);
+    let bh = spawn_blockhead(s, px, py);
+    let dest = s.macro_index_for_tile(px + tiles, py) as u32;
+    let mut want = Vec::new();
+    for x in (px..=px + tiles + 32).step_by(32) {
+        for y in [py - 32, py, py + 32] {
+            want.push(s.macro_index_for_tile(x, y));
+        }
+    }
+    s.request_blocks_throttled(&want, true, 30_000).unwrap();
+    s.run_for(1000).unwrap();
+    let before = latest_light(s, dest).expect("destination block not sent");
+    for dx in 1..=tiles {
+        s.send_object_batch(BatchKind::Update, OBJECT_TYPE_BLOCKHEAD, &[blockhead_update(bh, px + dx, py)]).unwrap();
+        s.run_for(60).unwrap();
+    }
+    s.run_for(3000).unwrap();
+    (before, latest_light(s, dest).expect("destination block not sent"))
+}
+
+fn explored(light: &[u8]) -> usize {
+    light.iter().filter(|b| **b != 0).count()
+}
+
+const WALK: i32 = 80;
+
 // ------------------------------------------------------------------------------------------------ tests
 
 #[test]
@@ -272,6 +345,16 @@ fn chest_contents_survive_closing_and_reopening() {
 }
 
 #[test]
+fn walking_into_a_new_area_loads_and_explores_it() {
+    let o = Ours::start("walk", None);
+    let mut s = join(o.port, "WALKER");
+    let (before, after) = walk_flow(&mut s, WALK);
+    assert_eq!(explored(&before), 0, "destination already explored before the walk");
+    assert!(explored(&after) > 0, "the area walked into was never explored (stays dark)");
+    s.disconnect();
+}
+
+#[test]
 fn parity_chest_matches_reference() {
     if !parity_enabled() {
         eprintln!("SKIP: parity_chest_matches_reference (BH_PARITY=1 + docker required)");
@@ -283,4 +366,18 @@ fn parity_chest_matches_reference() {
     s.disconnect();
     assert!(first.iter().all(|x| x.is_empty()), "reference: {:?}", first);
     assert_eq!(second.first(), Some(&vec![ITEM_DIRT, ITEM_DIRT]), "reference: {:?}", second);
+}
+
+#[test]
+fn parity_walk_matches_reference() {
+    if !parity_enabled() {
+        eprintln!("SKIP: parity_walk_matches_reference (BH_PARITY=1 + docker required)");
+        return;
+    }
+    let r = reference("walk");
+    let mut s = join(r.port(), "WALKER");
+    let (before, after) = walk_flow(&mut s, WALK);
+    s.disconnect();
+    assert_eq!(explored(&before), 0, "reference: destination already explored");
+    assert!(explored(&after) > 0, "reference: the area walked into was never explored");
 }
