@@ -10,6 +10,7 @@ use std::rc::{Rc, Weak};
 use bhmod_core::storage::{KvBackend, StorageProvider};
 use bhmod_core::types::{CommandSender, Event, LogLevel, Role, SavePhase, Side};
 use bhmod_core::{GameBridge, HostOptions, ModHost};
+use bhmod_wasm::{WasmConfig, WasmRuntime};
 
 use super::{ChatVerdict, ModHooks};
 use crate::server::bhserver::BHServer;
@@ -256,6 +257,11 @@ impl ModHooks for ServerMods {
 /// Loads the mods in `dir` for world `save_id`. `None` when no mod loaded.
 pub(super) fn load(dir: &Path, save_id: Option<&str>, server: &Rc<BHServer>) -> Option<Rc<dyn ModHooks>> {
     let mut opts = HostOptions::new(dir, Side::Server);
+    // WASM components; compiled code is cached in `<mods>/.cache` (hidden, so discovery skips it).
+    let wasm = WasmConfig { cache_dir: Some(dir.join(".cache")), ..WasmConfig::default() };
+    if let Ok(rt) = WasmRuntime::new(wasm) {
+        opts.runtimes.push(Box::new(rt));
+    }
     // A world always has a save id on the dedicated server; `(null)` mirrors ObjC's nil formatting otherwise.
     let world_dir = PathBuf::from(crate::foundation::paths::save_dir(save_id.unwrap_or("(null)")));
     opts.storage = Box::new(LmdbStorage::new(world_dir.join("mods/storage")));
