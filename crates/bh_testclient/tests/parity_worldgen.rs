@@ -150,7 +150,11 @@ fn rules_hash_seed() {
     let mut o = OurServer::start(&RunSpec { tag: "hash-seed".into(), args: a, ..Default::default() }).unwrap();
     run_to_stable(&mut o, ID, load_timeout("1/16")).unwrap();
     assert!(o.log().contains("converted to integer:166199516"), "{}", o.log());
-    assert!(o.log().contains("using seed:166199516"));
+    // The start-position search retries with seed + 1 on this small world, so the final seed is not the hash
+    // itself; it must match the reference's.
+    let seed = |log: &str| log.lines().find_map(|l| l.split("using seed:").nth(1).map(str::to_string));
+    assert_eq!(seed(&o.log()), seed(&r.log()), "final seed");
+    assert!(seed(&o.log()).is_some(), "{}", o.log());
     let rep = diff_saves(&r.save_dir(ID), &o.save_dir(ID), &SaveDiffOptions::parity_default()).unwrap();
     assert_clean("hash-seed", &mut r, &mut o, &rep);
 }
