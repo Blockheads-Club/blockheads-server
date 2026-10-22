@@ -20,7 +20,7 @@ use super::LoaderKey;
 pub const MAX_TRANSFERS: usize = 8;
 
 /// Where mod loader help lives (shown with every rejection text).
-pub const HELP_URL: &str = "https://blockheads-club.github.io/website/docs/mods/";
+pub const HELP_URL: &str = "https://blockheads.club/docs/mods/players";
 
 /// Rejection text for a `HELLO` with another protocol version.
 pub fn proto_text() -> String {
