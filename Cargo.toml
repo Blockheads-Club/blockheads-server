@@ -21,6 +21,9 @@ socket2 = "0.5"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 lmdb-master-sys = "=0.2.6"
 anyhow = "1"
+# The shared mod host. A path dependency on a sibling checkout of Blockheads-Club/mod-sdk until that repository is
+# published; it then becomes a git dependency.
+bhmod-core = { path = "../../mod-sdk/crates/bhmod-core" }
 
 # The original is a C/ObjC binary: unwinding is needed to emulate its exception catch sites.
 [profile.dev]

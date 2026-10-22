@@ -1266,6 +1266,11 @@ impl World {
             (Some(a), Some(b)) => (a, b),
             _ => return,
         };
+        // Mods (not in the original; `None` without mods).
+        let mods = crate::mods::hooks();
+        if let Some(h) = &mods {
+            h.world_save(false);
+        }
         let hooks = core_hooks();
         let mut d = match self.core_delegate() {
             Some(del) => mutable_copy_of_dict(&del.get_default_game_save_for_world_with_id(&save_id)),
@@ -1382,6 +1387,9 @@ impl World {
                 world_data.as_deref(),
                 sign_data.as_deref(),
             );
+        }
+        if let Some(h) = mods {
+            h.world_save(true);
         }
     }
 }

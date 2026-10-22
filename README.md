@@ -54,6 +54,21 @@ Players join with Join World -> Advanced... -> Online IP/Port. On Android 10+ th
 the [Blockheads Patcher](https://github.com/Blockheads-Club/blockheads-patcher) before it can connect.
 Guides and docs: [blockheads-club.github.io/website/docs](https://blockheads-club.github.io/website/docs/).
 
+### Mods (preview)
+Server-side Lua (Luau) mods from the [mod SDK](https://github.com/Blockheads-Club/mod-sdk): put `.bhmod` files or
+unpacked mod folders in `<data dir>/mods/` (or the folder named by `BLOCKHEADS_MODS_DIR`) and grant what they ask
+for in `mods.toml` next to them:
+
+```toml
+[hello-lua]
+grant = ["players:chat"]
+```
+
+Mods get join/quit/chat/command/tick/world events, their own `/commands` (for every player), a scheduler and
+per-world storage (`saves/<world>/mods/storage`, separate from the world database). They run with a time budget and
+are disabled after repeated faults. Without a mods folder nothing changes: same bytes, saves and output as
+vanilla. Vanilla game clients can join servers with server-side mods.
+
 ---
 
 ## 🛠️ Requirements
@@ -76,6 +91,11 @@ cd blockheads-server
 cargo build --release -p blockheads_server
 cargo test --workspace
 ```
+
+The mod host (feature `mods`, on by default) uses `bhmod-core` from a sibling checkout of
+[mod-sdk](https://github.com/Blockheads-Club/mod-sdk) (`path = "../../mod-sdk/crates/bhmod-core"` in `Cargo.toml`)
+until that repository is published; it then becomes a git dependency. Build without it:
+`cargo build -p blockheads_server --no-default-features --features trace-rng`.
 
 More: [docs/development.md](docs/development.md) (tests, data directory, embedding, the desktop and Android app,
 releases).

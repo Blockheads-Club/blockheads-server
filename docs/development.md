@@ -29,7 +29,7 @@ repository. They skip cleanly unless these environment variables are set:
 - `BH_REF_BINARY` - reference binary for gdb RNG traces
 - `BH_PARITY=1` - enable the docker-based parity tests
 
-Coverage: `cargo llvm-cov --workspace`.
+Coverage: `cargo llvm-cov --workspace`. The mod host seam has its own 100 % line gate: `scripts/mods-coverage.sh`.
 
 Commits follow [Conventional Commits](https://www.conventionalcommits.org);
 releases are cut by pushing a signed tag `vX.Y.Z` on `dev`: `.github/workflows/release.yml` builds

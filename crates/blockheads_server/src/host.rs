@@ -54,6 +54,9 @@ pub struct HostConfig {
     /// Console lines sent once, on the server thread, right after `World load complete.` and before any other
     /// console input is read (e.g. `/set-password ...`). Independent of any UI polling.
     pub on_ready_commands: Vec<String>,
+    /// Mods (not in the original). The default loads mods from `BLOCKHEADS_MODS_DIR` or `<data dir>/mods` when
+    /// that directory exists; without mods the server behaves exactly like vanilla.
+    pub mods: crate::mods::ModsConfig,
 }
 
 impl Default for HostConfig {
@@ -68,6 +71,7 @@ impl Default for HostConfig {
             privacy: None,
             expert_mode: false,
             on_ready_commands: Vec::new(),
+            mods: crate::mods::ModsConfig::default(),
         }
     }
 }
@@ -147,6 +151,7 @@ pub fn start(cfg: HostConfig, log: LogCallback) -> std::io::Result<ServerHandle>
             user_log(line);
         });
         prepare_thread(cfg.data_dir.as_deref(), Some(sink));
+        crate::mods::set_config(cfg.mods.clone());
         nslog::set_process_name("blockheads_server");
         let (new_name, load_name, width) = match &cfg.world {
             WorldSelect::Load(n) => (None, Some(n.clone()), -1),

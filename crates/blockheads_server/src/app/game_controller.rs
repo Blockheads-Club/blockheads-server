@@ -173,6 +173,10 @@ impl GameController {
             g
         });
         *gc.glue.borrow_mut() = glue.clone();
+        // 2c. Mods (not in the original): installed only when mods are present.
+        if let Some(s) = &server {
+            crate::mods::start(a.save_id.as_deref(), s);
+        }
 
         // 3. windowInfo (PIXEL_SCALE == 1.0f, RESOLVED world_core), serverHostData, custom rules.
         let window_info = WindowInfo {
@@ -303,9 +307,15 @@ impl GameController {
                     d.load_complete_for_game_controller(&self.rc());
                 }
                 nslog!("World load complete.");
+                if let Some(h) = crate::mods::hooks() {
+                    h.world_loaded(&world.world_name().unwrap_or_default(), &world.save_id().unwrap_or_default());
+                }
             }
         } else {
             world.update_accurate_dt_pinch_scale_drag_in_progress(dtf, accurate_dt, 1.0, false);
+            if let Some(h) = crate::mods::hooks() {
+                h.tick(dtf);
+            }
             if self.needs_to_exit_world.get() {
                 // doExitWorld: empty stub on the server.
             }
@@ -339,6 +349,7 @@ impl GameController {
             w.save_all();
             w.finish_bulk_database_update();
         }
+        crate::mods::stop();
         // setPaused:NO is a no-op.
         self.cleanup_world();
     }

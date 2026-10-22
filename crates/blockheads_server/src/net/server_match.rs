@@ -180,7 +180,12 @@ impl BhNetServerMatch {
     /// `-pollNetEvents`: 60 Hz timer callback wrapped in `@try`; an NSException logs and `exit(0)`.
     pub fn poll_net_events(&self) {
         match catch_ns(|| self.poll_body()) {
-            Ok(()) => {}
+            Ok(()) => {
+                // Mods (not in the original): next-poll tasks.
+                if let Some(h) = crate::mods::hooks() {
+                    h.poll();
+                }
+            }
             Err(ex) => {
                 nslog(&format!(
                     "Exiting due to exception in pollNetEvents '{}' (reason '{}') ",

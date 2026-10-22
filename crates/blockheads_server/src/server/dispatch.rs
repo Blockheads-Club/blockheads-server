@@ -546,13 +546,34 @@ fn chat(srv: &Rc<BHServer>, dict: Option<PlistValue>, peer: &str) {
             }
         }
     }
-    let Some(msg) = msg else {
+    let Some(mut msg) = msg else {
         let ex = messages::chat_nil_exception();
         if let Malformed::Exception { name, reason } = ex {
             ns_raise(name, &reason);
         }
         return;
     };
+    // Mods (not in the original; `None` without mods): mod commands work for every player, chat can be cancelled
+    // or rewritten before it is shown or broadcast.
+    if let (Some(h), Some(t)) = (crate::mods::hooks(), text.clone()) {
+        if loc_zero && h.owns_command(&t) {
+            if let Some(d) = srv.delegate() {
+                d.chat_message_recieved_display_notification(msg.clone(), true);
+            }
+            h.command(Some(peer), &t);
+            return;
+        }
+        if !is_command {
+            match h.chat(peer, &t) {
+                crate::mods::ChatVerdict::Keep => {}
+                crate::mods::ChatVerdict::Cancel => return,
+                crate::mods::ChatVerdict::Replace(n) => {
+                    msg.map.insert("message".to_string(), PlistValue::string(n.clone()));
+                    text = Some(n);
+                }
+            }
+        }
+    }
     if let Some(d) = srv.delegate() {
         d.chat_message_recieved_display_notification(msg.clone(), true);
     }
@@ -787,6 +808,11 @@ fn handshake(srv: &Rc<BHServer>, payload: &[u8], peer: &str) {
     }
     srv.players_changed();
     srv.send_updated_player_list_to_clients();
+    if let Some(h) = crate::mods::hooks() {
+        if srv.connected_clients.borrow().iter().any(|e| e == p) {
+            h.player_join(p);
+        }
+    }
 }
 
 /// `-sendPortalChestAcknowledgementIfNeededForClient:`.
