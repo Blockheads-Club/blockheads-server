@@ -316,3 +316,40 @@ fn roles_kicks_and_stale_players() {
     }
     assert_eq!(srv.handle.stop(), Status::Stopped(0), "{}", srv.log());
 }
+
+/// A WASM component mod (the SDK's `hello-rust`, the twin of `hello-lua`) on a live server: compiled once, cached in
+/// `<mods>/.cache`, and behaving like the Luau version.
+#[test]
+fn wasm_mod_on_a_live_server() {
+    let tmp = tempfile::tempdir().unwrap();
+    let data = tmp.path().join("TheBlockheads");
+    let w = host::create_world(Some(&data), "Wasm", 104, false).expect("create");
+    let mods = tmp.path().join("mods");
+    copy_dir(&fixtures().join("hello-rust"), &mods.join("hello-rust"));
+    std::fs::write(mods.join("mods.toml"), "[hello-rust]\ngrant = [\"players:chat\"]\n").unwrap();
+    let cfg = ModsConfig { dir: Some(mods.clone()), disabled: false };
+    let mut srv = start(&data, &w.id, 15430, cfg.clone());
+    assert!(srv.log_has("[mods] loaded 1 mod(s): hello-rust 0.1.0"), "{}", srv.log());
+    assert!(srv.wait_log("[mods] hello-rust: hello-rust enabled", 10), "{}", srv.log());
+    let cached: Vec<_> = std::fs::read_dir(mods.join(".cache")).unwrap().flatten().collect();
+    assert_eq!(cached.len(), 1, "{cached:?}");
+
+    let mut alice = srv.join("ALICE");
+    wait_chat(&mut alice, "Hello, ALICE! You are greeting number 1.", 5000);
+    alice.chat("/hi").unwrap();
+    let a = wait_chat(&mut alice, "ALICE says hello to everyone!", 5000);
+    assert!(a.contains(&"Hello, ALICE!".to_string()), "{a:?}");
+    srv.handle.send_command("/hello");
+    assert!(srv.wait_log("Hello, console!", 5), "{}", srv.log());
+    alice.disconnect();
+    assert_eq!(srv.handle.stop(), Status::Stopped(0), "{}", srv.log());
+    assert!(srv.log_has("[mods] hello-rust: hello-rust disabled"), "{}", srv.log());
+
+    // The second start loads the cached code; storage survives.
+    let mut srv = start(&data, &w.id, 15431, cfg);
+    assert!(srv.wait_log("hello-rust enabled", 10), "{}", srv.log());
+    let mut bob = srv.join("BOB");
+    wait_chat(&mut bob, "You are greeting number 2.", 5000);
+    bob.disconnect();
+    assert_eq!(srv.handle.stop(), Status::Stopped(0));
+}
