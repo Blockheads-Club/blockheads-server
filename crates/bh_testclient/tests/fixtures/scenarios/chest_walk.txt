@@ -1,0 +1,284 @@
+# scenario chest_walk: noise mask learned from 3 runs of the reference server (blockheads-ref:1.7.1)
+# regenerate: see README.md in this directory
+S	AUDITA.blockhead	true
+S	AUDITA.blockhead#2	true
+S	A_B_join.create.t24	1
+S	~A_B_join.rx.1e	1
+S	A_chest_open3.chest_inventory	s0:1047x1,s3:1048x4
+S	A_chest_open3.rx.32	1
+S	B_chest_open.chest_inventory	s3:1048x4
+S	B_chest_open.rx.32	1
+S	B_join.create.t10	1
+S	B_join.create.t11	1
+S	B_join.create.t24	2
+S	B_join.create.t45	1
+S	B_join.create.t46	1
+S	B_join.create.t59	1
+S	B_join.rx.01	1
+S	B_join.rx.06	1
+S	~B_join.rx.1e	2
+S	B_join.rx.23	1
+S	bh_create.create.t10	1
+S	bh_create.create.t11	1
+S	bh_create.create.t24	1
+S	bh_create.create.t45	1
+S	bh_create.create.t59	2
+S	bh_create.rx.01	1
+S	bh_create.rx.06	1
+S	~bh_create.rx.1e	1
+S	bh_create.rx.23	1
+S	chest.target	2669,553
+S	chest_open1.chest_inventory	none
+S	chest_open1.rx.32	1
+S	chest_open2.chest_inventory	s3:1048x6
+S	chest_open2.rx.32	1
+S	chest_place.create.t46	1
+S	reload.initial_blockheads	21
+S	reload_chest_open.chest_inventory	s0:1047x1,s3:1048x4
+S	reload_chest_open.rx.32	1
+S	reload_join.create.t10	1
+S	reload_join.create.t11	1
+S	reload_join.create.t24	1
+S	reload_join.create.t45	2
+S	reload_join.create.t46	1
+S	reload_join.create.t59	1
+S	reload_join.rx.01	1
+S	reload_join.rx.06	1
+S	~reload_join.rx.1e	1
+S	reload_join.rx.23	1
+S	save.file..adminlist.txt	1
+S	save.file..blacklist.txt	1
+S	save.file..modlist.txt	1
+S	save.file..whitelist.txt	1
+S	save.file..worldv2	1
+S	save.lightBlocks.main.H_N_N	34
+S	save.lightBlocks.main.H_allIndexes	2
+S	save.server_db.main.H_info	2
+S	save.server_db.main.recentPlayers	1
+S	save.world_db.dw.N_N/1	5
+S	save.world_db.dw.N_N/10	3
+S	save.world_db.dw.N_N/11	1
+S	save.world_db.dw.N_N/17	5
+S	save.world_db.dw.N_N/2	2
+S	save.world_db.dw.N_N/27	3
+S	save.world_db.dw.N_N/4	5
+S	save.world_db.dw.N_N/45	1
+S	save.world_db.dw.N_N/46	1
+S	save.world_db.dw.N_N/5	1
+S	save.world_db.dw.N_N/59	1
+S	save.world_db.dw.N_N/62	1
+S	save.world_db.dw.N_N/7	3
+S	save.world_db.dw.N_N/8	2
+S	save.world_db.dw.N_N/chest_N	1
+S	save.world_db.main.H_blockhead_N_inventory	1
+S	save.world_db.main.blockheads	1
+S	save.world_db.main.dynamicWorldv2	1
+S	save.world_db.main.worldv2	1
+S	walk.blocks	75
+S	walk.explored_blocks	33
+S	walk.explored_total	~11500
+S	walk_left.create.t10	50
+S	walk_left.create.t11	16
+S	walk_left.create.t17	48
+S	walk_left.create.t24	29
+S	walk_left.create.t27	45
+S	walk_left.create.t45	32
+S	walk_left.create.t46	16
+S	walk_left.create.t59	19
+S	walk_left.create.t62	20
+S	walk_left.end	2507,487
+S	walk_right.create.t10	15
+S	walk_right.create.t11	11
+S	walk_right.create.t17	9
+S	walk_right.create.t24	20
+S	walk_right.create.t27	20
+S	walk_right.create.t45	22
+S	walk_right.create.t46	11
+S	walk_right.create.t59	15
+S	walk_right.create.t62	20
+S	walk_right.end	2827,591
+S	workbench_place.create.t45	1
+S	~A_B_join.rx.04	1
+S	~A_B_join.rx.07	1
+S	~B_join.create.t13	2
+S	~B_join.create.t28	1
+S	~B_join.create.t63	1
+S	~B_join.rx.04	4
+S	~B_join.rx.07	10
+S	~B_join.rx.28	1
+S	~bh_create.create.t13	2
+S	~bh_create.create.t28	1
+S	~bh_create.create.t63	2
+S	~bh_create.rx.04	17
+S	~bh_create.rx.07	10
+S	~bh_create.rx.08	12
+S	~bh_create.rx.28	1
+S	~chest_place.rx.04	3
+S	~chest_place.rx.07	1
+S	~chest_place.rx.08	6
+S	~reload_join.create.t14	1
+S	~reload_join.create.t28	1
+S	~reload_join.create.t63	1
+S	~reload_join.rx.04	12
+S	~reload_join.rx.07	10
+S	~remove.rx.04	3
+S	~save.world_db.dw.N_N/28	3
+S	~save.world_db.dw.N_N/63	1
+S	~walk.block_tiles.1614	f1242ab6
+S	~walk.block_tiles.1615	67d99a30
+S	~walk.block_tiles.1616	3bf21363
+S	~walk.block_tiles.1617	28e66a40
+S	~walk.block_tiles.1618	182906db
+S	~walk.block_tiles.1741	1ae57657
+S	~walk.block_tiles.1742	07369f9d
+S	~walk.block_tiles.1743	5cf46b00
+S	~walk.block_tiles.1744	6534c2ef
+S	~walk.block_tiles.1745	ec1b9fcd
+S	~walk.block_tiles.1746	135e56b1
+S	~walk.block_tiles.1747	aae743cc
+S	~walk.block_tiles.1868	c2605168
+S	~walk.block_tiles.1869	4312adfc
+S	~walk.block_tiles.1870	e9e020dc
+S	~walk.block_tiles.1871	691dcf50
+S	~walk.block_tiles.1872	9f3ac131
+S	~walk.block_tiles.1873	f8834dae
+S	~walk.block_tiles.1874	eddd18ff
+S	~walk.block_tiles.1875	1595d45f
+S	~walk.block_tiles.1876	4137cbd9
+S	~walk.block_tiles.1996	8dae1630
+S	~walk.block_tiles.1997	3cc6c1ca
+S	~walk.block_tiles.1998	bab8ce37
+S	~walk.block_tiles.1999	975ba53a
+S	~walk.block_tiles.2000	5d86845a
+S	~walk.block_tiles.2001	0d7584e4
+S	~walk.block_tiles.2002	dd728a3d
+S	~walk.block_tiles.2003	12f64c53
+S	~walk.block_tiles.2004	82146ab1
+S	~walk.block_tiles.2005	4a2c2f2f
+S	~walk.block_tiles.2006	ab1f7a8e
+S	~walk.block_tiles.2007	a9e46412
+S	~walk.block_tiles.2130	cc831027
+S	~walk.block_tiles.2131	adc8363c
+S	~walk.block_tiles.2132	64609053
+S	~walk.block_tiles.2133	b8243df2
+S	~walk.block_tiles.2134	997b418b
+S	~walk.block_tiles.2135	64f14fd2
+S	~walk.block_tiles.2136	b4f805f6
+S	~walk.block_tiles.2137	32fef3da
+S	~walk.block_tiles.2255	72f11e78
+S	~walk.block_tiles.2259	302fb852
+S	~walk.block_tiles.2260	ca4fc22f
+S	~walk.block_tiles.2261	20be173c
+S	~walk.block_tiles.2263	d33ab7d1
+S	~walk.block_tiles.2264	15052d8b
+S	~walk.block_tiles.2265	77723b61
+S	~walk.block_tiles.2266	4975d7b7
+S	~walk.block_tiles.2385	72f11e78
+S	~walk.block_tiles.2386	72f11e78
+S	~walk.block_tiles.2387	72f11e78
+S	~walk.block_tiles.2388	72f11e78
+S	~walk.block_tiles.2391	c9798d62
+S	~walk.block_tiles.2392	deb666ff
+S	~walk.block_tiles.2393	82c391dd
+S	~walk.block_tiles.2394	8d6c4e26
+S	~walk.block_tiles.2517	72f11e78
+S	~walk.block_tiles.2518	72f11e78
+S	~walk.block_tiles.2519	72f11e78
+S	~walk.block_tiles.2520	72f11e78
+S	~walk.block_tiles.2521	7297c503
+S	~walk.light_block.1743	52dfc0a5
+S	~walk.light_block.1744	789258a2
+S	~walk.light_block.1745	06af9412
+S	~walk.light_block.1870	66ce3492
+S	~walk.light_block.1871	ea7a355d
+S	~walk.light_block.1872	47c585e8
+S	~walk.light_block.1873	7b9febbf
+S	~walk.light_block.1874	df66bf89
+S	~walk.light_block.1998	6ec7bca6
+S	~walk.light_block.1999	54a75e2c
+S	~walk.light_block.2001	8a6f4093
+S	~walk.light_block.2002	e82d107e
+S	~walk.light_block.2003	6630f677
+S	~walk.light_block.2004	5272338e
+S	~walk.light_block.2005	be1e6b78
+S	~walk.light_block.2128	fe731c48
+S	~walk.light_block.2129	8066c50e
+S	~walk.light_block.2130	e8a5accd
+S	~walk.light_block.2131	6ae32992
+S	~walk.light_block.2132	73e1827e
+S	~walk.light_block.2133	f137bf3c
+S	~walk.light_block.2134	57db8081
+S	~walk.light_block.2259	f63c5980
+S	~walk.light_block.2261	89cb6589
+S	~walk.light_block.2262	d8543939
+S	~walk.light_block.2263	9e6515c4
+S	~walk.light_block.2388	151b8a7b
+S	~walk.light_block.2389	fee0ee44
+S	~walk.light_block.2390	db531fa2
+S	~walk_left.create.t28	31
+S	~walk_left.create.t63	19
+S	~walk_right.create.t28	11
+S	~walk_right.create.t63	15
+S	~workbench_place.create.t14	1
+S	~workbench_place.rx.07	2
+V	save.world_db.blocks.N_N
+V	walk.light_blocks
+V	~workbench_place.rx.1e
+V	~workbench_use.rx.1e
+V	~A_B_join.rx.08
+V	~A_after_B_close.rx.08
+V	~A_chest_close3.rx.08
+V	~A_chest_open3.rx.08
+V	~A_while_B_open.rx.08
+V	~B_chest_close.rx.08
+V	~B_chest_open.rx.08
+V	~B_join.rx.08
+V	~chest_close1.rx.08
+V	~chest_open1.rx.08
+V	~chest_open2.rx.08
+V	~chest_put.rx.08
+V	~chest_take_close.rx.08
+V	~fill.rx.04
+V	~fill.rx.08
+V	~reload_chest_open.rx.08
+V	~reload_join.create.t13
+V	~reload_join.rx.08
+V	~remove.rx.08
+V	~save.world_db.dw.N_N/13
+V	~save.world_db.dw.N_N/14
+V	~save.world_db.dw.N_N/25
+V	~walk.block_tiles.2124
+V	~walk.block_tiles.2125
+V	~walk.block_tiles.2126
+V	~walk.block_tiles.2127
+V	~walk.block_tiles.2128
+V	~walk.block_tiles.2129
+V	~walk.block_tiles.2256
+V	~walk.block_tiles.2257
+V	~walk.block_tiles.2258
+V	~walk.block_tiles.2262
+V	~walk.block_tiles.2389
+V	~walk.block_tiles.2390
+V	~walk.block_tiles.2522
+V	~walk.light_block.2260
+V	~walk.light_block.2264
+V	~walk.light_block.2391
+V	~walk.light_block.2392
+V	~walk_left.create.t13
+V	~walk_left.create.t14
+V	~walk_left.create.t25
+V	~walk_left.rx.04
+V	~walk_left.rx.07
+V	~walk_left.rx.08
+V	~walk_left.rx.28
+V	~walk_right.create.t13
+V	~walk_right.create.t14
+V	~walk_right.create.t25
+V	~walk_right.rx.04
+V	~walk_right.rx.07
+V	~walk_right.rx.08
+V	~walk_right.rx.28
+V	~workbench_place.rx.04
+V	~workbench_place.rx.08
+V	~workbench_use.rx.04
+V	~workbench_use.rx.08

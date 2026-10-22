@@ -1,0 +1,126 @@
+# scenario paint_sign: noise mask learned from 3 runs of the reference server (blockheads-ref:1.7.1)
+# regenerate: see README.md in this directory
+S	PAINTA.blockhead	true
+S	PAINTA.blockhead#2	true
+S	bed.created	true
+S	chest.created	true
+S	door.created	true
+S	join.create.t10	1
+S	join.create.t11	1
+S	join.create.t24	1
+S	join.create.t45	1
+S	join.create.t59	2
+S	join.rx.01	1
+S	join.rx.06	1
+S	~join.rx.1e	1
+S	join.rx.23	1
+S	paint.bed.block_resends	0
+S	paint.bed.object_paint	3000
+S	paint.bed.tile_kind	type=2 contents=48 fg=0
+S	paint.bed.tile_paint	00000000000000000000
+S	paint.chest.block_resends	0
+S	paint.chest.object_paint	3000
+S	paint.chest.tile_kind	type=2 contents=48 fg=0
+S	paint.chest.tile_paint	00000000000000000000
+S	paint.door.block_resends	1
+S	paint.door.object_paint	
+S	paint.door.tile_kind	type=6 contents=0 fg=0
+S	paint.door.tile_paint	00300000000000000000
+S	paint.ground.tile_kind	type=27 contents=0 fg=0
+S	paint.painting.object_paint	
+S	paint.painting.tile_kind	type=2 contents=0 fg=0
+S	paint.sign.object_paint	3000
+S	paint.sign.tile_kind	type=2 contents=0 fg=48
+S	paint.sign.tile_paint	00000000000000000000
+S	painting.created	false
+S	placed.create.t20	1
+S	placed.create.t23	1
+S	placed.create.t46	1
+S	placed.create.t47	1
+S	placed.create.t52	1
+S	placed.remove.t52	1
+S	reload.bed.2687,558.paint	3000
+S	reload.bed.count	1
+S	reload.chest.2666,553.paint	3000
+S	reload.chest.count	1
+S	reload.create.t10	1
+S	reload.create.t11	1
+S	reload.create.t20	1
+S	reload.create.t23	1
+S	reload.create.t24	1
+S	reload.create.t45	1
+S	reload.create.t46	1
+S	reload.create.t47	1
+S	reload.create.t59	1
+S	reload.door.count	1
+S	reload.painting.count	0
+S	reload.rx.01	1
+S	reload.rx.06	1
+S	~reload.rx.1e	1
+S	reload.rx.23	1
+S	reload.sign.2681,557.paint	0000
+S	reload.sign.2681,557.text	Edited by the script
+S	reload.sign.count	1
+S	save.file..adminlist.txt	1
+S	save.file..blacklist.txt	1
+S	save.file..modlist.txt	1
+S	save.file..testImage.png	1
+S	save.file..whitelist.txt	1
+S	save.file..worldv2	1
+S	save.lightBlocks.main.H_N_N	2
+S	save.lightBlocks.main.H_allIndexes	1
+S	save.server_db.main.H_info	1
+S	save.server_db.main.recentPlayers	1
+S	save.world_db.blocks.N_N	83
+S	save.world_db.dw.N_N/1	2
+S	save.world_db.dw.N_N/10	1
+S	save.world_db.dw.N_N/11	1
+S	save.world_db.dw.N_N/20	1
+S	save.world_db.dw.N_N/23	1
+S	save.world_db.dw.N_N/4	1
+S	save.world_db.dw.N_N/45	1
+S	save.world_db.dw.N_N/46	1
+S	save.world_db.dw.N_N/47	1
+S	save.world_db.dw.N_N/52	1
+S	save.world_db.dw.N_N/59	1
+S	save.world_db.dw.N_N/7	1
+S	save.world_db.dw.N_N/chest_N	1
+S	save.world_db.main.H_blockhead_N_inventory	1
+S	save.world_db.main.blockheads	1
+S	save.world_db.main.dynamicWorldv2	1
+S	save.world_db.main.worldv2	1
+S	sign.created	true
+S	sign.edit_echo	Edited by the script
+S	~spots	[(2666, 553), (2681, 557), (2687, 558), (2693, 560), (2696, 561)]
+S	~join.create.t13	2
+S	~join.create.t28	1
+S	~join.create.t63	2
+S	~join.rx.04	18
+S	~join.rx.07	10
+S	~join.rx.08	12
+S	~join.rx.28	1
+S	~placed.create.t14	1
+S	~placed.rx.07	6
+S	~placed.rx.09	1
+S	~reload.create.t28	1
+S	~reload.create.t63	1
+S	~save.world_db.dw.N_N/14	1
+S	~save.world_db.dw.N_N/28	1
+S	~save.world_db.dw.N_N/63	1
+V	paint.ground.block_resends
+V	paint.ground.tile_paint
+V	paint.painting.block_resends
+V	paint.painting.tile_paint
+V	paint.sign.block_resends
+V	~painted.rx.04
+V	~painted.rx.08
+V	~placed.rx.04
+V	~placed.rx.08
+V	~reload.create.t13
+V	~reload.create.t14
+V	~reload.rx.04
+V	~reload.rx.07
+V	~reload.rx.08
+V	~save.world_db.dw.N_N/13
+V	~sign_edit.rx.04
+V	~sign_edit.rx.08

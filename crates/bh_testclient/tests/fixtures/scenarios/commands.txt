@@ -1,0 +1,195 @@
+# scenario commands: noise mask learned from 3 runs of the reference server (blockheads-ref:1.7.1)
+# regenerate: see README.md in this directory
+S	admin./admin helper	helper has been added to the adminlist
+S	admin./ban cmdm	cmdm has been added to the blacklist
+S	admin./ban someone	someone has been added to the blacklist
+S	admin./ban-no-device other	other has been added to the blacklist
+S	admin./clear	
+S	admin./clear-blacklist	Blacklist cleared.
+S	admin./clear-modlist	Modlist cleared.
+S	admin./clear-whitelist	Whitelist cleared.
+S	admin./debug-log	server version:#.#.# connectedClients:# memory usage: total:#.# MB resident:#.# MB share:#.# MB loaded macro blocks:# free macro blocks:#  AppleTree:# PineTree:# FlaxPlant:# SunflowerPlant:# Dodo:# Donkey:# SnowSurfaceBlock:# Workbench:# total objects:#  local blockheads:# netBlockheads:# netBlockheadsWithDisconnectedClients:#  
+S	admin./help	 /HELP - display this message. /PLAYERS - list currently active players. /KICK player_name - kicks player_name, but they will still be allowed to reconnect. /BAN player_name_or_ip - adds player_name_or_ip to the blacklist, ban's that user's device from reconnecting with a different name, and kicks anyone who is no longer authorized. /BAN-NO-DEVICE player_name_or_ip - works the same as the ban command, but doesn't ban the player's device. /UNBAN player_name_or_ip - removes player_name_or_ip from the blacklist. /WHITELIST player_name_or_ip - adds player_name_or_ip to the whitelist, and kicks anyone who is no longer authorized. /UNWHITELIST player_name_or_ip - removes player_name_or_ip from the whitelist, and kicks anyone who is no longer authorized. /LIST-BLACKLIST lists the # most recent players on the blacklist. /LIST-WHITELIST lists the # most recent players on the whitelist. /CLEAR - clears the chat. /LIST-MODLIST - (admin only) lists the # most recent players on the modlist. /LIST-ADMINLIST - (admin only) lists the # most recent players on the adminlist. /PVP-ON - (admin only) enables PVP (Player vs. Player) so players can directly hurt each other. /PVP-OFF - (admin only) disables PVP (Player vs. Player) so players cannot directly hurt each other  /LOAD-LISTS - (admin only) reloads the blacklist.txt, modlist.txt and adminlist.txt files, and kicks anyone who is no longer authorized. /MOD player_name - (admin only) adds player_name to the modlist, allowing them to issue some server commands via chat. /UNMOD player_name - (admin only) removes player_name from the modlist. /ADMIN player_name - (admin only) adds player_name to the adminlist, allowing them to issue server commands via chat. /UNADMIN player_name - (admin only) removes player_name from the adminlist. /CLEAR-BLACKLIST - (admin only) removes all names from the blacklist. /CLEAR-WHITELIST - (admin only) removes all names from the whitelist. /CLEAR-MODLIST - (admin only) removes all names from the modlist. /CLEAR-ADMINLIST - (admin only) removes all names from the adminlist. /REPAIR - (admin only) toggles repair mode, which clears the contents of glitched tiles  /RESET-OWNER player_name - (admin only) allows anyone to connect as player_name, and whoever does will take ownership and control of that username including that user's blockheads, and be able to log in with it from then on. 
+S	admin./help#2	
+S	admin./kick cmdb	/help | /players | /ban x | /unban x | /admin x | /kick cmda | /list-blacklist
+S	admin./list-adminlist	Adminlist: cmda, , 
+S	admin./list-adminlist#2	Adminlist: helper, cmda, , 
+S	admin./list-blacklist	Blacklist: 
+S	admin./list-blacklist#2	Blacklist: other, someone, 
+S	admin./list-modlist	Modlist: cmdm, , 
+S	admin./list-modlist#2	Modlist: modder, cmdm, , 
+S	admin./list-whitelist	Whitelist: 
+S	admin./list-whitelist#2	Whitelist: cmdm, cmdb, cmda, friend, , 
+S	admin./load-lists	Reloaded lists.
+S	admin./mod modder	modder has been added to the modlist
+S	admin./notacommand	
+S	admin./players	There are # players connected: CMDA | #.#.#.# | #aab#d#e#d#c#e#c#ed#bef#b CMDM | #.#.#.# | db#cd#c#d#a#b#bcb#df#cdd#f# CMDB | #.#.#.# | #a#f#d#a#e#f#e#a#fb#
+S	admin./pvp-off	PVP is now disabled.
+S	admin./pvp-on	PVP is now enabled.
+S	admin./remove-owner	
+S	admin./remove-password	
+S	admin./remove-password#2	
+S	admin./repair	Repair mode is now enabled. Tapping any non-solid tile will now remove any contents within. Tapping a solid block will remove it, unless it is an un-mined block. Disable repair mode by typing /repair again. Use with care!
+S	admin./reset-owner somebody	SOMEBODY has already been reset.
+S	admin./reset-owner somebody#2	SOMEBODY has already been reset.
+S	admin./set-credit 5	
+S	admin./set-owner bigboss	
+S	admin./set-password secret	
+S	admin./set-privacy bogus	
+S	admin./set-privacy searchable	
+S	admin./unadmin cmda	cmda has been removed from the adminlist
+S	admin./unadmin helper	helper has been removed from the adminlist
+S	admin./unban nobody	nobody was not on the blacklist
+S	admin./unban someone	someone has been removed from the blacklist
+S	admin./unmod modder	modder has been removed from the modlist
+S	admin./unwhitelist friend	friend has been removed from the whitelist
+S	admin./whitelist CMDA	cmda has been added to the whitelist
+S	admin./whitelist CMDB	cmdb has been added to the whitelist
+S	admin./whitelist cmdm	cmdm has been added to the whitelist
+S	admin./whitelist friend	friend has been added to the whitelist
+S	admin.file.adminlist.txt	cmda
+S	admin.file.blacklist.txt	
+S	admin.file.modlist.txt	
+S	admin.file.whitelist.txt	
+S	admin_rx.chat	SERVER:  /HELP - display this message. /PLAYERS - list currently active players. /KICK player_name - kicks player_name, but they will still be allowed to reconnect. /BAN player_name_or_ip - adds player_name_or_ip to the blacklist, ban's that user's device from reconnecting with a different name, and kicks anyone who is no longer authorized. /BAN-NO-DEVICE player_name_or_ip - works the same as the ban command, but doesn't ban the player's device. /UNBAN player_name_or_ip - removes player_name_or_ip from the blacklist. /WHITELIST player_name_or_ip - adds player_name_or_ip to the whitelist, and kicks anyone who is no longer authorized. /UNWHITELIST player_name_or_ip - removes player_name_or_ip from the whitelist, and kicks anyone who is no longer authorized. /LIST-BLACKLIST lists the # most recent players on the blacklist. /LIST-WHITELIST lists the # most recent players on the whitelist. /CLEAR - clears the chat. /LIST-MODLIST - (admin only) lists the # most recent players on the modlist. /LIST-ADMINLIST - (admin only) lists the # most recent players on the adminlist. /PVP-ON - (admin only) enables PVP (Player vs. Player) so players can directly hurt each other. /PVP-OFF - (admin only) disables PVP (Player vs. Player) so players cannot directly hurt each other  /LOAD-LISTS - (admin only) reloads the blacklist.txt, modlist.txt and adminlist.txt files, and kicks anyone who is no longer authorized. /MOD player_name - (admin only) adds player_name to the modlist, allowing them to issue some server commands via chat. /UNMOD player_name - (admin only) removes player_name from the modlist. /ADMIN player_name - (admin only) adds player_name to the adminlist, allowing them to issue server commands via chat. /UNADMIN player_name - (admin only) removes player_name from the adminlist. /CLEAR-BLACKLIST - (admin only) removes all names from the blacklist. /CLEAR-WHITELIST - (admin only) removes all names from the whitelist. /CLEAR-MODLIST - (admin only) removes all names from the modlist. /CLEAR-ADMINLIST - (admin only) removes all names from the adminlist. /REPAIR - (admin only) toggles repair mode, which clears the contents of glitched tiles  /RESET-OWNER player_name - (admin only) allows anyone to connect as player_name, and whoever does will take ownership and control of that username including that user's blockheads, and be able to log in with it from then on. 
+S	admin_rx.chat#10	SERVER: someone has been removed from the blacklist
+S	admin_rx.chat#11	SERVER: nobody was not on the blacklist
+S	admin_rx.chat#12	SERVER: friend has been added to the whitelist
+S	admin_rx.chat#13	SERVER: cmda has been added to the whitelist
+S	admin_rx.chat#14	SERVER: cmdb has been added to the whitelist
+S	admin_rx.chat#15	SERVER: cmdm has been added to the whitelist
+S	admin_rx.chat#16	SERVER: Whitelist: cmdm, cmdb, cmda, friend, , 
+S	admin_rx.chat#17	SERVER: friend has been removed from the whitelist
+S	admin_rx.chat#18	SERVER: helper has been added to the adminlist
+S	admin_rx.chat#19	SERVER: Adminlist: helper, cmda, , 
+S	admin_rx.chat#2	SERVER: There are # players connected: CMDA | #.#.#.# | #aab#d#e#d#c#e#c#ed#bef#b CMDM | #.#.#.# | db#cd#c#d#a#b#bcb#df#cdd#f# CMDB | #.#.#.# | #a#f#d#a#e#f#e#a#fb#
+S	admin_rx.chat#20	SERVER: helper has been removed from the adminlist
+S	admin_rx.chat#21	SERVER: modder has been added to the modlist
+S	admin_rx.chat#22	SERVER: Modlist: modder, cmdm, , 
+S	admin_rx.chat#23	SERVER: modder has been removed from the modlist
+S	admin_rx.chat#24	SERVER: PVP is now enabled.
+S	admin_rx.chat#25	SERVER: PVP is now disabled.
+S	admin_rx.chat#26	SERVER: SOMEBODY has already been reset.
+S	admin_rx.chat#27	SERVER: SOMEBODY has already been reset.
+S	admin_rx.chat#28	SERVER: Repair mode is now enabled. Tapping any non-solid tile will now remove any contents within. Tapping a solid block will remove it, unless it is an un-mined block. Disable repair mode by typing /repair again. Use with care!
+S	admin_rx.chat#29	SERVER: Reloaded lists.
+S	admin_rx.chat#3	SERVER: Blacklist: 
+S	admin_rx.chat#30	SERVER: server version:#.#.# connectedClients:# memory usage: total:#.# MB resident:#.# MB share:#.# MB loaded macro blocks:# free macro blocks:#  AppleTree:# PineTree:# FlaxPlant:# SunflowerPlant:# Dodo:# Donkey:# SnowSurfaceBlock:# Workbench:# total objects:#  local blockheads:# netBlockheads:# netBlockheadsWithDisconnectedClients:#  
+S	admin_rx.chat#31	SERVER: Blacklist cleared.
+S	admin_rx.chat#32	SERVER: Whitelist cleared.
+S	admin_rx.chat#33	SERVER: Modlist cleared.
+S	admin_rx.chat#34	CMDM: /help
+S	admin_rx.chat#35	CMDM: /players
+S	admin_rx.chat#36	CMDM: /ban x
+S	admin_rx.chat#37	CMDM: /unban x
+S	admin_rx.chat#38	CMDM: /admin x
+S	admin_rx.chat#39	CMDM: /kick cmda
+S	admin_rx.chat#4	SERVER: Whitelist: 
+S	admin_rx.chat#40	CMDM: /list-blacklist
+S	admin_rx.chat#41	SERVER: cmdm has been added to the blacklist
+S	admin_rx.chat#42	SERVER: cmda has been removed from the adminlist
+S	admin_rx.chat#5	SERVER: Adminlist: cmda, , 
+S	admin_rx.chat#6	SERVER: Modlist: cmdm, , 
+S	admin_rx.chat#7	SERVER: someone has been added to the blacklist
+S	admin_rx.chat#8	SERVER: other has been added to the blacklist
+S	admin_rx.chat#9	SERVER: Blacklist: other, someone, 
+S	~admin_rx.rx.1e	1
+S	admin_rx.rx.24	42
+S	admin_rx.rx.2b	1
+S	admin_rx.rx.2d	2
+S	admin_rx.rx.47	1
+S	admin_rx.rx.4a	1
+S	ban.cmdm_disconnected	true
+S	ban.rejoin	Some(Rejected { reason: 6 })
+S	console./admin helper	SERVER: helper has been added to the adminlist
+S	console./ban someone	SERVER: someone has been added to the blacklist
+S	console./ban-no-device other	SERVER: other has been added to the blacklist
+S	console./clear	
+S	console./clear-blacklist	SERVER: Blacklist cleared.
+S	console./clear-modlist	SERVER: Modlist cleared.
+S	console./clear-whitelist	SERVER: Whitelist cleared.
+S	console./debug-log	SERVER: server version:#.#.# | connectedClients:# | memory usage: total:#.# MB resident:#.# MB share:#.# MB | loaded macro blocks:# | free macro blocks:# | total objects:# | local blockheads:# | netBlockheads:# | netBlockheadsWithDisconnectedClients:#
+S	console./help	SERVER:  | /HELP - display this message. | /PLAYERS - list currently active players. | /KICK player_name - kicks player_name, but they will still be allowed to reconnect. | /BAN player_name_or_ip - adds player_name_or_ip to the blacklist, ban's that user's device from reconnecting with a different name, and kicks anyone who is no longer authorized. | /BAN-NO-DEVICE player_name_or_ip - works the same as the ban command, but doesn't ban the player's device. | /UNBAN player_name_or_ip - removes player_name_or_ip from the blacklist. | /WHITELIST player_name_or_ip - adds player_name_or_ip to the whitelist, and kicks anyone who is no longer authorized. | /UNWHITELIST player_name_or_ip - removes player_name_or_ip from the whitelist, and kicks anyone who is no longer authorized. | /LIST-BLACKLIST lists the # most recent players on the blacklist. | /LIST-WHITELIST lists the # most recent players on the whitelist. | /CLEAR - clears the chat. | /LIST-MODLIST - (admin only) lists the # most recent players on the modlist. | /LIST-ADMINLIST - (admin only) lists the # most recent players on the adminlist. | /PVP-ON - (admin only) enables PVP (Player vs. Player) so players can directly hurt each other. | /PVP-OFF - (admin only) disables PVP (Player vs. Player) so players cannot directly hurt each other  | /LOAD-LISTS - (admin only) reloads the blacklist.txt, modlist.txt and adminlist.txt files, and kicks anyone who is no longer authorized. | /MOD player_name - (admin only) adds player_name to the modlist, allowing them to issue some server commands via chat. | /UNMOD player_name - (admin only) removes player_name from the modlist. | /ADMIN player_name - (admin only) adds player_name to the adminlist, allowing them to issue server commands via chat. | /UNADMIN player_name - (admin only) removes player_name from the adminlist. | /CLEAR-BLACKLIST - (admin only) removes all names from the blacklist. | /CLEAR-WHITELIST - (admin only) removes all names from the whitelist. | /CLEAR-MODLIST - (admin only) removes all names from the modlist. | /CLEAR-ADMINLIST - (admin only) removes all names from the adminlist. | /REPAIR - (admin only) toggles repair mode, which clears the contents of glitched tiles  | /RESET-OWNER player_name - (admin only) allows anyone to connect as player_name, and whoever does will take ownership and control of that username including that user's blockheads, and be able to log in with it from then on.
+S	console./list-adminlist	SERVER: Adminlist:
+S	console./list-adminlist#2	SERVER: Adminlist: | helper, , 
+S	console./list-blacklist	SERVER: Blacklist:
+S	console./list-blacklist#2	SERVER: Blacklist: | other, someone, 
+S	console./list-modlist	SERVER: Modlist:
+S	console./list-modlist#2	SERVER: Modlist: | modder, , 
+S	console./list-whitelist	SERVER: Whitelist:
+S	console./list-whitelist#2	SERVER: Whitelist: | cmdm, cmdb, cmda, friend, , 
+S	console./load-lists	SERVER: Reloaded lists.
+S	console./mod modder	SERVER: modder has been added to the modlist
+S	console./notacommand	
+S	console./players	SERVER: No players currently connected.
+S	console./pvp-off	SERVER: PVP is now disabled.
+S	console./pvp-on	SERVER: PVP was already enabled.
+S	console./remove-owner	
+S	console./remove-password	SERVER: Password removed.
+S	console./remove-password#2	SERVER: There was already no password set.
+S	console./reset-owner somebody	SERVER: SOMEBODY will be re-assigned to the next user who connects.
+S	console./reset-owner somebody#2	SERVER: SOMEBODY has already been reset.
+S	console./set-credit 5	
+S	console./set-owner bigboss	
+S	console./set-password secret	SERVER: Password set.
+S	console./set-privacy bogus	
+S	console./set-privacy searchable	SERVER: Privacy setting changed to searchable.
+S	console./stop	SERVER: Adminlist cleared. | Exiting World.
+S	console./unadmin helper	SERVER: helper has been removed from the adminlist
+S	console./unban nobody	SERVER: nobody was not on the blacklist
+S	console./unban someone	SERVER: someone has been removed from the blacklist
+S	console./unmod modder	SERVER: modder has been removed from the modlist
+S	console./unwhitelist friend	SERVER: friend has been removed from the whitelist
+S	console./whitelist CMDA	SERVER: cmda has been added to the whitelist
+S	console./whitelist CMDB	SERVER: cmdb has been added to the whitelist
+S	console./whitelist cmdm	SERVER: cmdm has been added to the whitelist
+S	console./whitelist friend	SERVER: friend has been added to the whitelist
+S	console.file.adminlist.txt	
+S	console.file.blacklist.txt	
+S	console.file.modlist.txt	
+S	console.file.whitelist.txt	
+S	end.file.adminlist.txt	
+S	end.file.blacklist.txt	cmdm \udid-CMDM
+S	end.file.modlist.txt	
+S	end.file.whitelist.txt	
+S	kick.cmdb_disconnected	true
+S	mod./admin x	
+S	mod./ban x	
+S	mod./help	
+S	mod./kick cmda	
+S	mod./list-blacklist	
+S	mod./players	
+S	mod./unban x	
+S	plain./ban cmda	
+S	plain./help	
+S	plain./kick cmda	
+S	plain./players	
+S	~plain_rx.rx.1e	2
+S	plain_rx.rx.26	3
+S	salt.join	connect failed
+S	save.file..adminlist.txt	1
+S	save.file..blacklist.txt	1
+S	save.file..modlist.txt	1
+S	save.file..resetList.plist	1
+S	save.file..whitelist.txt	1
+S	save.file..worldv2	1
+S	save.lightBlocks.main.H_N_N	3
+S	save.lightBlocks.main.H_allIndexes	3
+S	save.server_db.main.H_info	3
+S	save.server_db.main.recentPlayers	1
+S	save.world_db.blocks.N_N	78
+S	save.world_db.dw.N_N/1	2
+S	save.world_db.dw.N_N/10	1
+S	save.world_db.dw.N_N/11	1
+S	save.world_db.dw.N_N/4	1
+S	save.world_db.dw.N_N/45	1
+S	save.world_db.main.blockheads	1
+S	save.world_db.main.dynamicWorldv2	1
+S	save.world_db.main.worldv2	1
+S	server.exited	true
+S	stop.running	false
+S	~console_failed./repair	io error: Broken pipe (os error #)
+S	~console_failed./stop	io error: Broken pipe (os error #)
+S	~save.world_db.dw.N_N/13	3
+S	~save.world_db.dw.N_N/14	1
+S	~save.world_db.dw.N_N/28	1

@@ -57,11 +57,28 @@ fn run_on(h: &mut dyn ServerHandle, script: &str) -> (Vec<TraceEvent>, Option<i3
 }
 
 fn parity(tag: &str, script: &str) {
+    parity_with(tag, script, server_args());
+}
+
+/// The sample world of the built-in scripts: width 1 (their block indices go up to 16383).
+fn builtin_args() -> Vec<String> {
+    let mut a = server_args();
+    a[5] = "1".into(); // --world_width 1, same seed
+    a
+}
+
+/// A built-in `bh_client` scenario (scenario.rs) under the same strict trace parity.
+fn builtin(name: &str) {
+    let script = bh_testclient::scenario::builtin_script(name).unwrap_or_else(|| panic!("no builtin {}", name));
+    parity_with(&format!("builtin-{}", name), script, builtin_args());
+}
+
+fn parity_with(tag: &str, script: &str, args: Vec<String>) {
     if !parity_enabled() {
         eprintln!("SKIP: {} (BH_PARITY=1 + docker required)", tag);
         return;
     }
-    let spec = |t: &str| RunSpec { tag: format!("{}-{}", tag, t), args: server_args(), ..Default::default() };
+    let spec = |t: &str| RunSpec { tag: format!("{}-{}", tag, t), args: args.clone(), ..Default::default() };
     let mut r1 = RefServer::start(&spec("r1")).unwrap();
     let (t1, c1) = run_on(&mut r1, script);
     drop(r1);
@@ -121,4 +138,25 @@ fn session_save_after() {
     }
     let rep = diff_saves(&saves[0], &saves[1], &SaveDiffOptions::parity_default()).unwrap();
     assert!(rep.is_clean(), "{}", rep.render(80));
+}
+
+#[test]
+fn builtin_block_requests() {
+    builtin("block_requests");
+}
+#[test]
+fn builtin_fill_remove() {
+    builtin("fill_remove");
+}
+#[test]
+fn builtin_chat_relay() {
+    builtin("chat_relay");
+}
+#[test]
+fn builtin_blockhead_create() {
+    builtin("blockhead_create");
+}
+#[test]
+fn builtin_heartbeat() {
+    builtin("heartbeat");
 }

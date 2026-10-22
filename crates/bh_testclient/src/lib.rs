@@ -4,6 +4,7 @@
 
 pub mod client;
 pub mod decode;
+pub mod gameplay;
 pub mod harness;
 pub mod scenario;
 pub mod session;

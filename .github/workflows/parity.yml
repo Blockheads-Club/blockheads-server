@@ -1,0 +1,113 @@
+name: Parity
+
+# The full differential suite against the original 1.7.1 server. The reference environment (Dockerfile + original
+# binary) is private and never part of this repository: it is checked out from the private repository named by the
+# repository variable REFENV_REPO (owner/name, the reference environment at REFENV_PATH inside it, default the
+# root) with the secret REFENV_TOKEN (read access). Without them the job only reports that it was skipped.
+#
+# Normal CI runs the docker-free variants (`tests/scenarios_ours.rs`, fixtures under
+# crates/bh_testclient/tests/fixtures/scenarios).
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      tests:
+        description: "cargo test filter (empty = everything)"
+        required: false
+        default: ""
+      ref_runs:
+        description: "reference runs per scenario (noise mask)"
+        required: false
+        default: "2"
+
+concurrency:
+  group: parity-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  differential:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - name: Reference environment available?
+        id: refenv
+        env:
+          REPO: ${{ vars.REFENV_REPO }}
+          TOKEN: ${{ secrets.REFENV_TOKEN }}
+        run: |
+          if [ -n "$REPO" ] && [ -n "$TOKEN" ]; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::REFENV_REPO / REFENV_TOKEN not configured: differential suite skipped"
+          fi
+      - uses: actions/checkout@v4
+        if: steps.refenv.outputs.ok == 'true'
+      - uses: actions/checkout@v4
+        if: steps.refenv.outputs.ok == 'true'
+        with:
+          repository: ${{ vars.REFENV_REPO }}
+          token: ${{ secrets.REFENV_TOKEN }}
+          path: .refenv-src
+      - name: Build the reference image
+        if: steps.refenv.outputs.ok == 'true'
+        run: |
+          dir=".refenv-src/${{ vars.REFENV_PATH }}"
+          docker build -t blockheads-ref:1.7.1 "$dir"
+          echo "BH_REFENV=$(realpath "$dir")" >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.refenv.outputs.ok == 'true'
+      - uses: Swatinem/rust-cache@v2
+        if: steps.refenv.outputs.ok == 'true'
+      - name: Build our server
+        if: steps.refenv.outputs.ok == 'true'
+        run: |
+          cargo build --release -p blockheads_server
+          echo "BH_SERVER_BIN=$PWD/target/release/blockheads_server" >> "$GITHUB_ENV"
+      - name: Differential suite
+        if: steps.refenv.outputs.ok == 'true'
+        env:
+          BH_PARITY: "1"
+          BH_DIFF_OUT: ${{ github.workspace }}/parity-out
+          BH_DIFF_REF_RUNS: ${{ inputs.ref_runs || '2' }}
+          TESTS: ${{ inputs.tests }}
+        run: |
+          mkdir -p "$BH_DIFF_OUT"
+          set -o pipefail
+          cargo test --no-fail-fast -p bh_testclient \
+            --test diff_gameplay --test parity_session --test gameplay_regressions \
+            -- --nocapture $TESTS 2>&1 | tee "$BH_DIFF_OUT/test.log"
+      - name: Summary
+        if: always() && steps.refenv.outputs.ok == 'true'
+        run: |
+          {
+            echo '### Differential scenarios'
+            for r in parity-out/*/report.txt; do
+              [ -f "$r" ] || continue
+              echo "#### $(basename "$(dirname "$r")")"
+              echo '```'
+              grep -E '^(==|HARD|hard differences)' "$r" | head -60
+              echo '```'
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+      # Observations, traces, logs and reports only: saves and data dirs stay on the runner.
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.refenv.outputs.ok == 'true'
+        with:
+          name: parity-out
+          path: |
+            parity-out/**/report.txt
+            parity-out/**/obs.txt
+            parity-out/**/*.log
+            parity-out/**/trace_*.jsonl
+            parity-out/**/save_diff_full.txt
+          retention-days: 14

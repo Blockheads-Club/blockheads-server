@@ -1,0 +1,47 @@
+# scenario rules_welcome: noise mask learned from 3 runs of the reference server (blockheads-ref:1.7.1)
+# regenerate: see README.md in this directory
+S	admin_daynight.log	Custom rule named "day/night cycle" changed by RULESA
+S	admin_daynight.other_0x42	faster
+S	admin_daynight.sender_0x42	0
+S	admin_health.log	Custom rule named "health" changed by RULESA
+S	admin_health.other_0x42	easy
+S	admin_health.sender_0x42	0
+S	after_admin_set.0x36	welcome=Hello from the admin rules=2 health=<none> daynight=<none>
+S	after_plain_set.0x36	welcome=<none> rules=2 health=<none> daynight=<none>
+S	after_rules.0x36	welcome=Hello from the admin rules=4 health=easy daynight=faster
+S	b_rx.rx.01	1
+S	b_rx.rx.06	1
+S	~b_rx.rx.1e	3
+S	b_rx.rx.23	1
+S	b_rx.rx.36	3
+S	b_rx.rx.42	2
+S	initial.0x36	welcome=<none> rules=2 health=<none> daynight=<none>
+S	plain_health.log	
+S	plain_health.other_0x42	
+S	plain_health.sender_0x42	0
+S	reload.0x36	welcome=Hello from the admin rules=4 health=easy daynight=faster
+S	reload.summary.welcome	Hello from the admin
+S	rules_heartbeat.0x17	1
+S	rules_heartbeat.disconnected	false
+S	save.file..adminlist.txt	1
+S	save.file..blacklist.txt	1
+S	save.file..modlist.txt	1
+S	save.file..whitelist.txt	1
+S	save.file..worldv2	1
+S	save.lightBlocks.main.H_N_N	3
+S	save.lightBlocks.main.H_allIndexes	3
+S	save.server_db.main.H_info	3
+S	save.server_db.main.recentPlayers	1
+S	save.world_db.blocks.N_N	78
+S	save.world_db.dw.N_N/1	2
+S	save.world_db.dw.N_N/10	1
+S	save.world_db.dw.N_N/11	1
+S	save.world_db.dw.N_N/4	1
+S	save.world_db.dw.N_N/45	1
+S	save.world_db.main.blockheads	1
+S	save.world_db.main.dynamicWorldv2	1
+S	save.world_db.main.worldv2	1
+S	summary.welcome	<none>
+S	summary_c.welcome	Hello from the admin
+S	~save.world_db.dw.N_N/13	2
+S	~save.world_db.dw.N_N/28	1

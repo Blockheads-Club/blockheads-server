@@ -1,0 +1,85 @@
+# scenario trade: noise mask learned from 3 runs of the reference server (blockheads-ref:1.7.1)
+# regenerate: see README.md in this directory
+S	TRADEA.blockhead	true
+S	TRADEA.blockhead#2	true
+S	join.create.t10	1
+S	join.create.t11	1
+S	join.create.t24	1
+S	join.create.t45	1
+S	join.create.t59	2
+S	join.rx.01	1
+S	join.rx.06	1
+S	~join.rx.1e	1
+S	join.rx.23	1
+S	placed.create.t48	1
+S	placed.create.t50	1
+S	~placed.rx.1e	1
+S	placed.rx.2f	3
+S	reload.create.t10	1
+S	reload.create.t11	1
+S	reload.create.t24	1
+S	reload.create.t45	1
+S	reload.create.t48	1
+S	reload.create.t50	1
+S	reload.create.t59	1
+S	reload.rx.01	1
+S	reload.rx.06	1
+S	~reload.rx.1e	1
+S	reload.rx.23	1
+S	reload.rx.2f	1
+S	reload.trade_portals	1
+S	reload.trading_post	coins=10 tier=2 sell=empty(1 slots)
+S	reload.tx.sender	21=0.999000,298=0.999000
+S	save.file..adminlist.txt	1
+S	save.file..blacklist.txt	1
+S	save.file..modlist.txt	1
+S	save.file..whitelist.txt	1
+S	save.file..worldv2	1
+S	save.lightBlocks.main.H_N_N	3
+S	save.lightBlocks.main.H_allIndexes	2
+S	save.server_db.main.H_info	2
+S	save.server_db.main.recentPlayers	1
+S	save.world_db.blocks.N_N	83
+S	save.world_db.dw.N_N/1	2
+S	save.world_db.dw.N_N/10	1
+S	save.world_db.dw.N_N/11	1
+S	save.world_db.dw.N_N/4	1
+S	save.world_db.dw.N_N/45	1
+S	save.world_db.dw.N_N/48	1
+S	save.world_db.dw.N_N/50	1
+S	save.world_db.dw.N_N/59	1
+S	save.world_db.dw.N_N/7	1
+S	save.world_db.main.H_blockhead_N_inventory	1
+S	save.world_db.main.blockheads	1
+S	save.world_db.main.dynamicWorldv2	1
+S	save.world_db.main.worldv2	1
+S	~spots	[(2666, 553), (2681, 557)]
+S	trade_portal.created	true
+S	trade_portal.level	0
+S	trading_post.created	true
+S	trading_post.echo	coins=10 tier=2
+S	tx1.other0	21=1.002003,298=0.995010
+S	tx1.sender	21=1.002003,298=0.995010
+S	tx2_empty.other0	
+S	tx2_empty.sender	
+S	tx3_by_b.other0	298=0.999000
+S	tx3_by_b.sender	298=0.999000
+S	~join.create.t13	2
+S	~join.create.t28	1
+S	~join.create.t63	2
+S	~join.rx.04	16
+S	~join.rx.07	10
+S	~join.rx.08	12
+S	~join.rx.28	1
+S	~placed.rx.04	4
+S	~placed.rx.07	2
+S	~placed.rx.08	35
+S	~reload.create.t13	2
+S	~reload.create.t28	1
+S	~reload.create.t63	1
+S	~reload.rx.04	12
+S	~reload.rx.07	10
+S	~save.world_db.dw.N_N/13	2
+S	~save.world_db.dw.N_N/28	1
+S	~save.world_db.dw.N_N/63	1
+V	~reload.rx.08
