@@ -52,6 +52,8 @@ pub struct Identity {
     pub game_center_id: Option<String>,
     pub photo: Option<Vec<u8>>,
     pub plist_dialect: PlistDialect,
+    /// `bhcModLoader` `(proto, acceptedHash hex)` of a modded client (0xBC protocol), `None` for vanilla.
+    pub mod_loader: Option<(i64, String)>,
 }
 
 impl Identity {
@@ -67,6 +69,7 @@ impl Identity {
             game_center_id: None,
             photo: None,
             plist_dialect: PlistDialect::Apple,
+            mod_loader: None,
         }
     }
     pub fn udid(mut self, u: &str) -> Self {
@@ -95,6 +98,10 @@ impl Identity {
     }
     pub fn photo(mut self, v: Vec<u8>) -> Self {
         self.photo = Some(v);
+        self
+    }
+    pub fn mod_loader(mut self, proto: i64, accepted_hash: &str) -> Self {
+        self.mod_loader = Some((proto, accepted_hash.to_string()));
         self
     }
     pub fn dialect(mut self, d: PlistDialect) -> Self {
@@ -133,6 +140,16 @@ impl Identity {
                 if let Some(p) = &self.photo {
                     kv("photo", format!("<data>{}</data>", base64::engine::general_purpose::STANDARD.encode(p)));
                 }
+                if let Some((proto, hash)) = &self.mod_loader {
+                    kv(
+                        "bhcModLoader",
+                        format!(
+                            "<dict><key>acceptedHash</key><string>{}</string><key>proto</key><integer>{}</integer></dict>",
+                            xml_escape(hash),
+                            proto
+                        ),
+                    );
+                }
                 s.push_str("</dict></plist>");
                 let mut v = vec![t::CLIENT_PLAYER_INFORMATION];
                 v.extend_from_slice(s.as_bytes());
@@ -157,6 +174,12 @@ impl Identity {
                 }
                 if let Some(p) = &self.photo {
                     m.insert("photo".into(), PV::data(p.clone()));
+                }
+                if let Some((proto, hash)) = &self.mod_loader {
+                    let mut d: GsDict<String, PV> = GsDict::new();
+                    d.insert("acceptedHash".into(), PV::string(hash.clone()));
+                    d.insert("proto".into(), PV::int(*proto));
+                    m.insert("bhcModLoader".into(), PV::dict(d));
                 }
                 messages::client_player_information(&PV::dict(m))
             }

@@ -1,0 +1,19 @@
+schema = 1
+id = "chan-echo"
+version = "0.1.0"
+name = { en = "Channel echo" }
+description = { en = "Test mod: echoes channel messages between a server mod and its client half." }
+authors = ["Blockheads Club"]
+license = "MIT OR Apache-2.0"
+api = "^0.2"
+
+[sides]
+server = true
+client = true
+
+[entry]
+server = { runtime = "lua", path = "server/main.luau" }
+client = { runtime = "lua", path = "client/main.luau" }
+
+[permissions]
+channels = true
