@@ -189,6 +189,18 @@ pub fn mods_dir() -> PathBuf {
     }
 }
 
+/// Factor applied to the mod host's time budgets (soft, hard, per-step), from `BLOCKHEADS_MODS_BUDGET_SCALE`.
+/// The budgets are wall-clock limits, so a starved or instrumented process (CI, coverage builds, a shared test
+/// machine) can trip them with perfectly healthy mods; test setups raise the scale. Unset, empty, unparsable or
+/// zero: 1, the production budgets.
+pub fn budget_scale() -> u32 {
+    parse_scale(std::env::var("BLOCKHEADS_MODS_BUDGET_SCALE").ok().as_deref())
+}
+
+fn parse_scale(v: Option<&str>) -> u32 {
+    v.and_then(|s| s.trim().parse::<u32>().ok()).filter(|n| *n > 0).unwrap_or(1)
+}
+
 /// Loads the mods for the world `save_id` and installs the host if any mod loaded. Without the `mods` feature,
 /// with `ModsConfig.disabled`, or without a mods directory this does nothing at all.
 pub fn start(save_id: Option<&str>, server: &Rc<BHServer>) {
@@ -228,6 +240,24 @@ mod tests {
         assert!(mods_dir().ends_with("TheBlockheads/mods"), "{:?}", mods_dir());
         std::env::remove_var("BLOCKHEADS_MODS_DIR");
         assert!(mods_dir().ends_with("mods"));
+    }
+
+    #[test]
+    fn budget_scale_parsing() {
+        assert_eq!(parse_scale(None), 1);
+        assert_eq!(parse_scale(Some("")), 1);
+        assert_eq!(parse_scale(Some("x")), 1);
+        assert_eq!(parse_scale(Some("0")), 1);
+        assert_eq!(parse_scale(Some(" 20 ")), 20);
+        // Tests run single-threaded (.cargo/config.toml); put the configured value back afterwards.
+        let saved = std::env::var_os("BLOCKHEADS_MODS_BUDGET_SCALE");
+        std::env::set_var("BLOCKHEADS_MODS_BUDGET_SCALE", "7");
+        assert_eq!(budget_scale(), 7);
+        std::env::remove_var("BLOCKHEADS_MODS_BUDGET_SCALE");
+        assert_eq!(budget_scale(), 1);
+        if let Some(v) = saved {
+            std::env::set_var("BLOCKHEADS_MODS_BUDGET_SCALE", v);
+        }
     }
 
     #[test]

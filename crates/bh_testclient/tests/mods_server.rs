@@ -195,7 +195,7 @@ fn lua_mods_on_a_live_server() {
 
     // Storage survives a restart.
     let mut srv = start(&data, &w.id, 15401, cfg);
-    srv.wait_log("hello-lua enabled", 10);
+    assert!(srv.wait_log("hello-lua: hello-lua enabled", 10), "{}", srv.log());
     let mut carol = srv.join("CAROL");
     wait_chat(&mut carol, "You are greeting number 3.", 5000);
     carol.disconnect();

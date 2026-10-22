@@ -1,5 +1,8 @@
 [env]
 RUST_TEST_THREADS = "1"
+# The mod host's time budgets are wall-clock limits (25 ms hard per call); on a starved or coverage-instrumented
+# machine healthy mods trip them (on-enable then fails and the mod is disabled). Tests get 20x the budgets.
+BLOCKHEADS_MODS_BUDGET_SCALE = "20"
 # Luau (mods) is C++: link the static C++ runtime on Android so the app needs no libc++_shared.so
 # (the build script adds libc++abi, which libc++_static does not contain).
 CXXSTDLIB_armv7_linux_androideabi = "c++_static"

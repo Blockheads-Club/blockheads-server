@@ -397,6 +397,10 @@ impl ModHooks for ServerMods {
 /// Loads the mods in `dir` for world `save_id`. `None` when no mod loaded.
 pub(super) fn load(dir: &Path, save_id: Option<&str>, server: &Rc<BHServer>) -> Option<Rc<dyn ModHooks>> {
     let mut opts = HostOptions::new(dir, Side::Server);
+    let scale = super::budget_scale();
+    opts.budgets.soft *= scale;
+    opts.budgets.hard *= scale;
+    opts.budgets.step *= scale;
     // WASM components; compiled code is cached in `<mods>/.cache` (hidden, so discovery skips it).
     let wasm = WasmConfig { cache_dir: Some(dir.join(".cache")), ..WasmConfig::default() };
     if let Ok(rt) = WasmRuntime::new(wasm) {
