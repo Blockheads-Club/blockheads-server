@@ -163,7 +163,8 @@ pub fn run_our_trace(
     if let Some(c) = virtual_clock_unix {
         env.push(("BH_VIRTUAL_CLOCK".into(), c.to_string()));
     }
-    let mut srv = OurServer::start(&RunSpec { tag: "rngours".into(), args: args.to_vec(), data_dir: None, env })?;
+    let mut srv =
+        OurServer::start(&RunSpec { tag: "rngours".into(), args: args.to_vec(), data_dir: None, env, console: false })?;
     let end = Instant::now() + Duration::from_secs(600);
     loop {
         let lines = std::fs::read(out).map(|b| b.iter().filter(|c| **c == b'\n').count() as u64).unwrap_or(0);

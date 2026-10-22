@@ -30,6 +30,10 @@ pub trait ServerHandle {
     fn stop_sigint(&mut self, grace: Duration) -> Result<Option<i32>>;
     /// Data root (the reference's `DATA_DIR`, our `HOME/GNUstep`).
     fn data_dir(&self) -> PathBuf;
+    /// Type a line into the server console (needs `RunSpec::console`).
+    fn send_console(&mut self, _line: &str) -> Result<()> {
+        Err(HarnessError::Usage(format!("{}: no console (RunSpec::console not set)", self.name())))
+    }
     /// Do not delete the data dir when the handle is dropped; returns its path.
     fn keep_data(&mut self) -> PathBuf;
 }
@@ -43,7 +47,13 @@ pub struct RunSpec {
     pub data_dir: Option<PathBuf>,
     /// extra env for OUR server; ignored for the reference
     pub env: Vec<(String, String)>,
+    /// keep the server's stdin open for [`ServerHandle::send_console`] (the reference then runs `docker run -i`
+    /// directly instead of `run_ref.sh`, which attaches no stdin)
+    pub console: bool,
 }
+
+/// Docker image of the reference server.
+pub const REF_IMAGE: &str = "blockheads-ref:1.7.1";
 
 static COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -129,6 +139,7 @@ struct Proc {
     docker: bool,
     exit: Option<Option<i32>>,
     own_log: bool,
+    stdin: Option<std::process::ChildStdin>,
 }
 
 fn status_code(s: std::process::ExitStatus) -> Option<i32> {
@@ -281,6 +292,14 @@ impl Proc {
             let _ = std::fs::remove_file(&self.log_path);
         }
     }
+    fn send_console(&mut self, line: &str) -> Result<()> {
+        use std::io::Write;
+        let name = self.name.clone();
+        let w = self.stdin.as_mut().ok_or_else(|| HarnessError::Usage(format!("{}: no console", name)))?;
+        w.write_all(format!("{}\n", line).as_bytes())?;
+        w.flush()?;
+        Ok(())
+    }
     fn keep_data(&mut self) -> PathBuf {
         if let Some(t) = self.tmp.take() {
             let p = t.keep();
@@ -325,6 +344,9 @@ macro_rules! delegate_handle {
             fn keep_data(&mut self) -> PathBuf {
                 self.p.keep_data()
             }
+            fn send_console(&mut self, line: &str) -> Result<()> {
+                self.p.send_console(line)
+            }
         }
         impl Drop for $t {
             fn drop(&mut self) {
@@ -358,19 +380,32 @@ fn start_docker(script: &str, prefix: &str, spec: &RunSpec, gdb: bool) -> Result
         None => PathBuf::from(format!("{}.log", data.display())),
     };
     let log = File::create(&log_path)?;
-    let mut cmd = Command::new(refenv_dir().join(script));
+    let mut cmd = if spec.console && !gdb {
+        // what run_ref.sh does, plus -i so that the console can be typed into
+        let mut c = Command::new("docker");
+        c.args(["run", "--rm", "--init", "-i", "--name", &name, "--network", "host"])
+            .arg("--user")
+            .arg(format!("{}:{}", unsafe { libc::getuid() }, unsafe { libc::getgid() }))
+            .args(["-e", "HOME=/home/bh", "-v"])
+            .arg(format!("{}:/home/bh/GNUstep", data.display()))
+            .arg(REF_IMAGE);
+        c
+    } else {
+        Command::new(refenv_dir().join(script))
+    };
     cmd.args(with_defaults(&spec.args, port))
         .env("DATA_DIR", &data)
         .env("NAME", &name)
         .env("PORT", port.to_string())
-        .stdin(Stdio::null())
+        .stdin(if spec.console { Stdio::piped() } else { Stdio::null() })
         .stdout(Stdio::from(log.try_clone()?))
         .stderr(Stdio::from(log));
     if gdb {
         cmd.env("GDBPORT", free_udp_port().to_string());
     }
-    let child = cmd.spawn().map_err(|e| HarnessError::Docker(format!("spawn {}: {}", script, e)))?;
-    Ok(Proc { name, port, data, tmp, child: Some(child), log_path, docker: true, exit: None, own_log: true })
+    let mut child = cmd.spawn().map_err(|e| HarnessError::Docker(format!("spawn {}: {}", script, e)))?;
+    let stdin = child.stdin.take();
+    Ok(Proc { name, port, data, tmp, child: Some(child), log_path, docker: true, exit: None, own_log: true, stdin })
 }
 
 /// The reference server in a container.
@@ -413,7 +448,18 @@ impl RefDebugServer {
             .spawn()
             .map_err(|e| HarnessError::Docker(format!("spawn run_ref_debug.sh: {}", e)))?;
         let mut s = RefDebugServer {
-            p: Proc { name, port, data, tmp, child: Some(child), log_path, docker: true, exit: None, own_log: true },
+            p: Proc {
+                name,
+                port,
+                data,
+                tmp,
+                child: Some(child),
+                log_path,
+                docker: true,
+                exit: None,
+                own_log: true,
+                stdin: None,
+            },
             gdb_port,
         };
         s.p.wait_for_log("Listening on port", Duration::from_secs(30))?;
@@ -449,7 +495,7 @@ impl OurServer {
         let mut cmd = Command::new(our_server_bin()?);
         cmd.args(with_defaults(&spec.args, port))
             .env("HOME", home.path())
-            .stdin(Stdio::null())
+            .stdin(if spec.console { Stdio::piped() } else { Stdio::null() })
             .stdout(Stdio::from(log.try_clone()?))
             .stderr(Stdio::from(log));
         for (k, v) in &spec.env {
@@ -464,7 +510,8 @@ impl OurServer {
                 Ok(())
             });
         }
-        let child = cmd.spawn()?;
+        let mut child = cmd.spawn()?;
+        let stdin = child.stdin.take();
         let data = spec.data_dir.clone().unwrap_or_else(|| gnustep.clone());
         Ok(OurServer {
             p: Proc {
@@ -477,6 +524,7 @@ impl OurServer {
                 docker: false,
                 exit: None,
                 own_log: false,
+                stdin,
             },
             _home: Some(home),
         })
@@ -520,6 +568,9 @@ impl ServerHandle for OurServer {
     }
     fn keep_data(&mut self) -> PathBuf {
         self.p_keep()
+    }
+    fn send_console(&mut self, line: &str) -> Result<()> {
+        self.p.send_console(line)
     }
 }
 impl Drop for OurServer {

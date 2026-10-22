@@ -232,6 +232,7 @@ fn time_seed() {
         args: a,
         data_dir: None,
         env: vec![("BH_VIRTUAL_CLOCK".into(), seed.to_string())],
+        console: false,
     })
     .unwrap();
     run_to_stable(&mut o, ID, load_timeout("1/16")).unwrap();

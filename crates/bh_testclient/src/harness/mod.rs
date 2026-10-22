@@ -2,6 +2,7 @@
 //!
 
 pub mod gdb_rng;
+pub mod inproc;
 pub mod normalize;
 pub mod refenv;
 pub mod save_diff;
