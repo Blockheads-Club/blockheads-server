@@ -614,7 +614,7 @@ mod tests {
         made: RefCell<Vec<(i32, Option<i32>)>>,
         log: Rc<RefCell<Vec<String>>>,
     }
-    impl DwHooks for Hk {
+    impl crate::dynworld::state::DwHooksStub for Hk {
         fn construct_from_net_data(&self, t: i32, ito: Option<i32>, net: &[u8]) -> Option<ObjRef> {
             self.made.borrow_mut().push((t, ito));
             let id = u64::from_le_bytes(net[0..8].try_into().unwrap());

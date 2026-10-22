@@ -155,7 +155,7 @@ mod tests {
     #[test]
     fn mute_and_ban_fan_out() {
         struct O(RefCell<Vec<String>>);
-        impl DwOpsHooks for O {
+        impl crate::dynworld::lookups::DwOpsHooksStub for O {
             fn painting_user_mute_changed(&self, p: &ObjRef, pid: &str) {
                 self.0.borrow_mut().push(format!("mute{}:{}", p.unique_id(), pid));
             }

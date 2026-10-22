@@ -249,14 +249,14 @@ mod tests {
     struct Ops {
         sent: RefCell<Vec<(Vec<u8>, Vec<String>, bool)>>,
     }
-    impl DwOpsHooks for Ops {
+    impl crate::dynworld::lookups::DwOpsHooksStub for Ops {
         fn server_send_network_data_to_peers_reliable(&self, data: Vec<u8>, peers: &[String], reliable: bool) {
             self.sent.borrow_mut().push((data, peers.to_vec(), reliable));
         }
     }
 
     struct Hk;
-    impl DwHooks for Hk {
+    impl crate::dynworld::state::DwHooksStub for Hk {
         fn blockhead_client_id(&self, b: &ObjRef) -> Option<String> {
             Some(format!("player{}", b.unique_id() % 10))
         }
@@ -331,7 +331,7 @@ mod tests {
     #[test]
     fn kick_stops_actions_for_matching_only() {
         struct O(RefCell<Vec<u64>>);
-        impl DwOpsHooks for O {
+        impl crate::dynworld::lookups::DwOpsHooksStub for O {
             fn blockhead_stop_all_actions(&self, bh: &ObjRef) {
                 self.0.borrow_mut().push(bh.unique_id());
             }

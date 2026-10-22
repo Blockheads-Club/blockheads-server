@@ -51,10 +51,11 @@ fn t_ok(t: i32) -> bool {
 // The seam
 // =====================================================================================================
 
+crate::hooks::hook_trait! {
 /// Every call `dynamic_world_ops` makes into classes / modules that are not part of `dynamic_world_core`.
 /// All methods have inert defaults (`None` / `false` / `0`): a partial integration overrides only what it needs.
 #[allow(unused_variables)]
-pub trait DwOpsHooks {
+pub trait DwOpsHooks, stub DwOpsHooksStub {
     // ---- constructors (each runs `initWithWorld:...` to completion including its own RNG draws) ----
     /// `trees::tree::new_tree_for_type(...)`: class table of (`None` = unknown type).
     fn new_tree(
@@ -270,6 +271,7 @@ pub trait DwOpsHooks {
         false
     }
     /// `CaveTroll -controlIsLocal`
+    #[provided]
     fn cave_troll_control_is_local(&self, troll: &ObjRef) -> bool {
         crate::objects::handle::downcast::<crate::npc::cave_troll::CaveTroll>(troll)
             .map_or(false, |t| t.control_is_local())
@@ -438,10 +440,11 @@ pub trait DwOpsHooks {
     ) {
     }
 }
+}
 
 /// The default hooks: every default method of [`DwOpsHooks`].
 pub struct NullOpsHooks;
-impl DwOpsHooks for NullOpsHooks {}
+impl DwOpsHooksStub for NullOpsHooks {}
 
 thread_local! {
     static OPS_HOOKS: RefCell<Rc<dyn DwOpsHooks>> = RefCell::new(Rc::new(NullOpsHooks));
@@ -1371,7 +1374,7 @@ mod tests {
     #[test]
     fn default_troll_control_hook_downcasts_and_rejects_non_trolls() {
         let o = mk(39, 1, p(0, 0));
-        assert!(!NullOpsHooks.cave_troll_control_is_local(&o));
+        assert!(!DwOpsHooks::cave_troll_control_is_local(&NullOpsHooks, &o));
     }
 
     fn p(x: i32, y: i32) -> IntPair {
@@ -1471,7 +1474,7 @@ mod tests {
     }
 
     struct DoorHk(u32);
-    impl crate::dynworld::state::DwHooks for DoorHk {
+    impl crate::dynworld::state::DwHooksStub for DoorHk {
         fn item_type(&self, _o: &ObjRef) -> i32 {
             self.0 as i32
         }

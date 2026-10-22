@@ -76,10 +76,11 @@ pub struct FreeBlockData {
     pub priority_blockhead: Option<ObjRef>,
 }
 
+crate::hooks::hook_trait! {
 /// Calls into modules that were empty skeletons when `blockhead_inventory` was written. All defaults are inert (or the
 /// spec-derived trivial value).
 #[allow(unused_variables)]
-pub trait InventoryHost {
+pub trait InventoryHost, stub InventoryHostStub {
     // ---------------- FreeBlock (physics_objects) ----------------
     /// Accessors of `FreeBlock`. `None` if `fb` is not a `FreeBlock`.
     fn free_block_data(&self, fb: &ObjRef) -> Option<FreeBlockData> {
@@ -95,6 +96,7 @@ pub trait InventoryHost {
     }
     /// `[world addSimulationEventOfType:SE_GOT forBlockhead:b extraData:freeBlock]`. The `extraData` is
     /// the FreeBlock itself, which `SimulationEventExtra` cannot carry, hence this dedicated call.
+    #[provided]
     fn add_simulation_event_got(&self, b: &ObjRef, fb: &ObjRef) {
         host().add_simulation_event_of_type_for_blockhead_extra_data(2, b, super::blockhead::SimulationEventExtra::None)
     }
@@ -121,6 +123,7 @@ pub trait InventoryHost {
     /// `-[Blockhead currentInteractionTypeForTile:atPos:pickupRejectedDueToInventoryFull:includeActions:faceIndex:allowProtectedActions:]`
     ///  = `interactionTypeForTile:...item:[self currentItem]...`. Returns an `InteractionType` raw value.
     #[allow(clippy::too_many_arguments)]
+    #[provided]
     fn current_interaction_type_for_tile_at_pos_pickup_rejected_due_to_inventory_full_include_actions_face_index_allow_protected_actions(
         &self,
         b: &Blockhead,
@@ -201,10 +204,11 @@ pub trait InventoryHost {
         0
     }
 }
+}
 
 /// The default inventory host: every method as defaulted.
 pub struct NullInventoryHost;
-impl InventoryHost for NullInventoryHost {}
+impl InventoryHostStub for NullInventoryHost {}
 
 thread_local! {
     static INV_HOST: RefCell<Rc<dyn InventoryHost>> = RefCell::new(Rc::new(NullInventoryHost));
@@ -1895,7 +1899,7 @@ mod tests {
         fbs: RefCell<Vec<Fb>>,
         sims: RefCell<Vec<i32>>,
     }
-    impl BlockheadHost for Rec {
+    impl crate::blockhead::blockhead::BlockheadHostStub for Rec {
         fn create_free_block_at_position_of_type_data_a_data_b_sub_items_dynamic_object_save_dict_hovers_play_sound_priority_blockhead(
             &self,
             pos: IntPair,
@@ -1933,7 +1937,7 @@ mod tests {
         fb: RefCell<Option<FreeBlockData>>,
         cannot_pickup: std::cell::Cell<u32>,
     }
-    impl InventoryHost for Ih {
+    impl InventoryHostStub for Ih {
         fn free_block_data(&self, _fb: &ObjRef) -> Option<FreeBlockData> {
             self.fb.borrow().clone()
         }

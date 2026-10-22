@@ -1945,7 +1945,7 @@ mod tests {
     struct Rec {
         log: Rc<RC<Vec<(IntPair, u32, u16, u16, bool)>>>,
     }
-    impl DwHooks for Rec {
+    impl crate::dynworld::state::DwHooksStub for Rec {
         fn freeblock_from_position(&self, init: FreeBlockInit<'_>) -> Option<ObjRef> {
             self.log.borrow_mut().push((init.position, init.item_type, init.data_a, init.data_b, init.hovers));
             None

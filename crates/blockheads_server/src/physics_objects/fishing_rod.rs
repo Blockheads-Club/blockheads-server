@@ -16,17 +16,19 @@ use crate::world::helpers::{tile_is_air, tile_is_solid, tile_is_water};
 use crate::world::state::World;
 use crate::world::tiles::tile_at_world_position_loaded;
 
+crate::hooks::hook_trait! {
 /// Seam to modules that did not exist when this one was written.
 /// "npc_passive"). The integrator installs the real adapter with [`set_fishing_host`]; the defaults do nothing.
-pub trait FishingHost {
+pub trait FishingHost, stub FishingHostStub {
     /// `-[Blockhead fishingRodCast:]` (a no-op for net players,). `vec` is the original unscaled swipe.
     fn blockhead_fishing_rod_cast(&self, _blockhead: &ObjRef, _vec: Vector2) {}
     /// `-[ClownFish die:]` with the fishing Blockhead as killer.
     fn clown_fish_die(&self, _fish: &ObjRef, _killer: Option<&ObjRef>) {}
 }
+}
 
 struct NullFishingHost;
-impl FishingHost for NullFishingHost {}
+impl FishingHostStub for NullFishingHost {}
 
 thread_local! {
     static HOST: RefCell<Rc<dyn FishingHost>> = RefCell::new(Rc::new(NullFishingHost));
@@ -518,7 +520,7 @@ mod tests {
     struct Rec {
         log: RefCell<Vec<String>>,
     }
-    impl FishingHost for Rec {
+    impl FishingHostStub for Rec {
         fn blockhead_fishing_rod_cast(&self, _b: &ObjRef, v: Vector2) {
             self.log.borrow_mut().push(format!("cast({},{})", v.x, v.y));
         }

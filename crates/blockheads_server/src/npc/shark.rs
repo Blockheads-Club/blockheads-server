@@ -2072,12 +2072,12 @@ mod spec_tests {
         kelp: Cell<bool>,
         dummy: ObjRef,
     }
-    impl NpcEnv for SpecEnv {
+    impl crate::npc::npc::NpcEnvStub for SpecEnv {
         fn tile_probe(&self, x: i32, y: i32) -> Option<NpcTileCopy> {
-            self.inner.tile_probe(x, y)
+            crate::npc::npc::NpcEnv::tile_probe(&*self.inner, x, y)
         }
         fn all_blockheads_including_net(&self) -> Vec<ObjRef> {
-            self.inner.all_blockheads_including_net()
+            crate::npc::npc::NpcEnv::all_blockheads_including_net(&*self.inner)
         }
         fn is_client(&self) -> bool {
             self.client.get()
@@ -2086,18 +2086,18 @@ mod spec_tests {
             self.temp.get()
         }
     }
-    impl PassiveEnv for SpecEnv {
+    impl crate::npc::egg::PassiveEnvStub for SpecEnv {
         fn tile_loaded(&self, x: i32, y: i32) -> Option<Tile> {
-            self.inner.tile_loaded(x, y)
+            crate::npc::egg::PassiveEnv::tile_loaded(&*self.inner, x, y)
         }
         fn tile_cached(&self, x: i32, y: i32) -> Option<Tile> {
-            self.inner.tile_cached(x, y)
+            crate::npc::egg::PassiveEnv::tile_cached(&*self.inner, x, y)
         }
         fn custom_rules(&self) -> CustomRules {
-            self.inner.custom_rules()
+            crate::npc::egg::PassiveEnv::custom_rules(&*self.inner)
         }
         fn add_simulation_event_damage(&self, b: &ObjRef, text: &str) {
-            self.inner.add_simulation_event_damage(b, text)
+            crate::npc::egg::PassiveEnv::add_simulation_event_damage(&*self.inner, b, text)
         }
         fn dw_load_npc_at_position(
             &self,
@@ -2111,7 +2111,7 @@ mod spec_tests {
             if !self.spawn_ok.get() {
                 return false;
             }
-            self.inner.dw_load_npc_at_position(pos, t, sd, adult, placed, c)
+            crate::npc::egg::PassiveEnv::dw_load_npc_at_position(&*self.inner, pos, t, sd, adult, placed, c)
         }
         #[allow(clippy::too_many_arguments)]
         fn dw_create_free_block(
@@ -2124,19 +2124,19 @@ mod spec_tests {
             play: i32,
             p: Option<&ObjRef>,
         ) {
-            self.inner.dw_create_free_block(pos, t, a, b, sd, play, p)
+            crate::npc::egg::PassiveEnv::dw_create_free_block(&*self.inner, pos, t, a, b, sd, play, p)
         }
         fn dw_plant_at_pos(&self, pos: IntPair) -> Option<ObjRef> {
-            self.inner.dw_plant_at_pos(pos)
+            crate::npc::egg::PassiveEnv::dw_plant_at_pos(&*self.inner, pos)
         }
         fn plant_available_food(&self, p: &ObjRef) -> f32 {
-            self.inner.plant_available_food(p)
+            crate::npc::egg::PassiveEnv::plant_available_food(&*self.inner, p)
         }
         fn plant_set_available_food(&self, p: &ObjRef, v: f32) {
-            self.inner.plant_set_available_food(p, v)
+            crate::npc::egg::PassiveEnv::plant_set_available_food(&*self.inner, p, v)
         }
         fn is_kelp_plant(&self, o: &ObjRef) -> bool {
-            self.kelp.get() && self.inner.is_kelp_plant(o)
+            self.kelp.get() && crate::npc::egg::PassiveEnv::is_kelp_plant(&*self.inner, o)
         }
         fn is_boat(&self, _o: &ObjRef) -> bool {
             self.boat.get()
@@ -2160,7 +2160,7 @@ mod spec_tests {
             if self.kill_on_damage.get() {
                 self.regen_uid.set(b.unique_id());
             }
-            self.inner.bh_suffer_damage(b, d, s, r)
+            crate::npc::egg::PassiveEnv::bh_suffer_damage(&*self.inner, b, d, s, r)
         }
         fn bh_stop_riding(&self, _b: &ObjRef) {
             self.stops.set(self.stops.get() + 1);

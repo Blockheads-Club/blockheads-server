@@ -92,12 +92,14 @@ pub fn class_is_kind_named(o: &ObjRef, name: &str) -> bool {
 
 // ------------------------------------------------------------------------------------------------ env seam
 
+crate::hooks::hook_trait! {
 /// Everything `npc_passive` needs from layers that are not part of it.
 /// Defaults: concrete `World` / `DynamicWorld` / `Blockhead` calls where those types exist, inert otherwise.
 #[allow(unused_variables)]
-pub trait PassiveEnv {
+pub trait PassiveEnv, stub PassiveEnvStub {
     // ---------------------------------------------------------------- concrete handles
     /// The concrete `World` (defaults to `NpcEnv::world`).
+    #[provided]
     fn world(&self) -> Option<Rc<World>> {
         npc_env().world()
     }
@@ -108,11 +110,13 @@ pub trait PassiveEnv {
 
     // ---------------------------------------------------------------- tiles (copies)
     /// `tileAtWorldPositionLoaded(x, y, world)` copied out (loads the block on demand).
+    #[provided]
     fn tile_loaded(&self, x: i32, y: i32) -> Option<Tile> {
         let w = self.world()?;
         crate::world::tiles::tile_at_world_position_loaded(x, y, &w).map(|t| t.get())
     }
     /// `tileAtWorldPosition(x, y, [world macroTiles], world)` copied out (never loads).
+    #[provided]
     fn tile_cached(&self, x: i32, y: i32) -> Option<Tile> {
         let w = self.world()?;
         crate::world::tiles::tile_at_world_position(x, y, &w.macro_tiles(), &w).map(|t| t.get())
@@ -120,19 +124,23 @@ pub trait PassiveEnv {
 
     // ---------------------------------------------------------------- World
     /// `[world expertMode]`
+    #[provided]
     fn expert_mode(&self) -> bool {
         self.world().map_or(false, |w| w.expert_mode())
     }
     /// `[world fastForward]`
+    #[provided]
     fn fast_forward(&self) -> bool {
         self.world().map_or(false, |w| w.fast_forward())
     }
     /// `[world customRules]` (zeros when there is no world).
+    #[provided]
     fn custom_rules(&self) -> CustomRules {
         self.world().map_or_else(CustomRules::default, |w| w.custom_rules())
     }
     /// `[world fillTile:atPos:withType:ITEM_DODO_EGG dataA:0 dataB:child placedByClient:nil saveDict:genes placedByBlockhead:nil
     /// placedByClientName:nil]` with the tile at `pos`. `genes` is `{genesDict: {breed: child}}`.
+    #[provided]
     fn fill_tile_dodo_egg(&self, pos: IntPair, data_b: u16, genes: &PlistDict) {
         if let Some(w) = self.world() {
             let tile = crate::world::tiles::tile_at_world_position_loaded(pos.x, pos.y, &w);
@@ -151,6 +159,7 @@ pub trait PassiveEnv {
         }
     }
     /// `[world addSimulationEventOfType:SE_DAMAGE forBlockhead:b extraData:text]`
+    #[provided]
     fn add_simulation_event_damage(&self, b: &ObjRef, text: &str) {
         if let Some(w) = self.world() {
             w.add_simulation_event_of_type_for_blockhead_extra_data(4, Some(b), SimulationEventExtra::Text(text));
@@ -159,6 +168,7 @@ pub trait PassiveEnv {
 
     // ---------------------------------------------------------------- DynamicWorld
     /// `loadNPCAtPosition:type:saveDict:isAdult:wasPlaced:placedByClient:`
+    #[provided]
     fn dw_load_npc_at_position(
         &self,
         pos: IntPair,
@@ -176,6 +186,7 @@ pub trait PassiveEnv {
         }
     }
     /// `createFreeBlockAtPosition:ofType:dataA:dataB:subItems:nil dynamicObjectSaveDict:save hovers:NO playSound:play priorityBlockhead:`
+    #[provided]
     fn dw_create_free_block(
         &self,
         pos: IntPair,
@@ -201,40 +212,49 @@ pub trait PassiveEnv {
         }
     }
     /// `npcExistsAtPos:ignoreNPC:`
+    #[provided]
     fn dw_npc_exists_at_pos(&self, pos: IntPair, ignore: &ObjRef) -> bool {
         self.dynamic_world().map_or(false, |dw| dw.npc_exists_at_pos_ignore_npc(pos, Some(ignore)))
     }
     /// `blockheadOccupiesTileAtPos:ignoreBlockhead:nil`
+    #[provided]
     fn dw_blockhead_occupies_tile(&self, pos: IntPair) -> bool {
         self.dynamic_world().map_or(false, |dw| dw.blockhead_occupies_tile_at_pos_ignore_blockhead(pos, None))
     }
     /// `npcCloseEnoughToBreedWithNPC:`
+    #[provided]
     fn dw_npc_close_enough_to_breed(&self, npc: &ObjRef) -> Option<ObjRef> {
         self.dynamic_world().and_then(|dw| dw.npc_close_enough_to_breed_with_npc(npc))
     }
     /// `treeAtPos:`
+    #[provided]
     fn dw_tree_at_pos(&self, pos: IntPair) -> Option<ObjRef> {
         self.dynamic_world().and_then(|dw| dw.tree_at_pos(pos))
     }
     /// `getPlantAtPos:`
+    #[provided]
     fn dw_plant_at_pos(&self, pos: IntPair) -> Option<ObjRef> {
         self.dynamic_world().and_then(|dw| dw.get_plant_at_pos(pos))
     }
     /// `loadedCountOfObjectsOfType:`
+    #[provided]
     fn dw_loaded_count(&self, object_type: i32) -> i32 {
         self.dynamic_world().map_or(0, |dw| dw.loaded_count_of_objects_of_type(object_type))
     }
     /// `tooManyNPCsToSpawnMoreNearPos:`
+    #[provided]
     fn dw_too_many_npcs(&self, pos: IntPair) -> bool {
         self.dynamic_world().map_or(false, |dw| dw.too_many_npcs_to_spawn_more_near_pos(pos))
     }
     /// `removeStandardObject:`
+    #[provided]
     fn dw_remove_standard_object(&self, o: &ObjRef) {
         if let Some(dw) = self.dynamic_world() {
             dw.remove_standard_object(Some(o));
         }
     }
     /// `activeBlockhead`
+    #[provided]
     fn dw_active_blockhead(&self) -> Option<ObjRef> {
         self.dynamic_world().and_then(|dw| dw.active_blockhead())
     }
@@ -251,20 +271,24 @@ pub trait PassiveEnv {
         0
     }
     /// `[o isKindOfClass:[AppleTree class]]`
+    #[provided]
     fn is_apple_tree(&self, o: &ObjRef) -> bool {
         class_is_kind_named(o, "AppleTree")
     }
     /// `[o isKindOfClass:[KelpPlant class]]`
+    #[provided]
     fn is_kelp_plant(&self, o: &ObjRef) -> bool {
         class_is_kind_named(o, "KelpPlant")
     }
     /// `[o isKindOfClass:[Boat class]]`
+    #[provided]
     fn is_boat(&self, o: &ObjRef) -> bool {
         class_is_kind_named(o, "Boat")
     }
 
     // ---------------------------------------------------------------- Blockhead (blockhead_core)
     /// `[b moving]`. Note: `hasJetPackEquipped` is not reachable from the concrete Blockhead yet.
+    #[provided]
     fn bh_moving(&self, b: &ObjRef) -> bool {
         match b.as_any().downcast_ref::<Blockhead>() {
             Some(bh) => {
@@ -278,6 +302,7 @@ pub trait PassiveEnv {
         }
     }
     /// `[b heldItemType]`. The non-replica branch needs `currentItem` of the blockhead_inventory layer.
+    #[provided]
     fn bh_held_item_type(&self, b: &ObjRef) -> i32 {
         match b.as_any().downcast_ref::<Blockhead>() {
             Some(bh) if b.is_net() => bh.bh.borrow().remote_interaction_item_type,
@@ -285,36 +310,44 @@ pub trait PassiveEnv {
         }
     }
     /// `[b paused]`
+    #[provided]
     fn bh_paused(&self, b: &ObjRef) -> bool {
         b.as_any().downcast_ref::<Blockhead>().map_or(false, |x| x.paused())
     }
     /// `[b regenerating]`
+    #[provided]
     fn bh_regenerating(&self, b: &ObjRef) -> bool {
         b.as_any().downcast_ref::<Blockhead>().map_or(false, |x| x.regenerating())
     }
     /// `[b onTradeMission]`
+    #[provided]
     fn bh_on_trade_mission(&self, b: &ObjRef) -> bool {
         b.as_any().downcast_ref::<Blockhead>().map_or(false, |x| x.on_trade_mission())
     }
     /// `[b shouldContinueSimulating]`
+    #[provided]
     fn bh_should_continue_simulating(&self, b: &ObjRef) -> bool {
         b.as_any().downcast_ref::<Blockhead>().map_or(false, |x| x.should_continue_simulating())
     }
     /// `[b rideObject]`
+    #[provided]
     fn bh_ride_object(&self, b: &ObjRef) -> Option<ObjRef> {
         b.as_any().downcast_ref::<Blockhead>().and_then(|x| x.bh.borrow().ride_object.clone())
     }
     /// `[b fishingRod]`
+    #[provided]
     fn bh_fishing_rod(&self, b: &ObjRef) -> Option<FishingRodRef> {
         b.as_any().downcast_ref::<Blockhead>().and_then(|x| x.bh.borrow().fishing_rod.clone())
     }
     /// `[b sufferDamage:dmg isSimulation:sim recoil:recoil]`
+    #[provided]
     fn bh_suffer_damage(&self, b: &ObjRef, dmg: f32, sim: bool, recoil: bool) {
         if let Some(x) = b.as_any().downcast_ref::<Blockhead>() {
             x.suffer_damage_is_simulation_recoil(dmg, sim, recoil);
         }
     }
     /// `[b stopRiding]` (re-enters `removeRider:` of the ridden object).
+    #[provided]
     fn bh_stop_riding(&self, b: &ObjRef) {
         npc_env().blockhead_stop_riding(b)
     }
@@ -339,9 +372,10 @@ pub trait PassiveEnv {
         None
     }
 }
+}
 
 struct DefaultPassiveEnv;
-impl PassiveEnv for DefaultPassiveEnv {}
+impl PassiveEnvStub for DefaultPassiveEnv {}
 
 thread_local! {
     static PENV: RefCell<Rc<dyn PassiveEnv>> = RefCell::new(Rc::new(DefaultPassiveEnv));
@@ -729,7 +763,7 @@ pub(crate) mod test_support {
             self.tiles.borrow_mut().insert((x, y), t);
         }
     }
-    impl crate::npc::npc::NpcEnv for TestPassiveEnv {
+    impl crate::npc::npc::NpcEnvStub for TestPassiveEnv {
         fn tile_probe(&self, x: i32, y: i32) -> Option<crate::npc::npc::NpcTileCopy> {
             self.tiles
                 .borrow()
@@ -743,7 +777,7 @@ pub(crate) mod test_support {
             self.server_clients.get()
         }
     }
-    impl PassiveEnv for TestPassiveEnv {
+    impl PassiveEnvStub for TestPassiveEnv {
         fn tile_loaded(&self, x: i32, y: i32) -> Option<Tile> {
             self.tiles.borrow().get(&(x, y)).copied()
         }

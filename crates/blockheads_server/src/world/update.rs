@@ -67,7 +67,7 @@ impl World {
         }
 
         // 2: path pump (always runs on the server: uiManager is nil)
-        self.update_path_pump();
+        self.update_path_pump(false);
 
         // 3
         self.update_idle_timer_disabled();
@@ -152,8 +152,10 @@ impl World {
         d.update_accurate_dt(dt, accurate_dt);
     }
 
-    /// Step 2 (a, b, c): request intake, creator pump, completion.
-    fn update_path_pump(&self) {
+    /// Step 2 (a, b, c): request intake, creator pump, completion. `catch_up` is the variant that follows
+    /// `[dynamicWorld simulate:]` in `-[World continueSimulate]`: after one `updatePath` it keeps pumping (up to 4
+    /// more times) while the path is in progress, saving and decommissioning blocks when more than 0x80 are used.
+    pub(crate) fn update_path_pump(&self, catch_up: bool) {
         let d = deps();
         let Some(pc) = d.path_creator() else { return };
 
@@ -193,6 +195,17 @@ impl World {
         // 2b
         if pc.in_progress() || pc.has_path() {
             pc.update_path();
+            if catch_up {
+                let mut sanity = 4;
+                while pc.in_progress() && !pc.has_path() && sanity > 0 {
+                    sanity -= 1;
+                    pc.update_path();
+                    if self.used_physical_blocks_len() > 0x80 {
+                        self.save_all();
+                        self.decommision_all_blocks_block_to_save_physcial_block(false);
+                    }
+                }
+            }
         } else {
             let next = PATH_QUEUE.with(|q| {
                 let mut q = q.borrow_mut();

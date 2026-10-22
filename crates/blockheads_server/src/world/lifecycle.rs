@@ -86,13 +86,14 @@ pub struct WorldInitArgs {
 // The seam
 // =====================================================================================================
 
+crate::hooks::hook_trait! {
 /// Every call world_core makes into classes that have no published API yet. All methods are inert by default
 /// (`false` / `None` / empty / no-op) so a `World` can be driven end to end without them (unit tests, bring-up).
 /// The method names are the selectors of the callee in snake_case, prefixed by the receiver. Receivers that the
 /// original messages through an ivar (`worldTileLoader`, `dynamicWorld`,...) are NOT passed: the hook owner holds
 /// them. World_core only calls a hook when the matching `World` ivar is `Some` (nil messaging otherwise).
 #[allow(unused_variables)]
-pub trait WorldCoreHooks {
+pub trait WorldCoreHooks, stub WorldCoreHooksStub {
     // ---------------------------------------------------------------- BHServer
     /// `-[BHServer sendNetworkData:toPeers:reliable:]`; `peers == None` is nil = all `connectedClients`.
     fn server_send_network_data_to_peers_reliable(&self, data: &[u8], peers: Option<&[String]>, reliable: bool) {}
@@ -451,10 +452,11 @@ pub trait WorldCoreHooks {
         None
     }
 }
+}
 
 /// The hooks used until [`set_core_hooks`] is called: every method inert.
 pub struct NullCoreHooks;
-impl WorldCoreHooks for NullCoreHooks {}
+impl WorldCoreHooksStub for NullCoreHooks {}
 
 thread_local! {
     static CORE_HOOKS: RefCell<Rc<dyn WorldCoreHooks>> = RefCell::new(Rc::new(NullCoreHooks));
@@ -1454,7 +1456,7 @@ pub(crate) mod testkit {
         }
     }
 
-    impl WorldCoreHooks for Rec {
+    impl WorldCoreHooksStub for Rec {
         fn server_send_network_data_to_peers_reliable(&self, data: &[u8], peers: Option<&[String]>, reliable: bool) {
             self.sends.borrow_mut().push((data.to_vec(), peers.map(|p| p.to_vec()), reliable));
         }

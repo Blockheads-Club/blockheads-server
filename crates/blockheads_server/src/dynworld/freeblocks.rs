@@ -234,7 +234,7 @@ mod tests {
         log: Rc<RefCell<Vec<String>>>,
         next: std::cell::Cell<u64>,
     }
-    impl DwHooks for Hk {
+    impl crate::dynworld::state::DwHooksStub for Hk {
         fn freeblock_from_position(&self, init: FreeBlockInit<'_>) -> Option<ObjRef> {
             self.next.set(self.next.get() + 1);
             let o: ObjRef = Obj::new(14, self.next.get(), self.log.clone());

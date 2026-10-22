@@ -172,7 +172,7 @@ mod tests {
     }
 
     struct Hk;
-    impl DwHooks for Hk {
+    impl crate::dynworld::state::DwHooksStub for Hk {
         fn blockhead_client_id(&self, _b: &ObjRef) -> Option<String> {
             Some("cl".into())
         }

@@ -9,6 +9,7 @@ pub mod dynworld;
 pub mod env;
 pub mod fmath;
 pub mod foundation;
+pub(crate) mod hooks;
 pub mod host;
 pub mod interaction;
 pub mod items;

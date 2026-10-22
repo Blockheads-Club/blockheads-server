@@ -51,6 +51,8 @@ pub struct HostConfig {
     pub owner_name: Option<String>,
     pub privacy: Option<String>,
     pub expert_mode: bool,
+    /// `--custom-rules <json>` (only with [`WorldSelect::New`]), e.g. `{"seed":"custom","custom_seed_value":"1"}`.
+    pub custom_rules_json: Option<String>,
     /// Console lines sent once, on the server thread, right after `World load complete.` and before any other
     /// console input is read (e.g. `/set-password ...`). Independent of any UI polling.
     pub on_ready_commands: Vec<String>,
@@ -67,6 +69,7 @@ impl Default for HostConfig {
             owner_name: None,
             privacy: None,
             expert_mode: false,
+            custom_rules_json: None,
             on_ready_commands: Vec::new(),
         }
     }
@@ -165,6 +168,7 @@ pub fn start(cfg: HostConfig, log: LogCallback) -> std::io::Result<ServerHandle>
             owner_name: cfg.owner_name.clone(),
             privacy: cfg.privacy.clone(),
             expert_mode: cfg.expert_mode,
+            custom_rules_json: cfg.custom_rules_json.clone(),
             ..InitParams::default()
         };
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {

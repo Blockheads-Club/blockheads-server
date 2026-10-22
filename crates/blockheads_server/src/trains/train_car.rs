@@ -1820,7 +1820,7 @@ mod world_tests {
     }
 
     struct Ops;
-    impl DwOpsHooks for Ops {
+    impl crate::dynworld::lookups::DwOpsHooksStub for Ops {
         fn new_rail(&self, dw: &Rc<DynamicWorld>, pos: IntPair, ty: i32, owned: bool) -> Option<ObjRef> {
             Rail::new(&dw.world.upgrade().unwrap(), dw, pos, None, ty, owned)
         }

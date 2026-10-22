@@ -239,15 +239,17 @@ pub struct NpcTileCopy {
     pub artificial_heat: i16,
 }
 
+crate::hooks::hook_trait! {
 /// Seam to the layers that were stubs when `npc_base` was written.
 /// Every method has a default; the integrator installs one implementation with [`set_npc_env`]. The tile /
 /// season / temperature methods have working defaults on top of [`NpcEnv::world`].
-pub trait NpcEnv {
+pub trait NpcEnv, stub NpcEnvStub {
     /// The concrete `World` (`None` in tests that do not need tiles).
     fn world(&self) -> Option<Rc<World>> {
         None
     }
     /// `tileAtWorldPositionLoaded(x, y, world)` copied out (loads the physical block on demand).
+    #[provided]
     fn tile_probe(&self, x: i32, y: i32) -> Option<NpcTileCopy> {
         let w = self.world()?;
         let t = crate::world::tiles::tile_at_world_position_loaded(x, y, &w)?.get();
@@ -259,6 +261,7 @@ pub trait NpcEnv {
         })
     }
     /// `seasonForWorldX(x, worldTime, world)`.
+    #[provided]
     fn season_for_world_x(&self, x: i32, t: f64) -> f32 {
         let w = self.world();
         crate::world::climate::season_for_world_x(x, t, w.as_deref())
@@ -272,6 +275,7 @@ pub trait NpcEnv {
         0.0
     }
     /// `currentTemperatureForTileAtWorldPos(tile, pos, season, dayNight, weather, world)`.
+    #[provided]
     fn current_temperature(&self, tile: &NpcTileCopy, pos: IntPair, season: f32, day: f32, weather: f32) -> f32 {
         let w = self.world();
         let mut t = Tile::default();
@@ -280,6 +284,7 @@ pub trait NpcEnv {
         crate::world::climate::current_temperature_for_tile_at_world_pos(&t, pos, season, day, weather, w.as_deref())
     }
     /// `tileContainsDoor(tileAtWorldPositionLoaded(x, y))` (NULL-safe).
+    #[provided]
     fn tile_contains_door(&self, x: i32, y: i32) -> bool {
         match self.world() {
             Some(w) => {
@@ -289,6 +294,7 @@ pub trait NpcEnv {
         }
     }
     /// `tileContainsDoor || tileContainsTrapDoor || tileContainsGate` of the tile at (x, y).
+    #[provided]
     fn tile_contains_door_like(&self, x: i32, y: i32) -> bool {
         match self.world() {
             Some(w) => {
@@ -307,6 +313,7 @@ pub trait NpcEnv {
         0
     }
     /// `[dynamicWorld localNetID]`; on the dedicated server `md5hex("server")`.
+    #[provided]
     fn local_net_id(&self) -> Option<String> {
         Some(SERVER_LOCAL_NET_ID.to_string())
     }
@@ -364,9 +371,10 @@ pub trait NpcEnv {
     /// `[blockhead setRidingObject:]`
     fn blockhead_set_riding_object(&self, _b: &ObjRef, _o: Option<&ObjRef>) {}
 }
+}
 
 struct NullEnv;
-impl NpcEnv for NullEnv {}
+impl NpcEnvStub for NullEnv {}
 
 thread_local! {
     static ENV: RefCell<Rc<dyn NpcEnv>> = RefCell::new(Rc::new(NullEnv));
@@ -2336,7 +2344,7 @@ mod tests {
             })
         }
     }
-    impl NpcEnv for TestEnv {
+    impl NpcEnvStub for TestEnv {
         fn server_clients_count(&self) -> usize {
             self.server_clients.get()
         }

@@ -99,11 +99,12 @@ pub static WORKBENCH_CLASS: ClassInfo = ClassInfo {
 // Host seam
 // =====================================================================================================
 
+crate::hooks::hook_trait! {
 /// Calls `Workbench` makes into the `Blockhead` and `DynamicWorld` classes that have no typed API at this layer.
 /// All methods are inert by default; the integrator implements the trait once and installs it with
 /// [`install_host`]. Selector names are given per method; `nil` receivers are the caller's business.
 #[allow(unused_variables)]
-pub trait WorkbenchHost {
+pub trait WorkbenchHost, stub WorkbenchHostStub {
     /// `-[DynamicWorld portalIsBeingRemovedAtPos:]`
     fn portal_is_being_removed_at_pos(&self, pos: IntPair) {}
     /// `-[DynamicWorld findAndSubtractAllPowerUpTo:forUser:]` (calls `subtract_electricty` on `user`).
@@ -141,6 +142,7 @@ pub trait WorkbenchHost {
     /// `-[Blockhead setInteractionWorkbench:]`
     fn bh_set_interaction_workbench(&self, bh: &ObjRef, wb: Option<&ObjRef>) {}
     /// `-[Blockhead setInteractionObject:]`
+    #[provided]
     fn bh_set_interaction_object(&self, bh: &ObjRef, o: Option<&ObjRef>) {
         if let Some(b) = bh.as_blockhead() {
             b.set_interaction_object(o);
@@ -167,10 +169,11 @@ pub trait WorkbenchHost {
     /// `-[Blockhead netInteractionObjectWasLoaded:]`
     fn bh_net_interaction_object_was_loaded(&self, bh: &ObjRef, wb: &ObjRef) {}
 }
+}
 
 /// All-inert host.
 pub struct NullHost;
-impl WorkbenchHost for NullHost {}
+impl WorkbenchHostStub for NullHost {}
 
 thread_local! {
     static HOST: RefCell<Rc<dyn WorkbenchHost>> = RefCell::new(Rc::new(NullHost));
@@ -2064,7 +2067,7 @@ pub(crate) mod testkit {
         pub log: RefCell<Vec<String>>,
         pub controlled: Cell<bool>,
     }
-    impl WorldOpsDeps for Deps {
+    impl crate::world::misc::WorldOpsDepsStub for Deps {
         fn create_free_block_at_position_of_type_data_a_data_b_sub_items_dynamic_object_save_dict_hovers_play_sound_priority_blockhead(
             &self,
             pos: IntPair,
@@ -2144,7 +2147,7 @@ pub(crate) mod testkit {
         pub coffee: Cell<bool>,
         pub adding_fuel: Cell<bool>,
     }
-    impl WorkbenchHost for Host {
+    impl WorkbenchHostStub for Host {
         fn portal_is_being_removed_at_pos(&self, pos: IntPair) {
             self.log.borrow_mut().push(format!("portalRemoved({},{})", pos.x, pos.y));
         }

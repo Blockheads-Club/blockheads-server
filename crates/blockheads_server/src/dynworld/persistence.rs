@@ -463,7 +463,7 @@ mod tests {
         list: RefCell<IndexSet>,
         exists: bool,
     }
-    impl DwOpsHooks for FoundOps {
+    impl crate::dynworld::lookups::DwOpsHooksStub for FoundOps {
         fn found_items_list_snapshot(&self, _c: &str) -> Option<IndexSet> {
             if self.exists {
                 Some(self.list.borrow().clone())
@@ -571,7 +571,7 @@ mod tests {
         fn notify_players_changed(&self) {}
     }
     struct Hk;
-    impl DwHooks for Hk {
+    impl crate::dynworld::state::DwHooksStub for Hk {
         fn blockhead_client_id(&self, b: &ObjRef) -> Option<String> {
             Some(format!("c{}", b.unique_id()))
         }
@@ -582,7 +582,7 @@ mod tests {
     struct SendOps {
         sent: RefCell<Vec<(Vec<u8>, Vec<String>)>>,
     }
-    impl DwOpsHooks for SendOps {
+    impl crate::dynworld::lookups::DwOpsHooksStub for SendOps {
         fn server_send_network_data_to_peers_reliable(&self, d: Vec<u8>, p: &[String], _r: bool) {
             self.sent.borrow_mut().push((d, p.to_vec()));
         }

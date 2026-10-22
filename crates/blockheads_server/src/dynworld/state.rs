@@ -132,11 +132,12 @@ pub struct FreeBlockInit<'a> {
     pub priority_blockhead: Option<&'a ObjRef>,
 }
 
+crate::hooks::hook_trait! {
 /// Every call this module makes into modules that are not part of `dynamic_world_core`. All methods have inert
 /// defaults so that a partial integration (or a unit-test mock) overrides only what it needs.
 ///  Note:.
 #[allow(unused_variables)]
-pub trait DwHooks {
+pub trait DwHooks, stub DwHooksStub {
     // ---- World (world_core / world_ops) ----
     /// `-[World savePhysicalBlockForMacroTile:sendReliably:dontSend:onlySaveIfClientsNeedIt:]`
     fn save_physical_block_for_macro_tile(
@@ -173,6 +174,7 @@ pub trait DwHooks {
     /// `-blockheadWillBeUnloaded:`
     fn blockhead_will_be_unloaded(&self, blockhead: &ObjRef) {}
     /// `-localNetID`: on the dedicated server the md5 persistent id of `"server"`.
+    #[provided]
     fn local_net_id(&self) -> String {
         "cf1e8c14e54505f60aa10ceb8d5d8ab3".to_string()
     }
@@ -373,10 +375,11 @@ pub trait DwHooks {
     /// `[bh die]`
     fn blockhead_die(&self, b: &ObjRef) {}
 }
+}
 
 /// The default hooks: every default method of [`DwHooks`].
 pub struct NullHooks;
-impl DwHooks for NullHooks {}
+impl DwHooksStub for NullHooks {}
 
 /// Arguments of [`DynamicWorld::new`].
 pub struct DynamicWorldInit {

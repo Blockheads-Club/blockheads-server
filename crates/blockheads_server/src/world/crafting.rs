@@ -295,7 +295,7 @@ mod tests {
         item: RefCell<crate::types::structs::CraftableItem>,
         wb_type: u32,
     }
-    impl WorldOpsDeps for CraftDeps {
+    impl crate::world::misc::WorldOpsDepsStub for CraftDeps {
         fn craftable_item(&self, _o: &ObjRef) -> crate::types::structs::CraftableItem {
             *self.item.borrow()
         }
@@ -320,7 +320,7 @@ mod tests {
             snd: i32,
             bh: Option<&ObjRef>,
         ) {
-            self.rec.create_free_block_at_position_of_type_data_a_data_b_sub_items_dynamic_object_save_dict_hovers_play_sound_priority_blockhead(
+            crate::world::misc::WorldOpsDeps::create_free_block_at_position_of_type_data_a_data_b_sub_items_dynamic_object_save_dict_hovers_play_sound_priority_blockhead(&*self.rec,
                 pos, t, a, b, s, sd, h, snd, bh,
             );
         }

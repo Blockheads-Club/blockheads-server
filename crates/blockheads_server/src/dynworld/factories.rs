@@ -1163,7 +1163,7 @@ mod tests {
             Rc::new(H { soil_ok: false, made: RefCell::new(vec![]), next_id: Cell::new(1000) })
         }
     }
-    impl DwOpsHooks for H {
+    impl crate::dynworld::lookups::DwOpsHooksStub for H {
         fn new_tree(
             &self,
             dw: &Rc<DynamicWorld>,
@@ -1344,7 +1344,7 @@ mod tests {
     struct T {
         moves: RefCell<Vec<(i32, u32, i32)>>,
     }
-    impl DwOpsHooks for T {
+    impl crate::dynworld::lookups::DwOpsHooksStub for T {
         fn new_chest(
             &self,
             dw: &Rc<DynamicWorld>,

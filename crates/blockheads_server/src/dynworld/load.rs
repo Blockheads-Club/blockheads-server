@@ -1734,7 +1734,7 @@ mod tests {
         log: Rc<RefCell<Vec<String>>>,
         next: std::cell::Cell<u64>,
     }
-    impl DwHooks for Rec {
+    impl crate::dynworld::state::DwHooksStub for Rec {
         fn freeblock_from_position(&self, init: FreeBlockInit<'_>) -> Option<ObjRef> {
             self.log
                 .borrow_mut()
@@ -2043,7 +2043,7 @@ mod population_tests {
         next: Cell<u64>,
         workbench: Cell<bool>,
     }
-    impl DwHooks for Spy {
+    impl crate::dynworld::state::DwHooksStub for Spy {
         fn freeblock_from_position(&self, init: FreeBlockInit<'_>) -> Option<ObjRef> {
             self.log.borrow_mut().push(format!("hat({},{},{})", init.item_type, init.position.x, init.position.y));
             self.next.set(self.next.get() + 1);

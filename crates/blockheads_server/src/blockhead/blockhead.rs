@@ -236,6 +236,27 @@ impl PathExtraData {
             _ => None,
         }
     }
+    /// The number entries as a plist dictionary (what a path request can carry through the path creator); object
+    /// entries are left out (see [`PathExtraData::with_objects_from`]).
+    pub fn to_plist(&self) -> PlistValue {
+        let mut d = crate::foundation::gsdict::GsDict::new();
+        for (k, v) in &self.entries {
+            if let ExtraValue::Int(i) = v {
+                d.insert(k.clone(), PlistValue::int(*i));
+            }
+        }
+        PlistValue::dict(d)
+    }
+    /// `self` plus the object entries of `other` that `self` lacks (the original passes one dictionary through the
+    /// path creator; the plist round trip of a path request keeps only its numbers).
+    pub fn with_objects_from(mut self, other: &PathExtraData) -> PathExtraData {
+        for (k, v) in &other.entries {
+            if !matches!(v, ExtraValue::Int(_)) && !self.entries.iter().any(|e| &e.0 == k) {
+                self.entries.push((k.clone(), v.clone()));
+            }
+        }
+        self
+    }
     /// Adapter from the `Option<PlistValue>` of `PathUserDynamicObject::set_path_type_goal_interaction_extra_data`
     /// (object_model signature, R-1): only number values can be carried by a `PlistValue`.
     pub fn from_plist(v: Option<&PlistValue>) -> Option<PathExtraData> {
@@ -1116,13 +1137,14 @@ impl HarmableDynamicObject for Blockhead {
 // The host seam
 // ====================================================================================================
 
+crate::hooks::hook_trait! {
 /// Calls into modules that were not implemented when `blockhead_core` was written. Every method has a default:
 /// spec-derived where the spec is a trivial read, otherwise inert (returns nil/0/NO and does nothing). The
 /// integrator implements this once (a thin adapter over the real `World`, `DynamicWorld`, registry, NPCs,
 /// workbenches, plants, `FishingRod`, `Action`, and the `impl Blockhead` blocks of blockhead_inventory /
 /// blockhead_actions) and installs it with [`set_host`].
 #[allow(unused_variables)]
-pub trait BlockheadHost {
+pub trait BlockheadHost, stub BlockheadHostStub {
     // ================= sibling Blockhead methods (blockhead_inventory -, blockhead_actions /) ====
     /// `-updatePosition:` override. Default = the DynamicObject version.
     fn update_position(&self, b: &Blockhead, p: IntPair) {
@@ -1401,8 +1423,14 @@ pub trait BlockheadHost {
     fn report_achievement_with_identifier(&self, id: &str) {}
     /// `-[World abortInProgressPathIfForBlockhead:]`
     fn abort_in_progress_path_if_for_blockhead(&self, b: &ObjRef) {}
-    /// `-[World sendDamage:forNetBlockhead:recoil:]`
-    fn send_damage_for_net_blockhead_recoil(&self, damage: f32, b: &ObjRef, recoil: bool) {}
+    /// `-[World sendDamage:forNetBlockhead:recoil:]`: forwarded to the blockhead's world (an inert default left PvP
+    /// damage unsent in production).
+    #[provided]
+    fn send_damage_for_net_blockhead_recoil(&self, damage: f32, b: &ObjRef, recoil: bool) {
+        if let Some(w) = crate::objects::handle::downcast::<Blockhead>(b).and_then(|x| x.world_rc()) {
+            w.send_damage_for_net_blockhead_recoil(damage, b, recoil);
+        }
+    }
     /// `-[World fireProjectileFrom:to:at:fireItemType:firer:]`
     fn fire_projectile_from_to_at_fire_item_type_firer(
         &self,
@@ -1539,6 +1567,7 @@ pub trait BlockheadHost {
 
     // ================= DynamicWorld (dynamic_world_core / ops) ===========================================
     /// `-[DynamicWorld localNetID]` (md5 id of "server" on the dedicated server)
+    #[provided]
     fn dynamic_world_local_net_id(&self) -> String {
         "cf1e8c14e54505f60aa10ceb8d5d8ab3".to_string()
     }
@@ -1736,14 +1765,17 @@ pub trait BlockheadHost {
     /// `-[Door pos]` / `-[Door freeblockCreationItemType]` / `-[Door freeBlockCreationSaveDict]` are on the base trait.
     /// `-[Window...]` nothing extra.
     /// `-[Sign text]` length (SignTextDynamicObject): the number of UTF-16 units.
+    #[provided]
     fn sign_text_length(&self, o: &ObjRef) -> usize {
         o.as_sign_text().and_then(|s| s.text()).map_or(0, |t| t.encode_utf16().count())
     }
     /// `[rideObject blockheadCanRide:self usingItem:t]`
+    #[provided]
     fn ridable_blockhead_can_ride_using_item(&self, o: &ObjRef, b: &Blockhead, item: i32) -> bool {
         o.as_ridable().map_or(false, |r| r.blockhead_can_ride_using_item(&b.me(), item))
     }
     /// `[rideObject isKindOfClass:[HandCar|SteamTrain|PassengerCar class]]`: 28 / 29 / 30 or 0 = other.
+    #[provided]
     fn ride_object_animation_type(&self, o: &ObjRef) -> u32 {
         use crate::objects::handle::is_kind_of_class;
         if is_kind_of_class(o, &crate::trains::hand_car::HAND_CAR_CLASS) {
@@ -1758,6 +1790,7 @@ pub trait BlockheadHost {
     }
     /// `[rideObject respondsToSelector:@selector(riderRidesWithArmsDown)] && [rideObject riderRidesWithArmsDown]`
     /// Answered: true only for Dodo and Scorpion.
+    #[provided]
     fn ride_object_rider_rides_with_arms_down(&self, o: &ObjRef) -> bool {
         use crate::objects::handle::is_kind_of_class;
         is_kind_of_class(o, &crate::npc::dodo::DODO_CLASS_INFO)
@@ -1846,6 +1879,7 @@ pub trait BlockheadHost {
     /// `-[FishingRod update:accurateDT:isSimulation:]`
     fn fishing_rod_update(&self, r: &FishingRodRef, dt: f32, accurate_dt: f32, is_simulation: bool) {}
 }
+}
 
 /// Which `-[DynamicWorld removeXAtPos:]` of the pickup table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1866,7 +1900,7 @@ pub enum Remover {
 
 /// The default host: every method of [`BlockheadHost`] as defaulted.
 pub struct NullHost;
-impl BlockheadHost for NullHost {}
+impl BlockheadHostStub for NullHost {}
 
 thread_local! {
     static HOST: RefCell<Rc<dyn BlockheadHost>> = RefCell::new(Rc::new(NullHost));
@@ -2028,7 +2062,7 @@ pub(crate) mod testutil {
             self.log.borrow_mut().push(s);
         }
     }
-    impl BlockheadHost for TestHost {
+    impl BlockheadHostStub for TestHost {
         fn add_simulation_event_of_type_for_blockhead_extra_data(
             &self,
             event_type: i32,

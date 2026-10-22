@@ -46,13 +46,14 @@ pub(crate) fn ub_null_deref(site: &'static str) -> ! {
 // The dependency seam
 // =====================================================================================================
 
+crate::hooks::hook_trait! {
 /// Calls `world_ops` makes into other modules. Every method has an inert default so that
 /// a partially wired server still links; the integrator overrides all of them.
 ///
 /// Peers (`ServerClient`) are addressed by their peer id string; the adapter looks the object up in
 /// `World.server_clients`. Blockhead / Workbench / interaction object calls take the `ObjRef`.
 #[allow(unused_variables, clippy::too_many_arguments)]
-pub trait WorldOpsDeps {
+pub trait WorldOpsDeps, stub WorldOpsDepsStub {
     // ------------------------------------------------------------------ DynamicWorld
     /// `-[DynamicWorld pathUsers]`.
     fn path_users(&self) -> Vec<ObjRef> {
@@ -658,6 +659,7 @@ pub trait WorldOpsDeps {
         0
     }
 }
+}
 
 /// A zero-initialised `CraftableItem` (what a nil `craftedItemObject` leaves in the local).
 pub fn zero_craftable_item() -> CraftableItem {
@@ -666,7 +668,7 @@ pub fn zero_craftable_item() -> CraftableItem {
 
 /// All-defaults implementation (nothing wired).
 pub struct NullDeps;
-impl WorldOpsDeps for NullDeps {}
+impl WorldOpsDepsStub for NullDeps {}
 
 thread_local! {
     static DEPS: RefCell<Rc<dyn WorldOpsDeps>> = RefCell::new(Rc::new(NullDeps));
@@ -894,7 +896,57 @@ fn narrate_blockhead(out: &mut String, rec: &PlistDict) {
     n.collapse();
 }
 
+/// One blockhead's typed away/offline-simulation record (world::simulation) in the dictionary shape the narrator
+/// reads: `"blockheadName"`, then each event under the decimal string of its type: sleep / collapse as a
+/// `{"count": n}` dictionary, craft / got as item type -> count, place as kind -> count, damage as the array of its
+/// texts (the original's text -> text dictionary, enumerated).
+fn events_record(ev: &crate::world::simulation::BlockheadEvents) -> PlistDict {
+    use crate::world::simulation::SimEvent;
+    let mut rec = GsDict::new();
+    if let Some(n) = &ev.name {
+        rec.insert("blockheadName".to_string(), PlistValue::string(n.clone()));
+    }
+    for ty in ev.events.keys_in_order() {
+        let v = match ev.events.get(&ty).expect("listed key") {
+            SimEvent::Count(c) => {
+                PlistValue::dict(GsDict::from_pairs([("count".to_string(), PlistValue::int(*c as i64))]))
+            }
+            SimEvent::Items(items) => PlistValue::dict(GsDict::from_pairs(
+                items.iter().map(|(t, n)| (t.to_string(), PlistValue::int(*n as i64))),
+            )),
+            SimEvent::Places(p) => {
+                PlistValue::dict(GsDict::from_pairs(p.iter().map(|(k, n)| (k.clone(), PlistValue::int(*n as i64)))))
+            }
+            SimEvent::Damage(d) => PlistValue::array(d.iter().map(|(_, t)| PlistValue::string(t.clone())).collect()),
+        };
+        rec.insert(ty.to_string(), v);
+    }
+    match PlistValue::dict(rec) {
+        PlistValue::Dict(d) => d,
+        _ => unreachable!("PlistValue::dict makes a dictionary"),
+    }
+}
+
 impl World {
+    /// `-[World welcomeBackMessageForInfoDict:]` of a typed event map (world::simulation): the blockheads in the
+    /// map's (uniqueID `NSNumber`) enumeration order.
+    pub fn welcome_back_message_for_events(
+        &self,
+        events: Option<&crate::world::simulation::BlockheadEventsMap>,
+    ) -> Option<String> {
+        let events = events.filter(|e| e.len() > 0)?;
+        let mut out = String::from("While you were away,");
+        for (_, ev) in events.iter() {
+            narrate_blockhead(&mut out, &events_record(ev));
+        }
+        Some(out)
+    }
+
+    /// `[self welcomeBackMessageForInfoDict:simulationEvents]` (offline catch-up simulation, `finishSimulating`).
+    pub fn welcome_back_message_for_simulation_events(&self) -> Option<String> {
+        crate::world::simulation::with_simulation_events(|s| self.welcome_back_message_for_events(s.as_ref()))
+    }
+
     /// `server_clients` keys in GSIMap enumeration order; empty when the dictionary is nil.
     pub fn server_clients_keys_in_order(&self) -> Vec<String> {
         match self.server_clients.borrow().as_ref() {
@@ -930,10 +982,13 @@ impl World {
 
     /// `-[World welcomeBackEventsMessageForClientID:]`: `welcomeBackMessageForInfoDict:` of
     /// `awayClientSimulationEvents[clientID]`.
+    /// The events are the typed `awayClientSimulationEvents` that `addSimulationEventOfType:forBlockhead:extraData:`
+    /// fills (world::simulation).
     pub fn welcome_back_events_message_for_client_id(&self, client_id: &str) -> Option<String> {
-        let entry =
-            self.away_client_simulation_events.borrow().as_ref().and_then(|d| d.get(&client_id.to_string()).cloned());
-        self.welcome_back_message_for_info_dict(entry.as_ref())
+        crate::world::simulation::with_away_client_simulation_events(|a| {
+            let entry = a.as_ref().and_then(|m| m.get(&client_id.to_string()));
+            self.welcome_back_message_for_events(entry)
+        })
     }
 
     /// `-[World setNetEventsMessageToDisplayOnceLoaded:]` (retain/release, no copy).
@@ -1089,7 +1144,7 @@ pub(crate) mod testkit {
     fn p(pos: IntPair) -> String {
         format!("({},{})", pos.x, pos.y)
     }
-    impl WorldOpsDeps for Rec {
+    impl WorldOpsDepsStub for Rec {
         fn all_blockheads_including_net(&self) -> Vec<ObjRef> {
             self.blockheads.borrow().clone()
         }

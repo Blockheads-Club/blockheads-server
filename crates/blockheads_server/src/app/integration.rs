@@ -34,6 +34,9 @@ use crate::worldgen::block_io::LoadOutcome;
 use crate::worldgen::noise::NoiseFunction;
 use crate::worldgen::tile_loader::{DynamicObjectsNetData, WorldTileLoader, WorldgenHost};
 
+mod actor_hosts;
+mod blockhead_host;
+
 /// The dynamic object type whose class is `name` (`classNameForDynamicObjectType`); 0 when unknown.
 fn dyn_type_named(name: &str) -> usize {
     (1..=64).find(|t| crate::objects::type_tables::class_name_for_dynamic_object_type(*t) == Some(name)).unwrap_or(0)
@@ -53,6 +56,43 @@ fn chest_of(o: &ObjRef) -> Option<&crate::interaction::chest::Chest> {
 /// The `Door` behind an object handle (`None` for any other class).
 fn door_of(o: &ObjRef) -> Option<&crate::building::door::Door> {
     crate::objects::handle::downcast::<crate::building::door::Door>(o)
+}
+
+/// `-[obj itemType]` of every class that answers it (doors, windows, free blocks, paintings, building parts, rails,
+/// beds); 0 for any other object.
+fn item_type_of(o: &ObjRef) -> i32 {
+    use crate::building::elevator::{ElevatorMotor, ElevatorShaft};
+    use crate::building::{
+        bed::Bed, column::Column, door::Door, ladder::Ladder, stairs::Stairs, window::Window, wire::Wire,
+    };
+    use crate::objects::handle::downcast;
+    if let Some(x) = downcast::<Door>(o) {
+        x.item_type()
+    } else if let Some(x) = downcast::<Window>(o) {
+        x.item_type()
+    } else if let Some(x) = downcast::<crate::physics_objects::free_block::FreeBlock>(o) {
+        x.item_type()
+    } else if let Some(x) = downcast::<crate::interaction::painting::Painting>(o) {
+        x.item_type()
+    } else if let Some(x) = downcast::<Column>(o) {
+        x.item_type()
+    } else if let Some(x) = downcast::<Stairs>(o) {
+        x.item_type()
+    } else if let Some(x) = downcast::<Ladder>(o) {
+        x.item_type()
+    } else if let Some(x) = downcast::<Wire>(o) {
+        x.item_type()
+    } else if let Some(x) = downcast::<ElevatorShaft>(o) {
+        x.item_type()
+    } else if let Some(x) = downcast::<ElevatorMotor>(o) {
+        x.item_type()
+    } else if let Some(x) = downcast::<crate::trains::rail::Rail>(o) {
+        x.item_type()
+    } else if let Some(x) = downcast::<Bed>(o) {
+        x.item_type()
+    } else {
+        0
+    }
 }
 
 /// The `FreightCar` behind an object handle (`None` for any other class).
@@ -288,7 +328,13 @@ impl Glue {
         crate::npc::npc::set_npc_env(self.clone());
         crate::npc::egg::set_passive_env(self.clone());
         crate::crafting::workbench::install_host(self.clone());
-        crate::blockhead::blockhead::set_host(Rc::new(BlockheadGlue(self.weak_self.clone())));
+        let bh = Rc::new(BlockheadGlue(self.weak_self.clone()));
+        crate::blockhead::blockhead::set_host(bh.clone());
+        crate::blockhead::interaction_rules::set_actions_host(bh.clone());
+        crate::blockhead::inventory_model::set_inventory_host(bh.clone());
+        crate::physics_objects::fishing_rod::set_fishing_host(bh.clone());
+        crate::physics_objects::fire_object::set_fire_host(bh.clone());
+        crate::npc::cave_troll::set_hostile_host(bh);
     }
 
     /// Install the seams that need the `World` handle; called right after `World::init` returned `Some(w)`.
@@ -349,31 +395,6 @@ struct BlockheadGlue(Weak<Glue>);
 impl BlockheadGlue {
     fn glue(&self) -> Option<Rc<Glue>> {
         self.0.upgrade()
-    }
-}
-
-impl crate::blockhead::blockhead::BlockheadHost for BlockheadGlue {
-    fn update_position(&self, b: &crate::blockhead::blockhead::Blockhead, p: IntPair) {
-        b.update_position(p)
-    }
-    fn server_client_light_block_index_for_net_id(&self, net_id: Option<&str>) -> Option<i32> {
-        let client = self.glue()?.client(net_id?)?;
-        Some(client.light_block_index())
-    }
-    fn fully_load_if_needed_around_pos_client_light_block_index_for_blockhead(
-        &self,
-        pos: IntPair,
-        light_block_index: i32,
-        b: Option<&ObjRef>,
-    ) {
-        if let Some(w) = self.glue().and_then(|g| g.world()) {
-            w.fully_load_if_needed_around_pos_client_light_block_index_for_blockhead(pos, light_block_index, b);
-        }
-    }
-    fn set_door_at_pos_to_open_direction(&self, pos: IntPair, open: bool, direction: i32) {
-        if let Some(d) = self.glue().and_then(|g| g.dw()) {
-            d.set_door_at_pos_to_open_direction(pos, open, direction);
-        }
     }
 }
 
@@ -801,6 +822,121 @@ impl WorldCoreHooks for Glue {
     // ---- Blockhead (r2_session_0 (b)): the owning client of a blockhead
     fn blockhead_client_id(&self, b: &ObjRef) -> Option<String> {
         bh_of(b).and_then(|bh| bh.client_id())
+    }
+
+    fn projectile_manager_fire(
+        &self,
+        from: crate::types::structs::Vector2,
+        to: crate::types::structs::Vector2,
+        at: Option<&crate::objects::handle::ObjRef>,
+        item_type: i32,
+        firer: Option<&crate::objects::handle::ObjRef>,
+    ) {
+        let p = self.projectile_manager.borrow().clone();
+        if let Some(p) = p {
+            p.fire_projectile_from_to_at_fire_item_type_firer(from, to, at, item_type, firer);
+        }
+    }
+    fn dynamic_world_set_server_server_clients(&self, has_server: bool) {
+        if let Some(d) = self.dw() {
+            let server: Option<Rc<dyn DwServer>> =
+                if has_server { self.srv().map(|s| s as Rc<dyn DwServer>) } else { None };
+            d.set_server_server_clients(server, has_server.then(|| self.dw_clients.clone()));
+        }
+    }
+    fn dynamic_world_blockhead_previews(&self) -> Vec<crate::plist::value::PlistValue> {
+        self.dw().map_or_else(Vec::new, |d| {
+            d.blockheads().iter().filter_map(bh_of).map(|b| PlistValue::data(b.preview_data())).collect()
+        })
+    }
+    fn blockhead_name(&self, b: &crate::objects::handle::ObjRef) -> Option<String> {
+        bh_of(b).and_then(|x| x.name())
+    }
+    fn blockhead_is_client_blockhead_being_controlled_by_server(&self, b: &crate::objects::handle::ObjRef) -> bool {
+        bh_of(b).map_or(false, |x| x.is_client_blockhead_being_controlled_by_server())
+    }
+    fn blockhead_should_continue_simulating(&self, b: &crate::objects::handle::ObjRef) -> bool {
+        bh_of(b).map_or(false, |x| x.should_continue_simulating())
+    }
+    fn blockhead_suffer_damage_is_simulation_recoil(
+        &self,
+        b: &crate::objects::handle::ObjRef,
+        damage: f32,
+        is_simulation: bool,
+        recoil: bool,
+    ) {
+        if let Some(x) = bh_of(b) {
+            x.suffer_damage_is_simulation_recoil(damage, is_simulation, recoil);
+        }
+    }
+    fn blockhead_die_for_good(&self, b: &crate::objects::handle::ObjRef) {
+        if let Some(x) = bh_of(b) {
+            x.die_for_good();
+        }
+    }
+    fn blockhead_asleep(&self, b: &crate::objects::handle::ObjRef) -> bool {
+        bh_of(b).map_or(false, |x| x.asleep())
+    }
+    fn blockhead_regenerating(&self, b: &crate::objects::handle::ObjRef) -> bool {
+        bh_of(b).map_or(false, |x| x.regenerating())
+    }
+    fn blockhead_meditating(&self, b: &crate::objects::handle::ObjRef) -> bool {
+        bh_of(b).map_or(false, |x| x.meditating())
+    }
+    fn blockhead_on_trade_mission(&self, b: &crate::objects::handle::ObjRef) -> bool {
+        bh_of(b).map_or(false, |x| x.on_trade_mission())
+    }
+    fn blockhead_has_actions(&self, b: &crate::objects::handle::ObjRef) -> bool {
+        bh_of(b).map_or(false, |x| x.has_actions())
+    }
+    fn blockhead_action_count(&self, b: &crate::objects::handle::ObjRef) -> i32 {
+        bh_of(b).map_or(0, |x| x.action_count())
+    }
+    fn blockhead_cancel_simulate_due_to_collapse(&self, b: &crate::objects::handle::ObjRef) -> bool {
+        bh_of(b).map_or(false, |x| x.cancel_simulate_due_to_collapse())
+    }
+    fn blockhead_current_interaction_requires_human_input(&self, b: &crate::objects::handle::ObjRef) -> bool {
+        bh_of(b).map_or(false, |x| x.current_interaction_requires_human_input())
+    }
+    fn world_load_light_block_for_client_light_block_index_into_physical_block(
+        &self,
+        world: &crate::world::state::World,
+        index: i32,
+        pb: crate::world::state::PhysicalBlockRef,
+    ) {
+        world.load_light_block_for_client_light_block_index_into_physical_block(index, &pb)
+    }
+    fn world_welcome_back_message_for_simulation_events(&self, world: &crate::world::state::World) -> Option<String> {
+        world.welcome_back_message_for_simulation_events()
+    }
+    fn world_pause_button_tapped(&self, world: &crate::world::state::World) {
+        // `-[World pauseButtonTapped]` is empty in the server build (CLIENT-ONLY UI): nothing to do.
+        let _ = world;
+    }
+    fn world_path_request_pump(&self, world: &crate::world::state::World) {
+        world.update_path_pump(true)
+    }
+    fn particle_emitter_set_world_width_macro(&self, width_macro: i32) {
+        crate::env::particle_emitter::ParticleEmitter::instance().set_world_width_macro(width_macro)
+    }
+    fn particle_emitter_do_add_electricity_particle_with_path_size(
+        &self,
+        path: &[crate::types::structs::ElectrictyParticlePathIndex],
+        size: f32,
+    ) {
+        crate::env::particle_emitter::ParticleEmitter::instance()
+            .do_add_electricity_particle_with_path_size(path.to_vec(), size)
+    }
+    fn tip_manager_display_tip(&self, text: &str) {
+        crate::env::tip_manager::TipManager::instance().display_tip_with_time_out_display_even_if_disabled_tip_color(
+            text,
+            10.0,
+            false,
+            [1.0, 1.0, 1.0, 1.0],
+        )
+    }
+    fn tip_manager_current_tip(&self) -> Option<String> {
+        crate::env::tip_manager::TipManager::instance().current_tip()
     }
 }
 
@@ -1640,6 +1776,207 @@ impl WorldOpsDeps for Glue {
     fn bh_can_use_dynamic_object(&self, bh: &ObjRef, o: &ObjRef) -> bool {
         bh_of(bh).map_or(false, |b| b.can_use_dynamic_object(o))
     }
+
+    fn load_new_blockhead_at_pos_craftable_item_object_unique_id(
+        &self,
+        pos: crate::types::structs::IntPair,
+        craftable_item_object: &crate::objects::handle::ObjRef,
+        unique_id: u64,
+    ) {
+        if let Some(d) = self.dw() {
+            d.load_new_blockhead_at_pos_craftable_item_object_unique_id(pos, craftable_item_object, unique_id);
+        }
+    }
+    fn continue_simulate(&self) {
+        if let Some(w) = self.world() {
+            w.continue_simulate();
+        }
+    }
+    fn delegate_set_paused(&self, paused: bool) {
+        if let Some(d) = self.world().and_then(|w| w.core_delegate()) {
+            d.set_paused(paused);
+        }
+    }
+    fn crystal_manager_set_count_watcher_none(&self) {
+        crate::env::crystal_manager::CrystalManager::instance().set_count_watcher(None)
+    }
+    fn crystal_manager_amount(&self) -> i32 {
+        crate::env::crystal_manager::CrystalManager::instance().amount()
+    }
+    fn crystal_manager_modify_modify_string(&self, amount: i32, modify_string: &str) {
+        crate::env::crystal_manager::CrystalManager::instance().modify_modify_string(amount, modify_string)
+    }
+    fn particle_emitter_add_particle_at_pos_velocity_color_gravity_type_life_scale(
+        &self,
+        pos: [f32; 3],
+        velocity: [f32; 3],
+        color: [f32; 4],
+        gravity_type: i32,
+        life: f32,
+        scale: f32,
+    ) {
+        let v3 = |a: [f32; 3]| crate::fmath::vector::Vector::new(a[0], a[1], a[2]);
+        crate::env::particle_emitter::ParticleEmitter::instance()
+            .add_particle_at_pos_velocity_color_gravity_type_life_scale(
+                v3(pos),
+                v3(velocity),
+                crate::fmath::vector::Vector::new4(color[0], color[1], color[2], color[3]),
+                gravity_type,
+                life,
+                scale,
+            )
+    }
+    fn bh_is_idle(&self, bh: &crate::objects::handle::ObjRef) -> bool {
+        bh_of(bh).map_or(true, |b| b.idle())
+    }
+    fn bh_check_if_can_warp_in_second_blockhead_after_item_added_data_b(
+        &self,
+        bh: &crate::objects::handle::ObjRef,
+        item: crate::types::item_type::ItemType,
+        data_b: u16,
+    ) {
+        if let Some(b) = bh_of(bh) {
+            b.check_if_can_warp_in_second_blockhead_after_item_added_data_b(item, data_b as i32);
+        }
+    }
+    fn bh_current_interaction_type_for_tile_at_pos_pickup_rejected_due_to_inventory_full_include_actions_face_index_allow_protected_actions(
+        &self,
+        bh: &crate::objects::handle::ObjRef,
+        tile: &crate::world::state::TileRef,
+        pos: crate::types::structs::IntPair,
+        pickup_rejected: &mut bool,
+        include_actions: bool,
+        face_index: u8,
+        allow_protected_actions: bool,
+    ) -> crate::types::enums::InteractionType {
+        match bh_of(bh) {
+            Some(b) => {
+                let item = b.current_item();
+                b.interaction_type_for_tile_at_pos_item_pickup_rejected_due_to_inventory_full_include_actions_face_index_allow_protected_actions(
+                    Some(tile),
+                    pos,
+                    item.as_ref(),
+                    pickup_rejected,
+                    include_actions,
+                    face_index as i32,
+                    allow_protected_actions,
+                )
+            }
+            None => crate::types::enums::InteractionType::INTERACTION_NONE,
+        }
+    }
+    fn bh_queue_action_with_goal_pos_goal_interaction_path_type_interaction_object_id_craftable_item_object_craft_count_or_extra_data_is_ai(
+        &self,
+        bh: &crate::objects::handle::ObjRef,
+        goal_pos: crate::types::structs::IntPair,
+        goal_interaction: crate::types::enums::InteractionType,
+        path_type: i32,
+        interaction_object_id: u64,
+        craftable_item_object: Option<&crate::objects::handle::ObjRef>,
+        craft_count_or_extra_data: i32,
+        is_ai: bool,
+    ) {
+        if let Some(b) = bh_of(bh) {
+            let cio = craftable_item_object.and_then(crate::crafting::workbench_craft::craftable_item_object_of_shim);
+            b.queue_action_with_goal_pos_goal_interaction_path_type_interaction_object_id_craftable_item_object_craft_count_or_extra_data_disable_cancel_check_is_ai(
+                goal_pos,
+                goal_interaction,
+                crate::types::enums::PathType(path_type as u32),
+                interaction_object_id,
+                cio,
+                craft_count_or_extra_data as i16,
+                false,
+                is_ai,
+            );
+        }
+    }
+    fn bh_cancel_any_action_at_goal_pos_or_with_interaction_object_id_goal_interaction_craft_count_or_extra_data(
+        &self,
+        bh: &crate::objects::handle::ObjRef,
+        goal_pos: crate::types::structs::IntPair,
+        interaction_object_id: u64,
+        goal_interaction: crate::types::enums::InteractionType,
+        craft_count_or_extra_data: i32,
+    ) {
+        if let Some(b) = bh_of(bh) {
+            b.cancel_any_action_at_goal_pos_or_with_interaction_object_id_goal_interaction_craft_count_or_extra_data(
+                goal_pos,
+                interaction_object_id,
+                goal_interaction.0 as i32,
+                craft_count_or_extra_data as i16,
+            );
+        }
+    }
+    fn io_can_be_used_by_blockhead(
+        &self,
+        io: &crate::objects::handle::ObjRef,
+        bh: &crate::objects::handle::ObjRef,
+    ) -> bool {
+        io.as_interaction_like().map_or(false, |i| i.can_be_used_by_blockhead(io, bh))
+    }
+    fn io_is_in_use(&self, io: &crate::objects::handle::ObjRef) -> bool {
+        io.is_in_use()
+    }
+    fn io_start_interaction_with_blockhead(
+        &self,
+        io: &crate::objects::handle::ObjRef,
+        bh: &crate::objects::handle::ObjRef,
+    ) {
+        if let Some(i) = io.as_interaction_like() {
+            i.start_interaction_with_blockhead(io, bh);
+        }
+    }
+    fn io_is_paintable(&self, io: &crate::objects::handle::ObjRef) -> bool {
+        io.as_interaction_like().map_or(false, |i| i.is_paintable())
+    }
+    fn obj_needs_removed(&self, o: &crate::objects::handle::ObjRef) -> bool {
+        o.needs_removed()
+    }
+    fn obj_can_be_removed_by_blockhead(
+        &self,
+        o: &crate::objects::handle::ObjRef,
+        bh: &crate::objects::handle::ObjRef,
+    ) -> bool {
+        o.can_be_removed_by_blockhead(o, bh)
+    }
+    fn obj_paint(&self, o: &crate::objects::handle::ObjRef, color_index: u16) {
+        use crate::building::{column::Column, elevator::ElevatorShaft, ladder::Ladder, stairs::Stairs};
+        use crate::objects::handle::downcast;
+        if let Some(x) = downcast::<Column>(o) {
+            x.paint(o, color_index);
+        } else if let Some(x) = downcast::<Ladder>(o) {
+            x.paint(o, color_index);
+        } else if let Some(x) = downcast::<Stairs>(o) {
+            x.paint(o, color_index);
+        } else if let Some(x) = downcast::<ElevatorShaft>(o) {
+            x.paint(o, color_index);
+        } else if let Some(i) = o.as_interaction_like() {
+            i.paint(o, color_index);
+        }
+    }
+    fn craftable_item(&self, obj: &crate::objects::handle::ObjRef) -> crate::types::structs::CraftableItem {
+        match crate::crafting::workbench_craft::craftable_item_object_of_shim(obj) {
+            Some(c) => c.craftable_item(),
+            None => crate::world::misc::zero_craftable_item(),
+        }
+    }
+    fn free_block_creation_item_save_dict(
+        &self,
+        obj: &crate::objects::handle::ObjRef,
+    ) -> Option<crate::plist::value::PlistValue> {
+        crate::crafting::workbench_craft::craftable_item_object_of_shim(obj)?
+            .free_block_creation_item_save_dict()
+            .map(PlistValue::Dict)
+    }
+    fn bh_subtract_items_from_inventory_of_type_count_data_b(
+        &self,
+        bh: &crate::objects::handle::ObjRef,
+        item: crate::types::item_type::ItemType,
+        count: i32,
+        data_b: i32,
+    ) -> i32 {
+        bh_of(bh).map_or(0, |b| b.subtract_items_from_inventory_of_type_count_data_b(item, count, data_b).len() as i32)
+    }
 }
 
 // =====================================================================================================
@@ -2061,6 +2398,28 @@ impl DwHooks for Glue {
     }
     // item_type/remove_window_at_pos/tree_update_*/update_rain_dt/cleanup keep the inert defaults
     // (owning modules do not yet publish adapters; see cross_module_requests).
+
+    fn remove_window_at_pos(&self, pos: crate::types::structs::IntPair) -> Option<crate::objects::handle::ObjRef> {
+        self.dw()?.remove_window_at_pos(pos)
+    }
+    fn tree_update_all_owned_tiles_to_new_id_size(&self, tree: &crate::objects::handle::ObjRef) {
+        if crate::trees::tree::as_tree(tree).is_some() {
+            crate::trees::tree::tree_update_all_owned_tiles_to_new_id_size(tree);
+        }
+    }
+    fn update_rain_dt(&self, obj: &crate::objects::handle::ObjRef, rain: f32, dt: f32) {
+        if let Some(b) = crate::objects::handle::downcast::<crate::env::snow_surface_block::SnowSurfaceBlock>(obj) {
+            b.update_rain_dt(rain, dt);
+        }
+    }
+    fn item_type(&self, obj: &crate::objects::handle::ObjRef) -> i32 {
+        item_type_of(obj)
+    }
+    fn cleanup(&self, obj: &crate::objects::handle::ObjRef) {
+        if crate::trains::train_car::train_car_of(obj).is_some() {
+            crate::trains::train_car::train_car_cleanup(obj);
+        }
+    }
 }
 
 // =====================================================================================================
@@ -2097,6 +2456,72 @@ impl crate::npc::npc::NpcEnv for Glue {
             d.set_door_at_pos_to_open_direction(pos, open, direction);
         }
     }
+
+    fn mark_circum_navigate_x(&self, _x: i32) {
+        if let Some(w) = self.world() {
+            w.mark_circum_navigate_x(_x);
+        }
+    }
+    fn is_client(&self) -> bool {
+        self.dw().map_or(false, |d| d.is_client())
+    }
+    fn free_block_item_type(&self, _fb: &crate::objects::handle::ObjRef) -> i32 {
+        crate::objects::handle::downcast::<crate::physics_objects::free_block::FreeBlock>(_fb)
+            .map_or(0, |f| f.item_type())
+    }
+    fn feeder_chest_remove_item_if_available(&self, _io: &crate::objects::handle::ObjRef, _item: i32) -> Option<bool> {
+        let c = chest_of(_io)?;
+        let io = _io.as_interaction_like()?;
+        if io.interaction_object_type() == 2 && c.chest_type() == 6 && !_io.is_in_use() {
+            Some(c.remove_item_if_available(_io, _item))
+        } else {
+            None
+        }
+    }
+    fn create_free_block_for_captured_npc(
+        &self,
+        _pos: crate::types::structs::IntPair,
+        _item_type: i32,
+        _save_dict: &crate::plist::value::PlistDict,
+        _blockhead: &crate::objects::handle::ObjRef,
+    ) {
+        if let Some(d) = self.dw() {
+            d.create_free_block_at_position_of_type_data_a_data_b_sub_items_dynamic_object_save_dict_hovers_play_sound_priority_blockhead(
+                _pos,
+                crate::types::item_type::ItemType(_item_type as u32),
+                0,
+                0,
+                None,
+                Some(PlistValue::Dict(_save_dict.clone())),
+                false,
+                0,
+                Some(_blockhead),
+            );
+        }
+    }
+    fn remove_curse_words_from_blockhead_name(&self, name: &str) -> String {
+        match self.srv() {
+            Some(s) => s.remove_curse_words_from_blockhead_name(Some(name)).unwrap_or_default(),
+            None => name.to_string(),
+        }
+    }
+    fn blockhead_paused(&self, _b: &crate::objects::handle::ObjRef) -> bool {
+        bh_of(_b).map_or(false, |b| b.paused())
+    }
+    fn blockhead_stop_riding(&self, _b: &crate::objects::handle::ObjRef) {
+        if let Some(b) = bh_of(_b) {
+            b.stop_riding();
+        }
+    }
+    fn blockhead_set_riding_object(
+        &self,
+        _b: &crate::objects::handle::ObjRef,
+        _o: Option<&crate::objects::handle::ObjRef>,
+    ) {
+        if let Some(b) = bh_of(_b) {
+            b.set_riding_object(_o);
+        }
+    }
 }
 
 impl crate::crafting::workbench::WorkbenchHost for Glue {
@@ -2107,6 +2532,78 @@ impl crate::crafting::workbench::WorkbenchHost for Glue {
     }
     fn find_and_subtract_all_power_up_to_for_user(&self, required: u16, user: &ObjRef) -> i32 {
         self.dw().map_or(0, |d| d.find_and_subtract_all_power_up_to_for_user(required, user))
+    }
+
+    fn bh_paused(&self, bh: &crate::objects::handle::ObjRef) -> bool {
+        bh_of(bh).map_or(false, |b| b.paused())
+    }
+    fn bh_has_coffee_energy(&self, bh: &crate::objects::handle::ObjRef) -> bool {
+        bh_of(bh).map_or(false, |b| b.has_coffee_energy())
+    }
+    fn bh_unable_to_work_reason(&self, bh: &crate::objects::handle::ObjRef) -> i32 {
+        bh_of(bh).map_or(0, |b| b.unable_to_work_reason().0 as i32)
+    }
+    fn bh_should_continue_simulating(&self, bh: &crate::objects::handle::ObjRef) -> bool {
+        bh_of(bh).map_or(false, |b| b.should_continue_simulating())
+    }
+    fn bh_is_crafting_at_any_workbench(&self, bh: &crate::objects::handle::ObjRef) -> bool {
+        bh_of(bh).map_or(false, |b| b.is_crafting_at_any_workbench())
+    }
+    fn bh_is_adding_fuel_to_any_workbench(&self, bh: &crate::objects::handle::ObjRef) -> bool {
+        bh_of(bh).map_or(false, |b| b.is_adding_fuel_to_any_workbench())
+    }
+    fn bh_interaction_workbench(&self, bh: &crate::objects::handle::ObjRef) -> Option<crate::objects::handle::ObjRef> {
+        bh_of(bh).and_then(|b| b.interaction_workbench())
+    }
+    fn bh_set_interaction_workbench(
+        &self,
+        bh: &crate::objects::handle::ObjRef,
+        wb: Option<&crate::objects::handle::ObjRef>,
+    ) {
+        if let Some(b) = bh_of(bh) {
+            b.set_interaction_workbench(wb.cloned());
+        }
+    }
+    fn bh_double_time_unlocked(&self, bh: &crate::objects::handle::ObjRef) -> bool {
+        bh_of(bh).map_or(false, |b| b.double_time_unlocked())
+    }
+    fn bh_subtract_items_from_inventory_of_type_count_data_b(
+        &self,
+        bh: &crate::objects::handle::ObjRef,
+        item_type: crate::types::item_type::ItemType,
+        count: i32,
+        data_b: i32,
+    ) -> Vec<crate::items::inventory_item::ItemRef> {
+        bh_of(bh)
+            .map_or_else(Vec::new, |b| b.subtract_items_from_inventory_of_type_count_data_b(item_type, count, data_b))
+    }
+    fn bh_add_item_to_inventory(
+        &self,
+        bh: &crate::objects::handle::ObjRef,
+        item: &crate::items::inventory_item::ItemRef,
+    ) {
+        if let Some(b) = bh_of(bh) {
+            b.add_item_to_inventory(item);
+        }
+    }
+    fn bh_craft_item_finished_at_workbench(
+        &self,
+        bh: &crate::objects::handle::ObjRef,
+        completed: bool,
+        wb: &crate::objects::handle::ObjRef,
+    ) {
+        if let Some(b) = bh_of(bh) {
+            b.craft_item_finished_at_workbench(completed, Some(wb));
+        }
+    }
+    fn bh_net_interaction_object_was_loaded(
+        &self,
+        bh: &crate::objects::handle::ObjRef,
+        wb: &crate::objects::handle::ObjRef,
+    ) {
+        if let Some(b) = bh_of(bh) {
+            b.net_interaction_object_was_loaded(wb);
+        }
     }
 }
 
@@ -2363,6 +2860,32 @@ impl crate::npc::egg::PassiveEnv for Glue {
     fn plant_type(&self, o: &ObjRef) -> i32 {
         crate::plants::plant::as_plant(o).map_or(0, |p| p.plant_type())
     }
+
+    fn rod_valid(&self, r: &crate::blockhead::blockhead::FishingRodRef) -> bool {
+        r.downcast_ref::<crate::physics_objects::fishing_rod::FishingRod>().map_or(false, |f| f.valid())
+    }
+    fn rod_hook_pos(&self, r: &crate::blockhead::blockhead::FishingRodRef) -> crate::types::structs::Vector2 {
+        r.downcast_ref::<crate::physics_objects::fishing_rod::FishingRod>()
+            .map_or(crate::types::structs::Vector2::ZERO, |f| f.hook_pos())
+    }
+    fn rod_hooked_fish(
+        &self,
+        r: &crate::blockhead::blockhead::FishingRodRef,
+    ) -> Option<crate::objects::handle::ObjRef> {
+        r.downcast_ref::<crate::physics_objects::fishing_rod::FishingRod>().and_then(|f| f.hooked_fish())
+    }
+    fn rod_set_hooked_fish(
+        &self,
+        r: &crate::blockhead::blockhead::FishingRodRef,
+        f: Option<&crate::objects::handle::ObjRef>,
+    ) {
+        if let Some(rod) = r.downcast_ref::<crate::physics_objects::fishing_rod::FishingRod>() {
+            rod.set_hooked_fish(f.cloned());
+        }
+    }
+    fn rod_blockhead(&self, r: &crate::blockhead::blockhead::FishingRodRef) -> Option<crate::objects::handle::ObjRef> {
+        r.downcast_ref::<crate::physics_objects::fishing_rod::FishingRod>().and_then(|f| f.blockhead())
+    }
 }
 
 impl DwOpsHooks for Glue {
@@ -2541,8 +3064,9 @@ impl DwOpsHooks for Glue {
             0
         }
     }
-    fn tree_is_required_soil_type(&self, _tree: &ObjRef, soil: u8) -> bool {
-        crate::trees::tree::tree_is_required_soil_type(soil as i32)
+    /// The tree's own `-isRequiredSoilType:` (cactus / coconut override the dirt family of the base class).
+    fn tree_is_required_soil_type(&self, tree: &ObjRef, soil: u8) -> bool {
+        crate::trees::tree::as_tree(tree).map_or(false, |t| t.is_required_soil_type(soil as i32))
     }
     // ---- doors (`setDoorAtPos:toOpen:direction:`, `doorIsOpenAtPos:`, path admission)
     fn door_can_be_used_by_blockhead(&self, door: &ObjRef, bh: &ObjRef) -> bool {
@@ -2586,6 +3110,341 @@ impl DwOpsHooks for Glue {
             c.move_inventory_items_from_array_to_index_count(chest, &from, index, count);
             *coins = std::mem::take(&mut *from.borrow_mut());
         }
+    }
+
+    fn new_torch(
+        &self,
+        dw: &std::rc::Rc<crate::dynworld::state::DynamicWorld>,
+        pos: crate::types::structs::IntPair,
+        ty: i32,
+        data_a: u16,
+        data_b: u16,
+        save_dict: Option<&crate::plist::value::PlistDict>,
+        client_id: Option<&str>,
+    ) -> Option<crate::objects::handle::ObjRef> {
+        let w = self.world()?;
+        let d: crate::objects::base::DynamicWorldRef = dw.clone();
+        crate::lighting::torch::Torch::init_with_world_dynamic_world_at_position_cache_type_data_a_data_b_save_dict_placed_by_client(
+            &w, &d, pos, None, ty, data_a, data_b, save_dict, client_id,
+        )
+        .map(|o| o as ObjRef)
+    }
+    fn new_egg(
+        &self,
+        dw: &std::rc::Rc<crate::dynworld::state::DynamicWorld>,
+        pos: crate::types::structs::IntPair,
+        save_dict: Option<&crate::plist::value::PlistDict>,
+    ) -> Option<crate::objects::handle::ObjRef> {
+        let w: crate::objects::base::WorldRef = self.world()?;
+        let d: crate::objects::base::DynamicWorldRef = dw.clone();
+        crate::npc::egg::Egg::init_with_world_dynamic_world_at_position_cache_save_dict(&w, &d, pos, None, save_dict)
+    }
+    fn new_painting(
+        &self,
+        dw: &std::rc::Rc<crate::dynworld::state::DynamicWorld>,
+        pos: crate::types::structs::IntPair,
+        ty: i32,
+        save_dict: Option<&crate::plist::value::PlistDict>,
+        client_id: Option<&str>,
+        client_name: Option<&str>,
+    ) -> Option<crate::objects::handle::ObjRef> {
+        let w = self.world()?;
+        crate::interaction::painting::Painting::new(&w, dw, pos, None, ty, save_dict, client_id, client_name)
+            .map(|o| o as ObjRef)
+    }
+    fn new_rail(
+        &self,
+        dw: &std::rc::Rc<crate::dynworld::state::DynamicWorld>,
+        pos: crate::types::structs::IntPair,
+        ty: i32,
+        owned_by_station: bool,
+    ) -> Option<crate::objects::handle::ObjRef> {
+        let w = self.world()?;
+        crate::trains::rail::Rail::new(&w, dw, pos, None, ty, owned_by_station)
+    }
+    fn new_boat(
+        &self,
+        dw: &std::rc::Rc<crate::dynworld::state::DynamicWorld>,
+        pos: crate::types::structs::IntPair,
+        save_dict: Option<&crate::plist::value::PlistDict>,
+        client_id: Option<&str>,
+    ) -> Option<crate::objects::handle::ObjRef> {
+        let w = self.world()?;
+        crate::physics_objects::boat::Boat::new(&w, dw, pos, None, save_dict, client_id)
+    }
+    fn new_train_car(
+        &self,
+        dw: &std::rc::Rc<crate::dynworld::state::DynamicWorld>,
+        item_type: i32,
+        pos: crate::types::structs::IntPair,
+        save_dict: Option<&crate::plist::value::PlistDict>,
+        client_id: Option<&str>,
+    ) -> Option<crate::objects::handle::ObjRef> {
+        let w = self.world()?;
+        match item_type {
+            204 => crate::trains::hand_car::HandCar::new(&w, dw, pos, None, save_dict, client_id),
+            205 => crate::trains::steam_train::SteamTrain::new(&w, dw, pos, None, save_dict, client_id),
+            206 => crate::trains::freight_car::FreightCar::new(&w, dw, pos, None, save_dict, client_id),
+            208 => crate::trains::passenger_car::PassengerCar::new(&w, dw, pos, None, save_dict, client_id),
+            _ => None,
+        }
+    }
+    fn new_glow_block(
+        &self,
+        dw: &std::rc::Rc<crate::dynworld::state::DynamicWorld>,
+        pos: crate::types::structs::IntPair,
+        tile: crate::world::state::TileRef,
+    ) -> Option<crate::objects::handle::ObjRef> {
+        let w = self.world()?;
+        let d: crate::objects::base::DynamicWorldRef = dw.clone();
+        crate::lighting::glow_block::GlowBlock::init_with_world_dynamic_world_at_position_cache_tile(
+            &w, &d, pos, None, &tile,
+        )
+        .map(|o| o as ObjRef)
+    }
+    fn new_blockhead(
+        &self,
+        dw: &std::rc::Rc<crate::dynworld::state::DynamicWorld>,
+        pos: crate::types::structs::IntPair,
+        blockhead_number: i32,
+        cio: &crate::objects::handle::ObjRef,
+        unique_id: u64,
+    ) -> Option<crate::objects::handle::ObjRef> {
+        let w = self.world()?;
+        let d: crate::objects::base::DynamicWorldRef = dw.clone();
+        let shim = crate::crafting::workbench_craft::craftable_item_object_of_shim(cio);
+        let bcio = shim.as_ref().and_then(|c| {
+            c.as_any().downcast_ref::<crate::crafting::craftable_item_object::BlockheadCraftableItemObject>()
+        });
+        crate::blockhead::blockhead::Blockhead::init_with_world_dynamic_world_at_position_cache_blockhead_number_craftable_item_object_unique_id(
+            &w,
+            &d,
+            pos,
+            None,
+            blockhead_number,
+            bcio.map(|b| b as &dyn crate::blockhead::lifecycle::BlockheadCraftableItemObjectLike),
+            unique_id,
+        )
+    }
+    fn tree_type(&self, tree: &crate::objects::handle::ObjRef) -> i32 {
+        crate::trees::tree::as_tree(tree).map_or(0, |t| t.tree_type())
+    }
+    fn plant_type(&self, plant: &crate::objects::handle::ObjRef) -> i32 {
+        crate::plants::plant::as_plant(plant).map_or(0, |p| p.plant_type())
+    }
+    fn plant_max_age_gene_variation(&self, plant: &crate::objects::handle::ObjRef) -> i32 {
+        crate::plants::plant::as_plant(plant).map_or(0, |p| p.max_age_gene_variation() as i32)
+    }
+    fn plant_growth_rate_gene_variation(&self, plant: &crate::objects::handle::ObjRef) -> i32 {
+        crate::plants::plant::as_plant(plant).map_or(0, |p| p.growth_rate_gene_variation() as i32)
+    }
+    fn plant_is_required_soil_type(&self, plant: &crate::objects::handle::ObjRef, soil: u8) -> bool {
+        crate::plants::plant::as_plant(plant).map_or(false, |p| p.is_required_soil_type(soil))
+    }
+    fn plant_can_breed(&self, plant: &crate::objects::handle::ObjRef) -> bool {
+        crate::plants::plant::as_plant(plant).map_or(false, |p| p.can_breed())
+    }
+    fn plant_number_of_occupied_tiles_above(&self, plant: &crate::objects::handle::ObjRef) -> i32 {
+        crate::plants::plant::as_plant(plant).map_or(0, |p| p.number_of_occupied_tiles_above())
+    }
+    fn plant_number_of_occupied_tiles_below(&self, plant: &crate::objects::handle::ObjRef) -> i32 {
+        crate::plants::plant::as_plant(plant).map_or(0, |p| p.number_of_occupied_tiles_below())
+    }
+    fn tap_is_within_body_radius(
+        &self,
+        o: &crate::objects::handle::ObjRef,
+        tap: crate::types::structs::Vector2,
+    ) -> bool {
+        if let Some(b) = crate::objects::handle::downcast::<crate::physics_objects::boat::Boat>(o) {
+            b.tap_is_within_body_radius(tap)
+        } else if let Some(t) = crate::trains::train_car::train_car_of(o) {
+            t.tap_is_within_body_radius(tap)
+        } else {
+            false
+        }
+    }
+    fn blockhead_current_item_type(&self, bh: &crate::objects::handle::ObjRef) -> i32 {
+        bh_of(bh).and_then(|b| b.current_item()).map_or(0, |i| i.borrow().item_type.0 as i32)
+    }
+    fn blockhead_goal_interaction_for_npc_chase(
+        &self,
+        bh: &crate::objects::handle::ObjRef,
+        npc: &crate::objects::handle::ObjRef,
+        item_type: i32,
+    ) -> i32 {
+        bh_of(bh).map_or(0, |b| {
+            b.goal_interaction_for_npc_chase_for_npc_with_item_type(
+                npc,
+                crate::types::item_type::ItemType(item_type as u32),
+            ) as i32
+        })
+    }
+    fn blockhead_crouching(&self, bh: &crate::objects::handle::ObjRef) -> bool {
+        bh_of(bh).map_or(false, |b| b.crouching())
+    }
+    fn blockhead_teleport_to_pos(
+        &self,
+        bh: &crate::objects::handle::ObjRef,
+        pos: crate::types::structs::IntPair,
+    ) -> bool {
+        bh_of(bh).map_or(false, |b| b.teleport_to_pos(pos))
+    }
+    fn blockhead_stop_all_actions(&self, bh: &crate::objects::handle::ObjRef) {
+        if let Some(b) = bh_of(bh) {
+            b.stop_all_actions();
+        }
+    }
+    fn blockhead_set_paused(&self, bh: &crate::objects::handle::ObjRef, paused: bool) {
+        if let Some(b) = bh_of(bh) {
+            b.set_paused(paused);
+        }
+    }
+    fn blockhead_remote_pickup_request_response(
+        &self,
+        bh: &crate::objects::handle::ObjRef,
+        accepted: bool,
+        ids: &[u64],
+    ) {
+        if let Some(b) = bh_of(bh) {
+            b.remote_pickup_request_response(accepted, ids);
+        }
+    }
+    fn blockhead_update_name_text_view(&self, bh: &crate::objects::handle::ObjRef) {
+        // `-[Blockhead updateNameTextView]` is CLIENT-ONLY (name label rendering): nothing on the server.
+        let _ = bh;
+    }
+    fn elevator_shaft_open(&self, shaft: &crate::objects::handle::ObjRef) {
+        if let Some(s) = crate::objects::handle::downcast::<crate::building::elevator::ElevatorShaft>(shaft) {
+            s.open();
+        }
+    }
+    fn elevator_shaft_last_known_motor_pos(
+        &self,
+        shaft: &crate::objects::handle::ObjRef,
+    ) -> crate::types::structs::IntPair {
+        crate::objects::handle::downcast::<crate::building::elevator::ElevatorShaft>(shaft)
+            .map_or(crate::types::structs::IntPair { x: 0, y: 0 }, |s| s.last_known_motor_pos())
+    }
+    fn elevator_motor_min_y(&self, motor: &crate::objects::handle::ObjRef) -> i32 {
+        crate::objects::handle::downcast::<crate::building::elevator::ElevatorMotor>(motor).map_or(0, |m| m.min_y())
+    }
+    fn elevator_motor_max_y(&self, motor: &crate::objects::handle::ObjRef) -> i32 {
+        crate::objects::handle::downcast::<crate::building::elevator::ElevatorMotor>(motor).map_or(0, |m| m.max_y())
+    }
+    fn train_car_rail_or_station_name_changed(&self, car: &crate::objects::handle::ObjRef) {
+        if let Some(t) = crate::trains::train_car::train_car_of(car) {
+            t.rail_or_station_name_changed();
+        }
+    }
+    fn train_car_set_paused(&self, car: &crate::objects::handle::ObjRef, paused: bool) {
+        // `-[TrainCar setPaused:]` is empty and no train car class overrides it.
+        let _ = (car, paused);
+    }
+    fn painting_image_data(&self, painting: &crate::objects::handle::ObjRef) -> Option<Vec<u8>> {
+        crate::objects::handle::downcast::<crate::interaction::painting::Painting>(painting)?.image_data()
+    }
+    fn painting_image_data_recieved(&self, painting: &crate::objects::handle::ObjRef, data: &[u8]) {
+        // Client path (`-[DynamicWorld paintingDataRecievedFromServer:]` handles a received 0x31); the dedicated server
+        // never receives painting data, so `-[Painting imageDataRecieved:]` is never sent there.
+        let _ = (painting, data);
+    }
+    fn painting_user_mute_changed(&self, painting: &crate::objects::handle::ObjRef, player_id: &str) {
+        if let Some(p) = crate::objects::handle::downcast::<crate::interaction::painting::Painting>(painting) {
+            p.user_mute_changed(player_id);
+        }
+    }
+    fn painting_user_ban_changed(&self, painting: &crate::objects::handle::ObjRef, player_id: &str, banned: bool) {
+        if let Some(p) = crate::objects::handle::downcast::<crate::interaction::painting::Painting>(painting) {
+            p.user_ban_changed_is_banned(painting, player_id, banned);
+        }
+    }
+    fn trade_portal_randomize_local_trade_offsets(&self, portal: &crate::objects::handle::ObjRef) {
+        if let Some(p) = crate::objects::handle::downcast::<crate::interaction::trade_portal::TradePortal>(portal) {
+            p.randomize_local_trade_offsets(portal);
+        }
+    }
+    fn interaction_object_land_owner_id(&self, o: &crate::objects::handle::ObjRef) -> Option<String> {
+        crate::objects::handle::downcast::<crate::interaction::ownership_sign::OwnershipSign>(o)?.land_owner_id()
+    }
+    fn interaction_object_width_radius(&self, o: &crate::objects::handle::ObjRef) -> i32 {
+        crate::objects::handle::downcast::<crate::interaction::ownership_sign::OwnershipSign>(o)
+            .map_or(0, |s| s.width_radius())
+    }
+    fn interaction_object_height_radius(&self, o: &crate::objects::handle::ObjRef) -> i32 {
+        crate::objects::handle::downcast::<crate::interaction::ownership_sign::OwnershipSign>(o)
+            .map_or(0, |s| s.height_radius())
+    }
+    fn world_remove_tile_at_world_x_world_y(&self, x: i32, y: i32) {
+        if let Some(w) = self.world() {
+            w.remove_tile_at_world_x_world_y_create_contents_freeblock_count_create_foreground_contents_freeblock_count_remove_blockhead(
+                x, y, 0, 0, None,
+            );
+        }
+    }
+    fn world_ownership_sign_was_placed_or_changed_at_pos(
+        &self,
+        pos: crate::types::structs::IntPair,
+        land_owner_id: Option<&str>,
+        width_radius: i32,
+        height_radius: i32,
+        was_removed: bool,
+    ) {
+        if let Some(w) = self.world() {
+            w.ownership_sign_was_placed_or_changed_at_pos_with_land_owner_width_radius_height_radius_was_removed(
+                pos,
+                land_owner_id,
+                width_radius,
+                height_radius,
+                was_removed,
+            );
+        }
+    }
+    fn world_welcome_back_events_message_for_client_id(
+        &self,
+        client_id: &str,
+    ) -> Option<crate::plist::value::PlistValue> {
+        self.world()?.welcome_back_events_message_for_client_id(client_id).map(PlistValue::string)
+    }
+    fn server_player_name_for_player_with_id_including_old_players(&self, player_id: &str) -> Option<String> {
+        self.srv()?.player_name_for_player_with_id_including_old_players(Some(player_id))
+    }
+    fn server_player_is_banned_with_id(&self, player_id: &str) -> bool {
+        self.srv().map_or(false, |s| s.player_is_banned_with_id(Some(player_id)))
+    }
+    fn found_items_list_snapshot(&self, client_id: &str) -> Option<crate::foundation::indexset::IndexSet> {
+        self.client(client_id).map(|c| c.found_items_list().borrow().clone())
+    }
+    fn found_items_list_remove_all_indexes(&self, client_id: &str) {
+        if let Some(c) = self.client(client_id) {
+            c.found_items_list().borrow_mut().remove_all_indexes();
+        }
+    }
+    fn found_items_list_add_indexes(&self, client_id: &str, set: &crate::foundation::indexset::IndexSet) {
+        if let Some(c) = self.client(client_id) {
+            c.found_items_list().borrow_mut().add_indexes(set);
+        }
+    }
+    fn particle_emitter_add_particle(
+        &self,
+        pos: [f32; 3],
+        velocity: [f32; 3],
+        color: [f32; 4],
+        gravity_type: i32,
+        life: f32,
+        scale: f32,
+        center: [f32; 4],
+    ) {
+        use crate::fmath::vector::Vector;
+        crate::env::particle_emitter::ParticleEmitter::instance()
+            .add_particle_at_pos_velocity_color_gravity_type_life_scale_center(
+                Vector::new(pos[0], pos[1], pos[2]),
+                Vector::new(velocity[0], velocity[1], velocity[2]),
+                Vector::new4(color[0], color[1], color[2], color[3]),
+                gravity_type,
+                life,
+                scale,
+                Vector::new4(center[0], center[1], center[2], center[3]),
+            )
     }
 }
 

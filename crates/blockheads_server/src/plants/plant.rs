@@ -918,7 +918,7 @@ mod integration_tests {
     struct Rec {
         blocks: Cell_<Vec<(IntPair, u32, u16, u16)>>,
     }
-    impl DwHooks for Rec {
+    impl crate::dynworld::state::DwHooksStub for Rec {
         fn freeblock_from_position(&self, init: FreeBlockInit<'_>) -> Option<ObjRef> {
             self.blocks.borrow_mut().push((init.position, init.item_type, init.data_a, init.data_b));
             None

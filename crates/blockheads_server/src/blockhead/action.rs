@@ -11,8 +11,8 @@ use std::any::Any;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use super::blockhead::{Blockhead, BlockheadHost};
-use super::inventory_model::InventoryHost;
+use super::blockhead::{Blockhead, BlockheadHostStub};
+use super::inventory_model::InventoryHostStub;
 use crate::crafting::craftable_item_object::{craftable_item_object_from_save_dict, CraftableItemObjectRef};
 use crate::foundation::exception::range_exception_index;
 use crate::foundation::gsdict::GsDict;
@@ -394,7 +394,7 @@ impl Action {
 /// Entries that are not an [`Action`] answer like the inert defaults.
 pub struct ActionBridge;
 
-impl BlockheadHost for ActionBridge {
+impl BlockheadHostStub for ActionBridge {
     // ---- the Blockhead methods owned by this module (blockhead_actions) ----
     fn update_position(&self, b: &Blockhead, p: IntPair) {
         b.update_position(p)
@@ -536,7 +536,7 @@ impl BlockheadHost for ActionBridge {
     }
 }
 
-impl InventoryHost for ActionBridge {
+impl InventoryHostStub for ActionBridge {
     fn action_goal_interaction(&self, a: &Rc<dyn Any>) -> i32 {
         action_of(a).map_or(0, |a| a.goal_interaction().0 as i32)
     }
@@ -698,22 +698,22 @@ mod tests {
         let br = ActionBridge;
         let a = sample(3);
         let any: Rc<dyn Any> = a.clone();
-        assert!(BlockheadHost::action_in_progress(&br, &any));
-        assert_eq!(BlockheadHost::action_goal_tile_pos(&br, &any), IntPair { x: 12, y: -3 });
-        assert_eq!(BlockheadHost::action_interaction_object_id(&br, &any), 0xdead_beef_0000_0001u64 as i64);
-        assert_eq!(InventoryHost::action_goal_interaction(&br, &any), 14);
-        assert_eq!(InventoryHost::action_craft_count_or_extra_data(&br, &any), 3);
-        assert_eq!(BlockheadHost::action_inventory_change_int_for_key(&br, &any, "105"), Some(1));
-        BlockheadHost::action_set_inventory_change_int_for_key(&br, &any, "7", 9);
+        assert!(BlockheadHostStub::action_in_progress(&br, &any));
+        assert_eq!(BlockheadHostStub::action_goal_tile_pos(&br, &any), IntPair { x: 12, y: -3 });
+        assert_eq!(BlockheadHostStub::action_interaction_object_id(&br, &any), 0xdead_beef_0000_0001u64 as i64);
+        assert_eq!(InventoryHostStub::action_goal_interaction(&br, &any), 14);
+        assert_eq!(InventoryHostStub::action_craft_count_or_extra_data(&br, &any), 3);
+        assert_eq!(BlockheadHostStub::action_inventory_change_int_for_key(&br, &any, "105"), Some(1));
+        BlockheadHostStub::action_set_inventory_change_int_for_key(&br, &any, "7", 9);
         assert_eq!(a.inventory_change().unwrap().get(&"7".to_string()).unwrap().int_value(), 9);
-        let r = BlockheadHost::good_or_bad_interaction_for_action(&br, b, Some(&any));
+        let r = BlockheadHostStub::good_or_bad_interaction_for_action(&br, b, Some(&any));
         assert_eq!(r.render_item_type, 0);
-        assert_eq!(BlockheadHost::unable_to_work_reason(&br, b), 0);
-        assert!(BlockheadHost::can_crawl(&br, b));
-        assert_eq!(BlockheadHost::jetpack_fuel_count(&br, b), 0);
-        assert_eq!(BlockheadHost::free_block_pickup_radius(&br, b), 0.5);
-        let saved = BlockheadHost::action_get_save_dict(&br, &any);
-        let back = BlockheadHost::action_init_with_save_dict_inventory_items(&br, &saved, &[]);
+        assert_eq!(BlockheadHostStub::unable_to_work_reason(&br, b), 0);
+        assert!(BlockheadHostStub::can_crawl(&br, b));
+        assert_eq!(BlockheadHostStub::jetpack_fuel_count(&br, b), 0);
+        assert_eq!(BlockheadHostStub::free_block_pickup_radius(&br, b), 0.5);
+        let saved = BlockheadHostStub::action_get_save_dict(&br, &any);
+        let back = BlockheadHostStub::action_init_with_save_dict_inventory_items(&br, &saved, &[]);
         assert_eq!(action_of(&back).unwrap().goal_tile_pos(), IntPair { x: 12, y: -3 });
     }
 }

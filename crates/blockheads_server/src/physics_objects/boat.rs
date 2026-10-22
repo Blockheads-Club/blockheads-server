@@ -870,7 +870,7 @@ mod tests {
 
     /// Host whose `stopRiding` does what says: call back `removeRider:` and clear `rideObject`.
     struct RideHost;
-    impl BlockheadHost for RideHost {
+    impl crate::blockhead::blockhead::BlockheadHostStub for RideHost {
         fn stop_riding(&self, b: &Blockhead) {
             let ro = b.bh.borrow().ride_object.clone();
             if let Some(ro) = ro {
@@ -882,7 +882,7 @@ mod tests {
     }
 
     struct FbHook(RefCell<Vec<(i32, bool, bool, i32)>>);
-    impl DwHooks for FbHook {
+    impl crate::dynworld::state::DwHooksStub for FbHook {
         fn freeblock_from_position(&self, init: FreeBlockInit<'_>) -> Option<ObjRef> {
             self.0.borrow_mut().push((
                 init.item_type as i32,

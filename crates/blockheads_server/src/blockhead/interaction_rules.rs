@@ -39,10 +39,11 @@ use crate::crafting::workbench::Workbench;
 // The seam (what BlockheadHost lacks)
 // ====================================================================================================
 
+crate::hooks::hook_trait! {
 /// `DynamicWorld` calls used by this module that `BlockheadHost` does not carry. Every method has an inert default (as
 /// in the sibling seams); the integrator installs a real adapter with [`set_actions_host`].
 #[allow(unused_variables)]
-pub trait ActionsHost {
+pub trait ActionsHost, stub ActionsHostStub {
     /// `-[DynamicWorld freeBlocksExistAtPos:]`
     fn free_blocks_exist_at_pos(&self, b: &Blockhead, pos: IntPair) -> bool {
         false
@@ -82,6 +83,7 @@ pub trait ActionsHost {
         Vec::new()
     }
     /// `-[obj interactionRenderItemType]` (InteractionObject)
+    #[provided]
     fn interaction_render_item_type(&self, o: &ObjRef) -> u32 {
         default_interaction_render_item_type(o)
     }
@@ -90,6 +92,7 @@ pub trait ActionsHost {
     fn dynamic_world_is_client(&self) -> bool {
         false
     }
+}
 }
 
 /// `-[InteractionObject interactionRenderItemType]` per subclass:
@@ -127,7 +130,7 @@ pub fn default_interaction_render_item_type(o: &ObjRef) -> u32 {
 
 /// The default seam: every method inert.
 pub struct NullActionsHost;
-impl ActionsHost for NullActionsHost {}
+impl ActionsHostStub for NullActionsHost {}
 
 thread_local! {
     static ACTIONS_HOST: std::cell::RefCell<Rc<dyn ActionsHost>> = std::cell::RefCell::new(Rc::new(NullActionsHost));
@@ -2018,7 +2021,7 @@ pub(crate) mod testhost {
             self.log.borrow_mut().push(s);
         }
     }
-    impl crate::blockhead::inventory_model::InventoryHost for AHost {
+    impl crate::blockhead::inventory_model::InventoryHostStub for AHost {
         fn action_goal_interaction(&self, a: &Rc<dyn std::any::Any>) -> i32 {
             ActionBridge.action_goal_interaction(a)
         }
@@ -2035,21 +2038,21 @@ pub(crate) mod testhost {
             ActionBridge.action_interaction_item_sub_index(a)
         }
     }
-    impl BlockheadHost for AHost {
+    impl crate::blockhead::blockhead::BlockheadHostStub for AHost {
         fn action_in_progress(&self, a: &Rc<dyn std::any::Any>) -> bool {
-            ActionBridge.action_in_progress(a)
+            BlockheadHost::action_in_progress(&ActionBridge, a)
         }
         fn action_set_in_progress(&self, a: &Rc<dyn std::any::Any>, v: bool) {
-            ActionBridge.action_set_in_progress(a, v)
+            BlockheadHost::action_set_in_progress(&ActionBridge, a, v)
         }
         fn action_goal_tile_pos(&self, a: &Rc<dyn std::any::Any>) -> IntPair {
-            ActionBridge.action_goal_tile_pos(a)
+            BlockheadHost::action_goal_tile_pos(&ActionBridge, a)
         }
         fn action_interaction_test_result(&self, a: &Rc<dyn std::any::Any>) -> InteractionTestResult {
-            ActionBridge.action_interaction_test_result(a)
+            BlockheadHost::action_interaction_test_result(&ActionBridge, a)
         }
         fn action_interaction_object_id(&self, a: &Rc<dyn std::any::Any>) -> i64 {
-            ActionBridge.action_interaction_object_id(a)
+            BlockheadHost::action_interaction_object_id(&ActionBridge, a)
         }
         fn set_door_at_pos_to_open_direction(&self, pos: IntPair, open: bool, dir: i32) {
             self.rec(format!("door:{},{}:{}:{}", pos.x, pos.y, open, dir));
@@ -2116,7 +2119,7 @@ pub(crate) mod testhost {
             ));
         }
     }
-    impl ActionsHost for AHost {
+    impl ActionsHostStub for AHost {
         fn free_blocks_exist_at_pos(&self, _b: &Blockhead, _p: IntPair) -> bool {
             self.fb_exist.get()
         }

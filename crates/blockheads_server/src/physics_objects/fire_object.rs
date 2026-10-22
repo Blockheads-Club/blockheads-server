@@ -42,16 +42,18 @@ const ITEM_GOLD_BED: i32 = 170;
 pub static FIRE_OBJECT_CLASS: ClassInfo =
     ClassInfo { name: "FireObject", superclass: Some(&DYNAMIC_OBJECT_CLASS), protocols: &[] };
 
+crate::hooks::hook_trait! {
 /// Seam to the plants module (not implemented when this module was written): `removePlantWithoutCreatingFreeblocks`
 /// on whichever plant class `getPlantAtPos:` returned. The integrator installs
 /// the real dispatcher with [`set_fire_host`]; the default does nothing.
-pub trait FireHost {
+pub trait FireHost, stub FireHostStub {
     /// `-[Plant removePlantWithoutCreatingFreeblocks]`
     fn remove_plant_without_creating_freeblocks(&self, _plant: &ObjRef) {}
 }
+}
 
 struct NullFireHost;
-impl FireHost for NullFireHost {}
+impl FireHostStub for NullFireHost {}
 
 thread_local! {
     static FIRE_HOST: RefCell<Rc<dyn FireHost>> = RefCell::new(Rc::new(NullFireHost));

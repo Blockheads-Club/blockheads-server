@@ -68,39 +68,47 @@ pub const SE_DAMAGE: i32 = 4;
 /// `ITEM_CAGE`
 pub const ITEM_CAGE: i32 = 302;
 
+crate::hooks::hook_trait! {
 /// Seam to layers that did not exist when `npc_hostile` was written. All methods have defaults; the `World` and
 /// `Blockhead` ones are implemented on the concrete types, the `DynamicWorld` ones are inert (they return the
 /// "nothing there" answer).
 #[allow(unused_variables)]
-pub trait HostileHost {
+pub trait HostileHost, stub HostileHostStub {
     // ---- World ----
     /// The concrete `World` (`[self world]`); `None` when there is none (tests).
+    #[provided]
     fn world(&self) -> Option<Rc<World>> {
         npc_env().world()
     }
     /// `[world customRules]` by value (zeroed if the world is gone).
+    #[provided]
     fn custom_rules(&self) -> CustomRules {
         self.world().map(|w| w.custom_rules()).unwrap_or_default()
     }
     /// `[world expertMode]`
+    #[provided]
     fn expert_mode(&self) -> bool {
         self.world().map_or(false, |w| w.expert_mode())
     }
     /// `[world tutorialActive]`
+    #[provided]
     fn tutorial_active(&self) -> bool {
         self.world().map_or(false, |w| w.tutorial_active())
     }
     /// `[world getDayNightFractionForX:atWorldTime:]`; 0 when there is no world.
+    #[provided]
     fn day_night_fraction(&self, x: f32, t: f64) -> f32 {
         self.world().map_or(0.0, |w| w.get_day_night_fraction_for_x_at_world_time(x, t))
     }
     /// `[world fireProjectileFrom:to:at:fireItemType:firer:]`.
+    #[provided]
     fn fire_projectile(&self, from: Vector2, to: Vector2, at: Option<&ObjRef>, item: i32, firer: Option<&ObjRef>) {
         if let Some(w) = self.world() {
             w.fire_projectile_from_to_at_fire_item_type_firer(from, to, at, item, firer);
         }
     }
     /// `[world addSimulationEventOfType:SE_DAMAGE forBlockhead:b extraData:text]` (only when `isSimulation`).
+    #[provided]
     fn add_damage_simulation_event(&self, b: &ObjRef, text: &str) {
         if let Some(w) = self.world() {
             w.add_simulation_event_of_type_for_blockhead_extra_data(
@@ -132,28 +140,34 @@ pub trait HostileHost {
     fn set_cactus_available_food_at(&self, pos: IntPair, v: f32) {}
     // ---- Blockhead ----
     /// `[b paused]`
+    #[provided]
     fn bh_paused(&self, b: &ObjRef) -> bool {
         as_blockhead(b).map_or(false, |x| x.paused())
     }
     /// `[b regenerating]`
+    #[provided]
     fn bh_regenerating(&self, b: &ObjRef) -> bool {
         as_blockhead(b).map_or(false, |x| x.regenerating())
     }
     /// `[b onTradeMission]`
+    #[provided]
     fn bh_on_trade_mission(&self, b: &ObjRef) -> bool {
         as_blockhead(b).map_or(false, |x| x.on_trade_mission())
     }
     /// `[b shouldContinueSimulating]`
+    #[provided]
     fn bh_should_continue_simulating(&self, b: &ObjRef) -> bool {
         as_blockhead(b).map_or(false, |x| x.should_continue_simulating())
     }
     /// `[b sufferDamage:dmg isSimulation:sim recoil:recoil]`.
+    #[provided]
     fn bh_suffer_damage(&self, b: &ObjRef, dmg: f32, sim: bool, recoil: bool) {
         if let Some(x) = as_blockhead(b) {
             x.suffer_damage_is_simulation_recoil(dmg, sim, recoil);
         }
     }
     /// `[b center]`
+    #[provided]
     fn bh_center(&self, b: &ObjRef) -> Vector2 {
         match b.as_harmable() {
             Some(h) => h.center(),
@@ -161,9 +175,10 @@ pub trait HostileHost {
         }
     }
 }
+}
 
 struct DefaultHost;
-impl HostileHost for DefaultHost {}
+impl HostileHostStub for DefaultHost {}
 
 /// [`HostileHost`] backed by the real `DynamicWorld` (dynamic_world_ops): the integrator installs
 /// `set_hostile_host(Rc::new(DynamicWorldHost(dw)))`.
@@ -2531,7 +2546,7 @@ pub(crate) mod test_support {
         pub bhs: RefCell<Vec<ObjRef>>,
         pub doors: RefCell<Vec<(IntPair, bool, i32)>>,
     }
-    impl NpcEnv for TestEnv {
+    impl crate::npc::npc::NpcEnvStub for TestEnv {
         fn world(&self) -> Option<Rc<World>> {
             Some(self.world.clone())
         }
@@ -2555,7 +2570,7 @@ pub(crate) mod test_support {
         pub babies: RefCell<Vec<(IntPair, i32)>>,
         pub sim_events: RefCell<Vec<String>>,
     }
-    impl HostileHost for TestHost {
+    impl HostileHostStub for TestHost {
         fn world(&self) -> Option<Rc<World>> {
             Some(self.world.clone())
         }
