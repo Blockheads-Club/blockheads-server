@@ -161,7 +161,12 @@ jobs:
       - name: Build
         working-directory: app
         shell: bash
+        env:
+          # Signs the updater artifacts (createUpdaterArtifacts in tauri.conf.json); the public key is in that file.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
+          [ -n "$TAURI_SIGNING_PRIVATE_KEY" ] || { echo "::error::TAURI_SIGNING_PRIVATE_KEY is not set (app updates need signed updater artifacts)"; exit 1; }
           bun install --frozen-lockfile
           # Stamp the release version into the bundle (not committed).
           bun -e 'const f="src-tauri/tauri.conf.json";const j=JSON.parse(await Bun.file(f).text());j.version="${{ needs.plan.outputs.version }}";await Bun.write(f,JSON.stringify(j,null,2))'
@@ -170,8 +175,19 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
-          find . -path '*/release/bundle/*' -type f \( -name '*.dmg' -o -name '*-setup.exe' -o -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \) -not -path '*/node_modules/*' -exec cp {} dist/ \;
-          ls -l dist
+          find . -path '*/release/bundle/*' -type f \( -name '*.dmg' -o -name '*-setup.exe' -o -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' -o -name '*.app.tar.gz' -o -name '*.sig' \) -not -path '*/node_modules/*' -exec cp {} dist/ \;
+          cd dist
+          # The macOS updater archive has no version or arch in its name; both macOS jobs would clash.
+          arch="${{ matrix.name }}"; arch="${arch#macos-}"; [ "$arch" = x86_64 ] && arch=x64
+          for f in *.app.tar.gz *.app.tar.gz.sig; do
+            [ -e "$f" ] || continue
+            mv "$f" "blockheads-server_${{ needs.plan.outputs.version }}_${arch}.app${f#*.app}"
+          done
+          # GitHub turns spaces in asset names into dots; do it here so latest.json names the uploaded files.
+          for f in *\ *; do
+            if [ -e "$f" ]; then mv "$f" "${f// /.}"; fi
+          done
+          ls -l
       - uses: actions/upload-artifact@v4
         with:
           name: app-${{ matrix.name }}
@@ -243,15 +259,25 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.tag }}
+          sparse-checkout: .github/scripts
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
           pattern: "{cli-*,app-*}"
           merge-multiple: true
       - name: Collect assets and checksums
+        env:
+          APP: ${{ needs.app-check.outputs.present }}
         run: |
           mkdir -p dist
           cp artifacts/* dist/
+          # Feed of the app's in-place updater (signed artifacts of all six desktop targets).
+          if [ "$APP" = true ]; then
+            .github/scripts/latest-json.sh dist "${{ needs.plan.outputs.version }}" "${{ needs.plan.outputs.tag }}" "$GITHUB_REPOSITORY"
+          fi
           (cd dist && sha256sum * > SHA256SUMS.txt)
           ls -l dist
       - name: Create or update the draft release
