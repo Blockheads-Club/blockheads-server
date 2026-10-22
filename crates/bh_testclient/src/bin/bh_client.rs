@@ -9,10 +9,12 @@ use std::process::exit;
 use bh_testclient::decode::{decode_packet, pretty};
 use bh_testclient::scenario::{builtin, BUILTIN_NAMES};
 use bh_testclient::trace::{read_trace, Dir, TraceRecord, TraceSink};
-use bh_testclient::{ClientConfig, Identity, JoinOutcome, RunOptions, Scenario, ScenarioError, Session};
+use bh_testclient::{
+    ClientConfig, Identity, JoinOutcome, LoaderOptions, ModClient, RunOptions, Scenario, ScenarioError, Session,
+};
 
 const USAGE: &str = "usage:
-  bh_client join ADDR --alias A [--udid U] [--password P] [--secs N] [--trace FILE]
+  bh_client join ADDR --alias A [--udid U] [--password P] [--secs N] [--trace FILE] [--modded CACHE_DIR]
   bh_client run  ADDR --script FILE [--trace-dir DIR] [--timeout MS]
   bh_client probe ADDR [--secs N]
   bh_client decode FILE.jsonl [--json] [--type 0x04]
@@ -119,7 +121,28 @@ fn cmd_join(a: &Args) -> i32 {
             *done = recs.len();
         }
     };
-    let outcome = match s.join(5000) {
+    // Modded mode: the 0xBC mod protocol (HELLO, mod list, downloads into CACHE_DIR, READY, bhcModLoader).
+    let mut modded = a.get("modded").map(|d| ModClient::new(LoaderOptions::new(std::path::Path::new(d))));
+    let joined = match &mut modded {
+        Some(mc) => mc.join(&mut s, 5000),
+        None => s.join(5000),
+    };
+    if let Some(mc) = &modded {
+        if let Some(h) = &mc.server {
+            let hash = bhmod_proto::hex(&h.mods_hash);
+            eprintln!("mods: server hello modsHash={hash} clientRequired={} count={}", h.client_required, h.count);
+        }
+        for m in mc.list.iter().flat_map(|l| &l.mods) {
+            eprintln!("mods: {} {} sides={:?} required={}", m.id, m.version, m.sides, m.client_required);
+        }
+        for d in &mc.downloads {
+            eprintln!("mods: download {} from {} complete={}", bhmod_proto::hex(&d.sha256), d.resumed_from, d.complete);
+        }
+        if let Some(r) = &mc.reject {
+            eprintln!("mods: rejected: {}", r.text);
+        }
+    }
+    let outcome = match joined {
         Ok(o) => o,
         Err(e) => {
             eprintln!("io error: {}", e);

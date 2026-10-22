@@ -990,7 +990,16 @@ impl DynamicObject for Blockhead {
     /// `-updatePosition:`.
     fn update_position(&self, me: &ObjRef, new_position: IntPair) {
         let _ = me;
-        host().update_position(self, new_position)
+        let before = self.pos();
+        host().update_position(self, new_position);
+        // Mods (not in the original; `None` without mods): `player-move` when a player's blockhead changed tile.
+        if let Some(m) = crate::mods::hooks().filter(|m| m.wants(crate::mods::Optional::PlayerMove)) {
+            if let (Some(c), after) = (self.client_id(), self.pos()) {
+                if after != before {
+                    m.player_move(&c, before, after);
+                }
+            }
+        }
     }
     /// `-worldChanged:` is empty.
     fn world_changed(&self, _me: &ObjRef, _positions: &mut Vec<IntPair>) {}

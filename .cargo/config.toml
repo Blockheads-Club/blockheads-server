@@ -1,2 +1,15 @@
 [env]
 RUST_TEST_THREADS = "1"
+# Luau (mods) is C++: link the static C++ runtime on Android so the app needs no libc++_shared.so
+# (the build script adds libc++abi, which libc++_static does not contain).
+CXXSTDLIB_armv7_linux_androideabi = "c++_static"
+CXXSTDLIB_aarch64_linux_android = "c++_static"
+CXXSTDLIB_x86_64_linux_android = "c++_static"
+CXXSTDLIB_i686_linux_android = "c++_static"
+
+# WASM mods run on the Pulley interpreter on armv7; tail-call dispatch makes it 1.3-2x faster.
+[target.armv7-unknown-linux-gnueabihf]
+rustflags = ["--cfg", "pulley_assume_llvm_makes_tail_calls"]
+
+[target.armv7-linux-androideabi]
+rustflags = ["--cfg", "pulley_assume_llvm_makes_tail_calls"]

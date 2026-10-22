@@ -5,12 +5,14 @@
 pub mod client;
 pub mod decode;
 pub mod harness;
+pub mod modded;
 pub mod scenario;
 pub mod session;
 pub mod trace;
 
 pub use client::{Client, ClientConfig, NetEvent, Rx};
 pub use decode::{decode_packet, pretty, type_name, Decoded};
+pub use modded::{Download, LoaderOptions, ModClient};
 pub use scenario::{BlockheadRef, RunOptions, RunReport, Scenario, ScenarioError, Step};
 pub use session::{
     BlockheadSpec, CreatedObject, FillNetRequest, GatherNetRequest, Identity, JoinOutcome, PaintNetRequest,

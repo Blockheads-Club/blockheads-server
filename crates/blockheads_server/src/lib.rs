@@ -14,6 +14,7 @@ pub mod host;
 pub mod interaction;
 pub mod items;
 pub mod lighting;
+pub mod mods;
 pub mod net;
 pub mod npc;
 pub mod objects;

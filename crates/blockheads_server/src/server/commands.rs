@@ -53,7 +53,7 @@ fn list_output(header: &str, list: Option<Vec<String>>) -> String {
 
 impl BHServer {
     /// The reply of a command: the console goes through the delegate, a client through the network.
-    fn reply_to(&self, text: &str, issue_client: Option<&str>) {
+    pub(crate) fn reply_to(&self, text: &str, issue_client: Option<&str>) {
         match issue_client {
             None => {
                 if let Some(d) = self.delegate() {
@@ -81,6 +81,12 @@ impl BHServer {
                 if loc + 1 == len && len > 1 {
                     command = Some(nsstring::substring_to_index(c, len - 1));
                 }
+            }
+        }
+        // Mods (not in the original): mod commands and `command` handlers run before the built-ins.
+        if let (Some(h), Some(c)) = (crate::mods::hooks(), command.as_deref()) {
+            if h.command(issue_client, c) {
+                return;
             }
         }
         // 3.-4. issuer flags

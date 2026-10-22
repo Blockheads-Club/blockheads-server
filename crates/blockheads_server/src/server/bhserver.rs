@@ -794,6 +794,9 @@ impl BHServer {
         if !present {
             return;
         }
+        if let Some(h) = crate::mods::hooks() {
+            h.player_quit(player_id, was_kick);
+        }
         if let Some(m) = self.node.match_() {
             m.disconnect_player(player_id);
         }
@@ -953,6 +956,9 @@ impl BHServer {
             }
             PlayerConnectionState::Disconnected => {
                 let was_connected = self.connected_clients.borrow().iter().any(|e| e == player_id);
+                if let (true, Some(h)) = (was_connected, crate::mods::hooks()) {
+                    h.player_quit(player_id, false);
+                }
                 if was_connected {
                     self.connected_clients.borrow_mut().retain(|e| e != player_id);
                     if let Some(t) = self.trade_portal_transactions.borrow_mut().as_mut() {

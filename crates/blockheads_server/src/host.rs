@@ -58,6 +58,9 @@ pub struct HostConfig {
     pub on_ready_commands: Vec<String>,
     /// `--world_id` of a new world (`None`: a random id).
     pub world_id: Option<String>,
+    /// Mods (not in the original). The default loads mods from `BLOCKHEADS_MODS_DIR` or `<data dir>/mods` when
+    /// that directory exists; without mods the server behaves exactly like vanilla.
+    pub mods: crate::mods::ModsConfig,
 }
 
 impl Default for HostConfig {
@@ -74,6 +77,7 @@ impl Default for HostConfig {
             custom_rules_json: None,
             on_ready_commands: Vec::new(),
             world_id: None,
+            mods: crate::mods::ModsConfig::default(),
         }
     }
 }
@@ -153,6 +157,7 @@ pub fn start(cfg: HostConfig, log: LogCallback) -> std::io::Result<ServerHandle>
             user_log(line);
         });
         prepare_thread(cfg.data_dir.as_deref(), Some(sink));
+        crate::mods::set_config(cfg.mods.clone());
         nslog::set_process_name("blockheads_server");
         let (new_name, load_name, width) = match &cfg.world {
             WorldSelect::Load(n) => (None, Some(n.clone()), -1),

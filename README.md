@@ -29,7 +29,7 @@ with a world list, start/stop, live log, connected players and a QR code for pho
 ## 📦 Other Blockheads Club Repositories
 - [**blockheads-pc**](https://github.com/Blockheads-Club/blockheads-pc) - Play The Blockheads on your computer
 - [**blockheads-patcher**](https://github.com/Blockheads-Club/blockheads-patcher) - Fix crashes and add small improvements to the game on your phone
-- [**website**](https://github.com/Blockheads-Club/website) - The [Blockheads Club website](https://blockheads-club.github.io/website/): downloads, guides and docs
+- [**website**](https://github.com/Blockheads-Club/website) - The [Blockheads Club website](https://blockheads.club): downloads, guides and docs
 
 ---
 
@@ -52,7 +52,30 @@ docker run -i --rm -p 15151:15151/udp -v bh-data:/data ghcr.io/blockheads-club/b
 
 Players join with Join World -> Advanced... -> Online IP/Port. On Android 10+ the game client needs the popup fix from
 the [Blockheads Patcher](https://github.com/Blockheads-Club/blockheads-patcher) before it can connect.
-Guides and docs: [blockheads-club.github.io/website/docs](https://blockheads-club.github.io/website/docs/).
+Guides and docs: [blockheads.club/docs](https://blockheads.club/docs).
+
+### Mods (preview)
+Server-side Lua (Luau) and WASM (Rust, C, Zig, Go) mods from the [mod SDK](https://github.com/Blockheads-Club/mod-sdk): put `.bhmod` files or
+unpacked mod folders in `<data dir>/mods/` (or the folder named by `BLOCKHEADS_MODS_DIR`) and grant what they ask
+for in `mods.toml` next to them:
+
+```toml
+[hello-lua]
+grant = ["players:chat"]
+```
+
+Mods get join/quit/chat/command/tick/world events, gameplay events (pre-login, block place/break/change, object
+placement, damage, death, movement; placing, breaking and damage can be cancelled), their own `/commands` (for every
+player), a scheduler, per-world storage (`saves/<world>/mods/storage`, separate from the world database) and
+services, custom events and channels to work with each other (the SDK's `economy` and `landclaim` samples do). They run with a time budget and
+are disabled after repeated faults. Without a mods folder nothing changes: same bytes, saves and output as
+vanilla. Vanilla game clients can join servers with server-side mods.
+
+Mods with a client half are offered to modded clients (PC loader, Android loader installed with Patcher) over the
+[0xBC mod protocol](https://github.com/Blockheads-Club/mod-sdk/blob/dev/docs/protocol-0xbc.md): the client lists the
+server's mods, downloads the packages from the server (resumable, SHA-256 checked) and joins; server and client mods
+talk over channels. Vanilla clients never receive a protocol byte; when a client mod is required they are refused
+with the vanilla "update your game" message (reason 3). The server never offers a client mod that needs `native`.
 
 ---
 
@@ -76,6 +99,11 @@ cd blockheads-server
 cargo build --release -p blockheads_server
 cargo test --workspace
 ```
+
+The mod host (feature `mods`, on by default) uses `bhmod-core`, `bhmod-wasm`, `bhmod-manifest` and `bhmod-proto` from
+[mod-sdk](https://github.com/Blockheads-Club/mod-sdk) as git dependencies pinned to one commit (to work on both
+repositories at once, see [docs/development.md](docs/development.md#developing-against-a-local-mod-sdk)). Build
+without it: `cargo build -p blockheads_server --no-default-features --features trace-rng`.
 
 More: [docs/development.md](docs/development.md) (tests, data directory, embedding, the desktop and Android app,
 releases).

@@ -59,6 +59,13 @@ impl DynamicWorld {
                 erase_first(&self.world_changed_send_unreliably_macro_positions, m);
             }
         }
+        // Mods (not in the original; `None` without mods): `block-changed`, attributed to the requesting player.
+        if let Some(h) = crate::mods::hooks().filter(|h| h.wants(crate::mods::Optional::BlockChanged)) {
+            let tile =
+                self.world.upgrade().and_then(|w| crate::world::tiles::tile_at_world_position_loaded(pos.x, pos.y, &w));
+            let tile = tile.map_or(0, |t| t.type_index() as u32);
+            h.block_changed(pos, tile, crate::mods::actor().as_deref());
+        }
     }
 
     /// `-worldContentsChangedAtPos:`: pushes to the RELIABLE macro list, never touches the unreliable one.

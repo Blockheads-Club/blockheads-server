@@ -26,6 +26,15 @@ pub fn match_did_receive_data_from_player(srv: &Rc<BHServer>, data: &[u8], peer:
     srv.update_players();
     let ty = data.first().copied().unwrap_or(0);
     let connected = srv.connected_clients.borrow().iter().any(|e| e == peer);
+    // Mods (not in the original): 0xBC goes to the mod host, only when one is installed.
+    if ty == crate::mods::MOD_PACKET {
+        if let Some(h) = crate::mods::hooks() {
+            if connected || srv.unapproved_clients.borrow().iter().any(|e| e == peer) {
+                h.mod_packet(peer, data);
+            }
+            return;
+        }
+    }
     if !connected {
         if ty != 0x1f {
             return;
@@ -237,6 +246,8 @@ fn route(srv: &Rc<BHServer>, msg: ClientMsg, original_packet: &[u8], peer: &str)
         }
         ClientMsg::BlockheadDamage { payload } => {
             if let Some(w) = &w {
+                // Mods: the damage event names the attacking player (no effect without mods).
+                let _actor = crate::mods::hooks().map(|_| crate::mods::act_as(peer));
                 w.remote_blockhead_damage_request_requested_by_client_name(&payload, alias.as_deref());
             }
         }
@@ -546,13 +557,34 @@ fn chat(srv: &Rc<BHServer>, dict: Option<PlistValue>, peer: &str) {
             }
         }
     }
-    let Some(msg) = msg else {
+    let Some(mut msg) = msg else {
         let ex = messages::chat_nil_exception();
         if let Malformed::Exception { name, reason } = ex {
             ns_raise(name, &reason);
         }
         return;
     };
+    // Mods (not in the original; `None` without mods): mod commands work for every player, chat can be cancelled
+    // or rewritten before it is shown or broadcast.
+    if let (Some(h), Some(t)) = (crate::mods::hooks(), text.clone()) {
+        if loc_zero && h.owns_command(&t) {
+            if let Some(d) = srv.delegate() {
+                d.chat_message_recieved_display_notification(msg.clone(), true);
+            }
+            h.command(Some(peer), &t);
+            return;
+        }
+        if !is_command {
+            match h.chat(peer, &t) {
+                crate::mods::ChatVerdict::Keep => {}
+                crate::mods::ChatVerdict::Cancel => return,
+                crate::mods::ChatVerdict::Replace(n) => {
+                    msg.map.insert("message".to_string(), PlistValue::string(n.clone()));
+                    text = Some(n);
+                }
+            }
+        }
+    }
     if let Some(d) = srv.delegate() {
         d.chat_message_recieved_display_notification(msg.clone(), true);
     }
@@ -750,6 +782,15 @@ fn handshake(srv: &Rc<BHServer>, payload: &[u8], peer: &str) {
             }
         }
     }
+    // Mods (not in the original; `None` without mods): the `bhcModLoader` check and `player-pre-login` may reject
+    // with a vanilla reason.
+    if let Some(h) = crate::mods::hooks() {
+        let loader = crate::mods::LoaderKey::from_player_info(raw_dict.as_ref());
+        if let Some(r) = h.pre_login(peer, p, info_alias.as_deref().unwrap_or(""), loader.as_ref()) {
+            reject_p(r, Some(p));
+            return;
+        }
+    }
     // 12. approved
     srv.connected_clients.borrow_mut().push(p.to_string());
     remove_unapproved();
@@ -787,6 +828,11 @@ fn handshake(srv: &Rc<BHServer>, payload: &[u8], peer: &str) {
     }
     srv.players_changed();
     srv.send_updated_player_list_to_clients();
+    if let Some(h) = crate::mods::hooks() {
+        if srv.connected_clients.borrow().iter().any(|e| e == p) {
+            h.player_join(p);
+        }
+    }
 }
 
 /// `-sendPortalChestAcknowledgementIfNeededForClient:`.

@@ -527,6 +527,10 @@ impl Blockhead {
                 return;
             }
         }
+        // Mods (not in the original): `death` of a blockhead simulated by the server.
+        if let Some(h) = crate::mods::hooks() {
+            h.death(self.client_id().as_deref(), self.unique_id());
+        }
         let world = self.world_rc();
         let rules = world.as_ref().map(|w| w.custom_rules()).unwrap_or_default();
         let enabled = rules.custom_rules_enabled != 0;
@@ -719,6 +723,10 @@ impl Blockhead {
         };
         // 6.
         if !was_regen && d.regenerating != 0 && has_server {
+            // Mods (not in the original): `death` of a player's blockhead (the client simulates it).
+            if let Some(m) = crate::mods::hooks() {
+                m.death(client_id.as_deref(), self.unique_id());
+            }
             let pn = h.player_name_for_player_with_id_including_old_players(client_id.as_deref());
             nslog!(
                 "Blockhead died named {} owned by player {}.",
@@ -1332,6 +1340,14 @@ impl Blockhead {
         let ctl = self.is_client_blockhead_being_controlled_by_server();
         if (sim || ctl) && !self.should_continue_simulating() {
             return;
+        }
+        // Mods (not in the original; `None` without mods): `damage` may cancel or change the amount.
+        if let Some(h) = crate::mods::hooks() {
+            let attacker = crate::mods::actor();
+            match h.damage(self.client_id().as_deref(), self.unique_id(), damage, attacker.as_deref()) {
+                Some(d) => damage = d,
+                None => return,
+            }
         }
         if self.is_net() {
             // 3.
