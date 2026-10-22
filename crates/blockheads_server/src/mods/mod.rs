@@ -13,6 +13,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use crate::server::bhserver::BHServer;
+use crate::types::structs::IntPair;
 
 #[cfg(feature = "mods")]
 mod server_host;
@@ -35,6 +36,15 @@ pub enum ChatVerdict {
     Cancel,
     /// Show and broadcast this text instead.
     Replace(String),
+}
+
+/// Events that are only worth building when a mod listens to them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Optional {
+    /// `block-changed` (every tile change).
+    BlockChanged,
+    /// `player-move` (every tile step of a player's blockhead).
+    PlayerMove,
 }
 
 /// The calls the server makes into the mod host. Player ids are the vanilla `playerID` strings.
@@ -60,11 +70,54 @@ pub trait ModHooks {
     fn world_save(&self, post: bool);
     /// The server is stopping (after the final save).
     fn server_stop(&self);
+
+    /// True when a mod listens to `what`.
+    fn wants(&self, what: Optional) -> bool;
+    /// A player passed every vanilla join check (API 0.2). `Some(reason)`: reject with that 0x26 reason byte.
+    fn pre_login(&self, player_id: &str, alias: &str) -> Option<u8>;
+    /// A player places `item` into a tile (0x10). True: cancelled (the caller takes the protected-tile path).
+    fn block_place(&self, player_id: &str, pos: IntPair, item: u32, data_a: u16, data_b: u16) -> bool;
+    /// A player removes a tile (0x11) or a back wall (0x3a). True: cancelled (protected-tile path).
+    fn block_break(&self, player_id: &str, pos: IntPair, back_wall: bool, tile: u32) -> bool;
+    /// A tile changed (monitor only); `player_id` from [`actor`] when a player's request caused it.
+    fn block_changed(&self, pos: IntPair, tile: u32, player_id: Option<&str>);
+    /// A player places a workbench (0x15, `item` = workbench type) or an interaction object (0x16, `item` = item
+    /// type). True: cancelled.
+    fn object_place(&self, player_id: &str, pos: IntPair, workbench: bool, item: u32) -> bool;
+    /// A blockhead is about to take `amount` damage. `None`: cancelled; otherwise the (possibly changed) amount.
+    fn damage(&self, player_id: Option<&str>, blockhead: u64, amount: f32, attacker: Option<&str>) -> Option<f32>;
+    /// A blockhead died.
+    fn death(&self, player_id: Option<&str>, blockhead: u64);
+    /// A player's blockhead moved to another tile.
+    fn player_move(&self, player_id: &str, from: IntPair, to: IntPair);
 }
 
 thread_local! {
     static HOOKS: RefCell<Option<Rc<dyn ModHooks>>> = const { RefCell::new(None) };
     static CONFIG: RefCell<ModsConfig> = RefCell::new(ModsConfig::default());
+    static ACTOR: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+/// While alive, tile changes and damage are attributed to a player (the request being handled). Only set when a
+/// mod host is installed.
+pub struct ActorGuard {
+    prev: Option<String>,
+}
+
+impl Drop for ActorGuard {
+    fn drop(&mut self) {
+        ACTOR.with(|a| *a.borrow_mut() = self.prev.take());
+    }
+}
+
+/// Attributes what happens until the guard drops to `player_id` (see [`actor`]).
+pub fn act_as(player_id: &str) -> ActorGuard {
+    ActorGuard { prev: ACTOR.with(|a| a.borrow_mut().replace(player_id.to_string())) }
+}
+
+/// The player whose request is being handled, if any.
+pub fn actor() -> Option<String> {
+    ACTOR.with(|a| a.borrow().clone())
 }
 
 /// The installed mod host, `None` on the vanilla path.
@@ -137,6 +190,21 @@ mod tests {
         assert!(mods_dir().ends_with("TheBlockheads/mods"), "{:?}", mods_dir());
         std::env::remove_var("BLOCKHEADS_MODS_DIR");
         assert!(mods_dir().ends_with("mods"));
+    }
+
+    #[test]
+    fn actor_guards_nest() {
+        assert_eq!(actor(), None);
+        {
+            let _a = act_as("a");
+            assert_eq!(actor().as_deref(), Some("a"));
+            {
+                let _b = act_as("b");
+                assert_eq!(actor().as_deref(), Some("b"));
+            }
+            assert_eq!(actor().as_deref(), Some("a"));
+        }
+        assert_eq!(actor(), None);
     }
 
     #[test]

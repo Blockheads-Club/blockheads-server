@@ -237,6 +237,8 @@ fn route(srv: &Rc<BHServer>, msg: ClientMsg, original_packet: &[u8], peer: &str)
         }
         ClientMsg::BlockheadDamage { payload } => {
             if let Some(w) = &w {
+                // Mods: the damage event names the attacking player (no effect without mods).
+                let _actor = crate::mods::hooks().map(|_| crate::mods::act_as(peer));
                 w.remote_blockhead_damage_request_requested_by_client_name(&payload, alias.as_deref());
             }
         }
@@ -769,6 +771,13 @@ fn handshake(srv: &Rc<BHServer>, payload: &[u8], peer: &str) {
                 reject_p(reject::DEVICE_ALREADY_IN_USE_WITH_DIFFERENT_NAME, Some(p));
                 return;
             }
+        }
+    }
+    // Mods (not in the original; `None` without mods): `player-pre-login` may reject with a vanilla reason.
+    if let Some(h) = crate::mods::hooks() {
+        if let Some(r) = h.pre_login(p, info_alias.as_deref().unwrap_or("")) {
+            reject_p(r, Some(p));
+            return;
         }
     }
     // 12. approved

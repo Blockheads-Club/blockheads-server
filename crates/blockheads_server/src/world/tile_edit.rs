@@ -182,8 +182,16 @@ impl World {
                 if self.tile_is_protected_at_pos_against_client(pos, Some(c)) {
                     return index;
                 }
+                // Mods (not in the original): a cancelled `block-break` takes the protected-tile path.
+                if let Some(h) = crate::mods::hooks() {
+                    let wall = self.tile_at(pos.x, pos.y).map_or(0, |t| t.back_wall_type_index() as u32);
+                    if h.block_break(c, pos, true, wall) {
+                        return index;
+                    }
+                }
             }
         }
+        let _actor = client_id.filter(|_| crate::mods::hooks().is_some()).map(crate::mods::act_as);
         let bh =
             if remove_blockhead_id != 0 { deps().blockhead_with_id_including_net(remove_blockhead_id) } else { None };
         self.remove_back_wall_at_pos_remove_blockhead(pos, bh.as_ref());
@@ -205,12 +213,20 @@ impl World {
                 if self.tile_is_protected_at_pos_against_client(pos, Some(c)) {
                     return index;
                 }
+                // Mods (not in the original): a cancelled `block-break` takes the protected-tile path.
+                if let Some(h) = crate::mods::hooks() {
+                    let tile = self.tile_at(pos.x, pos.y).map_or(0, |t| t.type_index() as u32);
+                    if h.block_break(c, pos, false, tile) {
+                        return index;
+                    }
+                }
                 if z_index == 1 && !d.player_is_admin_with_id(Some(c)) {
                     // resync only; the request is NOT rejected
                     d.update_player(c);
                 }
             }
         }
+        let _actor = client_id.filter(|_| crate::mods::hooks().is_some()).map(crate::mods::act_as);
         let bh = if remove_blockhead_id != 0 { d.blockhead_with_id_including_net(remove_blockhead_id) } else { None };
         if is_water == 0 {
             self.remove_tile_at_world_x_world_y_create_contents_freeblock_count_create_foreground_contents_freeblock_count_remove_blockhead_only_remove_c_ontents_only_remove_foreground_contents(
@@ -521,6 +537,10 @@ impl World {
                 if self.tile_is_protected_at_pos_against_client(pos, Some(c)) {
                     return;
                 }
+                // Mods (not in the original): a cancelled `object-place` is dropped like a protected tile.
+                if crate::mods::hooks().is_some_and(|h| h.object_place(c, pos, true, wb_type as u32)) {
+                    return;
+                }
             }
         }
         let plist = Self::trailing_gz_plist(payload, 0x10);
@@ -627,6 +647,10 @@ impl World {
         if self.server().is_some() {
             if let Some(c) = client_id {
                 if item_type == ItemType::ITEM_OWNERSHIP_SIGN && !d.player_is_admin_with_id(Some(c)) {
+                    return;
+                }
+                // Mods (not in the original): a cancelled `object-place` is dropped like a protected tile.
+                if crate::mods::hooks().is_some_and(|h| h.object_place(c, pos, false, item_type.0)) {
                     return;
                 }
             }
@@ -825,11 +849,16 @@ impl World {
                 if reject {
                     return index;
                 }
+                // Mods (not in the original): a cancelled `block-place` takes the protected-tile path.
+                if crate::mods::hooks().is_some_and(|h| h.block_place(c, pos, ty as u32, data_a, data_b)) {
+                    return index;
+                }
                 if z_index == 1 && !d.player_is_admin_with_id(Some(c)) {
                     d.update_player(c);
                 }
             }
         }
+        let _actor = client_id.filter(|_| crate::mods::hooks().is_some()).map(crate::mods::act_as);
         let tile = self.tile_at(pos.x, pos.y);
         let alias = d.player_alias_for_peer_id(client_id);
         self.fill_tile_at_pos_with_type_data_a_data_b_placed_by_client_save_dict_placed_by_client_name(

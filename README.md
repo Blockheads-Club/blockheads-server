@@ -64,8 +64,10 @@ for in `mods.toml` next to them:
 grant = ["players:chat"]
 ```
 
-Mods get join/quit/chat/command/tick/world events, their own `/commands` (for every player), a scheduler and
-per-world storage (`saves/<world>/mods/storage`, separate from the world database). They run with a time budget and
+Mods get join/quit/chat/command/tick/world events, gameplay events (pre-login, block place/break/change, object
+placement, damage, death, movement; placing, breaking and damage can be cancelled), their own `/commands` (for every
+player), a scheduler, per-world storage (`saves/<world>/mods/storage`, separate from the world database) and
+services, custom events and channels to work with each other (the SDK's `economy` and `landclaim` samples do). They run with a time budget and
 are disabled after repeated faults. Without a mods folder nothing changes: same bytes, saves and output as
 vanilla. Vanilla game clients can join servers with server-side mods.
 
