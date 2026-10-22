@@ -482,6 +482,10 @@ const CADENCE: &[u8] = &[0x17, 0x08, 0x2c, 0x04, 0x28, 0x07, 0x09, 0x1e];
 /// wandering into view, blockheads re-announced as they cross macro blocks): soft.
 pub const SOFT_OBJECTS: &[u8] = &[14, 13, 24, 25, 28, 35, 36, 39, 51, 63];
 
+/// Trees and plants from world generation. How many blocks hold them in the save follows how much of the world
+/// the server loaded while the scripts ran, which drifts with build speed: their save record counts are soft.
+pub const NATURAL_OBJECTS: &[u8] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 27, 33, 34, 37, 57, 58, 59, 61, 62];
+
 /// Summarise every packet received since the last drain into observations under `phase`:
 /// packet counts per type, object creates/removes per object type, chest inventories, fill/pickup replies and
 /// server chat text. Object ids never appear in keys (they follow the shared `rand()` stream).
@@ -619,7 +623,8 @@ pub fn save_obs(save: &Path, obs: &mut Obs) {
         *pat.entry(format!("save.{}.{}.{}", id.env, id.db, p)).or_default() += 1;
     }
     for (k, n) in pat {
-        let soft = k.rsplit('/').next().and_then(|t| t.parse::<u8>().ok()).is_some_and(|t| SOFT_OBJECTS.contains(&t));
+        let ty = k.rsplit('/').next().and_then(|t| t.parse::<u8>().ok());
+        let soft = ty.is_some_and(|t| SOFT_OBJECTS.contains(&t) || NATURAL_OBJECTS.contains(&t));
         if soft {
             obs.soft(k, n);
         } else {

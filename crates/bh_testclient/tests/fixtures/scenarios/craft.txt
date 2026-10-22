@@ -5,7 +5,7 @@ S	CRAFTA.blockhead#2	true
 S	craft.freeblock_created	0
 S	craft.pickup_accepted	1
 S	furnace.burn_last	type=9 level=0 inUse=1 hasFuel=1 fuel~7 inUseFuel=1
-S	furnace.burn_updates	2
+S	~furnace.burn_updates	2
 S	furnace.close.echo	type=9 level=0 inUse=0 hasFuel=1 fuel~15 inUseFuel=0
 S	furnace.create.t45	1
 S	furnace.created	type=9 level=0 inUse=0 hasFuel=1 fuel~15 inUseFuel=0
@@ -19,7 +19,7 @@ S	join.rx.01	1
 S	join.rx.06	1
 S	join.rx.23	1
 S	kiln.burn_last	type=8 level=0 inUse=1 hasFuel=1 fuel~2 inUseFuel=1
-S	kiln.burn_updates	2
+S	~kiln.burn_updates	2
 S	kiln.close.echo	type=8 level=0 inUse=0 hasFuel=1 fuel~15 inUseFuel=0
 S	kiln.create.t45	1
 S	kiln.created	type=8 level=0 inUse=0 hasFuel=1 fuel~15 inUseFuel=0
@@ -48,13 +48,13 @@ S	save.lightBlocks.main.H_allIndexes	1
 S	save.server_db.main.H_info	1
 S	save.server_db.main.recentPlayers	1
 S	save.world_db.blocks.N_N	83
-S	save.world_db.dw.N_N/1	2
-S	save.world_db.dw.N_N/10	1
-S	save.world_db.dw.N_N/11	1
-S	save.world_db.dw.N_N/4	1
+S	~save.world_db.dw.N_N/1	2
+S	~save.world_db.dw.N_N/10	1
+S	~save.world_db.dw.N_N/11	1
+S	~save.world_db.dw.N_N/4	1
 S	save.world_db.dw.N_N/45	1
-S	save.world_db.dw.N_N/59	1
-S	save.world_db.dw.N_N/7	1
+S	~save.world_db.dw.N_N/59	1
+S	~save.world_db.dw.N_N/7	1
 S	save.world_db.main.H_blockhead_N_inventory	1
 S	save.world_db.main.blockheads	1
 S	save.world_db.main.dynamicWorldv2	1

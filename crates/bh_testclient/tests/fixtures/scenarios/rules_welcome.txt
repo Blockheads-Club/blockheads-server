@@ -33,10 +33,10 @@ S	save.lightBlocks.main.H_allIndexes	3
 S	save.server_db.main.H_info	3
 S	save.server_db.main.recentPlayers	1
 S	save.world_db.blocks.N_N	78
-S	save.world_db.dw.N_N/1	2
-S	save.world_db.dw.N_N/10	1
-S	save.world_db.dw.N_N/11	1
-S	save.world_db.dw.N_N/4	1
+S	~save.world_db.dw.N_N/1	2
+S	~save.world_db.dw.N_N/10	1
+S	~save.world_db.dw.N_N/11	1
+S	~save.world_db.dw.N_N/4	1
 S	save.world_db.dw.N_N/45	1
 S	save.world_db.main.blockheads	1
 S	save.world_db.main.dynamicWorldv2	1

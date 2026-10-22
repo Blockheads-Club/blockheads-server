@@ -736,7 +736,8 @@ fn craft_play(ctx: &mut Ctx) {
             .filter(|(k, _)| *k == 0x08)
             .map(|(_, b)| wb_summary(b))
             .collect();
-        ctx.obs.add(format!("{}.burn_updates", label), burn.len());
+        // the periodic burn update follows the wall clock (every 6 s): its count is soft, its content is not
+        ctx.obs.soft(format!("{}.burn_updates", label), burn.len());
         ctx.obs.add(format!("{}.burn_last", label), burn.last().cloned().unwrap_or_default());
         bench_update(ctx, &mut a, &wb, &format!("{}.close", label), |b| {
             put_u64(b, 0x18, 0);
