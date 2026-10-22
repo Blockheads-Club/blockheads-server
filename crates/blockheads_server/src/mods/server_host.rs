@@ -409,14 +409,19 @@ pub(super) fn load(dir: &Path, save_id: Option<&str>, server: &Rc<BHServer>) -> 
     let bridge = Rc::new(Bridge { srv: Rc::downgrade(server), net: net.clone() });
     let host = ModHost::load(opts, bridge.clone());
     let loaded: Vec<String> = host.mods().into_iter().map(|m| m.id).collect();
-    let catalog = super::catalog::build(dir, &loaded, &mut |m| bridge.log(None, LogLevel::Warn, &m));
+    let catalog = super::catalog::build(dir, &loaded, &mut |m| GameBridge::log(&*bridge, None, LogLevel::Warn, &m));
     if host.is_empty() && catalog.is_empty() {
         return None;
     }
     let offered = catalog.entries.iter().filter(|e| e.bytes.is_some()).count();
     if offered > 0 {
         let req = if catalog.client_required { "required" } else { "optional" };
-        bridge.log(None, LogLevel::Info, &format!("offering {offered} client mod(s) to modded clients ({req})"));
+        GameBridge::log(
+            &*bridge,
+            None,
+            LogLevel::Info,
+            &format!("offering {offered} client mod(s) to modded clients ({req})"),
+        );
     }
     net.borrow_mut().catalog = catalog;
     Some(Rc::new(ServerMods {
