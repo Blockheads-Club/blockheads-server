@@ -45,6 +45,21 @@ fn bh_of(o: &ObjRef) -> Option<&crate::blockhead::blockhead::Blockhead> {
     crate::objects::handle::downcast::<crate::blockhead::blockhead::Blockhead>(o)
 }
 
+/// The `Chest` behind an object handle (`None` for any other class).
+fn chest_of(o: &ObjRef) -> Option<&crate::interaction::chest::Chest> {
+    crate::objects::handle::downcast::<crate::interaction::chest::Chest>(o)
+}
+
+/// The `Door` behind an object handle (`None` for any other class).
+fn door_of(o: &ObjRef) -> Option<&crate::building::door::Door> {
+    crate::objects::handle::downcast::<crate::building::door::Door>(o)
+}
+
+/// The `FreightCar` behind an object handle (`None` for any other class).
+fn freight_of(o: &ObjRef) -> Option<&crate::trains::freight_car::FreightCar> {
+    crate::objects::handle::downcast::<crate::trains::freight_car::FreightCar>(o)
+}
+
 /// A `PlistValue` narrowed to its dictionary (an ObjC non-dict argument is treated as nil).
 fn dict_of(v: Option<&PlistValue>) -> Option<&PlistDict> {
     match v {
@@ -1979,7 +1994,26 @@ impl DwHooks for Glue {
             x.die();
         }
     }
-    // chest_*/freight_*/item_type/remove_window_at_pos/tree_update_*/update_rain_dt/cleanup keep the inert defaults
+    // ---- chests and freight-car chests (`saveDynamicObjectsForMacroTile:`): without these the chest inventory
+    // was never written to `<x>_<y>/chest_<id>` and freight-car chests never to `trainchest_<id>`.
+    fn chest_inventory_data_allowing_empty(&self, chest: &ObjRef) -> Option<Vec<u8>> {
+        chest_of(chest)?.inventory_data_allowing_empty(true)
+    }
+    fn chest_save_dict_excluding_inventory(&self, chest: &ObjRef) -> Option<PlistValue> {
+        Some(PlistValue::Dict(chest_of(chest)?.get_save_dict_including_inventory(chest, false)))
+    }
+    fn freight_needs_chest_save(&self, car: &ObjRef) -> bool {
+        freight_of(car).map_or(false, |f| f.needs_chest_save())
+    }
+    fn freight_set_needs_chest_save(&self, car: &ObjRef, v: bool) {
+        if let Some(f) = freight_of(car) {
+            f.set_needs_chest_save(v);
+        }
+    }
+    fn freight_chest_save_dict(&self, car: &ObjRef) -> Option<PlistValue> {
+        freight_of(car).map(|f| PlistValue::Dict(f.get_chest_save_dict()))
+    }
+    // item_type/remove_window_at_pos/tree_update_*/update_rain_dt/cleanup keep the inert defaults
     // (owning modules do not yet publish adapters; see cross_module_requests).
 }
 
@@ -2464,6 +2498,49 @@ impl DwOpsHooks for Glue {
     fn tree_is_required_soil_type(&self, _tree: &ObjRef, soil: u8) -> bool {
         crate::trees::tree::tree_is_required_soil_type(soil as i32)
     }
+    // ---- doors (`setDoorAtPos:toOpen:direction:`, `doorIsOpenAtPos:`, path admission)
+    fn door_can_be_used_by_blockhead(&self, door: &ObjRef, bh: &ObjRef) -> bool {
+        door_of(door).map_or(false, |d| d.can_be_used_by_blockhead(door, bh))
+    }
+    fn door_is_open(&self, door: &ObjRef) -> bool {
+        door_of(door).map_or(false, |d| d.is_open())
+    }
+    fn door_set_open_direction(&self, door: &ObjRef, open: bool, direction: i32) {
+        if let Some(d) = door_of(door) {
+            d.set_open_direction(door, open, direction);
+        }
+    }
+    // ---- chests: the server side of opening a chest (`sendChestInventoryForChest:toClientOwningBlockheadWithID:`)
+    // and the treasure-chest fill. Inert, every chest opened by a client came back empty.
+    fn chest_load_inventory_items_from_disk_if_needed(&self, chest: &ObjRef) {
+        if let Some(c) = chest_of(chest) {
+            c.load_inventory_items_from_disk_if_needed();
+        }
+    }
+    fn chest_inventory_data(&self, chest: &ObjRef, allow_empty: bool) -> Option<Vec<u8>> {
+        chest_of(chest)?.inventory_data_allowing_empty(allow_empty)
+    }
+    fn chest_remote_inventory_data_recieved(&self, chest: &ObjRef, data: Option<&[u8]>) {
+        if let Some(c) = chest_of(chest) {
+            c.remote_inventory_data_recieved(data);
+        }
+    }
+    fn is_chest(&self, o: &ObjRef) -> bool {
+        chest_of(o).is_some()
+    }
+    fn chest_move_inventory_items_from_array_to_index_count(
+        &self,
+        chest: &ObjRef,
+        coins: &mut Vec<crate::items::inventory_item::ItemRef>,
+        index: i32,
+        count: i32,
+    ) {
+        if let Some(c) = chest_of(chest) {
+            let from: crate::items::inventory_item::SubSlot = Rc::new(RefCell::new(std::mem::take(coins)));
+            c.move_inventory_items_from_array_to_index_count(chest, &from, index, count);
+            *coins = std::mem::take(&mut *from.borrow_mut());
+        }
+    }
 }
 
 #[cfg(test)]
@@ -2499,6 +2576,85 @@ mod tests {
             n.npc().borrow_mut().mate_cooldown_timer = 0.0;
             n.npc().borrow_mut().age = 100.0;
             assert!(!DwOpsHooks::npc_can_mate(&*g, &adult));
+        });
+    }
+
+    /// Chest / freight-car / door hooks forward to the objects (inert for other classes). Before, every chest hook
+    /// kept its inert default: chest contents were never sent back to a client nor saved.
+    #[test]
+    fn glue_chest_door_and_freight_hooks_forward_to_the_objects() {
+        isolated(|| {
+            use crate::interaction::chest::Chest;
+            use crate::items::inventory_item::InventoryItem;
+            use crate::types::item_type::ItemType;
+            let h = Harness::new("glue_chest");
+            let g = Glue::new(&h.srv);
+            let d = crate::dynworld::state::testutil::dw("glue_chest", 4);
+            let w = d.world();
+            let it = InventoryItem::new(ItemType(0x413), 0, 0, None, None);
+            let chest: ObjRef =
+                Chest::new(&w, &d, IntPair { x: 40, y: 3 }, None, Some(&it.borrow()), false, None, Some("cid"), None)
+                    .unwrap();
+            assert!(DwOpsHooks::is_chest(&*g, &chest));
+            DwOpsHooks::chest_load_inventory_items_from_disk_if_needed(&*g, &chest);
+            assert!(DwOpsHooks::chest_inventory_data(&*g, &chest, false).is_none(), "empty chest");
+            assert!(DwHooks::chest_inventory_data_allowing_empty(&*g, &chest).is_some());
+            let mut coins: Vec<_> = (0..3).map(|_| InventoryItem::new(ItemType(166), 0, 0, None, None)).collect();
+            DwOpsHooks::chest_move_inventory_items_from_array_to_index_count(&*g, &chest, &mut coins, 0, 2);
+            assert_eq!(coins.len(), 1, "two coins moved into the chest, one left");
+            assert!(DwOpsHooks::chest_inventory_data(&*g, &chest, false).is_some());
+            match DwHooks::chest_save_dict_excluding_inventory(&*g, &chest) {
+                Some(PlistValue::Dict(sd)) => {
+                    assert!(!sd.map.contains_key(&"saveItemSlots".to_string()));
+                    assert!(sd.map.contains_key(&"chestType".to_string()));
+                }
+                other => panic!("{:?}", other.is_some()),
+            }
+            DwOpsHooks::chest_remote_inventory_data_recieved(&*g, &chest, None);
+            assert!(DwOpsHooks::chest_inventory_data(&*g, &chest, false).is_none(), "reset to empty slots");
+
+            let door = crate::building::door::Door::init_with_world_dynamic_world_at_position_cache_type_save_dict_placed_by_client(
+                &w,
+                &d,
+                IntPair { x: 50, y: 3 },
+                None,
+                0x89,
+                None,
+                None,
+            )
+            .unwrap();
+            assert!(!DwOpsHooks::door_is_open(&*g, &door));
+            DwOpsHooks::door_set_open_direction(&*g, &door, true, 1);
+            assert!(DwOpsHooks::door_is_open(&*g, &door));
+            let _ = DwOpsHooks::door_can_be_used_by_blockhead(&*g, &door, &chest);
+
+            // wrong classes: the inert answers
+            assert!(!DwOpsHooks::is_chest(&*g, &door));
+            DwOpsHooks::chest_load_inventory_items_from_disk_if_needed(&*g, &door);
+            DwOpsHooks::chest_remote_inventory_data_recieved(&*g, &door, None);
+            let mut none = Vec::new();
+            DwOpsHooks::chest_move_inventory_items_from_array_to_index_count(&*g, &door, &mut none, 0, 1);
+            assert!(DwOpsHooks::chest_inventory_data(&*g, &door, true).is_none());
+            assert!(DwHooks::chest_inventory_data_allowing_empty(&*g, &door).is_none());
+            assert!(DwHooks::chest_save_dict_excluding_inventory(&*g, &door).is_none());
+            assert!(!DwOpsHooks::door_is_open(&*g, &chest));
+            assert!(!DwOpsHooks::door_can_be_used_by_blockhead(&*g, &chest, &door));
+            DwOpsHooks::door_set_open_direction(&*g, &chest, true, 1);
+            assert!(!DwHooks::freight_needs_chest_save(&*g, &door));
+            DwHooks::freight_set_needs_chest_save(&*g, &door, true);
+            assert!(DwHooks::freight_chest_save_dict(&*g, &door).is_none());
+
+            if let Some(car) =
+                crate::trains::freight_car::FreightCar::new(&w, &d, IntPair { x: 60, y: 3 }, None, None, None)
+            {
+                DwHooks::freight_set_needs_chest_save(&*g, &car, true);
+                assert!(DwHooks::freight_needs_chest_save(&*g, &car));
+                DwHooks::freight_set_needs_chest_save(&*g, &car, false);
+                assert!(!DwHooks::freight_needs_chest_save(&*g, &car));
+                assert!(matches!(DwHooks::freight_chest_save_dict(&*g, &car), Some(PlistValue::Dict(_))));
+            } else {
+                panic!("freight car not constructed");
+            }
         });
     }
 
