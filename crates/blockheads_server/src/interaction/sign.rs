@@ -744,6 +744,9 @@ pub(crate) mod testkit {
     pub fn world_with_block(name: &str) -> (Rc<World>, Rc<DynamicWorld>, PhysicalBlockRef) {
         let d = dw(name, 4);
         let w = d.world();
+        // A save id like the dedicated server always has: without one, paths such as the painting check's
+        // `pnginfo <appsup>/saves/(null)/testImage.png` are not valid `sh -c` input.
+        *w.save_id.borrow_mut() = Some(name.to_string());
         let pb = w.take_physical_block();
         pb.valid.set(true);
         *w.macro_tiles().get(0).unwrap().physical_block.borrow_mut() = Some(pb);
