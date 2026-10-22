@@ -51,11 +51,12 @@
     if (stage === 'done') return t('upd.b.done');
     return kind === 'check' ? t('upd.b.checkFailed') : kind === 'download' ? t('upd.b.downloadFailed') : t('upd.b.failed');
   });
+  const inPlace = $derived(u.info?.mode === 'replace' || u.info?.mode === 'plugin');
   const steps = $derived([
     t('upd.step.saved'),
     t('upd.step.stopped'),
-    u.info?.mode === 'replace' ? t('upd.step.install', { v }) : t('upd.step.installer', { v }),
-    u.info?.mode === 'replace' ? t('upd.step.restart') : t('upd.step.restartApp')
+    inPlace ? t('upd.step.install', { v }) : t('upd.step.installer', { v }),
+    inPlace ? t('upd.step.restart') : t('upd.step.restartApp')
   ]);
   const options: { id: RestartWhen; title: string; hint: string }[] = $derived([
     { id: 'empty', title: t('upd.when.empty'), hint: t('upd.when.emptyHint') },
@@ -144,7 +145,7 @@
         </li>
       {/each}
     </ol>
-    <p class="hint">{u.step === 0 ? t('upd.dontClose') : t('upd.installerHint')}</p>
+    <p class="hint">{u.step === 0 || inPlace ? t('upd.dontClose') : t('upd.installerHint')}</p>
   {:else if stage === 'done' && u.done}
     <div class="box ok" role="status"><Icon name="check" />
       <span>{u.done.downtime === null ? t('upd.doneApp', { v: u.done.version }) : t('upd.doneRunning', { v: u.done.version, s: u.done.downtime })}</span>

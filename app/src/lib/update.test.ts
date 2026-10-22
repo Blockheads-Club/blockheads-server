@@ -66,6 +66,7 @@ describe('preferences and derived state', () => {
   it('maps backend error codes', () => {
     fresh();
     expect(updErr('checksum')).toBe(t('upd.err.checksum'));
+    expect(updErr('signature')).toBe(t('upd.err.signature'));
     expect(updErr('running')).toBe(t('err.running'));
     expect(updErr('weird')).toBe('weird');
     expect(updates).toBeInstanceOf(Updates);
@@ -159,28 +160,15 @@ describe('check', () => {
     expect(mock.api.updateCheck).toHaveBeenCalledTimes(1);
   });
 
-  it('uses the test channel and installs by itself only where it can', async () => {
+  it('uses the test channel and never downloads or installs by itself', async () => {
     const u = fresh();
-    store.settings.updates = { ...DEFAULT_PREFS, channel: 'beta', installWhenEmpty: true, seenVersion: '2.0.0' };
-    mock.api.updateProgress = vi.fn(async () => progress({ stage: 'ready' }));
+    store.settings.updates = { ...DEFAULT_PREFS, channel: 'beta', seenVersion: '2.0.0' };
     await u.check(true);
     expect(mock.api.updateCheck).toHaveBeenCalledWith(true);
-    expect(u.open).toBe(true); // the install itself opens the popup
-    expect(mock.api.updateDownload).toHaveBeenCalled();
-    expect(mock.api.updateInstall).toHaveBeenCalled();
-    u.stop();
-
-    const browser = fresh({ updateCheck: vi.fn(async () => makeUpdate({ mode: 'browser' })) });
-    store.settings.updates = { ...DEFAULT_PREFS, installWhenEmpty: true, seenVersion: '2.0.0' };
-    await browser.check(true);
-    expect(browser.open).toBe(false);
+    expect(u.stage).toBe('available');
+    expect(u.open).toBe(false);
     expect(mock.api.updateDownload).not.toHaveBeenCalled();
-
-    const phone = fresh();
-    store.info = { ...store.info!, platform: 'android' };
-    store.settings.updates = { ...DEFAULT_PREFS, installWhenEmpty: true };
-    await phone.check(true);
-    expect(mock.api.updateDownload).not.toHaveBeenCalled();
+    expect(mock.api.updateInstall).not.toHaveBeenCalled();
   });
 
   it('opens the popup from the icon and closes it again', async () => {
@@ -289,10 +277,19 @@ describe('restart and install', () => {
     await vi.advanceTimersByTimeAsync(QUIT_DELAY);
     await p;
     expect(mock.api.appQuit).toHaveBeenCalled();
+    expect(mock.api.appRestart).not.toHaveBeenCalled();
     mock.api.appQuit = vi.fn(async () => { throw 'x'; });
     const q = u.schedule('now');
     await vi.advanceTimersByTimeAsync(QUIT_DELAY);
     await q;
+    // In place (updater plugin): the app restarts into the new version instead of quitting.
+    u.info = makeUpdate({ mode: 'plugin' }) as never;
+    mock.api.appQuit = vi.fn(async () => {});
+    const r = u.install();
+    await vi.advanceTimersByTimeAsync(QUIT_DELAY);
+    await r;
+    expect(mock.api.appRestart).toHaveBeenCalled();
+    expect(mock.api.appQuit).not.toHaveBeenCalled();
   });
 
   it('waits for the server to empty, or warns players and restarts after 5 minutes', async () => {

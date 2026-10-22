@@ -174,7 +174,7 @@ describe('UpdateDialog', () => {
 
   it('walks through the install steps', async () => {
     updates.stage = 'installing';
-    updates.info = makeUpdate({ mode: 'replace' }) as never;
+    updates.info = makeUpdate({ mode: 'plugin' }) as never;
     store.state = 'running';
     render(UpdateDialog);
     expect(screen.getByText('Players can join again in about 30 seconds.')).toBeInTheDocument();
@@ -337,18 +337,13 @@ describe('UpdateSettings', () => {
 
     await fireEvent.click(screen.getByRole('switch', { name: 'Check for updates automatically' }));
     expect(updates.prefs.autoCheck).toBe(false);
-    await fireEvent.click(screen.getByRole('switch', { name: 'Install when no one is online' }));
-    expect(updates.prefs.installWhenEmpty).toBe(true);
+    expect(screen.queryByRole('switch', { name: /Install/ })).toBeNull();
     await fireEvent.change(screen.getByRole('combobox', { name: 'Versions' }), { target: { value: 'beta' } });
     expect(updates.prefs.channel).toBe('beta');
     expect(mock.api.setSettings).toHaveBeenCalled();
   });
 
-  it('leaves out automatic installs on Android, and copes with missing details', () => {
-    store.info = { ...store.info!, platform: 'android' };
-    render(UpdateSettings);
-    expect(screen.queryByRole('switch', { name: 'Install when no one is online' })).toBeNull();
-    cleanup();
+  it('copes with missing details', () => {
     store.info = null;
     updates.info = null;
     updates.stage = 'available';

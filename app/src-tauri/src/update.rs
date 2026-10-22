@@ -1,11 +1,11 @@
 //! App updates from the GitHub release feed of the Blockheads Server repository.
 //!
-//! App only: the game server code is not touched. A check reads the release list, picks the newest release above
-//! the running version (plain `vX.Y.Z` tags; test versions only when the user allows them) and the asset for this
-//! platform. Desktop builds download that asset, verify it against the release's `SHA256SUMS.txt` and hand it to
-//! the platform installer (or replace the running AppImage). Android and releases without a matching, verifiable
-//! asset open the download in the browser instead. In-place updates through the Tauri updater plugin need a signing
-//! key; see docs/development.md ("App updates").
+//! App only: the game server code is not touched, and nothing is downloaded or installed until the user asks for
+//! it. A check reads the release list and picks the newest release above the running version (plain `vX.Y.Z` tags;
+//! test versions only when the user allows them). Windows, macOS and AppImage builds then update in place through
+//! the Tauri updater plugin from the release's signed `latest.json` ([`Mode::Plugin`]). Elsewhere, or for a release
+//! without `latest.json`, the platform asset is downloaded, verified against `SHA256SUMS.txt` and handed to the
+//! system installer. Android opens the APK download in the browser. See docs/development.md ("App updates").
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -20,6 +20,7 @@ pub const FEED: &str = "https://api.github.com/repos/Blockheads-Club/blockheads-
 /// Only pages and downloads under this prefix are opened from the update popup.
 pub const SITE: &str = "https://github.com/Blockheads-Club/blockheads-server/";
 const SUMS: &str = "SHA256SUMS.txt";
+const LATEST: &str = "latest.json";
 const AGENT: &str = concat!("blockheads-server-app/", env!("CARGO_PKG_VERSION"));
 
 #[derive(Debug, Clone, Deserialize)]
@@ -65,6 +66,8 @@ pub enum Mode {
     Replace,
     /// Open the download (Android APK) or the release page in the browser.
     Browser,
+    /// The Tauri updater plugin: signed download, in-place install, relaunch.
+    Plugin,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -82,6 +85,9 @@ pub struct UpdateInfo {
     /// `SHA256SUMS.txt` of the release; required for [`Mode::Installer`] and [`Mode::Replace`].
     #[serde(skip)]
     pub sums: Option<String>,
+    /// The release's `latest.json` for [`Mode::Plugin`].
+    #[serde(skip)]
+    pub feed: Option<String>,
     pub mode: Mode,
 }
 
@@ -94,6 +100,8 @@ pub struct Platform {
     pub appimage: Option<PathBuf>,
     /// Linux package format of the system: "deb", "rpm" or "".
     pub pkg: String,
+    /// The updater plugin can install here (desktop Windows, macOS, AppImage).
+    pub plugin: bool,
 }
 
 impl Platform {
@@ -105,12 +113,10 @@ impl Platform {
         } else {
             ""
         };
-        Platform {
-            os: std::env::consts::OS.into(),
-            arch: std::env::consts::ARCH.into(),
-            appimage: std::env::var_os("APPIMAGE").filter(|v| !v.is_empty()).map(PathBuf::from),
-            pkg: pkg.into(),
-        }
+        let os = std::env::consts::OS;
+        let appimage = std::env::var_os("APPIMAGE").filter(|v| !v.is_empty()).map(PathBuf::from);
+        let plugin = os == "windows" || os == "macos" || (os == "linux" && appimage.is_some());
+        Platform { os: os.into(), arch: std::env::consts::ARCH.into(), appimage, pkg: pkg.into(), plugin }
     }
 }
 
@@ -162,13 +168,16 @@ pub fn asset_for<'a>(p: &Platform, assets: &'a [GhAsset]) -> Option<(&'a GhAsset
 }
 
 pub fn info_for(r: &GhRelease, current: &str, p: &Platform) -> UpdateInfo {
-    let sums = r.assets.iter().find(|a| a.name == SUMS).map(|a| a.browser_download_url.clone());
+    let url = |name: &str| r.assets.iter().find(|a| a.name == name).map(|a| a.browser_download_url.clone());
+    let (sums, latest) = (url(SUMS), url(LATEST));
     let found = asset_for(p, &r.assets);
     // Without a checksum list nothing is downloaded by the app: the browser takes over.
     let mode = match found {
+        _ if p.plugin && latest.is_some() => Mode::Plugin,
         Some((_, m)) if m == Mode::Browser || sums.is_some() => m,
         _ => Mode::Browser,
     };
+    let feed = if mode == Mode::Plugin { latest } else { None };
     UpdateInfo {
         version: r.tag_name.trim_start_matches('v').to_string(),
         current: current.to_string(),
@@ -178,7 +187,27 @@ pub fn info_for(r: &GhRelease, current: &str, p: &Platform) -> UpdateInfo {
         prerelease: r.prerelease,
         asset: found.map(|(a, _)| Asset { name: a.name.clone(), url: a.browser_download_url.clone(), size: a.size }),
         sums,
+        feed,
         mode,
+    }
+}
+
+/// Download speed (bytes/s) and seconds left after `done` of `total` bytes in `elapsed`.
+pub fn rate(done: u64, total: u64, elapsed: Duration) -> (u64, u64) {
+    let speed = (done as f64 / elapsed.as_secs_f64().max(0.001)) as u64;
+    let eta = if speed > 0 { total.saturating_sub(done) / speed } else { 0 };
+    (speed, eta)
+}
+
+/// An updater plugin error as a code for the UI.
+pub fn plugin_err(e: &str) -> String {
+    let e = e.to_ascii_lowercase();
+    if e.contains("signature") || e.contains("minisign") {
+        "signature".into()
+    } else if e.contains("format") || e.contains("platform") || e.contains("target") {
+        "nothing".into()
+    } else {
+        "offline".into()
     }
 }
 
@@ -325,6 +354,26 @@ impl Updater {
         lock(&self.file).clone().filter(|(p, _)| p.is_file())
     }
 
+    /// Change the progress (the updater plugin path reports through this too).
+    pub fn report(&self, f: impl FnOnce(&mut Progress)) -> Progress {
+        self.set(f)
+    }
+
+    /// The download ended: ready, cancelled or failed.
+    pub fn finish<T>(&self, r: &Result<T, String>) -> Progress {
+        self.set(|p| match r {
+            Ok(_) => p.stage = "ready".into(),
+            Err(e) if e == "cancelled" => {
+                p.stage = "cancelled".into();
+                p.error = None;
+            }
+            Err(e) => {
+                p.stage = "error".into();
+                p.error = Some(e.clone());
+            }
+        })
+    }
+
     fn set(&self, f: impl FnOnce(&mut Progress)) -> Progress {
         let mut p = lock(&self.progress);
         f(&mut p);
@@ -336,17 +385,7 @@ impl Updater {
     pub fn download(&self, tick: &dyn Fn(&Progress)) -> Result<PathBuf, String> {
         self.cancel.store(false, Ordering::SeqCst);
         let r = self.fetch(tick);
-        let p = self.set(|p| match &r {
-            Ok(_) => p.stage = "ready".into(),
-            Err(e) if e == "cancelled" => {
-                p.stage = "cancelled".into();
-                p.error = None;
-            }
-            Err(e) => {
-                p.stage = "error".into();
-                p.error = Some(e.clone());
-            }
-        });
+        let p = self.finish(&r);
         tick(&p);
         r
     }
@@ -384,9 +423,7 @@ impl Updater {
             done += n as u64;
             if shown.elapsed() >= Duration::from_millis(200) {
                 shown = Instant::now();
-                let secs = start.elapsed().as_secs_f64().max(0.001);
-                let speed = (done as f64 / secs) as u64;
-                let eta = if speed > 0 { total.saturating_sub(done) / speed } else { 0 };
+                let (speed, eta) = rate(done, total, start.elapsed());
                 tick(&self.set(|p| {
                     p.done = done;
                     p.total = total;
@@ -421,6 +458,11 @@ impl Updater {
     pub fn note(&self, p: &Pending) -> Result<(), String> {
         std::fs::create_dir_all(&self.dir).map_err(|e| e.to_string())?;
         std::fs::write(self.note_path(), serde_json::to_vec(p).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+    }
+
+    /// Drop the note again (the install did not start).
+    pub fn forget(&self) {
+        let _ = std::fs::remove_file(self.note_path());
     }
 
     /// The note of an update that restarted the app (read once), and the downloads are cleaned up.
@@ -580,6 +622,23 @@ mod tests {
         rpm_arm.pkg = "rpm".into();
         assert_eq!(get(&rpm_arm), None);
 
+        // With a signed latest.json the updater plugin takes over where it can install.
+        let mut with_latest = r.clone();
+        with_latest.assets.push(GhAsset {
+            name: LATEST.into(),
+            browser_download_url: "http://x/latest.json".into(),
+            size: 1,
+        });
+        let mut win = plat("windows", "x86_64");
+        win.plugin = true;
+        let pi = info_for(&with_latest, "0.1.0", &win);
+        assert_eq!((pi.mode, pi.feed.as_deref()), (Mode::Plugin, Some("http://x/latest.json")));
+        let mut deb_latest = deb.clone();
+        deb_latest.pkg = "deb".into();
+        let di = info_for(&with_latest, "0.1.0", &deb_latest);
+        assert_eq!((di.mode, di.feed), (Mode::Installer, None));
+        assert_eq!(info_for(&r, "0.1.0", &win).mode, Mode::Installer, "no latest.json: the installer hand-off");
+
         let info = info_for(&r, "0.1.0", &plat("windows", "x86_64"));
         assert_eq!(info.version, "0.2.0");
         assert_eq!(info.mode, Mode::Installer);
@@ -590,6 +649,17 @@ mod tests {
         assert_eq!(info_for(&bare, "0.1.0", &plat("windows", "x86_64")).mode, Mode::Browser);
         let none = info_for(&rel("v0.2.0", false, false, &[]), "0.1.0", &plat("windows", "x86_64"));
         assert_eq!((none.mode, none.asset), (Mode::Browser, None));
+    }
+
+    #[test]
+    fn rates_and_plugin_errors() {
+        assert_eq!(rate(50, 150, Duration::from_secs(10)), (5, 20));
+        assert_eq!(rate(0, 10, Duration::ZERO), (0, 0));
+        assert_eq!(plugin_err("the signature verification failed"), "signature");
+        assert_eq!(plugin_err("Minisign error"), "signature");
+        assert_eq!(plugin_err("invalid updater binary format"), "nothing");
+        assert_eq!(plugin_err("target not found"), "nothing");
+        assert_eq!(plugin_err("network error"), "offline");
     }
 
     #[test]
@@ -744,6 +814,7 @@ mod tests {
         });
         assert_eq!(r, Err("cancelled".into()));
         assert_eq!(u.progress().stage, "cancelled");
+        assert_eq!(u.report(|p| p.done = 3).done, 3);
         assert!(u.begin());
         assert!(!u.begin(), "one download at a time");
         assert!(!dir.path().join("a.exe.part").exists());
@@ -759,6 +830,9 @@ mod tests {
         u.note(&note).unwrap();
         std::fs::write(dir.path().join("updates").join("old.exe"), b"x").unwrap();
         assert_eq!(u.resume(), Some(note));
+        assert_eq!(u.resume(), None);
+        u.note(&Pending::default()).unwrap();
+        u.forget();
         assert_eq!(u.resume(), None);
         assert!(!dir.path().join("updates").join("old.exe").exists());
     }

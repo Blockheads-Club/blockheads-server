@@ -75,28 +75,33 @@ Set `CARGO_INCREMENTAL=0` when building several ABIs in parallel.
 ### App updates
 
 The app checks the GitHub releases of this repository (`src-tauri/src/update.rs`, UI in `src/lib/update.svelte.ts`).
-Only the app is updated; the game server code is not involved.
+Only the app is updated; the game server code is not involved. Like the Blockheads PC launcher, a check (by hand,
+or automatically at start and at most once a day) only shows the update: nothing is downloaded or installed until
+the user clicks to update, and the user then picks when the server restarts (now, when nobody is online, or in five
+minutes with a chat warning).
 
 - Feed: `https://api.github.com/repos/Blockheads-Club/blockheads-server/releases`. Drafts are ignored. The stable
-  channel takes plain `vX.Y.Z` tags that are not marked as prerelease; the "Stable and test versions" setting also
-  takes prereleases and `vX.Y.Z-pre.N` tags. Automatic checks run at start and at most once a day.
-- Assets are matched by the Tauri bundle names that `release.yml` uploads: `*_x64-setup.exe` / `*_arm64-setup.exe`
-  (Windows), `*_aarch64.dmg` / `*_x64.dmg` (macOS), `*_amd64.AppImage` / `*_aarch64.AppImage`, `*_amd64.deb` /
-  `*_arm64.deb`, `*.x86_64.rpm` (Linux) and `*-android.apk`. Renaming bundles in the workflow breaks this matching.
-- Desktop: the asset is downloaded into `<app data>/updates`, checked against the release's `SHA256SUMS.txt` (a
-  release without it, or without a matching asset, falls back to opening the download page), then the restart
-  saves and stops the server, copies the loaded world to `<data dir>/update-backups/<world>-<ms>` (newest three
-  kept), and hands over: Windows runs the NSIS setup, macOS opens the disk image, Linux opens the .deb/.rpm with the
-  system installer or, inside an AppImage (`$APPIMAGE`), swaps the AppImage file and starts it. A note in
-  `updates/pending.json` tells the next start which version was expected and whether to start the server again.
-- Android: the APK download opens in the browser; Android asks the user to confirm the install. This needs the APK
-  to be signed with the same persistent release key every time (see the `ANDROID_KEYSTORE_*` secrets).
+  channel takes plain `vX.Y.Z` tags that are not marked as prerelease; "Stable and test versions" also takes
+  prereleases and `vX.Y.Z-pre.N` tags.
+- In place (Windows, macOS, AppImage): `tauri-plugin-updater` reads the chosen release's `latest.json`, downloads the
+  artifact, checks its minisign signature against the public key in `tauri.conf.json` (`plugins.updater.pubkey`),
+  installs it and relaunches (Windows: the NSIS installer in passive mode restarts the app).
+- Fallback (Linux .deb/.rpm, or a release without `latest.json`): the platform asset is downloaded into
+  `<app data>/updates`, checked against the release's `SHA256SUMS.txt` and handed to the system installer (a
+  release without checksums opens the download page instead). Assets are matched by the bundle names of
+  `release.yml` (`*_x64-setup.exe`, `*_arm64-setup.exe`, `*_aarch64.dmg`, `*_x64.dmg`, `*_amd64.AppImage`,
+  `*_aarch64.AppImage`, `*_amd64.deb`, `*_arm64.deb`, `*.x86_64.rpm`, `*-android.apk`).
+- Before any restart the server is saved and stopped and the loaded world is copied to
+  `<data dir>/update-backups/<world>-<ms>` (newest three kept). `updates/pending.json` tells the next start which
+  version was expected and whether to start the server again.
+- Android: the APK download opens in the browser; Android asks the user to confirm. This needs every APK signed
+  with the same persistent release key (`ANDROID_KEYSTORE_*` secrets).
 - Debug builds can point the check at another feed with `BHS_UPDATE_FEED=<url>`.
 
-Fully in-place updates (download, install and relaunch without an installer window) would use the Tauri updater
-plugin, which needs a signing key that this repository does not have yet. To enable it: generate a key pair with
-`bun tauri signer generate -w ~/.tauri/blockheads-server.key`, keep the private key and its password only as the
-repository secrets `TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, put the public key in
-`tauri.conf.json` under `plugins.updater.pubkey` with an endpoint for a `latest.json`, set
-`bundle.createUpdaterArtifacts: true`, and have `release.yml` upload the `.sig` files and `latest.json`. The
-installer hand-off above can then be replaced by `tauri-plugin-updater` on desktop.
+Release side: `createUpdaterArtifacts` is on, so `tauri build` needs `TAURI_SIGNING_PRIVATE_KEY` and
+`TAURI_SIGNING_PRIVATE_KEY_PASSWORD` (repository secrets; `release.yml` fails without them). The desktop jobs upload
+the signed artifacts with their `.sig` files (macOS: `blockheads-server_<version>_<arch>.app.tar.gz`, renamed because
+Tauri gives both architectures the same name; spaces in names become dots as on GitHub), and the publish job writes
+`latest.json` for all six desktop targets with `.github/scripts/latest-json.sh` before `SHA256SUMS.txt`. Local
+bundle builds without the key: `bun tauri build -c '{"bundle":{"createUpdaterArtifacts":false}}'`, or sign with a
+throw-away key from `bun tauri signer generate`.

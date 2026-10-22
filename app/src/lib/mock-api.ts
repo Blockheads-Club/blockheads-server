@@ -43,6 +43,7 @@ export function makeApi(over: Partial<Record<string, unknown>> = {}) {
     updateCancel: vi.fn(async () => {}),
     updateInstall: vi.fn(async () => {}),
     updateResume: vi.fn(async () => null as unknown),
+    appRestart: vi.fn(async () => {}),
     openUrl: vi.fn(async () => {}),
     ...over
   };

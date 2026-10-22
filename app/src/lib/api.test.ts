@@ -50,12 +50,13 @@ describe('api', () => {
     await api.updateCancel();
     await api.updateInstall(true);
     await api.updateResume();
+    await api.appRestart();
     await api.openUrl('https://x');
     expect(invoke.mock.calls.map((c: any[]) => c[0])).toEqual([
       'app_info', 'list_worlds', 'create_world', 'delete_world', 'start_server', 'stop_server', 'poll', 'stats',
       'send_command', 'get_list', 'set_list', 'network_info', 'get_settings', 'set_settings',
       'boot', 'splash_set', 'splash_get', 'splash_retry', 'choose_data_folder', 'app_quit', 'main_ready',
-      'update_check', 'update_download', 'update_progress', 'update_cancel', 'update_install', 'update_resume', 'open_url'
+      'update_check', 'update_download', 'update_progress', 'update_cancel', 'update_install', 'update_resume', 'app_restart', 'open_url'
     ]);
     expect(invoke).toHaveBeenCalledWith('update_check', { beta: true });
     expect(invoke).toHaveBeenCalledWith('update_install', { backup: true });

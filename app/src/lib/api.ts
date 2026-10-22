@@ -42,6 +42,8 @@ export const api = {
   /** Stop the server, back up the world, start the installer; the app quits afterwards. */
   updateInstall: (backup: boolean) => invoke<void>('update_install', { backup }),
   updateResume: () => invoke<UpdatePending | null>('update_resume'),
+  /** After an in-place update: start the new version. */
+  appRestart: () => invoke<void>('app_restart'),
   /** Release pages and downloads of the server repository only. */
   openUrl: (url: string) => invoke<void>('open_url', { url })
 };

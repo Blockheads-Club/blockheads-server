@@ -25,15 +25,17 @@ export type UpdateChannel = 'stable' | 'beta';
 export interface UpdatePrefs {
   autoCheck: boolean;
   channel: UpdateChannel;
-  installWhenEmpty: boolean;
   /** ms since the Unix epoch, 0 = never; `lastOk` is the last check that worked. */
   lastChecked: number;
   lastOk: number;
   /** The popup opened by itself for this version already. */
   seenVersion: string;
 }
-/** installer: download, verify, run the setup; replace: swap the AppImage; browser: open the download page. */
-export type UpdateMode = 'installer' | 'replace' | 'browser';
+/**
+ * plugin: Tauri updater (signed, in place, relaunch); installer: download, verify, run the setup; replace: swap the
+ * AppImage; browser: open the download page.
+ */
+export type UpdateMode = 'plugin' | 'installer' | 'replace' | 'browser';
 export interface UpdateInfo {
   version: string;
   current: string;

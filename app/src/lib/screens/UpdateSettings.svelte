@@ -53,11 +53,6 @@
   <SettingRow title={t('settings.upd.auto')} hint={t('settings.upd.autoHint')}>
     <Toggle label={t('settings.upd.auto')} hideLabel checked={prefs.autoCheck} onchange={(v) => u.setPrefs({ autoCheck: v })} />
   </SettingRow>
-  {#if !u.mobile}
-    <SettingRow title={t('settings.upd.empty')} hint={t('settings.upd.emptyHint')}>
-      <Toggle label={t('settings.upd.empty')} hideLabel checked={prefs.installWhenEmpty} onchange={(v) => u.setPrefs({ installWhenEmpty: v })} />
-    </SettingRow>
-  {/if}
   <SettingRow title={t('settings.upd.channel')} hint={t('settings.upd.channelHint')}>
     <SelectField label={t('settings.upd.channel')} hideLabel value={prefs.channel} options={channels} onchange={(v) => u.setPrefs({ channel: v as UpdateChannel })} />
   </SettingRow>

@@ -318,19 +318,74 @@ async fn update_check(updater: State<'_, Arc<Updater>>, beta: bool) -> Res<Optio
         .map_err(|e| e.to_string())?
 }
 
-/// Start downloading the update of the last check on a worker thread; the UI polls [`update_progress`].
+/// Start downloading the update of the last check (only ever on the user's request); the UI polls
+/// [`update_progress`]. Windows, macOS and AppImage use the updater plugin, the rest the verified installer download.
 #[tauri::command]
 fn update_download(app: AppHandle, updater: State<'_, Arc<Updater>>) -> Res<()> {
-    if updater.last().is_none() {
-        return Err("nothing".into());
-    }
+    let info = updater.last().ok_or("nothing")?;
     if !updater.begin() {
         return Ok(());
     }
     let u = updater.inner().clone();
+    #[cfg(desktop)]
+    if info.mode == Mode::Plugin {
+        let feed = info.feed.unwrap_or_default();
+        let state = app.state::<Arc<PluginUpdate>>().inner().clone();
+        let task_state = state.clone();
+        let task = tauri::async_runtime::spawn(async move {
+            let r = plugin_download(&app, &u, &task_state, &feed).await;
+            taskbar(&app, &u.finish(&r));
+        });
+        *lock(&state.task) = Some(task);
+        return Ok(());
+    }
+    let _ = info;
     std::thread::spawn(move || {
         let _ = u.download(&|p| taskbar(&app, p));
     });
+    Ok(())
+}
+
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// A signed update fetched by the updater plugin, waiting for the restart.
+#[cfg(desktop)]
+#[derive(Default)]
+struct PluginUpdate {
+    ready: Mutex<Option<(tauri_plugin_updater::Update, Vec<u8>)>>,
+    task: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
+}
+
+#[cfg(desktop)]
+async fn plugin_download(app: &AppHandle, u: &Updater, state: &PluginUpdate, feed: &str) -> Res<()> {
+    use tauri_plugin_updater::UpdaterExt;
+    let url = feed.parse().map_err(|_| "feed".to_string())?;
+    let err = |e: tauri_plugin_updater::Error| update::plugin_err(&e.to_string());
+    let update =
+        app.updater_builder().endpoints(vec![url]).map_err(err)?.build().map_err(err)?.check().await.map_err(err)?;
+    let update = update.ok_or("nothing")?;
+    let (start, mut shown, mut done) = (Instant::now(), Instant::now(), 0u64);
+    let bytes = update
+        .download(
+            |chunk, total| {
+                done += chunk as u64;
+                if shown.elapsed() >= Duration::from_millis(200) {
+                    shown = Instant::now();
+                    let total = total.unwrap_or(0);
+                    let (speed, eta) = update::rate(done, total, start.elapsed());
+                    let p = u.report(|p| {
+                        (p.done, p.total, p.bytes_per_s, p.eta_s) = (done, total, speed, eta);
+                    });
+                    taskbar(app, &p);
+                }
+            },
+            || {},
+        )
+        .await
+        .map_err(err)?;
+    *lock(&state.ready) = Some((update, bytes));
     Ok(())
 }
 
@@ -356,12 +411,20 @@ fn update_progress(updater: State<'_, Arc<Updater>>) -> Progress {
 }
 
 #[tauri::command]
-fn update_cancel(updater: State<'_, Arc<Updater>>) {
+fn update_cancel(app: AppHandle, updater: State<'_, Arc<Updater>>) {
     updater.cancel();
+    #[cfg(desktop)]
+    if let Some(task) = lock(&app.state::<Arc<PluginUpdate>>().task).take() {
+        task.abort();
+        taskbar(&app, &updater.finish(&Err::<(), _>("cancelled".to_string())));
+    }
+    #[cfg(not(desktop))]
+    let _ = app;
 }
 
-/// Restart for the downloaded update: save and stop the server, back up its world, start the installer (or swap
-/// the AppImage) and leave a note for the next start. The UI quits the app afterwards.
+/// Restart for the downloaded update: save and stop the server, back up its world and leave a note for the next
+/// start, then install in place (updater plugin; the UI then calls `app_restart`, Windows restarts by itself) or
+/// start the installer / swap the AppImage (the UI then quits the app).
 #[tauri::command]
 async fn update_install(
     app: AppHandle,
@@ -369,7 +432,12 @@ async fn update_install(
     updater: State<'_, Arc<Updater>>,
     backup: bool,
 ) -> Res<()> {
-    let (file, info) = updater.downloaded().ok_or("nothing")?;
+    #[cfg(desktop)]
+    let plugin = lock(&app.state::<Arc<PluginUpdate>>().ready).take();
+    #[cfg(not(desktop))]
+    let plugin: Option<((), Vec<u8>)> = None;
+    let fallback = if plugin.is_some() { None } else { Some(updater.downloaded().ok_or("nothing")?) };
+    let info = fallback.as_ref().map(|(_, i)| i.clone()).or_else(|| updater.last()).ok_or("nothing")?;
     let (c, u) = (core.inner().clone(), updater.inner().clone());
     tauri::async_runtime::spawn_blocking(move || {
         let world_id = c.poll(u64::MAX).world_id.unwrap_or_else(|| c.get_settings().run.world_id);
@@ -379,11 +447,32 @@ async fn update_install(
         if backup {
             update::backup_world(&c.data_dir(), &world_id, at).map_err(|_| "backup".to_string())?;
         }
-        launch(&app, &file, info.mode)?;
-        u.note(&Pending { version: info.version, from: info.current, at, was_running, world_id })
+        let note = Pending { version: info.version, from: info.current, at, was_running, world_id };
+        match (plugin, fallback) {
+            #[cfg(desktop)]
+            (Some((update, bytes)), _) => {
+                // Windows: the installer runs and the app exits inside `install`, so the note goes first.
+                u.note(&note)?;
+                update.install(bytes).map_err(|e| {
+                    u.forget();
+                    update::plugin_err(&e.to_string()).replace("offline", "launch")
+                })
+            }
+            (_, Some((file, info))) => {
+                launch(&app, &file, info.mode)?;
+                u.note(&note)
+            }
+            _ => Err("nothing".into()),
+        }
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// After an in-place update: start the new version.
+#[tauri::command]
+fn app_restart(app: AppHandle) {
+    app.restart();
 }
 
 fn launch(app: &AppHandle, file: &std::path::Path, mode: Mode) -> Res<()> {
@@ -396,7 +485,7 @@ fn launch(app: &AppHandle, file: &std::path::Path, mode: Mode) -> Res<()> {
         }
         Mode::Installer if cfg!(windows) => std::process::Command::new(file).spawn().map(drop).map_err(fail),
         Mode::Installer => app.opener().open_path(file.to_string_lossy(), None::<&str>).map_err(|_| "launch".into()),
-        Mode::Browser => Err("nothing".into()),
+        Mode::Browser | Mode::Plugin => Err("nothing".into()),
     }
 }
 
@@ -423,7 +512,10 @@ const MIN_SIZE: (f64, f64) = (1120.0, 760.0);
 pub fn run() {
     let builder = tauri::Builder::default();
     #[cfg(desktop)]
-    let builder = builder.plugin(tauri_plugin_dialog::init());
+    let builder = builder
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .manage(Arc::new(PluginUpdate::default()));
     builder
         .plugin(tauri_plugin_hostservice::init())
         .plugin(tauri_plugin_opener::init())
@@ -511,6 +603,7 @@ pub fn run() {
             update_cancel,
             update_install,
             update_resume,
+            app_restart,
             open_url
         ])
         .run(tauri::generate_context!())

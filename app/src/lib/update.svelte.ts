@@ -7,7 +7,8 @@ import type { UpdateInfo, UpdatePrefs, UpdateProgress } from './types';
 /**
  * In-app updates of the Blockheads Server app (the release feed, download and installer hand-off live in
  * src-tauri/src/update.rs). Flow: check → available → download → ready → restart (now, when the server is empty,
- * or in 5 minutes with a chat warning) → installing → the app restarts → done. A failed check never blocks the app.
+ * or in 5 minutes with a chat warning) → installing → the app restarts → done. Like the Blockheads PC launcher, a
+ * check only tells: nothing is downloaded or installed until the user asks for it. A failed check never blocks the app.
  */
 export type UpdateStage = 'idle' | 'checking' | 'uptodate' | 'available' | 'downloading' | 'ready' | 'installing' | 'done' | 'error';
 export type RestartWhen = 'empty' | 'warn' | 'now';
@@ -20,7 +21,7 @@ const LAST_WARN_MS = 60 * 1000;
 /** How long the "installing" steps stay up before the app quits and the installer takes over. */
 export const QUIT_DELAY = 1500;
 
-export const DEFAULT_PREFS: UpdatePrefs = { autoCheck: true, channel: 'stable', installWhenEmpty: false, lastChecked: 0, lastOk: 0, seenVersion: '' };
+export const DEFAULT_PREFS: UpdatePrefs = { autoCheck: true, channel: 'stable', lastChecked: 0, lastOk: 0, seenVersion: '' };
 
 export class Updates {
   stage = $state<UpdateStage>('idle');
@@ -41,8 +42,6 @@ export class Updates {
   private timers: ReturnType<typeof setInterval>[] = [];
   private poller: ReturnType<typeof setInterval> | null = null;
   private lastWarned = false;
-  /** Restart by itself once ready (the "Install when no one is online" setting). */
-  private auto = false;
 
   /** The saved preferences with defaults filled in (read only: change them with `setPrefs`). */
   get prefs(): UpdatePrefs {
@@ -131,10 +130,6 @@ export class Updates {
         this.edit({ seenVersion: info.version });
         this.open = true;
       }
-      if (info && auto && prefs.installWhenEmpty && info.mode !== 'browser' && !this.mobile) {
-        this.auto = true;
-        await this.download();
-      }
     } catch (e) {
       this.edit({ lastChecked: Date.now() });
       this.stage = 'error';
@@ -191,7 +186,6 @@ export class Updates {
     if (p.stage === 'ready') {
       this.stopPolling();
       this.stage = 'ready';
-      if (this.auto) this.schedule('empty');
     } else if (p.stage === 'error') {
       this.fail('download', p.error ?? '');
     } else if (p.stage === 'cancelled') {
@@ -213,7 +207,6 @@ export class Updates {
   }
 
   async cancel() {
-    this.auto = false;
     await api.updateCancel().catch(() => {});
     this.stopPolling();
     this.stage = 'available';
@@ -231,7 +224,6 @@ export class Updates {
 
   unschedule() {
     this.scheduled = null;
-    this.auto = false;
   }
 
   private async say(text: string) {
@@ -254,10 +246,12 @@ export class Updates {
     }
   }
 
-  /** Save and stop the server, back up the world, start the installer, then quit (the installer takes over). */
+  /**
+   * Save and stop the server, back up the world and install. In place (updater plugin) the app then restarts into
+   * the new version; otherwise the installer takes over and the app quits.
+   */
   async install() {
     this.scheduled = null;
-    this.auto = false;
     const wasActive = store.active;
     this.stage = 'installing';
     this.step = 0;
@@ -273,7 +267,7 @@ export class Updates {
     }
     this.step = 3;
     await new Promise((r) => setTimeout(r, QUIT_DELAY));
-    await api.appQuit().catch(() => {});
+    await (this.info?.mode === 'plugin' ? api.appRestart() : api.appQuit()).catch(() => {});
   }
 
   /** Try again after a failure: a failed check checks again, a failed download downloads again. */

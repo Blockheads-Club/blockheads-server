@@ -72,7 +72,7 @@ export async function mockTauri(page: Page, opts: { worlds?: boolean; splash?: o
             const done = Math.min(4, ((s as any).dl = ((s as any).dl ?? 0) + 1));
             return { stage: done >= 4 ? 'ready' : 'downloading', done: done * 8_250_000, total: 33_000_000, bytesPerS: 2_000_000, etaS: 4 - done, error: null };
           }
-          case 'update_cancel': case 'update_install': case 'open_url': return;
+          case 'update_cancel': case 'update_install': case 'open_url': case 'app_restart': return;
           case 'update_resume': return null;
         }
         throw new Error('unmocked ' + cmd);
