@@ -37,7 +37,9 @@ macro_rules! hook_trait {
             )*
         }
     ) => {
+        // Seam methods mirror ObjC selectors, which often take more than seven arguments.
         $(#[$($tattr)*])*
+        #[allow(clippy::too_many_arguments)]
         $vis trait $name {
             $(
                 $crate::hooks::hook_trait! {
@@ -50,6 +52,7 @@ macro_rules! hook_trait {
         ///
         /// Stand-in flavour of the production trait (see [`crate::hooks`]): every method has its placeholder
         /// body. Only for test doubles and the "nothing installed" null objects.
+        #[allow(clippy::too_many_arguments)]
         $vis trait $stub {
             $(
                 $crate::hooks::hook_trait! {

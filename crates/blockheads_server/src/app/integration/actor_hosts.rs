@@ -34,7 +34,7 @@ fn workbench_of(o: &ObjRef) -> Option<&crate::crafting::workbench::Workbench> {
 
 impl crate::blockhead::interaction_rules::ActionsHost for BlockheadGlue {
     fn free_blocks_exist_at_pos(&self, _b: &Blockhead, pos: IntPair) -> bool {
-        self.live_dw().map_or(false, |d| d.free_blocks_exist_at_pos(pos))
+        self.live_dw().is_some_and(|d| d.free_blocks_exist_at_pos(pos))
     }
     fn blockhead_at_pos(&self, _b: &Blockhead, pos: IntPair) -> Option<ObjRef> {
         self.live_dw()?.blockhead_at_pos(pos)
@@ -86,7 +86,7 @@ impl crate::blockhead::interaction_rules::ActionsHost for BlockheadGlue {
         self.live_dw().map_or_else(Vec::new, |d| d.all_blockheads_including_net())
     }
     fn dynamic_world_is_client(&self) -> bool {
-        self.live_dw().map_or(false, |d| d.is_client())
+        self.live_dw().is_some_and(|d| d.is_client())
     }
 }
 
@@ -109,7 +109,7 @@ impl crate::blockhead::inventory_model::InventoryHost for BlockheadGlue {
         }
     }
     fn dynamic_world_is_client(&self) -> bool {
-        self.live_dw().map_or(false, |d| d.is_client())
+        self.live_dw().is_some_and(|d| d.is_client())
     }
     /// `extraData` is the free block: SE_GOT records `[freeBlock itemType]`.
     fn add_simulation_event_got(&self, b: &ObjRef, fb: &ObjRef) {
@@ -225,10 +225,10 @@ impl crate::physics_objects::fire_object::FireHost for BlockheadGlue {
 
 impl crate::npc::cave_troll::HostileHost for BlockheadGlue {
     fn npc_exists_at_pos_ignore_npc(&self, pos: IntPair, ignore: Option<&ObjRef>) -> bool {
-        self.live_dw().map_or(false, |d| d.npc_exists_at_pos_ignore_npc(pos, ignore))
+        self.live_dw().is_some_and(|d| d.npc_exists_at_pos_ignore_npc(pos, ignore))
     }
     fn blockhead_occupies_tile_at_pos(&self, pos: IntPair) -> bool {
-        self.live_dw().map_or(false, |d| d.blockhead_occupies_tile_at_pos_ignore_blockhead(pos, None))
+        self.live_dw().is_some_and(|d| d.blockhead_occupies_tile_at_pos_ignore_blockhead(pos, None))
     }
     fn create_free_block(&self, pos: IntPair, item_type: i32, priority_blockhead: Option<&ObjRef>) {
         if let Some(d) = self.live_dw() {

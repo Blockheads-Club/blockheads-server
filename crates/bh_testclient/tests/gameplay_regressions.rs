@@ -544,7 +544,7 @@ fn ground_spots(s: &mut Session, n: usize) -> Vec<(i32, i32)> {
     request_area(s, px - 40, px + 40, py - 32, py + 32);
     let mut all: Vec<(i32, i32)> = find_tiles(s, |_| true)
         .into_iter()
-        .filter(|(x, y)| (x - px).abs() <= 30 && (6..=30).contains(&(x - px).abs()))
+        .filter(|(x, _y)| (x - px).abs() <= 30 && (6..=30).contains(&(x - px).abs()))
         .filter(|(x, y)| {
             let (Some(here), Some(below)) = (tile(s, *x, *y), tile(s, *x, *y - 1)) else { return false };
             here == (2, 0, 0) && ![2, 3, 5].contains(&below.0) && below.1 == 0 && below.2 == 0
@@ -878,7 +878,7 @@ fn a_gate_cannot_be_removed_by_its_non_admin_owner() {
 fn found_item_list_is_kept_for_the_player() {
     let o = Ours::start("found", None);
     // the server quits when its last player leaves without any blockhead left: keep somebody connected
-    let mut keeper = join(o.port, "KEEPER");
+    let _keeper = join(o.port, "KEEPER");
     let mut s = join(o.port, "FINDER");
     let (px, py) = portal(&s);
     let _ = spawn_blockhead(&mut s, px, py);

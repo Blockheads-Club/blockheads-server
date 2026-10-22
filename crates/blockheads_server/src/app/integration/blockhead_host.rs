@@ -381,7 +381,7 @@ impl crate::blockhead::blockhead::BlockheadHost for BlockheadGlue {
         tile_ref: Option<TileRef>,
         _tile: Option<Tile>,
     ) -> bool {
-        self.world_rc().map_or(false, |w| w.tile_is_lit_for_client_at_pos_tile(client_id, pos, tile_ref))
+        self.world_rc().is_some_and(|w| w.tile_is_lit_for_client_at_pos_tile(client_id, pos, tile_ref))
     }
     fn place_workbench_of_type_at_pos_save_dict_placed_by_client_placed_by_blockhead_placed_by_client_name(
         &self,
@@ -552,7 +552,7 @@ impl crate::blockhead::blockhead::BlockheadHost for BlockheadGlue {
         }
     }
     fn player_is_admin_with_id(&self, id: Option<&str>) -> bool {
-        self.srv_rc().map_or(false, |s| s.player_is_admin_with_id(id))
+        self.srv_rc().is_some_and(|s| s.player_is_admin_with_id(id))
     }
     fn update_player(&self, id: Option<&str>) {
         if let (Some(s), Some(id)) = (self.srv_rc(), id) {
@@ -726,19 +726,19 @@ impl crate::blockhead::blockhead::BlockheadHost for BlockheadGlue {
     }
     fn npc_can_be_captured_by_blockhead(&self, npc: &ObjRef, b: &Blockhead, item_type: ItemType) -> bool {
         crate::npc::npc::as_npc(npc)
-            .map_or(false, |n| n.can_be_captured_by_blockhead_with_item_type(&b.me(), item_type.0 as i32))
+            .is_some_and(|n| n.can_be_captured_by_blockhead_with_item_type(&b.me(), item_type.0 as i32))
     }
     fn npc_can_be_milked_by_blockhead(&self, npc: &ObjRef, b: &Blockhead) -> bool {
-        crate::npc::npc::as_npc(npc).map_or(false, |n| n.can_be_milked_by_blockhead(&b.me()))
+        crate::npc::npc::as_npc(npc).is_some_and(|n| n.can_be_milked_by_blockhead(&b.me()))
     }
     fn npc_can_be_shaved_by_blockhead(&self, npc: &ObjRef, b: &Blockhead) -> bool {
-        crate::npc::npc::as_npc(npc).map_or(false, |n| n.can_be_shaved_by_blockhead(&b.me()))
+        crate::npc::npc::as_npc(npc).is_some_and(|n| n.can_be_shaved_by_blockhead(&b.me()))
     }
     fn npc_belongs_to_player_with_blockhead(&self, npc: &ObjRef, b: &Blockhead) -> bool {
-        crate::npc::npc::as_npc(npc).map_or(false, |n| n.belongs_to_player_with_blockhead(&b.me()))
+        crate::npc::npc::as_npc(npc).is_some_and(|n| n.belongs_to_player_with_blockhead(&b.me()))
     }
     fn npc_can_be_fed_by_blockhead(&self, npc: &ObjRef, b: &Blockhead) -> bool {
-        crate::npc::npc::as_npc(npc).map_or(false, |n| n.can_be_fed_by_blockhead(npc, &b.me()))
+        crate::npc::npc::as_npc(npc).is_some_and(|n| n.can_be_fed_by_blockhead(npc, &b.me()))
     }
     fn npc_feed_by_blockhead(&self, npc: &ObjRef, b: &Blockhead) {
         if let Some(n) = crate::npc::npc::as_npc(npc) {
@@ -751,13 +751,13 @@ impl crate::blockhead::blockhead::BlockheadHost for BlockheadGlue {
         }
     }
     fn npc_capture_by_blockhead_with_item_type(&self, npc: &ObjRef, b: &Blockhead, item_type: i32) -> bool {
-        crate::npc::npc::as_npc(npc).map_or(false, |n| n.capture_by_blockhead_with_item_type(npc, &b.me(), item_type))
+        crate::npc::npc::as_npc(npc).is_some_and(|n| n.capture_by_blockhead_with_item_type(npc, &b.me(), item_type))
     }
     fn npc_shave_by_blockhead(&self, npc: &ObjRef, b: &Blockhead) -> bool {
-        crate::npc::npc::as_npc(npc).map_or(false, |n| n.shave_by_blockhead(npc, &b.me()))
+        crate::npc::npc::as_npc(npc).is_some_and(|n| n.shave_by_blockhead(npc, &b.me()))
     }
     fn npc_milk_by_blockhead(&self, npc: &ObjRef, b: &Blockhead) -> bool {
-        crate::npc::npc::as_npc(npc).map_or(false, |n| n.milk_by_blockhead(npc, &b.me()))
+        crate::npc::npc::as_npc(npc).is_some_and(|n| n.milk_by_blockhead(npc, &b.me()))
     }
     fn npc_begin_blockhead_inspection(&self, npc: &ObjRef, b: &Blockhead) {
         if let Some(n) = crate::npc::npc::as_npc(npc) {
@@ -807,10 +807,10 @@ impl crate::blockhead::blockhead::BlockheadHost for BlockheadGlue {
         workbench_of(wb).map_or(0, |w| w.level())
     }
     fn workbench_has_required_fuel(&self, wb: &ObjRef) -> bool {
-        workbench_of(wb).map_or(false, |w| w.has_required_fuel())
+        workbench_of(wb).is_some_and(|w| w.has_required_fuel())
     }
     fn workbench_uses_stores_conducts_or_produces_electricity(&self, wb: &ObjRef) -> bool {
-        workbench_of(wb).map_or(false, |w| w.uses_stores_conducts_or_produces_electricity())
+        workbench_of(wb).is_some_and(|w| w.uses_stores_conducts_or_produces_electricity())
     }
     fn workbench_abort_immediately_and_restore_blockhead_items(&self, wb: &ObjRef) {
         if let Some(w) = workbench_of(wb) {
@@ -889,7 +889,7 @@ impl crate::blockhead::blockhead::BlockheadHost for BlockheadGlue {
 
     // ================= FishingRod =================
     fn fishing_rod_valid(&self, r: &FishingRodRef) -> bool {
-        fishing_rod_of(r).map_or(false, |f| f.valid())
+        fishing_rod_of(r).is_some_and(|f| f.valid())
     }
     fn fishing_rod_hooked_fish_unique_id(&self, r: &FishingRodRef) -> u64 {
         fishing_rod_of(r).and_then(|f| f.hooked_fish()).map_or(0, |f| f.unique_id())
