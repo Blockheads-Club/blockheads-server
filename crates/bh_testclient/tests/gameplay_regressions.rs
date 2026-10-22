@@ -547,9 +547,9 @@ fn glow_flow(s: &mut Session) -> ((i32, i32), u16, u16) {
     let target = nearest(&find_tiles(s, is_glowing), px, py).expect("no glowing tile near the portal");
     let before = artificial_light_r(s, target.0, target.1);
     walk_to(s, bh, (px, py), (target.0, target.1 + 1));
-    let i = s.macro_index_for_tile(target.0, target.1);
-    s.request_block(i, true).unwrap();
-    s.run_for(2000).unwrap();
+    // fetch the block again and wait for that copy (not a fixed sleep)
+    load_block_at(s, target.0, target.1);
+    s.run_for(500).unwrap();
     (target, before, artificial_light_r(s, target.0, target.1))
 }
 
