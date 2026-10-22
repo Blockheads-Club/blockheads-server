@@ -12,11 +12,45 @@ use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
 
+use crate::plist::value::{PlistDict, PlistValue};
 use crate::server::bhserver::BHServer;
 use crate::types::structs::IntPair;
 
 #[cfg(feature = "mods")]
+pub mod catalog;
+#[cfg(feature = "mods")]
+pub mod net;
+#[cfg(feature = "mods")]
 mod server_host;
+
+/// The 0xBC mod protocol packet type (mod-sdk `docs/protocol-0xbc.md`). Only routed when a mod host is installed.
+pub const MOD_PACKET: u8 = 0xBC;
+
+/// The `bhcModLoader` dict a modded client adds to its 0x1f player information.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LoaderKey {
+    /// `proto` (an integer).
+    pub proto: Option<i64>,
+    /// `acceptedHash` (64 lowercase hex characters).
+    pub accepted_hash: Option<String>,
+}
+
+impl LoaderKey {
+    /// Reads `bhcModLoader` from a 0x1f plist. `None` when the key is absent; a key of another type reads as an
+    /// empty (invalid) key. The key is never copied into the stored player info (only listed keys are).
+    pub fn from_player_info(info: Option<&PlistDict>) -> Option<LoaderKey> {
+        let v = info?.map.get(&"bhcModLoader".to_string())?;
+        let PlistValue::Dict(d) = v else { return Some(LoaderKey::default()) };
+        let get = |k: &str| d.map.get(&k.to_string());
+        Some(LoaderKey {
+            proto: match get("proto") {
+                Some(PlistValue::Int(n)) => Some(*n),
+                _ => None,
+            },
+            accepted_hash: get("acceptedHash").and_then(|v| v.as_str()).map(str::to_string),
+        })
+    }
+}
 
 /// Embedding-API settings for mods (`HostConfig.mods`).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -73,8 +107,12 @@ pub trait ModHooks {
 
     /// True when a mod listens to `what`.
     fn wants(&self, what: Optional) -> bool;
-    /// A player passed every vanilla join check (API 0.2). `Some(reason)`: reject with that 0x26 reason byte.
-    fn pre_login(&self, player_id: &str, alias: &str) -> Option<u8>;
+    /// A 0xBC packet from a peer that is in the game or waiting for approval (`peer` as the dispatcher names it).
+    fn mod_packet(&self, peer: &str, data: &[u8]);
+    /// A player passed every vanilla join check: the `bhcModLoader` check, then `player-pre-login` (API 0.2).
+    /// `peer` is the dispatcher's name of the connection, `loader` the 0x1f `bhcModLoader` key. `Some(reason)`:
+    /// reject with that 0x26 reason byte (a modded client already got `REJECT_TEXT`).
+    fn pre_login(&self, peer: &str, player_id: &str, alias: &str, loader: Option<&LoaderKey>) -> Option<u8>;
     /// A player places `item` into a tile (0x10). True: cancelled (the caller takes the protected-tile path).
     fn block_place(&self, player_id: &str, pos: IntPair, item: u32, data_a: u16, data_b: u16) -> bool;
     /// A player removes a tile (0x11) or a back wall (0x3a). True: cancelled (protected-tile path).
@@ -205,6 +243,32 @@ mod tests {
             assert_eq!(actor().as_deref(), Some("a"));
         }
         assert_eq!(actor(), None);
+    }
+
+    #[test]
+    fn loader_key_from_player_info() {
+        use crate::foundation::gsdict::GsDict;
+        let dict = |v: Option<PlistValue>| {
+            let mut m: GsDict<String, PlistValue> = GsDict::new();
+            m.insert("alias".into(), PlistValue::string("A".to_string()));
+            if let Some(v) = v {
+                m.insert("bhcModLoader".into(), v);
+            }
+            PlistDict { map: m, tag: Default::default() }
+        };
+        assert_eq!(LoaderKey::from_player_info(None), None);
+        assert_eq!(LoaderKey::from_player_info(Some(&dict(None))), None);
+        let not_a_dict = dict(Some(PlistValue::string("x".to_string())));
+        assert_eq!(LoaderKey::from_player_info(Some(&not_a_dict)), Some(LoaderKey::default()));
+        let mut k: GsDict<String, PlistValue> = GsDict::new();
+        k.insert("proto".into(), PlistValue::string("1".to_string()));
+        k.insert("acceptedHash".into(), PlistValue::string("ab".to_string()));
+        let key = LoaderKey::from_player_info(Some(&dict(Some(PlistValue::dict(k))))).unwrap();
+        assert_eq!(key, LoaderKey { proto: None, accepted_hash: Some("ab".into()) });
+        let mut k: GsDict<String, PlistValue> = GsDict::new();
+        k.insert("proto".into(), PlistValue::Int(1));
+        let key = LoaderKey::from_player_info(Some(&dict(Some(PlistValue::dict(k))))).unwrap();
+        assert_eq!(key, LoaderKey { proto: Some(1), accepted_hash: None });
     }
 
     #[test]

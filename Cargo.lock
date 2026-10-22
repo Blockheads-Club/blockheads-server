@@ -84,12 +84,14 @@ name = "bh_testclient"
 version = "0.1.1"
 dependencies = [
  "base64",
+ "bhmod-proto",
  "blockheads_server",
  "flate2",
  "heed",
  "libc",
  "md-5",
  "rusty_enet",
+ "sha2",
  "tempfile",
 ]
 
@@ -105,7 +107,7 @@ dependencies = [
 [[package]]
 name = "bhmod-core"
 version = "0.1.0"
-source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=5571ca8#5571ca82afe99d58402ce29753f5b311161ddecf"
+source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=f22a8da#f22a8da42a2e20335ec6ad998f4dc8b307e92b8c"
 dependencies = [
  "bhmod-manifest",
  "mlua",
@@ -118,7 +120,7 @@ dependencies = [
 [[package]]
 name = "bhmod-manifest"
 version = "0.1.0"
-source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=5571ca8#5571ca82afe99d58402ce29753f5b311161ddecf"
+source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=f22a8da#f22a8da42a2e20335ec6ad998f4dc8b307e92b8c"
 dependencies = [
  "semver",
  "serde",
@@ -128,9 +130,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "bhmod-proto"
+version = "0.1.0"
+source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=f22a8da#f22a8da42a2e20335ec6ad998f4dc8b307e92b8c"
+dependencies = [
+ "sha2",
+]
+
+[[package]]
 name = "bhmod-wasm"
 version = "0.1.0"
-source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=5571ca8#5571ca82afe99d58402ce29753f5b311161ddecf"
+source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=f22a8da#f22a8da42a2e20335ec6ad998f4dc8b307e92b8c"
 dependencies = [
  "bhmod-core",
  "bhmod-manifest",
@@ -165,6 +175,8 @@ version = "0.1.1"
 dependencies = [
  "base64",
  "bhmod-core",
+ "bhmod-manifest",
+ "bhmod-proto",
  "bhmod-wasm",
  "chrono",
  "flate2",
@@ -2160,7 +2172,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

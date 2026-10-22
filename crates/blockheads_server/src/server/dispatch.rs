@@ -26,6 +26,15 @@ pub fn match_did_receive_data_from_player(srv: &Rc<BHServer>, data: &[u8], peer:
     srv.update_players();
     let ty = data.first().copied().unwrap_or(0);
     let connected = srv.connected_clients.borrow().iter().any(|e| e == peer);
+    // Mods (not in the original): 0xBC goes to the mod host, only when one is installed.
+    if ty == crate::mods::MOD_PACKET {
+        if let Some(h) = crate::mods::hooks() {
+            if connected || srv.unapproved_clients.borrow().iter().any(|e| e == peer) {
+                h.mod_packet(peer, data);
+            }
+            return;
+        }
+    }
     if !connected {
         if ty != 0x1f {
             return;
@@ -773,9 +782,11 @@ fn handshake(srv: &Rc<BHServer>, payload: &[u8], peer: &str) {
             }
         }
     }
-    // Mods (not in the original; `None` without mods): `player-pre-login` may reject with a vanilla reason.
+    // Mods (not in the original; `None` without mods): the `bhcModLoader` check and `player-pre-login` may reject
+    // with a vanilla reason.
     if let Some(h) = crate::mods::hooks() {
-        if let Some(r) = h.pre_login(p, info_alias.as_deref().unwrap_or("")) {
+        let loader = crate::mods::LoaderKey::from_player_info(raw_dict.as_ref());
+        if let Some(r) = h.pre_login(peer, p, info_alias.as_deref().unwrap_or(""), loader.as_ref()) {
             reject_p(r, Some(p));
             return;
         }
