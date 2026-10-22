@@ -71,6 +71,12 @@ services, custom events and channels to work with each other (the SDK's `economy
 are disabled after repeated faults. Without a mods folder nothing changes: same bytes, saves and output as
 vanilla. Vanilla game clients can join servers with server-side mods.
 
+Mods with a client half are offered to modded clients (PC loader, Android loader installed with Patcher) over the
+[0xBC mod protocol](https://github.com/Blockheads-Club/mod-sdk/blob/dev/docs/protocol-0xbc.md): the client lists the
+server's mods, downloads the packages from the server (resumable, SHA-256 checked) and joins; server and client mods
+talk over channels. Vanilla clients never receive a protocol byte; when a client mod is required they are refused
+with the vanilla "update your game" message (reason 3). The server never offers a client mod that needs `native`.
+
 ---
 
 ## 🛠️ Requirements
@@ -94,7 +100,7 @@ cargo build --release -p blockheads_server
 cargo test --workspace
 ```
 
-The mod host (feature `mods`, on by default) uses `bhmod-core` and `bhmod-wasm` from
+The mod host (feature `mods`, on by default) uses `bhmod-core`, `bhmod-wasm`, `bhmod-manifest` and `bhmod-proto` from
 [mod-sdk](https://github.com/Blockheads-Club/mod-sdk) as git dependencies pinned to one commit (to work on both
 repositories at once, see [docs/development.md](docs/development.md#developing-against-a-local-mod-sdk)). Build
 without it: `cargo build -p blockheads_server --no-default-features --features trace-rng`.
