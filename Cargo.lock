@@ -105,7 +105,7 @@ dependencies = [
 [[package]]
 name = "bhmod-core"
 version = "0.1.0"
-source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=f8f4f93#f8f4f93ac0d976504c33156c4b24d0f95fadca88"
+source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=5571ca8#5571ca82afe99d58402ce29753f5b311161ddecf"
 dependencies = [
  "bhmod-manifest",
  "mlua",
@@ -118,7 +118,7 @@ dependencies = [
 [[package]]
 name = "bhmod-manifest"
 version = "0.1.0"
-source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=f8f4f93#f8f4f93ac0d976504c33156c4b24d0f95fadca88"
+source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=5571ca8#5571ca82afe99d58402ce29753f5b311161ddecf"
 dependencies = [
  "semver",
  "serde",
@@ -130,7 +130,7 @@ dependencies = [
 [[package]]
 name = "bhmod-wasm"
 version = "0.1.0"
-source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=f8f4f93#f8f4f93ac0d976504c33156c4b24d0f95fadca88"
+source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=5571ca8#5571ca82afe99d58402ce29753f5b311161ddecf"
 dependencies = [
  "bhmod-core",
  "bhmod-manifest",
