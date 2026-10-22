@@ -933,7 +933,7 @@ impl World {
         &self,
         events: Option<&crate::world::simulation::BlockheadEventsMap>,
     ) -> Option<String> {
-        let events = events.filter(|e| e.len() > 0)?;
+        let events = events.filter(|e| !e.is_empty())?;
         let mut out = String::from("While you were away,");
         for (_, ev) in events.iter() {
             narrate_blockhead(&mut out, &events_record(ev));
@@ -1131,6 +1131,7 @@ pub(crate) mod testkit {
         pub load_makes_valid: Cell<bool>,
         pub send_block_calls: RefCell<Vec<(i32, i32, String)>>,
         pub world: RefCell<Option<std::rc::Weak<World>>>,
+        pub path_creator: RefCell<Option<Rc<crate::path::path_creator::PathCreator>>>,
     }
     impl Rec {
         pub fn push(&self, s: String) {
@@ -1515,6 +1516,9 @@ pub(crate) mod testkit {
         }
         fn dynamic_world_set_paused(&self, v: bool) {
             self.push(format!("dw.setPaused({})", v));
+        }
+        fn path_creator(&self) -> Option<Rc<crate::path::path_creator::PathCreator>> {
+            self.path_creator.borrow().clone()
         }
     }
 

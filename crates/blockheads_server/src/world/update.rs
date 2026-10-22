@@ -537,4 +537,40 @@ mod tests {
         assert_eq!(w.send_trade_transaction_timer.get(), 0.0);
         install_deps(Rc::new(NullDeps));
     }
+
+    /// The catch-up pump (`-[World continueSimulate]`) keeps pumping a path in progress, and saves and
+    /// decommissions every block once more than 0x80 physical blocks are in use.
+    #[test]
+    fn catch_up_pump_decommissions_past_0x80_blocks() {
+        use crate::path::path_creator::testutil::{new_user, new_world};
+        use crate::path::path_creator::{PathCreator, PathRequest};
+        let rec = testkit::install();
+        let (w, _loader, _dw) = new_world(32, 20);
+        let pc = PathCreator::init_with_world(&w);
+        let user = new_user(IntPair { x: 100, y: 21 });
+        let req = PathRequest {
+            path_type: 0,
+            goal_x: 400,
+            goal_y: 21,
+            goal_interaction: 0,
+            extra_data: None,
+            path_user: Some(user),
+        };
+        pc.create_path_with_dict(&req);
+        assert!(pc.in_progress() && !pc.has_path());
+        *rec.path_creator.borrow_mut() = Some(pc.clone());
+        while w.used_physical_blocks_len() <= 0x80 {
+            w.take_physical_block();
+        }
+        assert_eq!(w.free_physical_blocks_len(), 0);
+        w.update_path_pump(true);
+        // still searching (the goal is far away), and the fresh never-loaded blocks went back to the free set
+        assert!(pc.in_progress() && !pc.has_path());
+        assert!(w.free_physical_blocks_len() > 0x40);
+        assert!(w.used_physical_blocks_len() < 0x40);
+        // the per-tick pump advances the search once and does not catch up
+        w.update_path_pump(false);
+        assert!(pc.in_progress());
+        install_deps(Rc::new(NullDeps));
+    }
 }

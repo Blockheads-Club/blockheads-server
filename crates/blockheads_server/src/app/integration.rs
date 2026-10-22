@@ -857,10 +857,10 @@ impl WorldCoreHooks for Glue {
         bh_of(b).and_then(|x| x.name())
     }
     fn blockhead_is_client_blockhead_being_controlled_by_server(&self, b: &crate::objects::handle::ObjRef) -> bool {
-        bh_of(b).map_or(false, |x| x.is_client_blockhead_being_controlled_by_server())
+        bh_of(b).is_some_and(|x| x.is_client_blockhead_being_controlled_by_server())
     }
     fn blockhead_should_continue_simulating(&self, b: &crate::objects::handle::ObjRef) -> bool {
-        bh_of(b).map_or(false, |x| x.should_continue_simulating())
+        bh_of(b).is_some_and(|x| x.should_continue_simulating())
     }
     fn blockhead_suffer_damage_is_simulation_recoil(
         &self,
@@ -879,28 +879,28 @@ impl WorldCoreHooks for Glue {
         }
     }
     fn blockhead_asleep(&self, b: &crate::objects::handle::ObjRef) -> bool {
-        bh_of(b).map_or(false, |x| x.asleep())
+        bh_of(b).is_some_and(|x| x.asleep())
     }
     fn blockhead_regenerating(&self, b: &crate::objects::handle::ObjRef) -> bool {
-        bh_of(b).map_or(false, |x| x.regenerating())
+        bh_of(b).is_some_and(|x| x.regenerating())
     }
     fn blockhead_meditating(&self, b: &crate::objects::handle::ObjRef) -> bool {
-        bh_of(b).map_or(false, |x| x.meditating())
+        bh_of(b).is_some_and(|x| x.meditating())
     }
     fn blockhead_on_trade_mission(&self, b: &crate::objects::handle::ObjRef) -> bool {
-        bh_of(b).map_or(false, |x| x.on_trade_mission())
+        bh_of(b).is_some_and(|x| x.on_trade_mission())
     }
     fn blockhead_has_actions(&self, b: &crate::objects::handle::ObjRef) -> bool {
-        bh_of(b).map_or(false, |x| x.has_actions())
+        bh_of(b).is_some_and(|x| x.has_actions())
     }
     fn blockhead_action_count(&self, b: &crate::objects::handle::ObjRef) -> i32 {
         bh_of(b).map_or(0, |x| x.action_count())
     }
     fn blockhead_cancel_simulate_due_to_collapse(&self, b: &crate::objects::handle::ObjRef) -> bool {
-        bh_of(b).map_or(false, |x| x.cancel_simulate_due_to_collapse())
+        bh_of(b).is_some_and(|x| x.cancel_simulate_due_to_collapse())
     }
     fn blockhead_current_interaction_requires_human_input(&self, b: &crate::objects::handle::ObjRef) -> bool {
-        bh_of(b).map_or(false, |x| x.current_interaction_requires_human_input())
+        bh_of(b).is_some_and(|x| x.current_interaction_requires_human_input())
     }
     fn world_load_light_block_for_client_light_block_index_into_physical_block(
         &self,
@@ -1831,7 +1831,7 @@ impl WorldOpsDeps for Glue {
             )
     }
     fn bh_is_idle(&self, bh: &crate::objects::handle::ObjRef) -> bool {
-        bh_of(bh).map_or(true, |b| b.idle())
+        bh_of(bh).is_none_or(|b| b.idle())
     }
     fn bh_check_if_can_warp_in_second_blockhead_after_item_added_data_b(
         &self,
@@ -1916,7 +1916,7 @@ impl WorldOpsDeps for Glue {
         io: &crate::objects::handle::ObjRef,
         bh: &crate::objects::handle::ObjRef,
     ) -> bool {
-        io.as_interaction_like().map_or(false, |i| i.can_be_used_by_blockhead(io, bh))
+        io.as_interaction_like().is_some_and(|i| i.can_be_used_by_blockhead(io, bh))
     }
     fn io_is_in_use(&self, io: &crate::objects::handle::ObjRef) -> bool {
         io.is_in_use()
@@ -1931,7 +1931,7 @@ impl WorldOpsDeps for Glue {
         }
     }
     fn io_is_paintable(&self, io: &crate::objects::handle::ObjRef) -> bool {
-        io.as_interaction_like().map_or(false, |i| i.is_paintable())
+        io.as_interaction_like().is_some_and(|i| i.is_paintable())
     }
     fn obj_needs_removed(&self, o: &crate::objects::handle::ObjRef) -> bool {
         o.needs_removed()
@@ -2390,7 +2390,7 @@ impl DwHooks for Glue {
         Some(PlistValue::Dict(chest_of(chest)?.get_save_dict_including_inventory(chest, false)))
     }
     fn freight_needs_chest_save(&self, car: &ObjRef) -> bool {
-        freight_of(car).map_or(false, |f| f.needs_chest_save())
+        freight_of(car).is_some_and(|f| f.needs_chest_save())
     }
     fn freight_set_needs_chest_save(&self, car: &ObjRef, v: bool) {
         if let Some(f) = freight_of(car) {
@@ -2467,7 +2467,7 @@ impl crate::npc::npc::NpcEnv for Glue {
         }
     }
     fn is_client(&self) -> bool {
-        self.dw().map_or(false, |d| d.is_client())
+        self.dw().is_some_and(|d| d.is_client())
     }
     fn free_block_item_type(&self, _fb: &crate::objects::handle::ObjRef) -> i32 {
         crate::objects::handle::downcast::<crate::physics_objects::free_block::FreeBlock>(_fb)
@@ -2510,7 +2510,7 @@ impl crate::npc::npc::NpcEnv for Glue {
         }
     }
     fn blockhead_paused(&self, _b: &crate::objects::handle::ObjRef) -> bool {
-        bh_of(_b).map_or(false, |b| b.paused())
+        bh_of(_b).is_some_and(|b| b.paused())
     }
     fn blockhead_stop_riding(&self, _b: &crate::objects::handle::ObjRef) {
         if let Some(b) = bh_of(_b) {
@@ -2539,22 +2539,22 @@ impl crate::crafting::workbench::WorkbenchHost for Glue {
     }
 
     fn bh_paused(&self, bh: &crate::objects::handle::ObjRef) -> bool {
-        bh_of(bh).map_or(false, |b| b.paused())
+        bh_of(bh).is_some_and(|b| b.paused())
     }
     fn bh_has_coffee_energy(&self, bh: &crate::objects::handle::ObjRef) -> bool {
-        bh_of(bh).map_or(false, |b| b.has_coffee_energy())
+        bh_of(bh).is_some_and(|b| b.has_coffee_energy())
     }
     fn bh_unable_to_work_reason(&self, bh: &crate::objects::handle::ObjRef) -> i32 {
         bh_of(bh).map_or(0, |b| b.unable_to_work_reason().0 as i32)
     }
     fn bh_should_continue_simulating(&self, bh: &crate::objects::handle::ObjRef) -> bool {
-        bh_of(bh).map_or(false, |b| b.should_continue_simulating())
+        bh_of(bh).is_some_and(|b| b.should_continue_simulating())
     }
     fn bh_is_crafting_at_any_workbench(&self, bh: &crate::objects::handle::ObjRef) -> bool {
-        bh_of(bh).map_or(false, |b| b.is_crafting_at_any_workbench())
+        bh_of(bh).is_some_and(|b| b.is_crafting_at_any_workbench())
     }
     fn bh_is_adding_fuel_to_any_workbench(&self, bh: &crate::objects::handle::ObjRef) -> bool {
-        bh_of(bh).map_or(false, |b| b.is_adding_fuel_to_any_workbench())
+        bh_of(bh).is_some_and(|b| b.is_adding_fuel_to_any_workbench())
     }
     fn bh_interaction_workbench(&self, bh: &crate::objects::handle::ObjRef) -> Option<crate::objects::handle::ObjRef> {
         bh_of(bh).and_then(|b| b.interaction_workbench())
@@ -2569,7 +2569,7 @@ impl crate::crafting::workbench::WorkbenchHost for Glue {
         }
     }
     fn bh_double_time_unlocked(&self, bh: &crate::objects::handle::ObjRef) -> bool {
-        bh_of(bh).map_or(false, |b| b.double_time_unlocked())
+        bh_of(bh).is_some_and(|b| b.double_time_unlocked())
     }
     fn bh_subtract_items_from_inventory_of_type_count_data_b(
         &self,
@@ -2866,7 +2866,7 @@ impl crate::npc::egg::PassiveEnv for Glue {
     }
 
     fn rod_valid(&self, r: &crate::blockhead::blockhead::FishingRodRef) -> bool {
-        r.downcast_ref::<crate::physics_objects::fishing_rod::FishingRod>().map_or(false, |f| f.valid())
+        r.downcast_ref::<crate::physics_objects::fishing_rod::FishingRod>().is_some_and(|f| f.valid())
     }
     fn rod_hook_pos(&self, r: &crate::blockhead::blockhead::FishingRodRef) -> crate::types::structs::Vector2 {
         r.downcast_ref::<crate::physics_objects::fishing_rod::FishingRod>()
@@ -3070,14 +3070,14 @@ impl DwOpsHooks for Glue {
     }
     /// The tree's own `-isRequiredSoilType:` (cactus / coconut override the dirt family of the base class).
     fn tree_is_required_soil_type(&self, tree: &ObjRef, soil: u8) -> bool {
-        crate::trees::tree::as_tree(tree).map_or(false, |t| t.is_required_soil_type(soil as i32))
+        crate::trees::tree::as_tree(tree).is_some_and(|t| t.is_required_soil_type(soil as i32))
     }
     // ---- doors (`setDoorAtPos:toOpen:direction:`, `doorIsOpenAtPos:`, path admission)
     fn door_can_be_used_by_blockhead(&self, door: &ObjRef, bh: &ObjRef) -> bool {
-        door_of(door).map_or(false, |d| d.can_be_used_by_blockhead(door, bh))
+        door_of(door).is_some_and(|d| d.can_be_used_by_blockhead(door, bh))
     }
     fn door_is_open(&self, door: &ObjRef) -> bool {
-        door_of(door).map_or(false, |d| d.is_open())
+        door_of(door).is_some_and(|d| d.is_open())
     }
     fn door_set_open_direction(&self, door: &ObjRef, open: bool, direction: i32) {
         if let Some(d) = door_of(door) {
@@ -3243,10 +3243,10 @@ impl DwOpsHooks for Glue {
         crate::plants::plant::as_plant(plant).map_or(0, |p| p.growth_rate_gene_variation() as i32)
     }
     fn plant_is_required_soil_type(&self, plant: &crate::objects::handle::ObjRef, soil: u8) -> bool {
-        crate::plants::plant::as_plant(plant).map_or(false, |p| p.is_required_soil_type(soil))
+        crate::plants::plant::as_plant(plant).is_some_and(|p| p.is_required_soil_type(soil))
     }
     fn plant_can_breed(&self, plant: &crate::objects::handle::ObjRef) -> bool {
-        crate::plants::plant::as_plant(plant).map_or(false, |p| p.can_breed())
+        crate::plants::plant::as_plant(plant).is_some_and(|p| p.can_breed())
     }
     fn plant_number_of_occupied_tiles_above(&self, plant: &crate::objects::handle::ObjRef) -> i32 {
         crate::plants::plant::as_plant(plant).map_or(0, |p| p.number_of_occupied_tiles_above())
@@ -3284,14 +3284,14 @@ impl DwOpsHooks for Glue {
         })
     }
     fn blockhead_crouching(&self, bh: &crate::objects::handle::ObjRef) -> bool {
-        bh_of(bh).map_or(false, |b| b.crouching())
+        bh_of(bh).is_some_and(|b| b.crouching())
     }
     fn blockhead_teleport_to_pos(
         &self,
         bh: &crate::objects::handle::ObjRef,
         pos: crate::types::structs::IntPair,
     ) -> bool {
-        bh_of(bh).map_or(false, |b| b.teleport_to_pos(pos))
+        bh_of(bh).is_some_and(|b| b.teleport_to_pos(pos))
     }
     fn blockhead_stop_all_actions(&self, bh: &crate::objects::handle::ObjRef) {
         if let Some(b) = bh_of(bh) {
@@ -3413,7 +3413,7 @@ impl DwOpsHooks for Glue {
         self.srv()?.player_name_for_player_with_id_including_old_players(Some(player_id))
     }
     fn server_player_is_banned_with_id(&self, player_id: &str) -> bool {
-        self.srv().map_or(false, |s| s.player_is_banned_with_id(Some(player_id)))
+        self.srv().is_some_and(|s| s.player_is_banned_with_id(Some(player_id)))
     }
     fn found_items_list_snapshot(&self, client_id: &str) -> Option<crate::foundation::indexset::IndexSet> {
         self.client(client_id).map(|c| c.found_items_list().borrow().clone())
@@ -3512,13 +3512,10 @@ mod tests {
             DwOpsHooks::chest_move_inventory_items_from_array_to_index_count(&*g, &chest, &mut coins, 0, 2);
             assert_eq!(coins.len(), 1, "two coins moved into the chest, one left");
             assert!(DwOpsHooks::chest_inventory_data(&*g, &chest, false).is_some());
-            match DwHooks::chest_save_dict_excluding_inventory(&*g, &chest) {
-                Some(PlistValue::Dict(sd)) => {
-                    assert!(!sd.map.contains_key(&"saveItemSlots".to_string()));
-                    assert!(sd.map.contains_key(&"chestType".to_string()));
-                }
-                other => panic!("{:?}", other.is_some()),
-            }
+            let sd = DwHooks::chest_save_dict_excluding_inventory(&*g, &chest);
+            let Some(PlistValue::Dict(sd)) = sd else { panic!("{:?}", sd.is_some()) };
+            assert!(!sd.map.contains_key(&"saveItemSlots".to_string()));
+            assert!(sd.map.contains_key(&"chestType".to_string()));
             DwOpsHooks::chest_remote_inventory_data_recieved(&*g, &chest, None);
             assert!(DwOpsHooks::chest_inventory_data(&*g, &chest, false).is_none(), "reset to empty slots");
 
@@ -3553,17 +3550,13 @@ mod tests {
             DwHooks::freight_set_needs_chest_save(&*g, &door, true);
             assert!(DwHooks::freight_chest_save_dict(&*g, &door).is_none());
 
-            if let Some(car) =
-                crate::trains::freight_car::FreightCar::new(&w, &d, IntPair { x: 60, y: 3 }, None, None, None)
-            {
-                DwHooks::freight_set_needs_chest_save(&*g, &car, true);
-                assert!(DwHooks::freight_needs_chest_save(&*g, &car));
-                DwHooks::freight_set_needs_chest_save(&*g, &car, false);
-                assert!(!DwHooks::freight_needs_chest_save(&*g, &car));
-                assert!(matches!(DwHooks::freight_chest_save_dict(&*g, &car), Some(PlistValue::Dict(_))));
-            } else {
-                panic!("freight car not constructed");
-            }
+            let car = crate::trains::freight_car::FreightCar::new(&w, &d, IntPair { x: 60, y: 3 }, None, None, None)
+                .expect("freight car not constructed");
+            DwHooks::freight_set_needs_chest_save(&*g, &car, true);
+            assert!(DwHooks::freight_needs_chest_save(&*g, &car));
+            DwHooks::freight_set_needs_chest_save(&*g, &car, false);
+            assert!(!DwHooks::freight_needs_chest_save(&*g, &car));
+            assert!(matches!(DwHooks::freight_chest_save_dict(&*g, &car), Some(PlistValue::Dict(_))));
         });
     }
 

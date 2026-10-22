@@ -2042,14 +2042,8 @@ pub(crate) mod testhost {
         fn action_in_progress(&self, a: &Rc<dyn std::any::Any>) -> bool {
             BlockheadHost::action_in_progress(&ActionBridge, a)
         }
-        fn action_set_in_progress(&self, a: &Rc<dyn std::any::Any>, v: bool) {
-            BlockheadHost::action_set_in_progress(&ActionBridge, a, v)
-        }
         fn action_goal_tile_pos(&self, a: &Rc<dyn std::any::Any>) -> IntPair {
             BlockheadHost::action_goal_tile_pos(&ActionBridge, a)
-        }
-        fn action_interaction_test_result(&self, a: &Rc<dyn std::any::Any>) -> InteractionTestResult {
-            BlockheadHost::action_interaction_test_result(&ActionBridge, a)
         }
         fn action_interaction_object_id(&self, a: &Rc<dyn std::any::Any>) -> i64 {
             BlockheadHost::action_interaction_object_id(&ActionBridge, a)

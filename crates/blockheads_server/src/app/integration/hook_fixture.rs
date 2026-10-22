@@ -2,7 +2,6 @@
 //! and one live object of each class the adapters forward to.
 
 use std::any::Any;
-use std::cell::RefCell;
 use std::rc::{Rc, Weak};
 
 use super::{BlockheadGlue, Glue, RealDw};
@@ -17,7 +16,8 @@ use crate::types::structs::{IntPair, Vector2};
 use crate::world::state::{PhysicalBlockRef, TileRef, World};
 
 pub(crate) struct Fx {
-    pub h: Harness,
+    /// Keeps the server (and its world) alive for the fixture's lifetime.
+    pub _h: Harness,
     pub g: Rc<Glue>,
     pub bg: BlockheadGlue,
     /// Glue with neither World nor DynamicWorld (and its BlockheadGlue).
@@ -86,7 +86,7 @@ pub(crate) fn fx(tag: &str) -> Fx {
     let rod: FishingRodRef = cast;
     let objs = make_objects(&g, &world, &dw, &bh_obj, tile);
     Fx {
-        h,
+        _h: h,
         g,
         bg,
         dead,
@@ -107,15 +107,6 @@ pub(crate) fn fx(tag: &str) -> Fx {
         action,
         rod,
     }
-}
-
-thread_local! {
-    static KEEP: RefCell<Vec<Rc<dyn Any>>> = RefCell::new(Vec::new());
-}
-
-/// Keep something alive for the rest of the test thread.
-pub(crate) fn keep(x: Rc<dyn Any>) {
-    KEEP.with(|k| k.borrow_mut().push(x));
 }
 
 /// One live object per class, built through the production constructors where the glue has one.
