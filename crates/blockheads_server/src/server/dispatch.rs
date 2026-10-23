@@ -474,7 +474,7 @@ fn privacy_change(srv: &Rc<BHServer>, privacy: Option<String>, peer: &str, alias
     let Some(sm) = m.as_server_match() else { return };
     let white_nonempty = srv.white_list.borrow().as_ref().map_or(false, |l| !l.is_empty());
     if srv.is_cloud_match() && white_nonempty && safe_ci(Some(&privacy), Some("public")) == 0 {
-        let cur = srv.privacy_string().map(|s| nsstring::uppercase_string(&s)).unwrap_or_else(|| "(null)".to_string());
+        let cur = srv.privacy_string().map(|s| nsstring::uppercase_string(&s)).unwrap_or("(null)".to_string());
         let msg = format!(
             "Error: This world is whitelisted, and whitelisted worlds can only be serachable or private. Privacy setting has been left unchanged as {}. To make this world public, please clear the whitelist first with /CLEAR-WHITELIST",
             cur
@@ -919,7 +919,7 @@ mod tests {
         assert!(h.srv.connected_client_ids().contains(&pid));
         assert!(h.w.calls.borrow().contains(&format!("client_connected {}", pid)));
         let pk = h.m.packets_to(&pid);
-        assert!(pk.iter().any(|p| p[0] == 0x01), "summary expected {:?}", pk.iter().map(|p| p[0]).collect::<Vec<_>>());
+        assert!(pk.iter().any(|p| p[0] == 0x01), "summary expected");
         assert_eq!(h.srv.unapproved_clients.borrow().len(), 0);
         assert!(h.d.changed.get() > 0);
         // duplicate handshake from an approved client -> 2

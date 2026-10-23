@@ -492,7 +492,7 @@ impl BHServer {
                     }
                 }
             }
-            if let Some(data) = data_from_property_list(&PlistValue::Array(a)) {
+            for data in data_from_property_list(&PlistValue::Array(a)) {
                 let target = format!("{}/saves/{}/allPlayers.plist", docs, sid);
                 if write_data_atomic(&target, &data) {
                     let _ = std::fs::remove_file(&old);
@@ -514,7 +514,7 @@ impl BHServer {
         crate::nslog!("Upgrading players list from 1.5 format to 1.5.1...");
         let players_dir = format!("{}/players/", save);
         let _ = std::fs::create_dir_all(&players_dir);
-        if let Ok(rd) = std::fs::read_dir(&save) {
+        for rd in std::fs::read_dir(&save) {
             let mut names: Vec<String> =
                 rd.filter_map(|e| e.ok()).filter_map(|e| e.file_name().into_string().ok()).collect();
             names.sort();
@@ -545,7 +545,7 @@ impl BHServer {
                     }
                     let info_path = format!("{}playerInfo.plist", player_dir);
                     if !std::path::Path::new(&info_path).exists() {
-                        if let Some(data) = data_from_property_list(item) {
+                        for data in data_from_property_list(item) {
                             write_data_atomic(&info_path, &data);
                         }
                     }
@@ -555,7 +555,7 @@ impl BHServer {
                 }
             }
         }
-        if let Some(data) = data_from_property_list(&PlistValue::array(recent)) {
+        for data in data_from_property_list(&PlistValue::array(recent)) {
             let target = format!("{}/recentPlayers.plist", save);
             if write_data_atomic(&target, &data) {
                 let _ = std::fs::remove_file(&src);
@@ -666,13 +666,16 @@ impl BHServer {
 
     /// `-sendNetworkData:toPeers:reliable:`. `peers` None == nil == all connected clients.
     pub fn send_network_data_to_peers_reliable<D: AsRef<[u8]>, P: IntoPeers>(&self, data: D, peers: P, reliable: bool) {
-        let peers = peers.into_peers().unwrap_or_else(|| self.connected_clients.borrow().clone());
+        self.send_to_peers(data.as_ref(), peers.into_peers(), reliable);
+    }
+
+    /// The body of [`BHServer::send_network_data_to_peers_reliable`] (not generic, so its lines count once).
+    fn send_to_peers(&self, data: &[u8], peers: Option<Vec<String>>, reliable: bool) {
+        let peers = peers.unwrap_or_else(|| self.connected_clients.borrow().clone());
         let m = self.node.match_();
-        if let Some(m) = m {
-            if !peers.is_empty() {
-                let mode = if reliable { SendDataMode::Reliable } else { SendDataMode::Unreliable };
-                m.send_data_to_players_with_data_mode_error(Some(data.as_ref()), &peers, mode);
-            }
+        if let (Some(m), false) = (m, peers.is_empty()) {
+            let mode = if reliable { SendDataMode::Reliable } else { SendDataMode::Unreliable };
+            m.send_data_to_players_with_data_mode_error(Some(data), &peers, mode);
         }
     }
 
@@ -987,8 +990,8 @@ impl BHServer {
                     }
                 }
                 if let Some((idx, mut dict)) = found {
-                    let alias = dict_str(&dict, "alias").unwrap_or_else(|| "(null)".to_string());
-                    let wn = self.world().and_then(|w| w.world_name()).unwrap_or_else(|| "(null)".to_string());
+                    let alias = dict_str(&dict, "alias").unwrap_or("(null)".to_string());
+                    let wn = self.world().and_then(|w| w.world_name()).unwrap_or("(null)".to_string());
                     crate::nslog!("{} - Player Disconnected {}", wn, alias);
                     dict.map.remove(&"connected".to_string());
                     self.recent_players.borrow_mut().remove(idx);
@@ -1192,7 +1195,7 @@ pub(crate) mod test_support {
             if alias.eq_ignore_ascii_case("server") {
                 return None;
             }
-            let pid = self.persistent.borrow().get(enet).cloned().unwrap_or_else(|| enet.to_string());
+            let pid = self.persistent.borrow().get(enet).cloned().unwrap_or(enet.to_string());
             let mut d = mutable_copy(c);
             d.insert("playerID".to_string(), PlistValue::string(pid));
             d.insert("local".to_string(), PlistValue::boolean(false));
@@ -1719,15 +1722,26 @@ pub(crate) mod test_support {
 
         /// Like `new` but runs `pre(save_dir)` before the server initialises (list files).
         pub fn with_files(tag: &str, pre: impl FnOnce(&str)) -> Harness {
-            Self::build(tag, NetNodeType::OnlineServer, pre)
+            Self::build(tag, NetNodeType::OnlineServer, Box::new(pre), Box::new(|_| {}))
+        }
+
+        /// Like `with_files`, with the mock match adjusted before the server initialises.
+        pub fn tuned(tag: &str, pre: impl FnOnce(&str), tune: impl FnOnce(&MockMatch)) -> Harness {
+            Self::build(tag, NetNodeType::OnlineServer, Box::new(pre), Box::new(tune))
         }
 
         /// A server in a local-network game (some commands differ).
         pub fn local_server(tag: &str) -> Harness {
-            Self::build(tag, NetNodeType::LocalServer, |_| {})
+            Self::build(tag, NetNodeType::LocalServer, Box::new(|_| {}), Box::new(|_| {}))
         }
 
-        fn build(tag: &str, node_type: NetNodeType, pre: impl FnOnce(&str)) -> Harness {
+        // Not generic: every test shares one copy of the set-up code.
+        fn build(
+            tag: &str,
+            node_type: NetNodeType,
+            pre: Box<dyn FnOnce(&str) + '_>,
+            tune: Box<dyn FnOnce(&MockMatch) + '_>,
+        ) -> Harness {
             init_env();
             let id = format!("{:032x}", {
                 use std::hash::{Hash, Hasher};
@@ -1741,6 +1755,7 @@ pub(crate) mod test_support {
             let _ = std::fs::create_dir_all(&save);
             pre(&save);
             let m = MockMatch::new();
+            tune(&m);
             let d = MockDelegate::new();
             let dd: Rc<dyn ServerDelegate> = d.clone();
             let srv = BHServer::init_with_delegate_match_net_node_type_save_id_max_players(
@@ -1810,3 +1825,7 @@ pub(crate) mod test_support {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "bhserver_tests.rs"]
+mod server_tests;

@@ -118,7 +118,7 @@ impl BHServer {
             None => (None, None),
         };
         // Bug-compatible: the "IP hidden" substitution is computed but never logged.
-        let wn = self.world().and_then(|w| w.world_name()).unwrap_or_else(|| "(null)".to_string());
+        let wn = self.world().and_then(|w| w.world_name()).unwrap_or("(null)".to_string());
         crate::nslog!(
             "{} - Player Connected {} | {} | {}",
             wn,
