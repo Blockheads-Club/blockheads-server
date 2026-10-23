@@ -1712,6 +1712,15 @@ pub(crate) mod test_support {
 
         /// Like `new` but runs `pre(save_dir)` before the server initialises (list files).
         pub fn with_files(tag: &str, pre: impl FnOnce(&str)) -> Harness {
+            Self::build(tag, NetNodeType::OnlineServer, pre)
+        }
+
+        /// A server in a local-network game (some commands differ).
+        pub fn local_server(tag: &str) -> Harness {
+            Self::build(tag, NetNodeType::LocalServer, |_| {})
+        }
+
+        fn build(tag: &str, node_type: NetNodeType, pre: impl FnOnce(&str)) -> Harness {
             init_env();
             let id = format!("{:032x}", {
                 use std::hash::{Hash, Hasher};
@@ -1730,7 +1739,7 @@ pub(crate) mod test_support {
             let srv = BHServer::init_with_delegate_match_net_node_type_save_id_max_players(
                 Rc::downgrade(&dd),
                 m.clone(),
-                NetNodeType::OnlineServer,
+                node_type,
                 Some(&id),
                 32,
             )

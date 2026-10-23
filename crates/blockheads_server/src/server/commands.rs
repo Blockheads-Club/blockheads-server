@@ -30,9 +30,10 @@ fn at1(command: &Option<String>, literal: &str) -> bool {
     }
 }
 
-/// `[command substringWithRange:NSMakeRange(n, length - n)]`.
-fn arg(command: &Option<String>, n: usize) -> Option<String> {
-    command.as_ref().map(|c| nsstring::substring_from_index(c, n))
+/// `[command substringWithRange:NSMakeRange(n, length - n)]`; only asked for after `at1` matched, so the command
+/// exists.
+fn arg(command: &Option<String>, n: usize) -> String {
+    command.as_ref().map(|c| nsstring::substring_from_index(c, n)).unwrap_or_default()
 }
 
 /// `list-*` output: newest (last) first, at most 50 entries, first `" \\"` component of each.
@@ -70,8 +71,12 @@ impl BHServer {
     /// `-handleCommand:issueClient:`; `issue_client` None == console. May `ns_raise` (console `/repair`) and
     /// `stop` may drop the last reference of the server, so a clone is kept alive.
     pub fn handle_command_issue_client<'a>(&self, command: impl Into<Option<&'a str>>, issue_client: Option<&str>) {
+        self.run_command(command.into(), issue_client);
+    }
+
+    /// The body of [`BHServer::handle_command_issue_client`] (not generic, so all its lines count once).
+    fn run_command(&self, command: Option<&str>, issue_client: Option<&str>) {
         let _keep_alive: Rc<BHServer> = self.rc();
-        let command: Option<&str> = command.into();
         // 1. usesGameCenterPlayerInformation is NO on the dedicated server.
         // 2. strip ONE trailing newline
         let mut command: Option<String> = command.map(|c| c.to_string());
@@ -110,43 +115,29 @@ impl BHServer {
         let mut print_result: Option<String> = None;
         let is_cloud = self.is_cloud_match();
         let world = self.world();
-        let server_match_kind = || self.node.match_().map_or(false, |m| m.as_server_match().is_some());
+        let match_ = self.node.match_();
+        let server_match = match_.as_ref().and_then(|m| m.as_server_match());
 
         // ---- Block A: console-only owner commands ----
         if issue_client.is_none() {
             if at1(&command, "set-credit ") {
-                if let Some(amount) = arg(&command, 12) {
-                    if let Some(m) = self.node.match_() {
-                        if let Some(s) = m.as_server_match() {
-                            s.set_credit(nsstring::int_value(&amount) as f32);
-                        }
-                    }
+                let amount = arg(&command, 12);
+                if let Some(s) = server_match {
+                    s.set_credit(nsstring::int_value(&amount) as f32);
                 }
             } else if at1(&command, "set-owner ") {
-                if let Some(owner) = arg(&command, 11) {
-                    if nsstring::length(&owner) != 0 {
-                        if let Some(m) = self.node.match_() {
-                            if let Some(s) = m.as_server_match() {
-                                s.set_owner(Some(&owner));
-                            }
-                        }
-                    }
+                let owner = arg(&command, 11);
+                if let (true, Some(s)) = (nsstring::length(&owner) != 0, server_match) {
+                    s.set_owner(Some(&owner));
                 }
             } else if at1(&command, "remove-owner") {
-                if let Some(m) = self.node.match_() {
-                    if let Some(s) = m.as_server_match() {
-                        s.set_owner(None);
-                    }
+                if let Some(s) = server_match {
+                    s.set_owner(None);
                 }
             } else if at1(&command, "set-salt ") {
-                if let Some(salt) = arg(&command, 10) {
-                    if nsstring::length(&salt) != 0 {
-                        if let Some(m) = self.node.match_() {
-                            if let Some(s) = m.as_server_match() {
-                                s.set_cloud_salt(Some(&salt));
-                            }
-                        }
-                    }
+                let salt = arg(&command, 10);
+                if let (true, Some(s)) = (nsstring::length(&salt) != 0, server_match) {
+                    s.set_cloud_salt(Some(&salt));
                 }
             }
         }
@@ -155,52 +146,46 @@ impl BHServer {
         let owner_entry = issue_client.is_none() || self.player_is_owner_with_alias(a);
         if owner_entry {
             if at1(&command, "set-privacy ") {
-                if let Some(privacy) = arg(&command, 13) {
-                    if nsstring::length(&privacy) != 0 && server_match_kind() {
-                        let white_nonempty = self.white_list.borrow().as_ref().map_or(false, |l| !l.is_empty());
-                        if is_cloud && white_nonempty && safe_ci(Some(&privacy), Some("public")) == 0 {
-                            print_result = Some(
-                                "Error: This world is whitelisted, and whitelisted worlds can only be serachable or private. Privacy setting has been left unchanged."
-                                    .to_string(),
-                            );
-                        } else if safe_ci(Some(&privacy), Some("public")) != 0
-                            && safe_ci(Some(&privacy), Some("searchable")) != 0
-                            && safe_ci(Some(&privacy), Some("private")) != 0
-                        {
-                            // no reply
-                        } else {
-                            if let Some(m) = self.node.match_() {
-                                if let Some(s) = m.as_server_match() {
-                                    s.set_privacy_by_string(Some(&privacy));
-                                }
-                            }
-                            if is_cloud {
-                                crate::nslog!("CLOUD:SETTING:PRIVACY:{}", nsstring::uppercase_string(&privacy));
-                            }
-                            print_result = Some(format!("Privacy setting changed to {}.", privacy));
+                let privacy = arg(&command, 13);
+                if let (true, Some(s)) = (nsstring::length(&privacy) != 0, server_match) {
+                    let white_nonempty = self.white_list.borrow().as_ref().map_or(false, |l| !l.is_empty());
+                    if is_cloud && white_nonempty && safe_ci(Some(&privacy), Some("public")) == 0 {
+                        print_result = Some(
+                            "Error: This world is whitelisted, and whitelisted worlds can only be serachable or private. Privacy setting has been left unchanged."
+                                .to_string(),
+                        );
+                    } else if safe_ci(Some(&privacy), Some("public")) != 0
+                        && safe_ci(Some(&privacy), Some("searchable")) != 0
+                        && safe_ci(Some(&privacy), Some("private")) != 0
+                    {
+                        // no reply
+                    } else {
+                        s.set_privacy_by_string(Some(&privacy));
+                        if is_cloud {
+                            crate::nslog!("CLOUD:SETTING:PRIVACY:{}", nsstring::uppercase_string(&privacy));
                         }
+                        print_result = Some(format!("Privacy setting changed to {}.", privacy));
                     }
                 }
             } else if at1(&command, "set-password ") {
-                if let Some(password) = arg(&command, 14) {
-                    if nsstring::length(&password) != 0 && server_match_kind() {
-                        if nsstring::length(&password) < 16 {
-                            if let Some(w) = &world {
-                                w.new_server_password_set(Some(&password));
-                            }
-                            print_result = Some("Password set.".to_string());
-                            if is_cloud {
-                                crate::nslog!("CLOUD:SETTING:PASSWORD:ON");
-                            }
-                        } else {
-                            print_result = Some(
-                                "Error setting password. Sorry, but passwords must not be longer than 16 characters."
-                                    .to_string(),
-                            );
+                let password = arg(&command, 14);
+                if nsstring::length(&password) != 0 && server_match.is_some() {
+                    if nsstring::length(&password) < 16 {
+                        if let Some(w) = &world {
+                            w.new_server_password_set(Some(&password));
                         }
+                        print_result = Some("Password set.".to_string());
+                        if is_cloud {
+                            crate::nslog!("CLOUD:SETTING:PASSWORD:ON");
+                        }
+                    } else {
+                        print_result = Some(
+                            "Error setting password. Sorry, but passwords must not be longer than 16 characters."
+                                .to_string(),
+                        );
                     }
                 }
-            } else if at1(&command, "remove-password") && server_match_kind() {
+            } else if at1(&command, "remove-password") && server_match.is_some() {
                 let had = world.as_ref().map_or(false, |w| w.server_password().is_some());
                 print_result =
                     Some(if !had { "There was already no password set." } else { "Password removed." }.to_string());
@@ -371,7 +356,8 @@ impl BHServer {
                     || (!issuer_is_admin && self.player_is_mod_with_alias(Some(name)))
             };
             if at1(&command, "kick ") {
-                if let Some(name) = arg(&command, 6) {
+                {
+                    let name = arg(&command, 6);
                     if self.player_is_owner_with_alias(Some(&name))
                         || self.player_is_cloud_wide_admin_with_alias(Some(&name))
                     {
@@ -383,7 +369,8 @@ impl BHServer {
                     }
                 }
             } else if at1(&command, "ban ") {
-                if let Some(name) = arg(&command, 5) {
+                {
+                    let name = arg(&command, 5);
                     if deny_target(&name) {
                         incorrect_permissions = true;
                     } else {
@@ -395,7 +382,8 @@ impl BHServer {
                     }
                 }
             } else if at1(&command, "ban-no-device ") {
-                if let Some(name) = arg(&command, 15) {
+                {
+                    let name = arg(&command, 15);
                     if deny_target(&name) {
                         incorrect_permissions = true;
                     } else {
@@ -407,7 +395,8 @@ impl BHServer {
                     }
                 }
             } else if at1(&command, "unban ") {
-                if let Some(name) = arg(&command, 7) {
+                {
+                    let name = arg(&command, 7);
                     if deny_target(&name) {
                         incorrect_permissions = true;
                     } else {
@@ -415,25 +404,20 @@ impl BHServer {
                     }
                 }
             } else if at1(&command, "whitelist ") {
-                if let Some(name) = arg(&command, 11) {
+                {
+                    let name = arg(&command, 11);
                     if deny_target(&name) {
                         incorrect_permissions = true;
                     } else {
                         let mut append_warning: Option<&str> = None;
-                        if let Some(m) = self.node.match_() {
-                            if m.is_cloud_match() {
-                                let white_empty = self.white_list.borrow().as_ref().map_or(true, |l| l.is_empty());
-                                if white_empty {
-                                    if let Some(s) = m.as_server_match() {
-                                        if s.privacy() == 1 {
-                                            s.set_privacy(2);
-                                            crate::nslog!("CLOUD:SETTING:PRIVACY:SEARCHABLE");
-                                            append_warning = Some(
-                                                "\nAs this server is now whitelisted, it can no longer be public. The privacy setting has been changed to SEARCHABLE.",
-                                            );
-                                        }
-                                    }
-                                }
+                        let white_empty = self.white_list.borrow().as_ref().map_or(true, |l| l.is_empty());
+                        if let (true, true, Some(s)) = (is_cloud, white_empty, server_match) {
+                            if s.privacy() == 1 {
+                                s.set_privacy(2);
+                                crate::nslog!("CLOUD:SETTING:PRIVACY:SEARCHABLE");
+                                append_warning = Some(
+                                    "\nAs this server is now whitelisted, it can no longer be public. The privacy setting has been changed to SEARCHABLE.",
+                                );
                             }
                         }
                         self.modify_list_for_player_or_ip_is_added_list_type(&name, false, 0);
@@ -445,7 +429,8 @@ impl BHServer {
                     }
                 }
             } else if at1(&command, "unwhitelist ") {
-                if let Some(name) = arg(&command, 13) {
+                {
+                    let name = arg(&command, 13);
                     if deny_target(&name) {
                         incorrect_permissions = true;
                     } else {
@@ -453,7 +438,8 @@ impl BHServer {
                     }
                 }
             } else if at1(&command, "admin ") {
-                if let Some(name) = arg(&command, 7) {
+                {
+                    let name = arg(&command, 7);
                     if !issuer_is_admin {
                         incorrect_permissions = true;
                     } else {
@@ -462,7 +448,8 @@ impl BHServer {
                     }
                 }
             } else if at1(&command, "unadmin ") {
-                if let Some(name) = arg(&command, 9) {
+                {
+                    let name = arg(&command, 9);
                     if !issuer_is_admin {
                         incorrect_permissions = true;
                     } else {
@@ -470,7 +457,8 @@ impl BHServer {
                     }
                 }
             } else if at1(&command, "mod ") {
-                if let Some(name) = arg(&command, 5) {
+                {
+                    let name = arg(&command, 5);
                     if !issuer_is_admin {
                         incorrect_permissions = true;
                     } else {
@@ -479,7 +467,8 @@ impl BHServer {
                     }
                 }
             } else if at1(&command, "unmod ") {
-                if let Some(name) = arg(&command, 7) {
+                {
+                    let name = arg(&command, 7);
                     if !issuer_is_admin {
                         incorrect_permissions = true;
                     } else {
@@ -516,7 +505,8 @@ impl BHServer {
                 if !is_cloud {
                     if !issuer_is_admin {
                         incorrect_permissions = true;
-                    } else if let Some(name) = arg(&command, 13) {
+                    } else {
+                        let name = arg(&command, 13);
                         let found = self
                             .reset_list
                             .borrow_mut()
@@ -555,7 +545,7 @@ impl BHServer {
         let mut result = String::new();
         result.push_str("server version:1.7.1\n");
         result.push_str(&format!("connectedClients:{}\n", self.connected_clients.borrow().len()));
-        if let Some((size, resident, share)) = read_off_memory_status() {
+        for (size, resident, share) in read_off_memory_status() {
             let mb = |bytes: u64| -> f64 { (bytes as f32 / 1048576.0f32) as f64 };
             result.push_str(&format!(
                 "memory usage: total:{:.2} MB resident:{:.2} MB share:{:.2} MB\n",
@@ -576,7 +566,13 @@ impl BHServer {
 /// three figures from the native process-memory query instead.
 #[cfg(not(any(target_vendor = "apple", windows)))]
 fn read_off_memory_status() -> Option<(u64, u64, u64)> {
-    match std::fs::read_to_string("/proc/self/statm") {
+    read_statm("/proc/self/statm")
+}
+
+/// The statm reader behind [`read_off_memory_status`] (the path is a parameter for the tests).
+#[cfg(not(any(target_vendor = "apple", windows)))]
+fn read_statm(path: &str) -> Option<(u64, u64, u64)> {
+    match std::fs::read_to_string(path) {
         Err(e) => {
             // perror(3): "<prefix>: <strerror(errno)>" (no Rust "(os error N)" suffix).
             let msg = crate::foundation::sys::strerror(&e);
@@ -767,3 +763,7 @@ mod tests {
         assert!(log[0].ends_with("loaded macro blocks:7\n"));
     }
 }
+
+#[cfg(test)]
+#[path = "commands_tests.rs"]
+mod command_matrix;
