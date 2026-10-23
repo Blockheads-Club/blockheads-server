@@ -725,6 +725,8 @@ pub(crate) mod test_support {
         pub breed_with: RefCell<Option<ObjRef>>,
         /// `[dynamicWorld isClient]` (never true on the dedicated server).
         pub client: Cell<bool>,
+        /// What `isAppleTree:` answers.
+        pub apple_tree: Cell<bool>,
     }
     impl TestPassiveEnv {
         pub fn new() -> Rc<TestPassiveEnv> {
@@ -751,6 +753,7 @@ pub(crate) mod test_support {
                 server_clients: Cell::new(1),
                 breed_with: RefCell::new(None),
                 client: Cell::new(false),
+                apple_tree: Cell::new(true),
             })
         }
         /// Installs this object as both the `PassiveEnv` and the `NpcEnv`.
@@ -862,7 +865,7 @@ pub(crate) mod test_support {
             4
         }
         fn is_apple_tree(&self, _o: &ObjRef) -> bool {
-            true
+            self.apple_tree.get()
         }
         fn is_kelp_plant(&self, _o: &ObjRef) -> bool {
             true
