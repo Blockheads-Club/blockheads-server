@@ -331,10 +331,10 @@ pub fn custom_rules_from_dict(incoming: Option<&PlistDict>, expert_mode: bool) -
     };
     if count == 7 {
         for i in 0..7 {
-            let d = match slots {
-                Some(PlistValue::Array(a)) => &a.items[i],
-                Some(other) => unrecognized_selector(other.class_name(), "objectAtIndex:"),
-                None => unreachable!(),
+            // `count == 7` was only reached with `slots` present
+            let d = match slots.expect("count is 7") {
+                PlistValue::Array(a) => &a.items[i],
+                other => unrecognized_selector(other.class_name(), "objectAtIndex:"),
             };
             let (ty, ct) = match d {
                 PlistValue::Dict(dd) => (dd.get(&"type".to_string()), dd.get(&"count".to_string())),
@@ -727,10 +727,10 @@ mod tests {
     use crate::types::structs::WireStruct;
 
     fn dict(json: &str) -> PlistDict {
-        match json_object_with_data(json.as_bytes()).value.expect("json") {
-            PlistValue::Dict(d) => d,
-            _ => panic!("not a dict"),
-        }
+        let PlistValue::Dict(d) = json_object_with_data(json.as_bytes()).value.expect("json") else {
+            panic!("not a dict")
+        };
+        d
     }
     fn reason_of(json: &str) -> String {
         let d = dict(json);
@@ -823,40 +823,40 @@ mod tests {
     }
 
     fn field_by_cat(r: &CustomRules, cat: i32) -> i8 {
-        match cat {
-            1 => r.seed_type,
-            2 => r.oceans,
-            3 => r.temperature,
-            4 => r.rainfall,
-            5 => r.plants,
-            6 => r.trees,
-            7 => r.terrain_type,
-            8 => r.caves,
-            9 => r.lakes,
-            10 => r.sky_islands,
-            11 => r.ore_quantity,
-            12 => r.ore_distribution,
-            13 => r.gems,
-            14 => r.treasure,
-            999 => r.health,
-            1000 => r.hunger,
-            1002 => r.happiness,
-            1003 => r.trade_portals,
-            1004 => r.portal_prices,
-            1005 => r.portal_discoverability,
-            1006 => r.npc_difficulty,
-            1007 => r.clothing_decay,
-            1008 => r.tool_decay,
-            1009 => r.death,
-            1010 => r.death_drops,
-            1011 => r.max_blockheads,
-            1012 => r.day_night_cycle,
-            1014 => r.world_modifcation,
-            1015 => r.pole_items,
-            1016 => r.teleportation,
-            1017 => r.meditation,
-            _ => panic!("cat {}", cat),
-        }
+        let table = [
+            (1, r.seed_type),
+            (2, r.oceans),
+            (3, r.temperature),
+            (4, r.rainfall),
+            (5, r.plants),
+            (6, r.trees),
+            (7, r.terrain_type),
+            (8, r.caves),
+            (9, r.lakes),
+            (10, r.sky_islands),
+            (11, r.ore_quantity),
+            (12, r.ore_distribution),
+            (13, r.gems),
+            (14, r.treasure),
+            (999, r.health),
+            (1000, r.hunger),
+            (1002, r.happiness),
+            (1003, r.trade_portals),
+            (1004, r.portal_prices),
+            (1005, r.portal_discoverability),
+            (1006, r.npc_difficulty),
+            (1007, r.clothing_decay),
+            (1008, r.tool_decay),
+            (1009, r.death),
+            (1010, r.death_drops),
+            (1011, r.max_blockheads),
+            (1012, r.day_night_cycle),
+            (1014, r.world_modifcation),
+            (1015, r.pole_items),
+            (1016, r.teleportation),
+            (1017, r.meditation),
+        ];
+        table.iter().find(|(c, _)| *c == cat).map(|(_, v)| *v).unwrap_or_else(|| panic!("cat {}", cat))
     }
 
     #[test]
@@ -1182,5 +1182,67 @@ mod tests {
             bytes.truncate(1);
             let _ = w.verify_client_custom_rules_data(&gzip_deflate(&bytes));
         }
+    }
+}
+
+#[cfg(test)]
+mod more_tests {
+    use super::*;
+    use crate::plist::json::json_object_with_data;
+
+    fn dict(json: &str) -> PlistDict {
+        let PlistValue::Dict(d) = json_object_with_data(json.as_bytes()).value.expect("json") else { panic!("dict") };
+        d
+    }
+
+    #[test]
+    fn const_helpers_and_categories_that_store_nothing() {
+        let o = opt("x", 3, "a", &["a", "b"]);
+        assert_eq!((o.name, o.category_key, o.default, o.options.len()), ("x", 3, Some("a"), 2));
+        let mut r = default_custom_rules(false);
+        let before = r;
+        for cat in [1001, 1013, 99] {
+            store_category(&mut r, cat, 1);
+        }
+        assert_eq!(r.health, before.health);
+    }
+
+    #[test]
+    fn an_empty_data_seed_resets_to_random_and_odd_exponents_parse() {
+        let mut d = dict("{\"seed\":\"custom\"}");
+        d.insert("custom_seed_value".to_string(), PlistValue::data(Vec::<u8>::new()));
+        let r = custom_rules_from_dict(Some(&d), false);
+        assert_eq!(r.seed_type, 0);
+        for s in ["1e5x", "1.5e+3z", "2e", "3E-2q", "9e99999999999"] {
+            let _ = parse_seed(s);
+        }
+    }
+
+    #[test]
+    fn net_rules_with_slot_arrays_sun_colours_and_unstackable_slots() {
+        let w = World::alloc(32);
+        w.set_is_admin(true);
+        // no dictionary: nothing to update
+        w.set_sun_color_rule([1.0, 0.5, 0.0, 1.0]);
+        w.custom_rule_dict_recieved_from_net(&dict("{\"health\":\"hard\"}"));
+        *w.custom_rules_dict.borrow_mut() = Some(dict("{}"));
+        let mut net = dict("{\"health\":\"hard\",\"spawnItemSlots\":[{\"type\":3,\"count\":2}]}");
+        net.insert("other".to_string(), PlistValue::int(1));
+        w.custom_rule_dict_recieved_from_net(&net);
+        assert!(matches!(
+            w.custom_rules_dict.borrow().as_ref().unwrap().get(&"spawnItemSlots".to_string()),
+            Some(PlistValue::Array(_))
+        ));
+        // slots that are not a list are stored as sent
+        w.custom_rule_dict_recieved_from_net(&dict("{\"spawnItemSlots\":\"none\"}"));
+        *w.custom_rules_dict.borrow_mut() = Some(dict("{}"));
+        // a slot item that cannot stack keeps a count of one
+        let unstackable = (1..400).find(|&i| !item_type_is_stackable(ItemType(i), 0, 0)).unwrap() as i32;
+        w.set_custom_slot_at_index_to_item_type_count(0, unstackable, 9);
+        let d = w.custom_rules_dict.borrow();
+        let Some(PlistValue::Array(a)) = d.as_ref().unwrap().get(&"spawnItemSlots".to_string()) else {
+            panic!("slots")
+        };
+        assert_eq!(a.items[0].object_for_key("count").unwrap().int_value(), 1);
     }
 }
