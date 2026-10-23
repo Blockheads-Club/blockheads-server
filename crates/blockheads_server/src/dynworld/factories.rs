@@ -178,12 +178,9 @@ impl DynamicWorld {
         Some(cands[idx].clone())
     }
 
-    /// `-sowPlantNearParent:`: not on a client; two attempts, one `rand()` each; the plant-type loop
+    /// `-sowPlantNearParent:`: (the client guard is gone: there is no client here) two attempts, one `rand()` each; the plant-type loop
     /// stops at the first match.
     pub fn sow_plant_near_parent(self: &Rc<Self>, parent: &ObjRef) {
-        if self.is_client() {
-            return;
-        }
         let hooks = ops();
         let parent_pos = parent.pos();
         for _attempt in 0..2 {
@@ -518,15 +515,9 @@ impl DynamicWorld {
         cid: Option<&str>,
     ) {
         let wi = self.world_index(pos);
-        if self.by_pos_contains(17, wi) {
+        if let Some(o) = self.by_pos_get(17, wi) {
             // UB-PARITY
-            if ty == 17 {
-                if let Some(o) = self.by_pos_get(17, wi) {
-                    if !o.needs_removed() {
-                        return;
-                    }
-                }
-            } else {
+            if ty != 17 || !o.needs_removed() {
                 return;
             }
         }
@@ -1002,9 +993,7 @@ impl DynamicWorld {
 
     /// `-loadGatherBlockAtPos:`: `client == nil` only.
     pub fn load_gather_block_at_pos(self: &Rc<Self>, pos: IntPair) {
-        if !self.is_client() {
-            self.load_standard_dynamic_object_of_type_at_pos(26, pos);
-        }
+        self.load_standard_dynamic_object_of_type_at_pos(26, pos);
     }
 
     /// The 256-particle burst of teleport / new blockhead: 7 `rand()` per particle (1792 total) in the order
@@ -1154,13 +1143,12 @@ mod tests {
 
     /// Hooks with a fake tree / plant population.
     struct H {
-        soil_ok: bool,
         made: RefCell<Vec<String>>,
         next_id: Cell<u64>,
     }
     impl H {
         fn new() -> Rc<H> {
-            Rc::new(H { soil_ok: false, made: RefCell::new(vec![]), next_id: Cell::new(1000) })
+            Rc::new(H { made: RefCell::new(vec![]), next_id: Cell::new(1000) })
         }
     }
     impl crate::dynworld::lookups::DwOpsHooksStub for H {
@@ -1200,12 +1188,6 @@ mod tests {
         }
         fn blockhead_teleport_to_pos(&self, _bh: &ObjRef, _pos: IntPair) -> bool {
             true
-        }
-        fn tree_is_required_soil_type(&self, _t: &ObjRef, _s: u8) -> bool {
-            self.soil_ok
-        }
-        fn tree_type(&self, _t: &ObjRef) -> i32 {
-            1
         }
     }
 
@@ -1397,12 +1379,15 @@ mod tests {
             for (i, (idx, first, count)) in moves.iter().enumerate() {
                 assert_eq!(*idx, i as i32);
                 assert!(*count >= 1);
+                assert!(
+                    matches!(*first, 166 | 167 | 260 | 87 | 86 | 76 | 75 | 88 | 72 | 329),
+                    "unexpected item {first}"
+                );
                 consumed += match *first {
                     166 | 167 => 5 + if *count == 99 { 1 } else { 0 },
                     260 => 6,
                     87 | 86 | 76 | 75 | 88 => 4,
-                    72 | 329 => 3,
-                    other => panic!("unexpected item {other}"),
+                    _ => 3,
                 };
             }
             drop(moves);
@@ -1417,5 +1402,925 @@ mod tests {
         assert_eq!(clampf(0.0, 1.0, 99.0), 1.0);
         assert_eq!(clampf(120.0, 1.0, 99.0), 99.0);
         assert_eq!(clampf(50.0, 1.0, 99.0), 50.0);
+    }
+}
+
+/// Scenario tests over a small hilly world with scripted constructors.
+#[cfg(test)]
+mod scenario_tests {
+    use super::*;
+    use crate::dynworld::lookups::{set_ops_hooks, DwOpsHooksStub};
+    use crate::dynworld::state::testutil::Obj;
+    use crate::rng::glibc_rand::srand;
+    use crate::trees::tree::testenv::{env, ip, tile, GROUND};
+    use crate::world::state::World;
+    use std::cell::{Cell, RefCell};
+
+    type Log = Rc<RefCell<Vec<String>>>;
+
+    /// Constructors that return plain objects of a fixed type and log what they were asked for.
+    struct Ops {
+        log: Log,
+        soil: Cell<bool>,
+        plant_ty: Cell<i32>,
+        refuse: Cell<bool>,
+        item: Cell<i32>,
+        tap: Cell<bool>,
+        breed: Cell<bool>,
+        wb_type: Cell<i32>,
+    }
+    impl Ops {
+        fn make(&self, dw: &Rc<DynamicWorld>, ty: i32, pos: IntPair, what: &str) -> Option<ObjRef> {
+            self.log.borrow_mut().push(format!("{what}@{},{}", pos.x, pos.y));
+            if self.refuse.get() {
+                return None;
+            }
+            let o: ObjRef = Obj::new(ty, dw.get_next_dynamic_object_id(), self.log.clone());
+            o.base().borrow_mut().pos = pos;
+            Some(o)
+        }
+    }
+    impl DwOpsHooksStub for Ops {
+        fn new_tree(
+            &self,
+            dw: &Rc<DynamicWorld>,
+            ty: i32,
+            pos: IntPair,
+            _m: i16,
+            _g: i16,
+            _a: bool,
+            _x: f32,
+        ) -> Option<ObjRef> {
+            self.make(dw, 1, pos, &format!("tree{ty}"))
+        }
+        fn new_plant(
+            &self,
+            dw: &Rc<DynamicWorld>,
+            ty: i32,
+            pos: IntPair,
+            _a: i16,
+            _g: i16,
+            _ad: bool,
+        ) -> Option<ObjRef> {
+            self.make(dw, 10, pos, &format!("plant{ty}"))
+        }
+        fn new_npc(
+            &self,
+            dw: &Rc<DynamicWorld>,
+            ty: i32,
+            pos: IntPair,
+            _sd: Option<&PlistDict>,
+            _a: bool,
+            _w: bool,
+            _c: Option<&str>,
+        ) -> Option<ObjRef> {
+            self.make(dw, 13, pos, &format!("npc{ty}"))
+        }
+        fn new_torch(
+            &self,
+            dw: &Rc<DynamicWorld>,
+            pos: IntPair,
+            ty: i32,
+            _a: u16,
+            _b: u16,
+            _sd: Option<&PlistDict>,
+            _c: Option<&str>,
+        ) -> Option<ObjRef> {
+            self.make(dw, 17, pos, &format!("torch{ty}"))
+        }
+        fn new_egg(&self, dw: &Rc<DynamicWorld>, pos: IntPair, _sd: Option<&PlistDict>) -> Option<ObjRef> {
+            self.make(dw, 30, pos, "egg")
+        }
+        fn new_painting(
+            &self,
+            dw: &Rc<DynamicWorld>,
+            pos: IntPair,
+            ty: i32,
+            _sd: Option<&PlistDict>,
+            _c: Option<&str>,
+            _n: Option<&str>,
+        ) -> Option<ObjRef> {
+            self.make(dw, 52, pos, &format!("painting{ty}"))
+        }
+        fn new_rail(&self, dw: &Rc<DynamicWorld>, pos: IntPair, ty: i32, _o: bool) -> Option<ObjRef> {
+            self.make(dw, 40, pos, &format!("rail{ty}"))
+        }
+        fn new_boat(
+            &self,
+            dw: &Rc<DynamicWorld>,
+            pos: IntPair,
+            _sd: Option<&PlistDict>,
+            _c: Option<&str>,
+        ) -> Option<ObjRef> {
+            self.make(dw, 27, pos, "boat")
+        }
+        fn new_train_car(
+            &self,
+            dw: &Rc<DynamicWorld>,
+            ty: i32,
+            pos: IntPair,
+            _sd: Option<&PlistDict>,
+            _c: Option<&str>,
+        ) -> Option<ObjRef> {
+            self.make(dw, 42, pos, &format!("car{ty}"))
+        }
+        fn new_workbench(
+            &self,
+            dw: &Rc<DynamicWorld>,
+            pos: IntPair,
+            ty: i32,
+            _f: bool,
+            _sd: Option<&PlistDict>,
+            _c: Option<&str>,
+            _n: Option<&str>,
+        ) -> Option<ObjRef> {
+            self.make(dw, 45, pos, &format!("workbench{ty}"))
+        }
+        fn new_trade_portal(
+            &self,
+            dw: &Rc<DynamicWorld>,
+            pos: IntPair,
+            ty: i32,
+            _f: bool,
+            _sd: Option<&PlistDict>,
+            _c: Option<&str>,
+            _n: Option<&str>,
+        ) -> Option<ObjRef> {
+            self.make(dw, 50, pos, &format!("portal{ty}"))
+        }
+        fn new_chest(
+            &self,
+            dw: &Rc<DynamicWorld>,
+            pos: IntPair,
+            ty: i32,
+            _f: bool,
+            _sd: Option<&PlistDict>,
+            _c: Option<&str>,
+            _n: Option<&str>,
+        ) -> Option<ObjRef> {
+            self.make(dw, 46, pos, &format!("chest{ty}"))
+        }
+        fn new_glow_block(&self, dw: &Rc<DynamicWorld>, pos: IntPair, _t: TileRef) -> Option<ObjRef> {
+            self.make(dw, 18, pos, "glow")
+        }
+        fn new_blockhead(&self, dw: &Rc<DynamicWorld>, pos: IntPair, n: i32, _c: &ObjRef, uid: u64) -> Option<ObjRef> {
+            let o = self.make(dw, 24, pos, &format!("blockhead{n}"))?;
+            o.base().borrow_mut().unique_id = uid;
+            Some(o)
+        }
+        fn tree_is_required_soil_type(&self, _t: &ObjRef, _s: u8) -> bool {
+            self.soil.get()
+        }
+        fn tree_type(&self, _t: &ObjRef) -> i32 {
+            1
+        }
+        fn plant_type(&self, _p: &ObjRef) -> i32 {
+            self.plant_ty.get()
+        }
+        fn plant_is_required_soil_type(&self, _p: &ObjRef, _s: u8) -> bool {
+            self.soil.get()
+        }
+        fn plant_can_breed(&self, _p: &ObjRef) -> bool {
+            self.breed.get()
+        }
+        fn tap_is_within_body_radius(&self, _o: &ObjRef, _t: crate::types::structs::Vector2) -> bool {
+            self.tap.get()
+        }
+        fn blockhead_teleport_to_pos(&self, _b: &ObjRef, _p: IntPair) -> bool {
+            !self.refuse.get()
+        }
+        fn object_update_in_time_since_saved(&self, o: &ObjRef) {
+            self.log.borrow_mut().push(format!("caught_up({})", o.unique_id()));
+        }
+        fn elevator_shaft_open(&self, s: &ObjRef) {
+            self.log.borrow_mut().push(format!("open({})", s.unique_id()));
+        }
+        fn world_remove_tile_at_world_x_world_y(&self, x: i32, y: i32) {
+            self.log.borrow_mut().push(format!("remove_tile({x},{y})"));
+        }
+        fn world_ownership_sign_was_placed_or_changed_at_pos(
+            &self,
+            p: IntPair,
+            _o: Option<&str>,
+            _w: i32,
+            _h: i32,
+            r: bool,
+        ) {
+            self.log.borrow_mut().push(format!("ownership({},{},{r})", p.x, p.y));
+        }
+        fn train_car_rail_or_station_name_changed(&self, c: &ObjRef) {
+            self.log.borrow_mut().push(format!("renamed({})", c.unique_id()));
+        }
+    }
+
+    impl crate::dynworld::state::DwHooksStub for Ops {
+        fn item_type(&self, _o: &ObjRef) -> i32 {
+            self.item.get()
+        }
+        fn workbench_type(&self, _w: &ObjRef) -> i32 {
+            self.wb_type.get()
+        }
+    }
+
+    fn fixture(name: &str) -> (Rc<World>, Rc<DynamicWorld>, Rc<Ops>, Log) {
+        crate::objects::registry::install();
+        let (w, d) = env(name);
+        let log: Log = Rc::new(RefCell::new(vec![]));
+        let ops = Rc::new(Ops {
+            log: log.clone(),
+            soil: Cell::new(true),
+            plant_ty: Cell::new(4),
+            refuse: Cell::new(false),
+            item: Cell::new(0),
+            tap: Cell::new(false),
+            breed: Cell::new(true),
+            wb_type: Cell::new(0),
+        });
+        set_ops_hooks(ops.clone());
+        d.set_hooks(ops.clone());
+        (w, d, ops, log)
+    }
+
+    fn set_tile(w: &World, x: i32, y: i32, f: impl FnOnce(&mut crate::types::tile::Tile)) {
+        tile_at_world_position_loaded(x, y, w).unwrap().update(f);
+    }
+
+    /// Column heights differ so that parents see ground at their own row, below them and far above them; some
+    /// columns have a pond on top.
+    fn hills(w: &World) {
+        for x in 0..64 {
+            let h = 3 + (x * 5) % 11;
+            for y in 0..=20 {
+                set_tile(w, x, y, |t| {
+                    if y <= h {
+                        t.type_index = 6;
+                    } else if y == h + 1 && x % 7 == 0 {
+                        t.type_index = 3;
+                    } else {
+                        t.type_index = 2;
+                        t.back_wall_type_index = 2;
+                    }
+                });
+            }
+        }
+    }
+
+    fn obj(ty: i32, id: u64, pos: IntPair, log: &Log) -> ObjRef {
+        let o: ObjRef = Obj::new(ty, id, log.clone());
+        o.base().borrow_mut().pos = pos;
+        o
+    }
+
+    fn forget_added(d: &DynamicWorld) {
+        for t in 0..65 {
+            d.dynamic_objects_to_add.borrow_mut()[t].clear();
+            d.dynamic_objects_by_world_pos_index.borrow_mut()[t].clear();
+        }
+    }
+
+    #[test]
+    fn sowing_trees_over_hills() {
+        let (w, d, ops, log) = fixture("fs_trees");
+        hills(&w);
+        for py in [0, 3, 8, 12, 25, 40] {
+            let parent = obj(1, 1, ip(32, py), &log);
+            for seed in 1..60u32 {
+                srand(seed);
+                d.sow_tree_near_parent_adult_adult_max_age(&parent, seed % 2 == 0, 5.0);
+                forget_added(&d);
+            }
+        }
+        assert!(log.borrow().iter().any(|l| l.starts_with("tree1@")));
+        // soil that the parent cannot grow in, and a crowded neighbourhood
+        let n = log.borrow().len();
+        ops.soil.set(false);
+        let parent = obj(1, 1, ip(32, 12), &log);
+        for seed in 1..30u32 {
+            srand(seed);
+            d.sow_tree_near_parent_adult_adult_max_age(&parent, false, 5.0);
+        }
+        assert_eq!(log.borrow().len(), n);
+        ops.soil.set(true);
+        for x in (0..64).step_by(2) {
+            d.do_set(1, 100 + x as u64, obj(1, 100 + x as u64, ip(x, 20), &log));
+        }
+        for seed in 1..30u32 {
+            srand(seed);
+            d.sow_tree_near_parent_adult_adult_max_age(&parent, false, 5.0);
+        }
+        assert_eq!(log.borrow().len(), n);
+    }
+
+    #[test]
+    fn sowing_plants_over_hills() {
+        let (w, d, ops, log) = fixture("fs_plants");
+        hills(&w);
+        for pt in [4, 6, 7] {
+            ops.plant_ty.set(pt);
+            for py in [0, 3, 8, 12, 25, 40] {
+                let parent = obj(10, 1, ip(32, py), &log);
+                for seed in 1..60u32 {
+                    srand(seed);
+                    d.sow_plant_near_parent(&parent);
+                    forget_added(&d);
+                }
+            }
+        }
+        assert!(log.borrow().iter().any(|l| l.starts_with("plant4@")));
+        assert!(log.borrow().iter().any(|l| l.starts_with("plant6@")));
+        assert!(log.borrow().iter().any(|l| l.starts_with("plant7@")));
+        // a crowded row blocks every attempt
+        let n = log.borrow().len();
+        for x in 0..64 {
+            d.do_set(10, 500 + x as u64, obj(10, 500 + x as u64, ip(x, 40), &log));
+        }
+        let parent = obj(10, 1, ip(32, 12), &log);
+        for seed in 1..30u32 {
+            srand(seed);
+            d.sow_plant_near_parent(&parent);
+        }
+        assert_eq!(log.borrow().len(), n);
+    }
+
+    #[test]
+    fn sowing_by_seed_item() {
+        let (_w, d, _ops, log) = fixture("fs_seed");
+        use crate::types::item_type::ItemType as I;
+        d.sow_tree_or_plant_at_position_item_type_max_height_growth_rate(ip(5, 12), I::ITEM_MAPLE_SEED.0 as i32, 3, 4);
+        d.sow_tree_or_plant_at_position_item_type_max_height_growth_rate(ip(9, 12), I::ITEM_FLAX_SEED.0 as i32, 3, 4);
+        let l = log.borrow().clone();
+        assert!(l.iter().any(|s| s.starts_with("tree")) && l.iter().any(|s| s.starts_with("plant")), "{l:?}");
+    }
+
+    /// An object that occupies one of the three tile layers.
+    struct Layer {
+        base: RefCell<crate::objects::base::DynamicObjectBase>,
+        ty: i32,
+        layer: u8,
+    }
+    fn layer_obj(ty: i32, id: u64, pos: IntPair, layer: u8) -> ObjRef {
+        let o = crate::objects::handle::alloc_obj(|w| Layer {
+            base: RefCell::new(crate::objects::base::DynamicObjectBase::alloc_zeroed_with(w)),
+            ty,
+            layer,
+        });
+        o.base.borrow_mut().unique_id = id;
+        o.base.borrow_mut().pos = pos;
+        o
+    }
+    impl crate::objects::base::DynamicObject for Layer {
+        fn base(&self) -> &RefCell<crate::objects::base::DynamicObjectBase> {
+            &self.base
+        }
+        fn class_info(&self) -> &'static crate::objects::class_info::ClassInfo {
+            &crate::objects::class_info::DYNAMIC_OBJECT_CLASS
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+        fn object_type(&self) -> i32 {
+            self.ty
+        }
+        fn occupies_normal_contents(&self) -> bool {
+            self.layer == 0
+        }
+        fn occupies_foreground_contents(&self) -> bool {
+            self.layer == 1
+        }
+        fn occupies_background_contents(&self) -> bool {
+            self.layer == 2
+        }
+    }
+
+    #[test]
+    fn standard_objects_fire_snow_and_surface() {
+        let (w, d, _ops, log) = fixture("fs_std");
+        let p = ip(5, 12);
+        assert!(d.load_standard_dynamic_object_of_type_at_pos(16, p).is_some());
+        assert!(d.load_standard_dynamic_object_of_type_at_pos(16, p).is_none());
+        assert!(d.load_standard_dynamic_object_of_type_at_pos(0, p).is_none());
+        d.load_surface_block_at_pos(ip(6, 12));
+        d.load_snow_surface_block_at_pos_load_snow(ip(7, 12), false);
+        d.load_snow_surface_block_at_pos_load_snow(ip(8, 12), true);
+        d.load_snow_surface_block_at_pos_load_snow(ip(8, 12), true);
+        assert!(log.borrow().iter().any(|l| l.starts_with("caught_up")));
+        d.load_gather_block_at_pos(ip(9, 12));
+        // fire: needs a tile, refuses burning tiles and stale plant sprites
+        assert!(d.place_fire_at_position(ip(10, 12)).is_some());
+        assert_eq!(tile(&w, 10, 12).on_fire, 1);
+        assert!(d.place_fire_at_position(ip(10, 12)).is_none());
+        set_tile(&w, 11, 12, |t| t.foreground_contents = 0x43);
+        assert!(d.place_fire_at_position(ip(11, 12)).is_none());
+        assert_eq!(tile(&w, 11, 12).foreground_contents, 0);
+        assert!(d.place_fire_at_position(ip(11, -5)).is_none());
+        // a second fire at an occupied slot is not lit
+        set_tile(&w, 12, 12, |t| t.on_fire = 0);
+        d.by_pos_set(16, d.world_index(ip(12, 12)), &obj(16, 777, ip(12, 12), &log));
+        assert!(d.place_fire_at_position(ip(12, 12)).is_none());
+    }
+
+    #[test]
+    fn npc_placement_limits() {
+        let (_w, d, _ops, log) = fixture("fs_npc");
+        let dt = dynamic_object_type_for_npc_type(NPCType(1)).0 as i32;
+        assert!(d.load_npc_at_position_type_save_dict_is_adult_was_placed_placed_by_client(
+            ip(5, 12),
+            1,
+            None,
+            true,
+            true,
+            None
+        ));
+        // crowded: more than one npc around the spot
+        d.do_set(13, 2001, obj(13, 2001, ip(20, 12), &log));
+        d.do_set(13, 2002, obj(13, 2002, ip(21, 12), &log));
+        assert!(!d.load_npc_at_position_type_save_dict_is_adult_was_placed_placed_by_client(
+            ip(20, 12),
+            1,
+            None,
+            true,
+            false,
+            None
+        ));
+        assert!(d.load_npc_at_position_type_save_dict_is_adult_was_placed_placed_by_client(
+            ip(20, 12),
+            1,
+            None,
+            true,
+            true,
+            None
+        ));
+        // too many of the type
+        for i in 0..520u64 {
+            d.do_set(dt as usize, 5000 + i, obj(dt, 5000 + i, ip(40, 12), &log));
+        }
+        assert!(!d.load_npc_at_position_type_save_dict_is_adult_was_placed_placed_by_client(
+            ip(1, 12),
+            1,
+            None,
+            true,
+            false,
+            None
+        ));
+    }
+
+    #[test]
+    fn placed_workbenches_chests_and_signs() {
+        let (_w, d, ops, log) = fixture("fs_place");
+        assert!(d
+            .workbench_placed_at_position_of_type_save_dict_placed_by_client_client_name(ip(5, 12), 1, None, None, None)
+            .is_some());
+        assert!(!d.workbench_has_been_crafted.get());
+        assert!(d
+            .workbench_placed_at_position_of_type_save_dict_placed_by_client_client_name(ip(7, 12), 3, None, None, None)
+            .is_some());
+        assert!(d.workbench_has_been_crafted.get());
+        ops.refuse.set(true);
+        assert!(d
+            .workbench_placed_at_position_of_type_save_dict_placed_by_client_client_name(ip(9, 12), 3, None, None, None)
+            .is_none());
+        ops.refuse.set(false);
+        use crate::types::item_type::ItemType as I;
+        for (n, t) in [I::ITEM_OWNERSHIP_SIGN, I::ITEM_TRAIN_STATION, I::ITEM_SIGN, I::ITEM_CHEST, I::ITEM_WOOD_BED]
+            .iter()
+            .enumerate()
+        {
+            let it = InventoryItem::new(*t, 0, 0, None, None);
+            let r = d.interaction_object_placed_at_position_with_item_flipped_save_dict_placed_by_client_client_name(
+                ip(12 + 3 * n as i32, 12),
+                &it.borrow(),
+                false,
+                None,
+                None,
+                None,
+            );
+            assert!(r.is_some(), "{t:?}");
+        }
+        let nothing = InventoryItem::new(ItemType(1), 0, 0, None, None);
+        assert!(d
+            .interaction_object_placed_at_position_with_item_flipped_save_dict_placed_by_client_client_name(
+                ip(30, 12),
+                &nothing.borrow(),
+                false,
+                None,
+                None,
+                None
+            )
+            .is_none());
+        let l = log.borrow().clone();
+        assert!(l.iter().any(|s| s.starts_with("ownership(")), "{l:?}");
+    }
+
+    #[test]
+    fn removing_standard_objects_clears_the_layer() {
+        let (w, d, _ops, log) = fixture("fs_remove");
+        for (layer, id) in [(0u8, 1u64), (1, 2), (2, 3), (3, 4)] {
+            let pos = ip(5 + id as i32, 12);
+            set_tile(&w, pos.x, pos.y, |t| {
+                t.contents = 0x30;
+                t.foreground_contents = 0x61;
+                t.background_contents = 0x46;
+            });
+            let o = layer_obj(33, id, pos, layer);
+            assert_eq!(o.class_info().name, crate::objects::class_info::DYNAMIC_OBJECT_CLASS.name);
+            assert!(o.as_any().is::<Layer>());
+            d.remove_standard_object(Some(&o));
+            assert!(o.needs_removed());
+            let t = tile(&w, pos.x, pos.y);
+            match layer {
+                0 => assert_eq!((t.contents, t.foreground_contents, t.background_contents), (0, 0x61, 0x46)),
+                1 => assert_eq!((t.contents, t.foreground_contents, t.background_contents), (0x30, 0, 0x46)),
+                2 => assert_eq!((t.contents, t.foreground_contents, t.background_contents), (0x30, 0x61, 0)),
+                _ => assert_eq!((t.contents, t.foreground_contents, t.background_contents), (0x30, 0x61, 0x46)),
+            }
+        }
+        // objects of the protected types only log
+        let chest = obj(46, 9, ip(3, 12), &log);
+        d.remove_standard_object(Some(&chest));
+        assert!(!chest.needs_removed());
+        // tiles that cannot be loaded are skipped
+        let far = layer_obj(33, 10, ip(3, 5000), 0);
+        d.remove_standard_object(Some(&far));
+        let far = layer_obj(33, 11, ip(3, 5000), 1);
+        d.remove_standard_object(Some(&far));
+        let far = layer_obj(33, 12, ip(3, 5000), 2);
+        d.remove_standard_object(Some(&far));
+    }
+
+    #[test]
+    fn eggs_paintings_rails_boats_and_torches() {
+        let (_w, d, ops, log) = fixture("fs_misc");
+        d.add_egg_at_pos_save_dict(ip(5, 12), None);
+        ops.refuse.set(true);
+        d.add_egg_at_pos_save_dict(ip(6, 12), None);
+        d.add_painting_at_pos_of_type_save_dict_placed_by_client_client_name(ip(6, 12), 3, None, None, None);
+        d.add_rail_at_pos_of_type_owned_by_station(ip(6, 12), 3, false);
+        d.place_boat_in_water_at_pos_save_dict_placed_by_client(ip(6, 12), None, None);
+        d.place_train_car_at_pos_of_type_save_dict_placed_by_client(ip(6, 12), 204, None, None);
+        d.load_new_blockhead_at_pos_craftable_item_object_unique_id(ip(6, 12), &obj(1, 1, ip(0, 0), &log), 5);
+        ops.refuse.set(false);
+        d.add_painting_at_pos_of_type_save_dict_placed_by_client_client_name(ip(5, 12), 3, None, None, None);
+        // a second painting at the same spot is ignored until the first is removed
+        d.add_painting_at_pos_of_type_save_dict_placed_by_client_client_name(ip(5, 12), 4, None, None, None);
+        assert_eq!(log.borrow().iter().filter(|l| l.starts_with("painting")).count(), 2);
+        d.painting_at_pos(ip(5, 12)).unwrap().base().borrow_mut().needs_removed = true;
+        d.add_painting_at_pos_of_type_save_dict_placed_by_client_client_name(ip(5, 12), 4, None, None, None);
+        assert_eq!(log.borrow().iter().filter(|l| l.starts_with("painting")).count(), 3);
+        d.add_rail_at_pos_of_type_owned_by_station(ip(7, 12), 3, false);
+        d.add_rail_at_pos_of_type_owned_by_station(ip(7, 12), 3, false);
+        assert_eq!(log.borrow().iter().filter(|l| l.starts_with("rail")).count(), 2);
+        d.get_rail_at_pos(ip(7, 12)).unwrap().base().borrow_mut().needs_removed = true;
+        d.add_rail_at_pos_of_type_owned_by_station(ip(7, 12), 3, false);
+        d.place_boat_in_water_at_pos_save_dict_placed_by_client(ip(8, 12), None, None);
+        // torches: same type replaces a removed torch, other types never replace
+        d.add_torch_at_pos_of_type_data_a_data_b_save_dict_placed_by_client(ip(9, 12), 17, 0, 0, None, None);
+        d.add_torch_at_pos_of_type_data_a_data_b_save_dict_placed_by_client(ip(9, 12), 17, 0, 0, None, None);
+        d.add_torch_at_pos_of_type_data_a_data_b_save_dict_placed_by_client(ip(9, 12), 47, 0, 0, None, None);
+        assert_eq!(log.borrow().iter().filter(|l| l.starts_with("torch")).count(), 1);
+        assert!(d.remove_torch_at_pos(ip(9, 12)).is_some());
+        d.add_torch_at_pos_of_type_data_a_data_b_save_dict_placed_by_client(ip(9, 12), 17, 0, 0, None, None);
+        assert_eq!(log.borrow().iter().filter(|l| l.starts_with("torch")).count(), 2);
+    }
+
+    #[test]
+    fn remove_wrappers_flag_the_registered_objects() {
+        let (_w, d, _ops, log) = fixture("fs_wrap");
+        let p = ip(5, 12);
+        for ty in [17, 30, 52, 19, 53, 54, 38, 56, 55, 40, 31] {
+            let o = obj(ty, 100 + ty as u64, p, &log);
+            d.register_with_pos(&o, ty, p);
+        }
+        let car = obj(42, 900, ip(50, 12), &log);
+        d.do_set(42, 900, car);
+        assert!(d.remove_torch_at_pos(p).is_some());
+        assert!(d.remove_egg_at_pos(p).is_some());
+        assert!(d.remove_painting_at_pos(p).is_some());
+        assert!(d.remove_ladder_at_pos(p).is_some());
+        assert!(d.remove_column_at_pos(p).is_some());
+        assert!(d.remove_stairs_at_pos(p).is_some());
+        assert!(d.remove_wire_at_pos(p).is_some());
+        assert!(d.remove_elevator_shaft_at_pos(p).is_some());
+        assert!(d.remove_elevator_motor_at_pos(p).is_some());
+        assert!(d.remove_rail_at_pos(p).is_some());
+        assert!(d.remove_window_at_pos(p).is_some());
+        assert!(d.remove_window_at_pos(p).is_none());
+        assert!(log.borrow().contains(&"renamed(900)".to_string()));
+        // elevator shafts open from the clicked cell and the one above
+        d.register_with_pos(&obj(56, 700, ip(8, 12), &log), 56, ip(8, 12));
+        d.register_with_pos(&obj(56, 701, ip(8, 13), &log), 56, ip(8, 13));
+        d.open_elevator_at_pos(ip(8, 12));
+        let l = log.borrow().clone();
+        assert!(l.contains(&"open(700)".to_string()) && l.contains(&"open(701)".to_string()));
+    }
+
+    #[test]
+    fn doors_set_their_tiles_and_remove_both_halves() {
+        let (w, d, ops, _log) = fixture("fs_doors");
+        // door types: tall wooden (52), tall (164), single (69, 165), gate (304) and another
+        for (n, ty) in [52, 164, 69, 165, 304, 9].iter().enumerate() {
+            let x = 5 + 2 * n as i32;
+            d.add_door_at_pos_of_type_save_dict_placed_by_client(ip(x, 12), *ty, None, None);
+            let t = tile(&w, x, 12);
+            match ty {
+                52 | 164 => assert_eq!((t.background_contents, tile(&w, x, 13).background_contents), (0x46, 0x46)),
+                69 | 165 => assert_eq!(t.background_contents, 0x4b),
+                304 => assert_eq!(t.contents, 0x92),
+                _ => {}
+            }
+        }
+        // removal: from the lower half, the upper half, a single door and a gate
+        ops.item.set(52);
+        assert!(d.remove_door_at_pos(ip(5, 12)).is_some());
+        assert_eq!(tile(&w, 5, 13).background_contents, 0);
+        assert!(d.remove_door_at_pos(ip(7, 13)).is_some());
+        assert_eq!(tile(&w, 7, 12).background_contents, 0);
+        ops.item.set(69);
+        assert!(d.remove_door_at_pos(ip(9, 12)).is_some());
+        ops.item.set(304);
+        assert!(d.remove_door_at_pos(ip(13, 12)).is_some());
+        assert_eq!(tile(&w, 13, 12).contents, 0);
+        // no door and no door below
+        assert!(d.remove_door_at_pos(ip(30, 12)).is_none());
+        d.remove_standard_object(d.object_of_type_at_pos(20, ip(11, 12)).as_ref());
+        // the extra wrappers
+        d.add_ladder_at_pos_of_type_save_dict_placed_by_client(ip(20, 12), 100, None, None);
+        d.add_column_at_pos_of_type_save_dict_placed_by_client(ip(21, 12), 100, None, None);
+        d.add_stairs_at_pos_of_type_save_dict_placed_by_client(ip(22, 12), 100, None, None);
+        d.add_wire_at_pos_of_type_save_dict_placed_by_client(ip(23, 12), 100, None, None);
+        d.add_elevator_shaft_at_pos_of_type_save_dict_placed_by_client(ip(24, 12), 100, None, None);
+        d.add_elevator_motor_at_pos_of_type_save_dict_placed_by_client(ip(25, 12), 100, None, None);
+        d.add_window_at_pos_of_type_save_dict_placed_by_client(ip(26, 12), 100, None, None);
+    }
+
+    /// Solid rock up to row 22 around x 0..40, a lit-by-nothing cave (back wall 1) from row 23 to 26 for x 6..=22.
+    fn cave(w: &World) {
+        for x in 0..40 {
+            for y in 10..=30 {
+                set_tile(w, x, y, |t| {
+                    t.contents = 0;
+                    t.foreground_contents = 0;
+                    if y <= 22 {
+                        t.type_index = 6;
+                    } else if (6..=22).contains(&x) && y <= 26 {
+                        t.type_index = 2;
+                        t.back_wall_type_index = 1;
+                    } else {
+                        t.type_index = 6;
+                    }
+                });
+            }
+        }
+    }
+
+    fn treasure(d: &Rc<DynamicWorld>, w: &World, pos: IntPair, troll: bool, loot: bool) {
+        let t = tile_at_world_position_loaded(pos.x, pos.y, w).unwrap();
+        d.create_treasure_chest_or_troll_at_tile_at_pos_load_troll_load_treasure(&t, pos, troll, loot);
+        forget_added(d);
+    }
+
+    #[test]
+    fn troll_caves_and_treasure_loot() {
+        let (w, d, _ops, log) = fixture("fs_cave");
+        cave(&w);
+        let count = |what: &str| log.borrow().iter().filter(|l| l.starts_with(what)).count();
+        // the full set: troll, two torches, trade portal
+        treasure(&d, &w, ip(10, 24), true, false);
+        assert_eq!((count("npc6"), count("torch183"), count("portal210")), (1, 2, 1));
+        // a spot on the right half of a macro tile mirrors the offsets
+        cave(&w);
+        treasure(&d, &w, ip(20, 24), true, false);
+        assert_eq!(count("npc6"), 2);
+        // loot only, over many seeds, with and without a troll
+        for seed in 1..400u32 {
+            cave(&w);
+            srand(seed);
+            treasure(&d, &w, ip(10, 24), seed % 3 == 0, true);
+        }
+        assert!(count("chest1072") > 300);
+        // an interaction object already there: nothing happens
+        let n = log.borrow().len();
+        d.register_with_pos(&obj(46, 4242, ip(10, 24), &log), 46, ip(10, 24));
+        treasure(&d, &w, ip(10, 24), true, true);
+        assert_eq!(log.borrow().len(), n);
+        d.dynamic_objects_by_world_pos_index.borrow_mut()[46].clear();
+        // the ground under the troll spot is missing: no troll
+        cave(&w);
+        set_tile(&w, 12, 22, |t| t.type_index = 2);
+        treasure(&d, &w, ip(10, 24), true, false);
+        // climbing: one and two solid cells in the troll column
+        for solid in [1, 2] {
+            cave(&w);
+            for k in 0..solid {
+                set_tile(&w, 12, 23 + k, |t| t.type_index = 6);
+            }
+            let before = count("npc6");
+            treasure(&d, &w, ip(10, 24), true, false);
+            assert_eq!(count("npc6"), before + 1, "solid {solid}");
+        }
+        // a blocked or unlit troll cell, and a blocked cell above it
+        cave(&w);
+        set_tile(&w, 12, 23, |t| t.back_wall_type_index = 2);
+        let before = count("npc6");
+        treasure(&d, &w, ip(10, 24), true, false);
+        cave(&w);
+        set_tile(&w, 12, 24, |t| t.contents = 0x30);
+        treasure(&d, &w, ip(10, 24), true, false);
+        assert_eq!(count("npc6"), before);
+        // torches only where there is room, portals only on supported ground
+        cave(&w);
+        set_tile(&w, 11, 24, |t| t.foreground_contents = 0x61);
+        set_tile(&w, 13, 24, |t| t.type_index = 6);
+        treasure(&d, &w, ip(10, 24), true, false);
+        for (ptile, a1, a2, floor) in [
+            (true, false, false, true),
+            (false, true, false, true),
+            (false, false, true, true),
+            (false, false, false, false),
+        ] {
+            cave(&w);
+            if ptile {
+                set_tile(&w, 14, 22, |t| t.type_index = 6);
+                set_tile(&w, 14, 23, |t| t.type_index = 6);
+                set_tile(&w, 14, 24, |t| t.type_index = 6);
+            }
+            if a1 {
+                set_tile(&w, 14, 24, |t| t.contents = 0x30);
+            }
+            if a2 {
+                set_tile(&w, 14, 25, |t| t.contents = 0x30);
+            }
+            if !floor {
+                set_tile(&w, 14, 21, |t| t.type_index = 2);
+            }
+            treasure(&d, &w, ip(10, 24), true, false);
+        }
+        // a refused trade portal and a refused chest
+        cave(&w);
+        _ops.refuse.set(true);
+        treasure(&d, &w, ip(10, 24), true, true);
+        _ops.refuse.set(false);
+        // too high up for trolls
+        cave(&w);
+        treasure(&d, &w, ip(10, 300), true, false);
+    }
+
+    #[test]
+    fn train_cars_snap_to_rails_and_neighbours() {
+        let (w, d, ops, log) = fixture("fs_cars");
+        for x in 15..=30 {
+            set_tile(&w, x, 10, |t| t.foreground_contents = 98);
+        }
+        // sloped rail pieces: one level up and one level down
+        set_tile(&w, 31, 11, |t| t.foreground_contents = 98);
+        set_tile(&w, 31, 10, |t| t.type_index = 6);
+        set_tile(&w, 14, 9, |t| t.foreground_contents = 98);
+        // snapping down onto the rail, a hand car on the spot, plain cars
+        d.place_train_car_at_pos_of_type_save_dict_placed_by_client(ip(20, 11), 204, None, None);
+        d.place_train_car_at_pos_of_type_save_dict_placed_by_client(ip(20, 10), 205, None, None);
+        assert!(log.borrow().iter().any(|l| l == "car204@20,10" || l == "car204@20,11"));
+        // a car next to an existing one is pushed away from it; the cars answer taps through the hook
+        let neighbour = obj(42, 800, ip(21, 10), &log);
+        d.do_set(42, 800, neighbour);
+        ops.tap.set(true);
+        d.place_train_car_at_pos_of_type_save_dict_placed_by_client(ip(20, 10), 205, None, None);
+        d.place_train_car_at_pos_of_type_save_dict_placed_by_client(ip(31, 10), 205, None, None);
+        d.place_train_car_at_pos_of_type_save_dict_placed_by_client(ip(15, 10), 205, None, None);
+        d.place_train_car_at_pos_of_type_save_dict_placed_by_client(ip(14, 10), 205, None, None);
+        d.place_train_car_at_pos_of_type_save_dict_placed_by_client(ip(10, 5000), 205, None, None);
+    }
+
+    #[test]
+    fn glow_blocks_load_once_per_cell() {
+        let (w, d, _ops, log) = fixture("fs_glow");
+        let t = tile_at_world_position_loaded(5, 12, &w).unwrap();
+        let mt = w.macro_tiles().get(0).unwrap();
+        mt.dynamic_objects_loaded.set(false);
+        d.load_glow_block_if_needed_at_pos_tile(ip(5, 12), &t);
+        assert!(!log.borrow().iter().any(|l| l.starts_with("glow")));
+        mt.dynamic_objects_loaded.set(true);
+        d.load_glow_block_if_needed_at_pos_tile(ip(5, 12), &t);
+        d.load_glow_block_if_needed_at_pos_tile(ip(5, 12), &t);
+        assert_eq!(log.borrow().iter().filter(|l| l.starts_with("glow")).count(), 1);
+        d.currently_loading_macro_blocks.borrow_mut()[18].insert(0);
+        d.load_glow_block_if_needed_at_pos_tile(ip(6, 12), &t);
+        d.currently_loading_macro_blocks.borrow_mut()[18].clear();
+        d.currently_adding_glow_blocks.borrow_mut().insert(wi_key(d.world_index(ip(7, 12))));
+        d.load_glow_block_if_needed_at_pos_tile(ip(7, 12), &t);
+        assert_eq!(log.borrow().iter().filter(|l| l.starts_with("glow")).count(), 1);
+        // outside the world
+        d.load_glow_block_if_needed_at_pos_tile(ip(7, -40), &t);
+        // the constructor may refuse
+        _ops.refuse.set(true);
+        d.load_glow_block_if_needed_at_pos_tile(ip(8, 12), &t);
+        let mt1 = w.macro_tiles().get(1).unwrap();
+        *mt1.physical_block.borrow_mut() = None;
+        d.load_glow_block_if_needed_at_pos_tile(ip(40, 12), &t);
+    }
+
+    #[test]
+    fn blockheads_teleport_and_arrive_with_particles() {
+        let (_w, d, ops, log) = fixture("fs_bh");
+        let bh = obj(24, 1, ip(1, 12), &log);
+        let wb = obj(45, 2, ip(8, 12), &log);
+        assert!(d.teleport_blockhead_to_workbench(&bh, Some(&wb)));
+        assert!(d.teleport_blockhead_to_workbench(&bh, None));
+        ops.refuse.set(true);
+        assert!(!d.teleport_blockhead_to_workbench(&bh, Some(&wb)));
+        ops.refuse.set(false);
+        let cio = obj(1, 1, ip(0, 0), &log);
+        d.load_new_blockhead_at_pos_craftable_item_object_unique_id(ip(3, 12), &cio, 77);
+        d.load_new_blockhead_at_pos_craftable_item_object_unique_id(ip(4, 12), &cio, 78);
+        assert_eq!(d.blockheads.borrow().len(), 2);
+        assert_eq!(d.blockheads.borrow()[1].unique_id(), 78);
+    }
+
+    #[test]
+    fn breeding_partners_must_be_willing_and_close() {
+        let (_w, d, ops, log) = fixture("fs_breed");
+        let me = obj(10, 1, ip(10, 12), &log);
+        d.do_set(10, 1, me.clone());
+        d.do_set(10, 2, obj(10, 2, ip(12, 12), &log));
+        ops.breed.set(false);
+        assert!(d.find_breeding_plant_near_plant(&me).is_none());
+        ops.breed.set(true);
+        assert_eq!(d.find_breeding_plant_near_plant(&me).unwrap().unique_id(), 2);
+    }
+
+    #[test]
+    fn sowing_plants_needs_matching_soil() {
+        let (w, d, ops, log) = fixture("fs_plant_soil");
+        hills(&w);
+        let parent = obj(10, 1, ip(32, 12), &log);
+        ops.soil.set(false);
+        for pt in [4, 7] {
+            ops.plant_ty.set(pt);
+            for seed in 1..40u32 {
+                srand(seed);
+                d.sow_plant_near_parent(&parent);
+            }
+        }
+        assert!(log.borrow().iter().all(|l| !l.starts_with("plant")));
+    }
+
+    #[test]
+    fn occupied_slots_and_removed_objects_are_replaced() {
+        let (w, d, ops, log) = fixture("fs_occupied");
+        let first = d.load_standard_dynamic_object_of_type_at_pos(16, ip(5, 12)).unwrap();
+        assert!(d.load_standard_dynamic_object_of_type_at_pos(16, ip(5, 12)).is_none());
+        first.base().borrow_mut().needs_removed = true;
+        assert!(d.load_standard_dynamic_object_of_type_at_pos(16, ip(5, 12)).is_some());
+        // add_*: a live object blocks the slot, a removed one does not
+        d.add_ladder_at_pos_of_type_save_dict_placed_by_client(ip(6, 12), 100, None, None);
+        let n = d.ta_len(19);
+        d.add_ladder_at_pos_of_type_save_dict_placed_by_client(ip(6, 12), 100, None, None);
+        assert_eq!(d.ta_len(19), n);
+        d.ladder_at_pos(ip(6, 12)).unwrap().base().borrow_mut().needs_removed = true;
+        d.add_ladder_at_pos_of_type_save_dict_placed_by_client(ip(6, 12), 100, None, None);
+        assert_eq!(d.ta_len(19), n + 1);
+        // portals count as the start portal
+        ops.wb_type.set(13);
+        d.workbench_placed_at_position_of_type_save_dict_placed_by_client_client_name(ip(9, 12), 1, None, None, None);
+        assert!(d.portal_positions.borrow().contains_index(d.world_index_key(ip(9, 12))));
+        // doors at the edge of the world have no tile to paint, doors below that are no tall doors stay
+        d.add_door_at_pos_of_type_save_dict_placed_by_client(ip(10, 5000), 52, None, None);
+        d.register_with_pos(&obj(20, 800, ip(12, 12), &log), 20, ip(12, 12));
+        ops.item.set(69);
+        assert!(d.remove_door_at_pos(ip(12, 13)).is_none());
+        d.register_with_pos(&obj(20, 801, ip(14, 5000), &log), 20, ip(14, 5000));
+        assert!(d.remove_door_at_pos(ip(14, 5000)).is_some());
+        let _ = w;
+    }
+
+    #[test]
+    fn train_cars_next_to_cars_move_over() {
+        let (w, d, ops, log) = fixture("fs_cars2");
+        ops.tap.set(true);
+        d.do_set(42, 800, obj(42, 800, ip(0, 0), &log));
+        // no rail below the click: the car stays; rail one row below: snap
+        set_tile(&w, 30, 29, |t| t.foreground_contents = 98);
+        d.place_train_car_at_pos_of_type_save_dict_placed_by_client(ip(30, 30), 205, None, None);
+        d.place_train_car_at_pos_of_type_save_dict_placed_by_client(ip(30, 40), 205, None, None);
+        // a rail piece to the left, a car on it: the new car moves right and down when there is a gap below
+        for y in 30..32 {
+            set_tile(&w, 41, y, |t| t.foreground_contents = 0);
+        }
+        set_tile(&w, 39, 31, |t| t.foreground_contents = 98);
+        set_tile(&w, 40, 31, |t| t.foreground_contents = 0);
+        d.place_train_car_at_pos_of_type_save_dict_placed_by_client(ip(40, 31), 205, None, None);
+        // ... and up when the cell is solid
+        set_tile(&w, 20, 31, |t| t.foreground_contents = 98);
+        set_tile(&w, 21, 31, |t| t.type_index = 6);
+        set_tile(&w, 22, 31, |t| t.type_index = 6);
+        d.place_train_car_at_pos_of_type_save_dict_placed_by_client(ip(21, 31), 205, None, None);
+        // a car beside a rail on flat ground stays at its height
+        set_tile(&w, 50, 10, |t| t.foreground_contents = 98);
+        d.place_train_car_at_pos_of_type_save_dict_placed_by_client(ip(51, 10), 205, None, None);
+        // the bottom of the world has no cell below to look at
+        d.place_train_car_at_pos_of_type_save_dict_placed_by_client(ip(5, 0), 205, None, None);
+        // the cell the car would be pushed into is not loaded
+        set_tile(&w, 33, 10, |t| t.foreground_contents = 98);
+        *w.macro_tiles().get(0).unwrap().physical_block.borrow_mut() = None;
+        d.place_train_car_at_pos_of_type_save_dict_placed_by_client(ip(32, 10), 205, None, None);
+        assert!(log.borrow().iter().filter(|l| l.starts_with("car205")).count() >= 6);
     }
 }

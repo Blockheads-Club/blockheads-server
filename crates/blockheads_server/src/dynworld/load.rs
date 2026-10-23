@@ -1996,7 +1996,6 @@ mod tests {
 /// Decision-table tests of the macro-block population (generation, load from save, surface blocks).
 #[cfg(test)]
 mod population_tests {
-    use super::fakes::{Sc, Srv};
     use super::*;
     use crate::dynworld::state::testutil::*;
     use crate::dynworld::state::{DwHooks, DwNoise, DynamicWorldInit, FreeBlockInit, ServerClientMap};
@@ -3112,98 +3111,10 @@ mod population_tests {
     }
 }
 
-/// A server client with real tamed-animal sets and a server that knows nobody, shared by the load/save tests.
-#[cfg(test)]
-mod fakes {
-    use super::*;
-    use crate::dynworld::state::{DwServer, DwServerClient};
-    use std::cell::RefCell;
-
-    pub(super) struct Sc {
-        id: String,
-        pub(super) tamed: RefCell<Vec<HashSet<u32>>>,
-        pub(super) wired: RefCell<Vec<u64>>,
-    }
-    impl Sc {
-        pub(super) fn new(id: &str) -> Sc {
-            Sc { id: id.into(), tamed: RefCell::new(vec![HashSet::new(); 65]), wired: RefCell::new(vec![]) }
-        }
-    }
-    impl DwServerClient for Sc {
-        fn connected(&self) -> bool {
-            true
-        }
-        fn client_id(&self) -> String {
-            self.id.clone()
-        }
-        fn light_block_index(&self) -> i32 {
-            0
-        }
-        fn block_is_wired(&self, _m: i32) -> bool {
-            false
-        }
-        fn dynamic_object_is_wired(&self, _u: u64) -> bool {
-            false
-        }
-        fn wire_dynamic_object(&self, u: u64) {
-            self.wired.borrow_mut().push(u);
-        }
-        fn unwire_dynamic_object(&self, _u: u64) {}
-        fn add_creation_object_data_to_send_of_type_object_id(&self, _d: &NetBlob, _t: u8, _i: u64) {}
-        fn add_creation_data_update_object_data_to_send_of_type(&self, _d: &NetBlob, _t: u8) {}
-        fn add_update_object_data_to_send_of_type_reliable(&self, _d: &NetBlob, _t: u8, _r: bool) {}
-        fn add_removal_object_data_to_send_of_type_object_id(&self, _d: &NetBlob, _t: u8, _i: u64) {}
-        fn send_all_object_data(&self) {}
-        fn world_indices_containing_tamed_animals(&self) -> &RefCell<Vec<HashSet<u32>>> {
-            &self.tamed
-        }
-    }
-
-    pub(super) struct Srv;
-    impl DwServer for Srv {
-        fn player_info_for_peer_id(&self, _p: &str) -> Option<PlistValue> {
-            None
-        }
-        fn player_is_admin_with_id(&self, _c: &str) -> bool {
-            false
-        }
-        fn player_update(&self) -> Option<String> {
-            None
-        }
-        fn notify_players_changed(&self) {}
-    }
-
-    /// The fakes answer the way a quiet connected client does.
-    #[test]
-    fn fake_client_and_server_are_inert() {
-        let sc = Sc::new("c9");
-        assert!(sc.connected());
-        assert_eq!(sc.client_id(), "c9");
-        assert_eq!(sc.light_block_index(), 0);
-        assert!(!sc.block_is_wired(1));
-        assert!(!sc.dynamic_object_is_wired(2));
-        sc.wire_dynamic_object(3);
-        sc.unwire_dynamic_object(3);
-        let blob: NetBlob = vec![1];
-        sc.add_creation_object_data_to_send_of_type_object_id(&blob, 1, 2);
-        sc.add_creation_data_update_object_data_to_send_of_type(&blob, 1);
-        sc.add_update_object_data_to_send_of_type_reliable(&blob, 1, true);
-        sc.add_removal_object_data_to_send_of_type_object_id(&blob, 1, 2);
-        sc.send_all_object_data();
-        assert_eq!(*sc.wired.borrow(), vec![3]);
-        assert_eq!(sc.world_indices_containing_tamed_animals().borrow().len(), 65);
-        assert!(Srv.player_info_for_peer_id("p").is_none());
-        assert!(!Srv.player_is_admin_with_id("c"));
-        assert!(Srv.player_update().is_none());
-        Srv.notify_players_changed();
-    }
-}
-
 /// Branch coverage of the save/load paths: legacy files, blockhead loading limits, per-type constructors, saves of
 /// chests, freight cars and owner-bound animals, and the initial net data of a macro tile.
 #[cfg(test)]
 mod load_save_tests {
-    use super::fakes::{Sc, Srv};
     use super::*;
     use crate::dynworld::state::testutil::*;
     use crate::dynworld::state::{DynamicWorldInit, ServerClientMap};
@@ -4139,43 +4050,12 @@ mod load_save_tests {
         assert!(d.load_local_inventory_data_for_chest(&chest).is_none());
     }
 
-    struct Ops(Cell<u32>);
-    impl crate::world::state::WorldOpsHooks for Ops {
-        fn load_physical_block_for_macro_tile_at_x_y_load_surrounding_blocks_create_if_not_created(
-            &self,
-            _w: &crate::world::state::World,
-            _mt: &MacroTileRef,
-            _mx: i32,
-            _my: i32,
-            _s: bool,
-            _c: bool,
-        ) -> bool {
-            false
-        }
-        fn load_dynamic_objects_if_not_already_loaded_for_macro_tile_include_surface_blocks(
-            &self,
-            _w: &crate::world::state::World,
-            _mt: &MacroTileRef,
-            _s: bool,
-        ) {
-            self.0.set(self.0.get() + 1);
-        }
-        fn tile_is_protected_at_pos_against_blockhead(
-            &self,
-            _w: &crate::world::state::World,
-            _p: IntPair,
-            _b: &ObjRef,
-        ) -> bool {
-            false
-        }
-    }
-
     /// Animals owned by a client come back when the client's block is loaded; an unloaded macro tile is loaded first.
     #[test]
     fn client_owned_objects_load_with_the_block() {
         let (d, _log, _h, sc) = served("lsf_owned", false);
         let world = d.world();
-        let ops = Rc::new(Ops(Cell::new(0)));
+        let ops = Rc::new(CountingOps(Cell::new(0)));
         world.set_ops_hooks(Some(ops.clone()));
         let pb = block(&d, 0, 0);
         let mt = world.macro_tiles().get(0).unwrap();
@@ -4216,7 +4096,7 @@ mod load_save_tests {
         assert_eq!(o.class_info().name, DYNAMIC_OBJECT_CLASS.name);
         assert!(o.as_any().is::<TObj>());
         let w = world(1);
-        let ops = Ops(Cell::new(0));
+        let ops = CountingOps(Cell::new(0));
         let mt = w.macro_tiles().get(0).unwrap();
         use crate::world::state::WorldOpsHooks;
         assert!(!ops.load_physical_block_for_macro_tile_at_x_y_load_surrounding_blocks_create_if_not_created(
@@ -4359,7 +4239,7 @@ mod load_save_tests {
         assert!(d.do_contains(14, 1));
         assert!(mt.dynamic_objects.borrow().is_none());
         // an empty tile has empty net data
-        let ops = Rc::new(Ops(Cell::new(0)));
+        let ops = Rc::new(CountingOps(Cell::new(0)));
         world.set_ops_hooks(Some(ops.clone()));
         block(&d, 0, 0);
         *mt.dynamic_objects.borrow_mut() = Some(vec![]);

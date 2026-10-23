@@ -982,6 +982,117 @@ pub(crate) mod testutil {
         }
     }
 
+    /// A server client with real tamed-animal sets.
+    pub struct Sc {
+        id: String,
+        pub tamed: RefCell<Vec<HashSet<u32>>>,
+        pub wired: RefCell<Vec<u64>>,
+    }
+    impl Sc {
+        pub fn new(id: &str) -> Sc {
+            Sc { id: id.into(), tamed: RefCell::new(vec![HashSet::new(); 65]), wired: RefCell::new(vec![]) }
+        }
+    }
+    impl DwServerClient for Sc {
+        fn connected(&self) -> bool {
+            true
+        }
+        fn client_id(&self) -> String {
+            self.id.clone()
+        }
+        fn light_block_index(&self) -> i32 {
+            0
+        }
+        fn block_is_wired(&self, _m: i32) -> bool {
+            false
+        }
+        fn dynamic_object_is_wired(&self, _u: u64) -> bool {
+            false
+        }
+        fn wire_dynamic_object(&self, u: u64) {
+            self.wired.borrow_mut().push(u);
+        }
+        fn unwire_dynamic_object(&self, _u: u64) {}
+        fn add_creation_object_data_to_send_of_type_object_id(&self, _d: &NetBlob, _t: u8, _i: u64) {}
+        fn add_creation_data_update_object_data_to_send_of_type(&self, _d: &NetBlob, _t: u8) {}
+        fn add_update_object_data_to_send_of_type_reliable(&self, _d: &NetBlob, _t: u8, _r: bool) {}
+        fn add_removal_object_data_to_send_of_type_object_id(&self, _d: &NetBlob, _t: u8, _i: u64) {}
+        fn send_all_object_data(&self) {}
+        fn world_indices_containing_tamed_animals(&self) -> &RefCell<Vec<HashSet<u32>>> {
+            &self.tamed
+        }
+    }
+
+    /// A server that knows nobody.
+    pub struct Srv;
+    impl DwServer for Srv {
+        fn player_info_for_peer_id(&self, _p: &str) -> Option<PlistValue> {
+            None
+        }
+        fn player_is_admin_with_id(&self, _c: &str) -> bool {
+            false
+        }
+        fn player_update(&self) -> Option<String> {
+            None
+        }
+        fn notify_players_changed(&self) {}
+    }
+
+    /// World hooks that only count the dynamic-object loads asked of them.
+    pub struct CountingOps(pub Cell<u32>);
+    impl crate::world::state::WorldOpsHooks for CountingOps {
+        fn load_physical_block_for_macro_tile_at_x_y_load_surrounding_blocks_create_if_not_created(
+            &self,
+            _w: &World,
+            _mt: &MacroTileRef,
+            _mx: i32,
+            _my: i32,
+            _s: bool,
+            _c: bool,
+        ) -> bool {
+            false
+        }
+        fn load_dynamic_objects_if_not_already_loaded_for_macro_tile_include_surface_blocks(
+            &self,
+            _w: &World,
+            _mt: &MacroTileRef,
+            _s: bool,
+        ) {
+            self.0.set(self.0.get() + 1);
+        }
+        fn tile_is_protected_at_pos_against_blockhead(&self, _w: &World, _p: IntPair, _b: &ObjRef) -> bool {
+            false
+        }
+    }
+
+    /// A `DynamicWorld` with a server and the given connected clients (`Sc`).
+    pub fn dw_served(name: &str, clients: &[&str]) -> (Rc<DynamicWorld>, Vec<Rc<Sc>>) {
+        let (main, dwdb) = dbs(name);
+        let w = world(1);
+        std::mem::forget(w.clone());
+        let map: ServerClientMap = Rc::new(RefCell::new(GsDict::new()));
+        let mut scs = Vec::new();
+        for c in clients {
+            let sc = Rc::new(Sc::new(c));
+            map.borrow_mut().insert(c.to_string(), sc.clone());
+            scs.push(sc);
+        }
+        let d = DynamicWorld::new(DynamicWorldInit {
+            world: w,
+            world_tile_loader: None,
+            server: Some(Rc::new(Srv)),
+            server_clients: Some(map),
+            cache: None,
+            tree_density_noise_function: None,
+            season_offset_noise_function: None,
+            app_database: None,
+            world_database: main,
+            dynamic_object_database: dwdb,
+            world_save_directory_override: Some(scratch(&format!("{name}_save"))),
+        });
+        (d, scs)
+    }
+
     /// A `World` with a given width in macro tiles.
     pub fn world(width_macro: i32) -> WorldRef {
         World::alloc(width_macro)
@@ -1096,5 +1207,44 @@ mod tests {
         d.free_blocks_erase(99, &a);
         d.free_blocks_erase(99, &b);
         assert!(d.free_blocks_by_position.borrow().is_empty());
+    }
+
+    /// The fakes answer the way a quiet connected client does.
+    #[test]
+    fn fake_client_server_and_world_hooks_are_inert() {
+        let sc = Sc::new("c9");
+        assert!(sc.connected());
+        assert_eq!(sc.client_id(), "c9");
+        assert_eq!(sc.light_block_index(), 0);
+        assert!(!sc.block_is_wired(1));
+        assert!(!sc.dynamic_object_is_wired(2));
+        sc.wire_dynamic_object(3);
+        sc.unwire_dynamic_object(3);
+        let blob: NetBlob = vec![1];
+        sc.add_creation_object_data_to_send_of_type_object_id(&blob, 1, 2);
+        sc.add_creation_data_update_object_data_to_send_of_type(&blob, 1);
+        sc.add_update_object_data_to_send_of_type_reliable(&blob, 1, true);
+        sc.add_removal_object_data_to_send_of_type_object_id(&blob, 1, 2);
+        sc.send_all_object_data();
+        assert_eq!(*sc.wired.borrow(), vec![3]);
+        assert_eq!(sc.world_indices_containing_tamed_animals().borrow().len(), 65);
+        assert!(Srv.player_info_for_peer_id("p").is_none());
+        assert!(!Srv.player_is_admin_with_id("c"));
+        assert!(Srv.player_update().is_none());
+        Srv.notify_players_changed();
+        let (d, scs) = dw_served("state_served", &["a", "b"]);
+        assert_eq!(scs.len(), 2);
+        assert_eq!(d.server_client_count(), 2);
+        use crate::world::state::WorldOpsHooks;
+        let w = d.world();
+        let mt = w.macro_tiles().get(0).unwrap();
+        let ops = CountingOps(Cell::new(0));
+        assert!(!ops.load_physical_block_for_macro_tile_at_x_y_load_surrounding_blocks_create_if_not_created(
+            &w, &mt, 0, 0, false, false
+        ));
+        ops.load_dynamic_objects_if_not_already_loaded_for_macro_tile_include_surface_blocks(&w, &mt, true);
+        assert_eq!(ops.0.get(), 1);
+        let bh: ObjRef = Obj::new(24, 1, Rc::new(RefCell::new(vec![])));
+        assert!(!ops.tile_is_protected_at_pos_against_blockhead(&w, IntPair { x: 0, y: 0 }, &bh));
     }
 }
