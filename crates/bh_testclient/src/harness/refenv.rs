@@ -154,28 +154,25 @@ impl Proc {
             None => false,
             Some(c) => match c.try_wait() {
                 Ok(None) => true,
-                Ok(Some(s)) => {
-                    self.exit.get_or_insert(status_code(s));
+                other => {
+                    other.ok().flatten().into_iter().for_each(|s| {
+                        self.exit.get_or_insert(status_code(s));
+                    });
                     false
                 }
-                Err(_) => false,
             },
         }
     }
     fn wait_for_log(&mut self, needle: &str, timeout: Duration) -> Result<()> {
         let end = Instant::now() + timeout;
         loop {
+            // the exit is checked before the log is read, so output flushed just before the exit is not missed
+            let running = self.is_running();
             let log = self.log();
             if log.lines().any(|l| strip_nslog_prefix(l).contains(needle)) {
                 return Ok(());
             }
-            let running = self.is_running();
             if !running {
-                // one last read: output may have been flushed just before exit
-                let log = self.log();
-                if log.lines().any(|l| strip_nslog_prefix(l).contains(needle)) {
-                    return Ok(());
-                }
                 return Err(HarnessError::Timeout(format!(
                     "{} exited before log contained '{}' (exit {:?}): {}",
                     self.name,
@@ -245,11 +242,11 @@ impl Proc {
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .status();
-        } else if let Some(c) = &self.child {
+        } else {
             // SAFETY: plain kill(2) on a child pid we own.
-            unsafe {
+            self.child.iter().for_each(|c| unsafe {
                 libc::kill(c.id() as i32, sig);
-            }
+            });
         }
     }
     fn stop_sigint(&mut self, grace: Duration) -> Result<Option<i32>> {
@@ -265,12 +262,13 @@ impl Proc {
             std::thread::sleep(Duration::from_millis(20));
         }
         self.signal(libc::SIGKILL);
-        if let Some(c) = self.child.as_mut() {
+        let waited = self.child.as_mut().and_then(|c| {
             let _ = c.kill();
-            if let Ok(s) = c.wait() {
-                self.exit.get_or_insert(status_code(s));
-            }
-        }
+            c.wait().ok()
+        });
+        waited.into_iter().for_each(|s| {
+            self.exit.get_or_insert(status_code(s));
+        });
         Ok(self.exit.flatten())
     }
     fn cleanup(&mut self) {
@@ -369,7 +367,7 @@ fn prepare_data(spec: &RunSpec) -> Result<(PathBuf, Option<TempDir>)> {
     }
 }
 
-fn start_docker(script: &str, prefix: &str, spec: &RunSpec, gdb: bool) -> Result<Proc> {
+fn start_docker(script: &str, prefix: &str, spec: &RunSpec) -> Result<Proc> {
     let (data, tmp) = prepare_data(spec)?;
     let port = free_udp_port();
     let name = unique_name(prefix, &spec.tag);
@@ -378,7 +376,7 @@ fn start_docker(script: &str, prefix: &str, spec: &RunSpec, gdb: bool) -> Result
         None => PathBuf::from(format!("{}.log", data.display())),
     };
     let log = File::create(&log_path)?;
-    let mut cmd = if spec.console && !gdb {
+    let mut cmd = if spec.console {
         // what run_ref.sh does, plus -i so that the console can be typed into
         let mut c = Command::new("docker");
         c.args(["run", "--rm", "--init", "-i", "--name", &name, "--network", "host"])
@@ -398,9 +396,6 @@ fn start_docker(script: &str, prefix: &str, spec: &RunSpec, gdb: bool) -> Result
         .stdin(if spec.console { Stdio::piped() } else { Stdio::null() })
         .stdout(Stdio::from(log.try_clone()?))
         .stderr(Stdio::from(log));
-    if gdb {
-        cmd.env("GDBPORT", free_udp_port().to_string());
-    }
     let mut child = cmd.spawn().map_err(|e| HarnessError::Docker(format!("spawn {}: {}", script, e)))?;
     let stdin = child.stdin.take();
     Ok(Proc { name, port, data, tmp, child: Some(child), log_path, docker: true, exit: None, own_log: true, stdin })
@@ -413,7 +408,7 @@ pub struct RefServer {
 impl RefServer {
     /// `DATA_DIR=<dir> NAME=bh-diff-<tag>-<pid>-<seq> PORT=<port> the reference environment <args> --port <port> --save_delay 1`.
     pub fn start(spec: &RunSpec) -> Result<RefServer> {
-        Ok(RefServer { p: start_docker("run_ref.sh", "bh-diff", spec, false)? })
+        Ok(RefServer { p: start_docker("run_ref.sh", "bh-diff", spec)? })
     }
 }
 delegate_handle!(RefServer);
@@ -469,6 +464,15 @@ impl RefDebugServer {
 }
 delegate_handle!(RefDebugServer);
 
+/// Runs in the forked child before `exec` (async-signal-safe: one `signal(2)` call).
+fn reset_sigint() -> std::io::Result<()> {
+    // SAFETY: restoring the default disposition of SIGINT.
+    unsafe {
+        libc::signal(libc::SIGINT, libc::SIG_DFL);
+    }
+    Ok(())
+}
+
 /// Our server as a child process with an isolated `HOME`.
 pub struct OurServer {
     p: Proc,
@@ -503,10 +507,7 @@ impl OurServer {
         // must not pass that disposition on (the original has no handler, SIGINT must kill it with status 130).
         unsafe {
             use std::os::unix::process::CommandExt;
-            cmd.pre_exec(|| {
-                libc::signal(libc::SIGINT, libc::SIG_DFL);
-                Ok(())
-            });
+            cmd.pre_exec(reset_sigint);
         }
         let mut child = cmd.spawn()?;
         let stdin = child.stdin.take();
@@ -600,6 +601,27 @@ mod tests {
     }
 
     #[test]
+    fn directory_copies_and_helpers() {
+        reset_sigint().unwrap();
+        let mut no_child = Proc { child: None, ..fake_proc_parts() };
+        no_child.signal(libc::SIGINT);
+        assert!(!no_child.is_running());
+        let tmp = TempDir::new("copy").unwrap();
+        let from = tmp.path().join("from");
+        std::fs::create_dir_all(from.join("sub/deeper")).unwrap();
+        std::fs::write(from.join("a.txt"), "a").unwrap();
+        std::fs::write(from.join("sub/deeper/b.txt"), "b").unwrap();
+        let to = tmp.path().join("to");
+        copy_dir_all(&from, &to).unwrap();
+        assert_eq!(std::fs::read_to_string(to.join("sub/deeper/b.txt")).unwrap(), "b");
+        assert!(copy_dir_all(&tmp.path().join("missing"), &to).is_err());
+        assert_eq!(tail("a\nb\nc", 2), "b\nc");
+        assert_eq!(tail("a", 5), "a");
+        let ok = std::process::Command::new("sh").args(["-c", "kill -9 $$"]).status().unwrap();
+        assert_eq!(status_code(ok), Some(137));
+    }
+
+    #[test]
     fn args_defaults() {
         let v = with_defaults(&["--new".into(), "X".into()], 1234);
         assert_eq!(v, ["--new", "X", "--port", "1234", "--save_delay", "1"]);
@@ -610,6 +632,7 @@ mod tests {
     /// R6-like check with a fake server (no docker): HOME isolation, log capture, SIGINT exit code 130.
     #[test]
     fn our_server_with_fake_binary() {
+        let _l = env_lock();
         let tmp = TempDir::new("fake").unwrap();
         let script = tmp.path().join("fake_server.sh");
         std::fs::write(&script, "#!/bin/sh\ntrap 'exit 130' INT\necho \"2026-10-16 20:30:41.724 blockheads_server171[6] World load complete.\" >&2\nmkdir -p \"$HOME/GNUstep/Library/ApplicationSupport/TheBlockheads/saves/abc/world_db\"\nwhile true; do echo x >> \"$HOME/GNUstep/Library/ApplicationSupport/TheBlockheads/saves/abc/world_db/data.mdb\"; sleep 0.2; done\n").unwrap();
@@ -631,6 +654,12 @@ mod tests {
         assert!(!s.is_running());
         let e = s.wait_for_log("never printed", Duration::from_millis(200));
         assert!(matches!(e, Err(HarnessError::Timeout(_))));
+    }
+
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    /// The environment is process-wide: tests that change it run one at a time.
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     fn script(dir: &Path, name: &str, body: &str) -> PathBuf {
@@ -666,6 +695,7 @@ mod tests {
     /// Console input reaches our server's stdin; without `RunSpec::console` there is none.
     #[test]
     fn our_server_console_with_fake_binary() {
+        let _l = env_lock();
         let tmp = TempDir::new("fake-console").unwrap();
         let bin = script(tmp.path(), "fake_server.sh", CONSOLE);
         let _g = EnvGuard::set("BH_SERVER_BIN", &bin);
@@ -686,6 +716,7 @@ mod tests {
     /// `docker run -i` for a console, and `run_ref_debug.sh`.
     #[test]
     fn reference_launchers_with_fakes() {
+        let _l = env_lock();
         let tmp = TempDir::new("fake-ref").unwrap();
         let bin = tmp.path().join("bin");
         std::fs::create_dir_all(&bin).unwrap();
@@ -705,5 +736,222 @@ mod tests {
         c.wait_for_log("console: /list", Duration::from_secs(5)).unwrap();
         let d = RefDebugServer::start(&spec).unwrap();
         assert!(d.gdb_port() > 0);
+    }
+    fn fake_proc_parts() -> Proc {
+        Proc {
+            name: "parts".into(),
+            port: 1,
+            data: PathBuf::from("/nonexistent"),
+            tmp: None,
+            child: None,
+            log_path: PathBuf::from("/nonexistent/log"),
+            docker: false,
+            exit: None,
+            own_log: false,
+            stdin: None,
+        }
+    }
+
+    fn fake_proc(dir: &Path, body: &str, docker: bool) -> Proc {
+        let bin = script(dir, "child.sh", body);
+        let log_path = dir.join("p.log");
+        let log = File::create(&log_path).unwrap();
+        let child = Command::new(bin)
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(log.try_clone().unwrap()))
+            .stderr(Stdio::from(log))
+            .spawn()
+            .unwrap();
+        Proc {
+            name: "fake-proc".into(),
+            port: 1,
+            data: dir.join("data"),
+            tmp: None,
+            child: Some(child),
+            log_path,
+            docker,
+            exit: None,
+            own_log: false,
+            stdin: None,
+        }
+    }
+
+    #[test]
+    fn docker_probes_follow_the_exit_status() {
+        let _l = env_lock();
+        let tmp = TempDir::new("fake-docker").unwrap();
+        let ok = tmp.path().join("ok");
+        let bad = tmp.path().join("bad");
+        std::fs::create_dir_all(&ok).unwrap();
+        std::fs::create_dir_all(&bad).unwrap();
+        script(&ok, "docker", "exit 0\n");
+        script(&bad, "docker", "exit 1\n");
+        let with_path =
+            |d: &Path| EnvGuard::set("PATH", format!("{}:{}", d.display(), std::env::var("PATH").unwrap_or_default()));
+        {
+            let _p = with_path(&ok);
+            assert!(docker_available() && image_present("x"));
+        }
+        {
+            let _p = with_path(&bad);
+            assert!(!docker_available() && !image_present("x"));
+        }
+        let _p = EnvGuard::set("PATH", tmp.path().join("nothing-here"));
+        assert!(!docker_available() && !image_present("x"));
+    }
+
+    #[test]
+    fn process_state_and_waiting() {
+        let tmp = TempDir::new("proc-state").unwrap();
+        // no child at all
+        let mut none = fake_proc(tmp.path(), "exit 0\n", false);
+        let mut c = none.child.take().unwrap();
+        c.wait().unwrap();
+        assert!(!none.is_running());
+        // exits right after printing: the last read finds the line, a missing one reports the exit
+        let mut quick = fake_proc(tmp.path(), "echo 'x[1] late line'\nexit 3\n", false);
+        quick.wait_for_log("late line", Duration::from_secs(5)).unwrap();
+        let err = quick.wait_for_log("never", Duration::from_secs(5)).unwrap_err().to_string();
+        assert!(err.contains("exited before log contained 'never'") && err.contains("Some(3)"), "{err}");
+        assert!(quick
+            .wait_for_saves("w", 1, Duration::from_secs(5))
+            .unwrap_err()
+            .to_string()
+            .contains("exited while waiting for saves (0/1)"));
+        assert_eq!(quick.stop_sigint(Duration::from_secs(1)).unwrap(), Some(3));
+        // still running: timeouts
+        let mut slow = fake_proc(tmp.path(), "sleep 30\n", false);
+        assert!(slow.is_running());
+        let err = slow.wait_for_log("never", Duration::from_millis(100)).unwrap_err().to_string();
+        assert!(err.contains("waiting for log 'never' on fake-proc"), "{err}");
+        let err = slow.wait_for_saves("w", 1, Duration::from_millis(100)).unwrap_err().to_string();
+        assert!(err.contains("wait_for_saves 0/1 on fake-proc"), "{err}");
+        // a world database that appears counts as one save
+        let db = tmp.path().join("data/Library/ApplicationSupport/TheBlockheads/saves/w/world_db");
+        std::fs::create_dir_all(&db).unwrap();
+        let d2 = db.clone();
+        let writer = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(200));
+            std::fs::write(d2.join("data.mdb"), b"x").unwrap();
+        });
+        slow.wait_for_saves("w", 1, Duration::from_secs(5)).unwrap();
+        writer.join().unwrap();
+        // SIGINT is ignored here, so the grace period ends in SIGKILL
+        let mut stubborn = fake_proc(tmp.path(), "trap '' INT\nwhile true; do sleep 0.1; done\n", false);
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(stubborn.stop_sigint(Duration::from_millis(200)).unwrap(), Some(137));
+        slow.cleanup();
+    }
+
+    #[test]
+    fn docker_signals_cleanup_and_keeping_data() {
+        let _l = env_lock();
+        let tmp = TempDir::new("proc-docker").unwrap();
+        let bin = tmp.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let calls = tmp.path().join("calls.txt");
+        script(&bin, "docker", &format!("echo \"$@\" >> {}\nexit 0\n", calls.display()));
+        let _p = EnvGuard::set("PATH", format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default()));
+        let mut p = fake_proc(tmp.path(), "trap 'exit 130' INT\nwhile true; do sleep 0.1; done\n", true);
+        std::thread::sleep(Duration::from_millis(200));
+        p.signal(libc::SIGINT);
+        p.signal(libc::SIGKILL);
+        p.own_log = true;
+        p.tmp = Some(TempDir::new("kept").unwrap());
+        let kept = p.tmp.as_ref().unwrap().path().to_path_buf();
+        assert_eq!(p.keep_data(), p.data);
+        assert!(kept.is_dir() && !p.own_log);
+        std::fs::remove_dir_all(&kept).unwrap();
+        p.own_log = true;
+        p.cleanup();
+        assert!(!p.log_path.exists());
+        let text = std::fs::read_to_string(&calls).unwrap();
+        assert!(
+            text.contains("kill -s INT fake-proc")
+                && text.contains("kill -s KILL fake-proc")
+                && text.contains("rm -f fake-proc"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn handles_delegate_to_the_process() {
+        let _l = env_lock();
+        let tmp = TempDir::new("handles").unwrap();
+        let bin = tmp.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        script(&bin, "docker", "exit 0\n");
+        script(tmp.path(), "run_ref.sh", "echo \"x[1] World load complete.\" >&2\nexit 0\n");
+        script(tmp.path(), "run_ref_debug.sh", "echo \"Listening on port $GDBPORT\" >&2\nsleep 30\n");
+        let _p = EnvGuard::set("PATH", format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default()));
+        let _r = EnvGuard::set("BH_REFENV", tmp.path());
+        let given = tmp.path().join("given-data");
+        let spec = RunSpec { tag: "handles".into(), data_dir: Some(given.clone()), ..Default::default() };
+        let mut r = RefServer::start(&spec).unwrap();
+        assert!(r.name().starts_with("bh-diff-handles-") && r.port() > 0);
+        assert_eq!(r.data_dir(), given);
+        assert_eq!(r.saves_dir(), given.join("Library/ApplicationSupport/TheBlockheads/saves"));
+        r.wait_for_log("World load complete.", Duration::from_secs(5)).unwrap();
+        assert!(r.log().contains("World load complete."));
+        assert!(r.wait_for_saves("w", 1, Duration::from_secs(5)).is_err());
+        let _ = r.is_running();
+        assert_eq!(r.stop_sigint(Duration::from_secs(1)).unwrap(), Some(0));
+        assert_eq!(r.keep_data(), given);
+        // the log of a given data dir sits next to it and is removed with the handle
+        let log = PathBuf::from(format!("{}.log", given.display()));
+        assert!(log.exists());
+        drop(r);
+        let mut d = RefDebugServer::start(&spec).unwrap();
+        assert_eq!((d.data_dir(), d.name().starts_with("bh-dbg-diff-handles-")), (given.clone(), true));
+        assert!(d.port() > 0 && d.gdb_port() > 0 && d.saves_dir().ends_with("saves") && d.log().contains("Listening"));
+        let _ = (d.is_running(), d.keep_data());
+        assert!(
+            d.wait_for_saves("w", 1, Duration::from_millis(50)).is_err()
+                && d.stop_sigint(Duration::from_millis(50)).is_ok()
+        );
+        let _ = std::fs::remove_file(&log);
+        // without the launcher scripts nothing starts
+        let empty = TempDir::new("no-launchers").unwrap();
+        let _r2 = EnvGuard::set("BH_REFENV", empty.path());
+        let plain = RunSpec { tag: "nolaunch".into(), ..Default::default() };
+        assert!(matches!(RefServer::start(&plain), Err(HarnessError::Docker(_))));
+        assert!(matches!(RefDebugServer::start(&plain), Err(HarnessError::Docker(_))));
+    }
+
+    #[test]
+    fn our_server_with_given_data_and_every_accessor() {
+        let _l = env_lock();
+        let tmp = TempDir::new("ours-given").unwrap();
+        let bin = script(
+            tmp.path(),
+            "fake_server.sh",
+            "trap 'exit 130' INT\necho \"x[1] World load complete.\" >&2\nd=\"$HOME/GNUstep/Library/ApplicationSupport/TheBlockheads/saves/w/world_db\"\nmkdir -p \"$d\"\nwhile true; do echo x >> \"$d/data.mdb\"; sleep 0.1; done\n",
+        );
+        let _g = EnvGuard::set("BH_SERVER_BIN", &bin);
+        let given = tmp.path().join("given");
+        let spec = RunSpec {
+            tag: "ours-given".into(),
+            data_dir: Some(given.clone()),
+            env: vec![("A".into(), "b".into())],
+            ..Default::default()
+        };
+        let mut s = OurServer::start(&spec).unwrap();
+        assert!(s.name().starts_with("ours-") && s.port() > 0);
+        assert_eq!(s.data_dir(), given);
+        assert!(s.saves_dir().starts_with(&given));
+        s.wait_for_log("World load complete.", Duration::from_secs(5)).unwrap();
+        assert!(s.log().contains("World load"));
+        s.wait_for_saves("w", 1, Duration::from_secs(5)).unwrap();
+        assert!(s.is_running());
+        assert_eq!(s.keep_data(), given);
+        assert_eq!(s.stop_sigint(Duration::from_secs(2)).unwrap(), Some(130));
+        let mut stable = OurServer::start(&spec).unwrap();
+        run_to_stable(&mut stable, "w", Duration::from_secs(5)).unwrap();
+        assert!(!stable.is_running());
+        let mut kept = OurServer::start(&RunSpec { data_dir: None, ..spec }).unwrap();
+        let data = kept.keep_data();
+        assert!(data.ends_with("GNUstep"));
+        kept.stop_sigint(Duration::from_secs(2)).unwrap();
+        std::fs::remove_dir_all(data.parent().unwrap()).unwrap();
     }
 }
