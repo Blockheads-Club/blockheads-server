@@ -446,7 +446,7 @@ pub(super) fn load(dir: &Path, save_id: Option<&str>, server: &Rc<BHServer>) -> 
         opts.runtimes.push(Box::new(rt));
     }
     // JVM mods: only when the owner turned them on (feature `jvm`, `BLOCKHEADS_JVM=1`). Logged once the bridge exists.
-    #[allow(unused_mut)]
+    #[cfg(feature = "jvm")]
     let mut notes: Vec<(LogLevel, String)> = Vec::new();
     #[cfg(feature = "jvm")]
     if let Some(mut cfg) = super::jvm_settings(&|k| std::env::var(k).ok()) {
@@ -467,6 +467,7 @@ pub(super) fn load(dir: &Path, save_id: Option<&str>, server: &Rc<BHServer>) -> 
     opts.storage = Box::new(LmdbStorage::new(world_dir.join("mods/storage")));
     let net = Rc::new(RefCell::new(ModNet::default()));
     let bridge = Rc::new(Bridge { srv: Rc::downgrade(server), net: net.clone() });
+    #[cfg(feature = "jvm")]
     for (level, note) in &notes {
         GameBridge::log(&*bridge, None, *level, note);
     }
