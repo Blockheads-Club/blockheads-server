@@ -211,3 +211,51 @@ mod tests {
         assert_eq!(w.free_physical_blocks_len(), 32);
     }
 }
+
+#[cfg(test)]
+mod convertor_tests {
+    use crate::foundation::paths;
+    use crate::storage::lmdb::{Database, DatabaseEnvironment};
+    use crate::world::db_convertor::{set_convertor, DatabaseConvertor};
+    use crate::world::lifecycle::testkit::*;
+    use std::rc::Rc;
+
+    /// A server world with databases, a convertor that still has light block and player files to move, and an app
+    /// database environment: every branch of the tick is taken.
+    #[test]
+    fn ticks_with_a_convertor_and_an_app_environment() {
+        let g = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let home = format!("{}/bhpu_{}", std::env::temp_dir().display(), std::process::id());
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).unwrap();
+        crate::foundation::paths::set_home_for_test(&home);
+        let wd = format!("{}/saves/sv", paths::appsup());
+        std::fs::create_dir_all(format!("{wd}/blocks/playerLightBlocks/a/b/cdefgh")).unwrap();
+        std::fs::write(format!("{wd}/blocks/playerLightBlocks/a/b/cdefgh/3_4_lightBlock"), b"x").unwrap();
+        std::fs::create_dir_all(format!("{wd}/players/a/b/cdef")).unwrap();
+        std::fs::write(format!("{wd}/players/a/b/cdef/playerInfo.plist"), b"x").unwrap();
+        let f = fixture(32);
+        let w = &f.world;
+        with_dw(w);
+        let _ = capture_log(|| w.initialize_databases());
+        *w.world_tile_loader.borrow_mut() = Some(Rc::new(crate::world::state::WorldTileLoader {}));
+        let env = w.database_environment.borrow().clone().unwrap();
+        let main = w.main_database.borrow().clone().unwrap();
+        let blocks = w.block_database.borrow().clone().unwrap();
+        let dwdb = w.dynamic_object_database.borrow().clone().unwrap();
+        let extra: Rc<Database> = Rc::new(Database::new(&env, "extra").unwrap());
+        let conv = DatabaseConvertor::new(w, main, dwdb, blocks, Some(extra.clone()), Some(extra));
+        set_convertor(Some(conv));
+        *w.database_convertor.borrow_mut() = Some(Rc::new(crate::world::state::DatabaseConvertor {}));
+        let other = DatabaseEnvironment::new(&format!("{home}/app"), 4, 16).unwrap();
+        APP_ENV.with(|e| *e.borrow_mut() = Some(other));
+        f.rec.finish_light_block.set(true);
+        for _ in 0..30 {
+            w.pre_update(0.2);
+        }
+        APP_ENV.with(|e| *e.borrow_mut() = None);
+        set_convertor(None);
+        drop(g);
+        assert!(f.rec.count("lb_finish") >= 3);
+    }
+}

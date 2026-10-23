@@ -1752,6 +1752,11 @@ pub(crate) mod testkit {
         }
     }
 
+    thread_local! {
+        /// What the test delegate answers for `appDatabaseEnvironment` (none by default).
+        pub static APP_ENV: RefCell<Option<Rc<DatabaseEnvironment>>> = const { RefCell::new(None) };
+    }
+
     pub struct TestDelegate {
         pub default_save: PlistDict,
     }
@@ -1768,7 +1773,7 @@ pub(crate) mod testkit {
             nslog!("failed to write to file:{}", p);
         }
         fn app_database_environment(&self) -> Option<Rc<DatabaseEnvironment>> {
-            None
+            APP_ENV.with(|e| e.borrow().clone())
         }
         fn show_welcome_back_popup_with_message(&self, _m: Option<&str>) {}
         fn set_paused(&self, _p: bool) {}
