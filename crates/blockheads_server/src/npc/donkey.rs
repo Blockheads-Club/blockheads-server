@@ -738,4 +738,13 @@ mod tests {
         assert!(!fx.env.drops.borrow().is_empty());
         assert_eq!(me.as_any().downcast_ref::<Donkey>().unwrap().donkey_like.borrow().death_timer, 1.0);
     }
+
+    /// Every forwarded selector of the class answers.
+    #[test]
+    fn faces() {
+        let fx = fixture();
+        let me = make(&fx, true, None);
+        let bh: ObjRef = crate::objects::base::testutil::TestObj::new();
+        crate::npc::npc::faces::exercise_faces(&me, &bh);
+    }
 }

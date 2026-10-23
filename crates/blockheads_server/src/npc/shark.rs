@@ -2048,6 +2048,15 @@ mod tests {
             assert_eq!(glibc_rand::rand(), v[3]);
         }
     }
+    /// Every forwarded selector of the class answers.
+    #[test]
+    fn faces() {
+        let fx = fixture();
+        water(&fx, 30, 50, 0, 10);
+        let me = make(&fx, true, true).expect("a shark");
+        let bh: ObjRef = crate::objects::base::testutil::TestObj::new();
+        crate::npc::npc::faces::exercise_faces(&me, &bh);
+    }
 }
 
 /// Tests derived from the behavioural specification's decision tables.

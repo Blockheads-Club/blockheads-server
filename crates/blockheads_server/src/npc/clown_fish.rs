@@ -1402,4 +1402,14 @@ mod tests {
 
     #[allow(dead_code)]
     fn _u(_: &MockDw) {}
+
+    /// Every forwarded selector of the class answers.
+    #[test]
+    fn faces() {
+        let fx = fixture();
+        water(&fx, 30, 50, 0, 10, 255);
+        let me = make(&fx, true, true).expect("a clown fish");
+        let bh: ObjRef = crate::objects::base::testutil::TestObj::new();
+        crate::npc::npc::faces::exercise_faces(&me, &bh);
+    }
 }

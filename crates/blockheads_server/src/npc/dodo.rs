@@ -1909,4 +1909,13 @@ mod tests {
 
     #[allow(dead_code)]
     fn _u(_: &dyn PassiveEnv) {}
+
+    /// Every forwarded selector of the class answers.
+    #[test]
+    fn faces() {
+        let fx = fixture();
+        let me = make(&fx, true, None);
+        let bh: ObjRef = crate::objects::base::testutil::TestObj::new();
+        crate::npc::npc::faces::exercise_faces(&me, &bh);
+    }
 }
