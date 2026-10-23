@@ -34,6 +34,8 @@ pub struct CovHost {
     pub knobs: RefCell<std::collections::HashMap<&'static str, i64>>,
     /// Scripted object answers (see `obj`).
     pub objs: RefCell<std::collections::HashMap<&'static str, ObjRef>>,
+    /// `free_blocks_at_pos` answers.
+    pub fbs: RefCell<Vec<ObjRef>>,
 }
 impl CovHost {
     pub fn set(&self, k: &'static str, v: i64) {
@@ -176,7 +178,7 @@ impl BlockheadHostStub for CovHost {
     }
     fn remove_object_at_pos(&self, which: Remover, pos: IntPair) -> Option<ObjRef> {
         self.rec(format!("remove:{:?}:{},{}", which, pos.x, pos.y));
-        None
+        self.obj("removed")
     }
     fn get_plant_at_pos(&self, _p: IntPair) -> Option<ObjRef> {
         self.plant.borrow().clone()
@@ -434,5 +436,142 @@ impl BlockheadHostStub for CovHost {
     }
     fn update_gather_speed_and_animation_for_current_interation_and_item(&self, _b: &Blockhead) {
         self.rec("gatherspeed".to_string());
+    }
+    fn donkey_breed(&self, _o: &ObjRef) -> u16 {
+        self.kv("breed") as u16
+    }
+    fn pickup_dynamic_object(&self, _b: &Blockhead, _o: &ObjRef) {
+        self.rec("pickup".to_string());
+    }
+    fn can_use_dynamic_object(&self, _b: &Blockhead, _o: &ObjRef) -> bool {
+        !self.flag("cantuse")
+    }
+    fn set_workbench_choice_ui_option(&self, _o: &ObjRef, v: i32) {
+        self.rec(format!("wbchoice:{v}"));
+    }
+    fn npc_begin_blockhead_inspection(&self, _n: &ObjRef, _b: &Blockhead) {
+        self.rec("inspect".to_string());
+    }
+    fn npc_inspection_stopped(&self, _n: &ObjRef) {
+        self.rec("inspectstop".to_string());
+    }
+    fn workbench_is_in_use(&self, _wb: &ObjRef) -> bool {
+        self.flag("wbuse")
+    }
+    fn workbench_current_blockhead(&self, _wb: &ObjRef) -> Option<ObjRef> {
+        self.obj("wbcur")
+    }
+    fn workbench_craft_item_with_blockhead_count(
+        &self,
+        _wb: &ObjRef,
+        _item: &Rc<dyn std::any::Any>,
+        _b: &Blockhead,
+        count: i32,
+    ) -> bool {
+        self.rec(format!("craft:{count}"));
+        self.flag("craftok")
+    }
+    fn workbench_start_managing_fuel_with_blockhead(&self, _wb: &ObjRef, _b: &Blockhead) {
+        self.rec("managefuel".to_string());
+    }
+    fn blockhead_reached_interaction_object_destination_path_extra_data(
+        &self,
+        _b: &ObjRef,
+        _e: Option<&PathExtraData>,
+    ) {
+        self.rec("reached".to_string());
+    }
+    fn player_is_admin_with_id(&self, _id: Option<&str>) -> bool {
+        self.flag("admin")
+    }
+    fn update_player(&self, _id: Option<&str>) {
+        self.rec("updateplayer".to_string());
+    }
+    fn player_name_for_player_with_id_including_old_players(&self, _id: Option<&str>) -> Option<String> {
+        self.flag("pname").then(|| "Pat".to_string())
+    }
+    fn ridable_object_with_id(&self, _id: u64) -> Option<ObjRef> {
+        self.obj("ride_by_id")
+    }
+    fn fishing_rod_new_with_swipe(&self, _b: &Blockhead, swipe: Vector2) -> FishingRodRef {
+        self.rec(format!("newrod:{},{}", swipe.x, swipe.y));
+        Rc::new(())
+    }
+    fn npc_with_id(&self, _id: u64) -> Option<ObjRef> {
+        self.obj("npc_by_id")
+    }
+    fn npc_remote_blockhead_hooked_you(&self, _n: &ObjRef, _b: &Blockhead) {
+        self.rec("hooked".to_string());
+    }
+    fn torch_at_pos(&self, _p: IntPair) -> Option<ObjRef> {
+        self.obj("torch")
+    }
+    fn torch_data_a_b(&self, _o: &ObjRef) -> (u16, u16) {
+        (self.kv("torch_a") as u16, self.kv("torch_b") as u16)
+    }
+    fn egg_at_pos(&self, _p: IntPair) -> Option<ObjRef> {
+        self.obj("egg")
+    }
+    fn egg_breed(&self, _o: &ObjRef) -> u16 {
+        self.kv("egg_breed") as u16
+    }
+    fn painting_at_pos(&self, _p: IntPair) -> Option<ObjRef> {
+        self.obj("painting")
+    }
+    fn column_at_pos(&self, _p: IntPair) -> Option<ObjRef> {
+        self.obj("column")
+    }
+    fn ladder_at_pos(&self, _p: IntPair) -> Option<ObjRef> {
+        self.obj("ladder")
+    }
+    fn wire_at_pos(&self, _p: IntPair) -> Option<ObjRef> {
+        self.obj("wire")
+    }
+    fn elevator_motor_at_pos(&self, _p: IntPair) -> Option<ObjRef> {
+        self.obj("motor")
+    }
+    fn elevator_shaft_at_pos(&self, _p: IntPair) -> Option<ObjRef> {
+        self.obj("shaft")
+    }
+    fn stairs_at_pos(&self, _p: IntPair) -> Option<ObjRef> {
+        self.obj("stairs")
+    }
+    fn door_at_pos(&self, _p: IntPair) -> Option<ObjRef> {
+        self.obj("door")
+    }
+    fn window_at_pos(&self, _p: IntPair) -> Option<ObjRef> {
+        self.obj("window")
+    }
+    fn can_pick_up_item_of_type_sub_items(&self, _b: &Blockhead, _t: ItemType, _s: Option<&[Vec<ItemRef>]>) -> i32 {
+        !self.flag("nopick") as i32
+    }
+    fn can_pick_up_item_of_type_sub_items_data_a_data_b(
+        &self,
+        _b: &Blockhead,
+        _t: ItemType,
+        _s: Option<&[Vec<ItemRef>]>,
+        _a: u16,
+        _bb: u16,
+    ) -> i32 {
+        !self.flag("noeggpick") as i32
+    }
+    fn pickup_freeblock_if_possible_in_tile_intentional(
+        &self,
+        _b: &Blockhead,
+        fb: &ObjRef,
+        _t: Option<TileRef>,
+        _i: bool,
+    ) -> bool {
+        self.rec(format!("pickupfb:{}", fb.unique_id()));
+        self.flag("fbok")
+    }
+    fn free_blocks_at_pos(&self, _p: IntPair) -> Vec<ObjRef> {
+        self.fbs.borrow().clone()
+    }
+    fn add_item_to_inventory_flash(&self, _b: &Blockhead, item: &ItemRef, flash: bool) {
+        self.rec(format!("additem:{}:{}", item.borrow().item_type.0, flash));
+    }
+    fn die_for_good(&self, _b: &Blockhead) {
+        self.rec("dieforgood".to_string());
     }
 }

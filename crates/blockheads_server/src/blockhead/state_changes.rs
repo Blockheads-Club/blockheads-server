@@ -2,16 +2,10 @@
 //! receiver, item pickup and damage.
 //!
 
-use std::rc::Rc;
-
-use crate::fmath::cconv::f32_to_i32;
-use crate::foundation::indexset::IndexSet;
 use crate::items::inventory_item::{InventoryItem, ItemRef};
-use crate::items::misc::workbench_type_for_item_type;
 use crate::items::predicates::{
-    interaction_type_disallowed_on_protected_tiles, item_type_is_column, item_type_is_full_cage,
-    item_type_is_interaction_object, item_type_is_metal, item_type_is_painting, item_type_is_stairs,
-    item_type_is_torch, item_type_is_workbench,
+    interaction_type_disallowed_on_protected_tiles, item_type_is_column, item_type_is_painting, item_type_is_stairs,
+    item_type_is_torch,
 };
 use crate::nslog;
 use crate::objects::base::{
@@ -24,14 +18,14 @@ use crate::types::item_type::ItemType;
 use crate::types::netdata::BlockheadUpdateData;
 use crate::types::structs::{FreeBlockCreationCount, IntPair, Vector, Vector2, WireStruct};
 use crate::world::helpers::{
-    tile_contains_door, tile_contains_gate, tile_contains_trap_door, tile_is_bush_or_scrub, tile_is_plant,
-    tile_is_solid, tile_is_tree_trunk, tile_is_unplaced_block_minable_with_pickaxe,
+    tile_is_bush_or_scrub, tile_is_plant, tile_is_solid, tile_is_tree_trunk,
+    tile_is_unplaced_block_minable_with_pickaxe,
 };
 use crate::world::state::{TileRef, World};
 use crate::world::tiles::{get_world_pos_for_world_index, tile_at_world_position_loaded};
 
 use super::blockhead::{
-    host, it, kf, state_asleep, tip, va, vsa, Blockhead, ExtraValue, PathExtraData, Remover, SimulationEventExtra,
+    host, it, state_asleep, tip, va, vsa, Blockhead, ExtraValue, PathExtraData, Remover, SimulationEventExtra,
 };
 
 fn tile_at(world: &World, p: IntPair) -> Option<TileRef> {
@@ -1444,30 +1438,14 @@ impl Blockhead {
     }
 }
 
-#[allow(dead_code)]
-fn _unused(_: Rc<()>, _: &IndexSet, _: i32, _: bool, _: &dyn Fn(ItemType) -> bool) {
-    let _ = (
-        f32_to_i32(0.0),
-        kf::STAND,
-        item_type_is_full_cage as fn(ItemType) -> bool,
-        item_type_is_interaction_object as fn(ItemType) -> bool,
-    );
-    let _ = (
-        item_type_is_metal as fn(ItemType) -> bool,
-        item_type_is_workbench as fn(ItemType) -> bool,
-        workbench_type_for_item_type,
-    );
-    let _ = (
-        tile_contains_door as fn(Option<TileRef>) -> bool,
-        tile_contains_gate as fn(Option<TileRef>) -> bool,
-        tile_contains_trap_door as fn(Option<TileRef>) -> bool,
-    );
-}
+#[cfg(test)]
+mod cov_tests;
 
 #[cfg(test)]
 mod tests {
     use super::super::blockhead::testutil::*;
     use super::*;
+    use std::rc::Rc;
     use crate::rng::glibc_rand::{r01_from, rand, srand};
     use crate::types::structs::CustomRules;
 
