@@ -216,14 +216,10 @@ impl Default for TreeState {
 pub trait TreeLike: DynamicObject {
     /// The Tree ivars.
     fn tree(&self) -> &RefCell<TreeState>;
-    /// `-treeType`: TREE_NOTHING in the base.
-    fn tree_type(&self) -> i32 {
-        0
-    }
-    /// `-fruitItemType`: ITEM_NONE.
-    fn fruit_item_type(&self) -> i32 {
-        0
-    }
+    /// `-treeType`: TREE_NOTHING in the base (every species overrides it).
+    fn tree_type(&self) -> i32;
+    /// `-fruitItemType`: ITEM_NONE in the base (every species overrides it).
+    fn fruit_item_type(&self) -> i32;
     /// `-shouldAddFallenFruits`: YES.
     fn should_add_fallen_fruits(&self) -> bool {
         true
@@ -236,12 +232,10 @@ pub trait TreeLike: DynamicObject {
     fn is_required_soil_type(&self, tile_type: i32) -> bool {
         tree_is_required_soil_type(tile_type)
     }
-    /// `-tileIsKindOfSelf:`: NO.
-    fn tile_is_kind_of_self(&self, _t: &Tile) -> bool {
-        false
-    }
-    /// `-makeTileDead:`: empty.
-    fn make_tile_dead(&self, _t: &mut Tile) {}
+    /// `-tileIsKindOfSelf:`: NO in the base (every species overrides it).
+    fn tile_is_kind_of_self(&self, t: &Tile) -> bool;
+    /// `-makeTileDead:`: empty in the base (every species overrides it).
+    fn make_tile_dead(&self, t: &mut Tile);
     /// `-updateGrowth:`: empty in the base.
     fn update_growth(&self, _me: &ObjRef, _add_new_branch_blocks: bool) {}
     /// `-isStaticTree`: NO (GemTree: YES).
@@ -257,11 +251,8 @@ pub trait TreeLike: DynamicObject {
     fn load_save_dict_values(&self, me: &ObjRef, d: &PlistDict) {
         tree_load_save_dict_values(me, d)
     }
-    /// Species `update:accurateDT:isSimulation:`: the default is the Tree base `update:`; species overrides run
-    /// [`tree_update`] first (`[super update:]`).
-    fn species_update(&self, me: &ObjRef, dt: f32, accurate_dt: f32, is_simulation: bool) {
-        tree_update(me, dt, accurate_dt, is_simulation)
-    }
+    /// Species `update:accurateDT:isSimulation:`; species overrides run [`tree_update`] first (`[super update:]`).
+    fn species_update(&self, me: &ObjRef, dt: f32, accurate_dt: f32, is_simulation: bool);
     /// Species `worldChanged:`: the default is [`tree_world_changed`]; GemTree does NOT chain.
     fn species_world_changed(&self, me: &ObjRef, positions: &mut Vec<IntPair>) {
         tree_world_changed(me, positions)
@@ -2845,5 +2836,137 @@ mod tests {
                 }
             }
         }
+    }
+}
+
+/// Whole-life scenarios of every species: growth over the seasons, fruit, saving and loading, neighbours changing
+/// and death.
+#[cfg(test)]
+mod scenario_tests {
+    use super::testenv::{env, GROUND};
+    use super::*;
+    use crate::rng::glibc_rand::srand;
+
+    const SPECIES: [(i32, i32); 11] = [
+        (TREE_APPLE, OBJECT_TYPE_APPLE),
+        (TREE_MANGO, OBJECT_TYPE_MANGO),
+        (TREE_MAPLE, OBJECT_TYPE_MAPLE),
+        (TREE_PINE, OBJECT_TYPE_PINE),
+        (TREE_CACTUS, OBJECT_TYPE_CACTUS),
+        (TREE_COCONUT, OBJECT_TYPE_COCONUT),
+        (TREE_ORANGE, OBJECT_TYPE_ORANGE),
+        (TREE_CHERRY, OBJECT_TYPE_CHERRY),
+        (TREE_COFFEE, OBJECT_TYPE_COFFEE),
+        (TREE_LIME, OBJECT_TYPE_LIME),
+        (11, OBJECT_TYPE_GEM),
+    ];
+
+    fn plant(w: &Rc<World>, d: &Rc<DynamicWorld>, tree_type: i32, x: i32, adult: bool) -> Option<ObjRef> {
+        new_tree_for_type(tree_type, w, d, IntPair { x, y: GROUND + 1 }, None, 9, 5, None, None, adult, 99_999.0)
+    }
+
+    #[test]
+    fn every_species_lives_through_the_seasons() {
+        for (k, (tree_type, object_type)) in SPECIES.iter().enumerate() {
+            let (w, d) = env(&format!("tr_life_{k}"));
+            let x = 10 + 3 * (k as i32 % 3);
+            for adult in [false, true] {
+                for seed in 1..4u32 {
+                    srand(seed);
+                    let Some(t) = plant(&w, &d, *tree_type, x, adult) else { continue };
+                    assert_eq!(t.object_type(), *object_type);
+                    for step in 0..120 {
+                        w.set_world_time(f64::from(step) * 77.0);
+                        t.update_accurate_dt_is_simulation(&t, 25.0, 25.0, false);
+                    }
+                    // a save and a reload long after
+                    let dict = t.get_save_dict(&t);
+                    w.set_world_time(50_000.0);
+                    let back = new_tree_from_save_dict(*object_type, &w, &d, &dict, None, None, None);
+                    if let Some(back) = back {
+                        back.update_accurate_dt_is_simulation(&back, 25.0, 25.0, false);
+                    }
+                    // a change next to it, then the end
+                    t.world_changed(&t, &mut vec![IntPair { x, y: GROUND }, IntPair { x: x + 1, y: GROUND + 3 }]);
+                    t.set_needs_removed(&t, true);
+                    t.remove_from_macro_block(&t);
+                    // clean the tiles for the next round
+                    for y in GROUND + 1..GROUND + 30 {
+                        for dx in -6..=6 {
+                            if let Some(tr) = crate::world::tiles::tile_at_world_position_loaded(x + dx, y, &w) {
+                                tr.update(|tile| {
+                                    tile.type_index = 2;
+                                    tile.contents = 0;
+                                    tile.foreground_contents = 0;
+                                    tile.back_wall_type_index = 2;
+                                    tile.sun_light = 255;
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn fruit_falls_and_the_base_selectors_answer() {
+        struct Fixed(f64);
+        impl crate::dynworld::state::DwNoise for Fixed {
+            fn get_x_y_octaves(&self, _x: f64, _y: f64, _o: i32) -> f64 {
+                self.0
+            }
+        }
+        let noise: Rc<dyn crate::dynworld::state::DwNoise> = Rc::new(Fixed(0.3));
+        for (k, (tree_type, object_type)) in SPECIES.iter().enumerate() {
+            let (w, d) = env(&format!("tr_fruit_{k}"));
+            srand(3);
+            let x = 12;
+            let Some(t) = new_tree_for_type(
+                *tree_type,
+                &w,
+                &d,
+                IntPair { x, y: GROUND + 1 },
+                None,
+                9,
+                5,
+                Some(noise.clone()),
+                Some(noise.clone()),
+                true,
+                99_999.0,
+            ) else {
+                continue;
+            };
+            let like = tl(&t);
+            let _ = (like.tree_type(), like.fruit_item_type(), like.should_add_fallen_fruits());
+            let _ = (like.fruit_should_fall_in_season(1), like.is_static_tree(), like.height());
+            for step in 0..24 {
+                w.set_world_time(f64::from(step) * 150.0);
+                t.update_accurate_dt_is_simulation(&t, 25.0, 25.0, false);
+                tree_add_fallen_fruits(&t);
+            }
+            like.update_growth(&t, true);
+            like.update_growth(&t, false);
+            assert_eq!(t.object_type(), *object_type);
+        }
+        let _ = TreeState::default();
+    }
+
+    #[test]
+    fn trees_need_loaded_ground() {
+        let (w, d) = env("tr_unloaded");
+        let dict = {
+            let t = plant(&w, &d, TREE_APPLE, 10, false).unwrap();
+            t.get_save_dict(&t)
+        };
+        for mx in 0..2 {
+            *w.macro_tiles().get(mx).unwrap().physical_block.borrow_mut() = None;
+        }
+        for (tree_type, object_type) in SPECIES {
+            assert!(plant(&w, &d, tree_type, 12, false).is_none() || tree_type == 11);
+            let _ = new_tree_from_save_dict(object_type, &w, &d, &dict, None, None, None);
+        }
+        assert!(new_tree_from_save_dict(99, &w, &d, &dict, None, None, None).is_none());
+        assert!(plant(&w, &d, 99, 12, false).is_none());
     }
 }
