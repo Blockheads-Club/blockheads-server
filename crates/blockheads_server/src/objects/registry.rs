@@ -107,9 +107,9 @@ impl PlainInteractionObject {
         cache: CacheRef,
     ) -> Option<ObjRef> {
         let me: ObjRef = Self::alloc();
-        if !base_init_with_world_dynamic_world_at_position_cache(&me, world, dw, pos, cache) {
-            return None;
-        }
+        // the base initialiser always succeeds when the position is given
+        let inited = base_init_with_world_dynamic_world_at_position_cache(&me, world, dw, pos, cache);
+        debug_assert!(inited);
         Some(me)
     }
 }
@@ -1155,12 +1155,10 @@ mod tests {
         let f = class_for_dynamic_object_type(15).unwrap();
         let mut nd = vec![0u8; 0x28];
         nd[0..8].copy_from_slice(&u64::MAX.to_le_bytes());
-        let o = (f.from_net_data.unwrap())(&wr, &dr, None, &nd);
-        if let Some(o) = o {
-            assert_eq!(o.object_type(), 15);
-            assert!(o.is_net());
-            assert!(as_interaction_like(&o).is_some());
-        }
+        let o = (f.from_net_data.unwrap())(&wr, &dr, None, &nd).expect("a plain interaction object");
+        assert_eq!(o.object_type(), 15);
+        assert!(o.is_net());
+        assert!(as_interaction_like(&o).is_some());
     }
 
     #[test]
@@ -1172,9 +1170,176 @@ mod tests {
             &dr,
             IntPair { x: 3, y: 3 },
             None,
-        );
-        if let Some(o) = o {
-            assert!(as_interaction_like(&o).is_some());
+        )
+        .expect("a plain interaction object");
+        assert!(as_interaction_like(&o).is_some());
+    }
+
+    /// Every constructor shape of every row, called with empty inputs on a real world: whatever comes out (or
+    /// raises) does not matter here, the adapters have to be callable.
+    #[test]
+    fn every_factory_shape_can_be_called() {
+        use crate::interaction::sign::testkit::world_with_block;
+        use std::panic::{catch_unwind, AssertUnwindSafe};
+        install();
+        let (w, dw, _pb) = world_with_block("reg_sweep");
+        *w.distance_ordered_food_types.borrow_mut() = (0..31).collect();
+        let (wr, dr): (WorldRef, DynamicWorldRef) = (w.clone(), dw.clone());
+        let pos = IntPair { x: 10, y: 10 };
+        let empty = crate::objects::base::new_mutable_dict();
+        let head = vec![0u8; 0x200];
+        let mut built = 0;
+        for t in 1..=64 {
+            let f = class_for_dynamic_object_type(t).unwrap();
+            let mut tries: Vec<Box<dyn FnOnce() -> Option<ObjRef> + '_>> = Vec::new();
+            if let Some(p) = f.from_position {
+                let (wr, dr) = (&wr, &dr);
+                tries.push(Box::new(move || p(wr, dr, pos, None)));
+            }
+            if let Some(sfn) = f.from_save_dict {
+                let (wr, dr, empty) = (&wr, &dr, &empty);
+                tries.push(Box::new(move || sfn(wr, dr, empty, None)));
+            }
+            if let Some(n) = f.from_net_data {
+                let (wr, dr, head) = (&wr, &dr, &head);
+                tries.push(Box::new(move || n(wr, dr, None, head)));
+            }
+            if let Some(tt) = f.from_position_type_save_dict {
+                let (wr, dr) = (&wr, &dr);
+                tries.push(Box::new(move || tt(wr, dr, pos, None, 0, None, None)));
+            }
+            if let Some(i) = f.from_position_interaction {
+                let (wr, dr) = (&wr, &dr);
+                tries.push(Box::new(move || i(wr, dr, pos, None, None, false, None, None, None)));
+            }
+            for call in tries {
+                if let Ok(Some(_)) = catch_unwind(AssertUnwindSafe(call)) {
+                    built += 1;
+                }
+            }
         }
+        assert!(built > 20, "only {built} objects built");
+        // the interaction table finds its rows too
+        for i in 1..=9 {
+            let f = class_for_interaction_object_type(i).unwrap();
+            let _ = f
+                .from_position_interaction
+                .map(|c| catch_unwind(AssertUnwindSafe(|| c(&wr, &dr, pos, None, None, false, None, None, None))));
+        }
+    }
+
+    /// The plain InteractionObject (type 15) answers its DynamicObject face; the downcast chain names every
+    /// concrete InteractionObject class and refuses everything else.
+    #[test]
+    fn plain_interaction_object_face_and_downcast_chain() {
+        use crate::interaction::sign::testkit::world_with_block;
+        install();
+        let (w, dw, _pb) = world_with_block("reg_plain");
+        let (wr, dr): (WorldRef, DynamicWorldRef) = (w.clone(), dw.clone());
+        let o = PlainInteractionObject::init_with_world_dynamic_world_at_position_cache(
+            &wr,
+            &dr,
+            IntPair { x: 10, y: 10 },
+            None,
+        )
+        .expect("plain interaction object");
+        assert_eq!(o.class_info().name, "InteractionObject");
+        let plain = downcast::<PlainInteractionObject>(&o).expect("a plain interaction object");
+        assert!(std::ptr::eq(InteractionObjectLike::io_state(plain), &plain.io));
+        assert!(o.as_any().is::<PlainInteractionObject>());
+        assert_eq!(o.object_type(), 15);
+        assert!(!o.requires_physical_block());
+        assert!(o.should_add_to_macro_block());
+        assert!(o.as_tap_choice().is_some());
+        let tap = o.as_tap_choice().unwrap();
+        assert_eq!(tap.action_title(), "");
+        assert!(!tap.is_double_height());
+        o.update_accurate_dt_is_simulation(&o, 0.016, 0.016, false);
+        let sd = o.get_save_dict(&o);
+        let nd = o.creation_net_data_for_client(&o, None).unwrap();
+        assert_eq!(nd, o.update_net_data_for_client(&o, None).unwrap());
+        o.remote_update(&o, &nd);
+        o.blockheads_loaded(&o);
+        let b: ObjRef = crate::objects::interaction_object::testutil::TestBh::new(5, false);
+        o.blockhead_unloaded(&o, &b);
+        assert!(as_interaction_like(&o).is_some());
+        // the net constructor refuses an image outside the loaded world
+        let mut far = nd.clone();
+        far[8..12].copy_from_slice(&3000u32.to_le_bytes());
+        assert!(PlainInteractionObject::init_with_world_dynamic_world_cache_net_data(&wr, &dr, None, &far).is_none());
+        o.dealloc(&o);
+        // every other class is not an InteractionObject
+        assert!(as_interaction_like(&b).is_none());
+        // and each concrete one is
+        let pos = IntPair { x: 12, y: 10 };
+        for t in [23, 45, 46, 47, 48, 49, 50, 60, 64] {
+            let f = class_for_dynamic_object_type(t).unwrap();
+            let made = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                f.from_position_interaction
+                    .and_then(|c| c(&wr, &dr, pos, None, None, false, None, Some("c"), Some("n")))
+            }));
+            if let Ok(Some(obj)) = made {
+                assert!(as_interaction_like(&obj).is_some(), "type {t}");
+            }
+        }
+    }
+
+    /// The dispatch helpers for trees, plants, Shark, FreightCar and Workbench.
+    #[test]
+    fn dispatch_helpers() {
+        use crate::interaction::sign::testkit::world_with_block;
+        install();
+        let (w, dw, _pb) = world_with_block("reg_dispatch");
+        let empty = crate::objects::base::new_mutable_dict();
+        let call = |t: i32| {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                init_tree_or_plant_from_save_dict(t, &w, &dw, &empty, None, None, None).is_some()
+            }))
+        };
+        let _ = call(1);
+        let _ = call(10);
+        assert_eq!(call(17).ok(), Some(false));
+        assert!(init_plant_from_save_dict_with_noise(17, &w, &dw, &empty, None, None, None).is_none());
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            init_plant_from_save_dict_with_noise(10, &w, &dw, &empty, None, None, None)
+        }));
+        let _ =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| init_shark_from_save_dict(&w, &dw, &empty, None)));
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            init_freight_car_from_save_dict(&w, &dw, &empty, None, None)
+        }));
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            init_workbench_from_save_dict(&w, &dw, &empty, None)
+        }));
+    }
+
+    /// The workbench hook installed for wires reaches the real workbench.
+    #[test]
+    fn wires_ask_the_workbench() {
+        use crate::building::wire::Wire;
+        use crate::crafting::workbench::{Workbench, WB_STEAM_GENERATOR};
+        use crate::interaction::sign::testkit::world_with_block;
+        use crate::objects::type_tables::DYNAMIC_OBJECT_TYPE_WORKBENCH;
+        use crate::types::enums::WorkbenchType;
+        install();
+        let (w, dw, _pb) = world_with_block("reg_wire");
+        let dr: DynamicWorldRef = dw.clone();
+        let wb = Workbench::init_with_world_dynamic_world_at_position_cache_type_flipped_save_dict_placed_by_client_client_name(
+            &w, &dr, IntPair { x: 10, y: 10 }, None, WorkbenchType(WB_STEAM_GENERATOR as _), false, None, None, None,
+        )
+        .unwrap();
+        let wbo: ObjRef = wb.clone();
+        dw.by_pos_set(DYNAMIC_OBJECT_TYPE_WORKBENCH, dw.world_index(IntPair { x: 10, y: 10 }), &wbo);
+        crate::world::tiles::tile_at_world_position_loaded(10, 10, &w).unwrap().set_contents(0x2e);
+        let wire = Wire::init_with_world_dynamic_world_at_position_cache_type_save_dict_placed_by_client(
+            &w,
+            &dw,
+            IntPair { x: 11, y: 10 },
+            None,
+            0,
+            None,
+            None,
+        );
+        assert!(wire.is_some());
     }
 }
