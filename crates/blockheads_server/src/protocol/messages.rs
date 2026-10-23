@@ -855,6 +855,20 @@ mod tests {
         assert!(index_set_decode(&[1, 2, 3, 4, 5, 6, 7, 8]).is_empty());
     }
 
+    /// 0x4c carries the raw `-[NSIndexSet serializedData]` words (no gzip, no plist): the default grant
+    /// {0..301, 1024..1095} is `[0x171e8f, 0, 302, 1024, 72]`.
+    #[test]
+    fn found_items_v2_is_the_raw_serialization() {
+        let p = found_items_v2(&[(0, 302), (1024, 72)]);
+        let mut want = vec![0x4c];
+        for w in [0x171e8fu32, 0, 302, 1024, 72] {
+            want.extend_from_slice(&w.to_le_bytes());
+        }
+        assert_eq!(p, want);
+        let Some(ClientMsg::FoundItemsV2 { ranges }) = decode_client_packet(&p).unwrap() else { panic!("not 0x4c") };
+        assert_eq!(ranges, vec![(0, 302), (1024, 72)]);
+    }
+
     #[test]
     fn malformed_table() {
         let exc = |p: &[u8]| decode_client_packet(p).unwrap_err();

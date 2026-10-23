@@ -151,14 +151,16 @@ jobs:
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@cargo-llvm-cov
-      # Policy is 100 % line coverage. Until it is reached the gate is the repository variable COVERAGE_MIN
-      # (default 0 = report only); raise it as coverage grows.
+      # Policy is 100 % line coverage; scripts/coverage-gate.sh holds the gates (mod host at 100 %, per-crate floors
+      # for the rest, only ever raised) and fails the job below them.
       - name: Measure
         run: |
-          cargo llvm-cov --workspace --lcov --output-path lcov.info --fail-under-lines "${{ vars.COVERAGE_MIN || 0 }}"
-          cargo llvm-cov report --summary-only | tee summary.txt
+          status=0
+          scripts/coverage-gate.sh || status=$?
           { echo '### Coverage'; echo '```'; cat summary.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: coverage
           path: |

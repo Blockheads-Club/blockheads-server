@@ -17,7 +17,8 @@ COPY crates crates
 RUN cargo build --release --locked -p blockheads_server --bin blockheads_server \
     && strip target/release/blockheads_server
 
-# Small runtime: glibc + libgcc only, non-root (uid 65532).
+# Small runtime: glibc, libgcc and libstdc++ (distroless/cc ships libstdc++.so.6; Luau, the mod runtime, is C++ and
+# links it dynamically), non-root (uid 65532).
 FROM gcr.io/distroless/cc-debian12:nonroot AS runtime-base
 ENV BLOCKHEADS_DATA_DIR=/data
 COPY --from=prep --chown=65532:65532 /data /data
