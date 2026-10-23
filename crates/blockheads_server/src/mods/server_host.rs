@@ -6,6 +6,7 @@ use std::collections::BTreeSet;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::rc::{Rc, Weak};
+use std::time::Instant;
 
 use bhmod_content::Kind;
 use bhmod_core::storage::{KvBackend, StorageProvider};
@@ -18,7 +19,7 @@ use bhmod_manifest::content::SLOTS;
 use bhmod_wasm::{WasmConfig, WasmRuntime};
 
 use super::net::{pre_login_text, Link, ModNet};
-use super::{ChatVerdict, LoaderKey, ModHooks, Optional};
+use super::{ChatVerdict, LoaderKey, ModHooks, Optional, LIMBO_GRACE};
 use crate::server::bhserver::BHServer;
 use crate::storage::lmdb::{Database, DatabaseEnvironment};
 use crate::types::structs::IntPair;
@@ -276,6 +277,27 @@ impl ServerMods {
     }
 }
 
+impl ServerMods {
+    /// Ends a vanilla peer's limbo: the peer is removed like any dropped one, without a `0x26` (any reason would
+    /// replace the readable welcome text with a misleading message on the client).
+    fn drop_limbo(&self, player: &str) {
+        let Some(s) = self.srv.upgrade() else { return };
+        if let Some(m) = s.match_() {
+            m.disconnect_player(player);
+            m.remove_client(player);
+        }
+        s.client_finished_away_simulation(player);
+    }
+
+    /// Drops the limbo peers whose grace ended at `now`.
+    fn drop_expired_limbo(&self, now: Instant) {
+        let expired = self.net.borrow_mut().expired_limbo(now);
+        for player in expired {
+            self.drop_limbo(&player);
+        }
+    }
+}
+
 impl ModHooks for ServerMods {
     fn player_join(&self, player_id: &str) {
         self.joined.borrow_mut().insert(player_id.to_string());
@@ -323,6 +345,7 @@ impl ModHooks for ServerMods {
     }
     fn poll(&self) {
         self.with((), |h| h.poll());
+        self.drop_expired_limbo(Instant::now());
         if !self.net.borrow().has_peers() {
             return;
         }
@@ -377,6 +400,22 @@ impl ModHooks for ServerMods {
         })?;
         self.net.borrow().reject_text(&link, player_id, r, pre_login_text(r));
         Some(r)
+    }
+    fn limbo_join(&self, peer: &str, player_id: &str, loader: Option<&LoaderKey>) -> bool {
+        let mut net = self.net.borrow_mut();
+        net.rekey(peer, player_id);
+        let limbo = net.wants_limbo(player_id, loader);
+        if limbo {
+            net.enter_limbo(peer, player_id, Instant::now(), LIMBO_GRACE);
+        }
+        limbo
+    }
+    fn limbo_packet(&self, peer: &str) -> bool {
+        let left = self.net.borrow_mut().leave_limbo(peer);
+        left.map(|player| self.drop_limbo(&player)).is_some()
+    }
+    fn limbo_gone(&self, peer: &str) {
+        self.net.borrow_mut().leave_limbo(peer);
     }
     fn block_place(&self, player_id: &str, at: IntPair, item: u32, data_a: u16, data_b: u16) -> bool {
         let ev =
@@ -477,6 +516,9 @@ pub(super) fn load(dir: &Path, save_id: Option<&str>, server: &Rc<BHServer>) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::net::bhmatch::{MatchDelegate, PlayerConnectionState};
+    use crate::plist::value::PlistValue;
+    use crate::server::bhserver::test_support::Harness;
 
     #[test]
     fn bridge_without_a_server() {
@@ -542,6 +584,115 @@ mod tests {
         sm.player_quit("p", false);
         sm.net.borrow_mut().rekey("x", "y");
         sm.poll();
+        // Nor does the limbo: a peer in it is forgotten, not dropped.
+        sm.net.borrow_mut().catalog.client_required = true;
+        assert!(sm.limbo_join("e", "p", None));
+        assert!(sm.limbo_packet("p"));
+        assert!(sm.limbo_join("e", "p", None));
+        sm.drop_expired_limbo(Instant::now() + LIMBO_GRACE);
+        assert!(!sm.limbo_packet("p"));
+    }
+
+    /// Keeps the host installed for the test and removes it afterwards (the hooks are thread-local).
+    struct Installed(Rc<ServerMods>, tempfile::TempDir);
+
+    impl Drop for Installed {
+        fn drop(&mut self) {
+            crate::mods::install(None);
+        }
+    }
+
+    fn installed(h: &Harness, client_required: bool) -> Installed {
+        let tmp = tempfile::tempdir().unwrap();
+        let net = Rc::new(RefCell::new(ModNet::default()));
+        net.borrow_mut().catalog.client_required = client_required;
+        let bridge = Rc::new(Bridge { srv: Rc::downgrade(&h.srv), net: net.clone() });
+        let host = ModHost::load(HostOptions::new(tmp.path(), Side::Server), bridge);
+        let sm = Rc::new(ServerMods {
+            host: RefCell::new(host),
+            srv: Rc::downgrade(&h.srv),
+            joined: RefCell::new(BTreeSet::new()),
+            net,
+        });
+        crate::mods::install(Some(sm.clone()));
+        Installed(sm, tmp)
+    }
+
+    fn limbo_join(h: &Harness, alias: &str) -> String {
+        let pid = h.join(alias);
+        // In the limbo: the summary with the readable welcome text, no player, no approval, no rejection yet.
+        let pk = h.m.packets_to(&pid);
+        let summary = pk.iter().find(|p| p[0] == 0x01).expect("summary");
+        let xml = crate::foundation::gzip::gzip_inflate(&summary[1..]).unwrap();
+        let PlistValue::Dict(d) = crate::plist::helpers::property_list_from_data(&xml).unwrap() else { panic!() };
+        assert_eq!(d.map.get(&"welcomeMessage".to_string()).and_then(|v| v.as_str()), Some(crate::mods::LIMBO_TEXT));
+        assert!(pk.iter().all(|p| p[0] != 0x26));
+        assert!(h.srv.connected_client_ids().is_empty());
+        assert!(h.srv.unapproved_clients.borrow().is_empty());
+        assert!(!h.w.calls.borrow().join("|").contains("client_connected"));
+        assert!(h.m.approved.borrow().is_empty() && h.m.removed.borrow().is_empty());
+        pid
+    }
+
+    #[test]
+    fn vanilla_client_waits_in_the_limbo_and_any_packet_ends_it() {
+        let h = Harness::new("m_limbo_packet");
+        let _mods = installed(&h, true);
+        let pid = limbo_join(&h, "Vic");
+        h.m.clear();
+        h.send(&pid, &[0x05]);
+        assert!(h.m.packets_to(&pid).is_empty());
+        assert_eq!(*h.m.removed.borrow(), vec![pid.clone()]);
+        assert_eq!(*h.m.disconnected.borrow(), vec![pid.clone()]);
+        // Later packets are ignored.
+        h.m.clear();
+        h.send(&pid, &[0x05]);
+        assert!(h.m.sent.borrow().is_empty());
+    }
+
+    #[test]
+    fn vanilla_client_is_dropped_when_the_grace_ends() {
+        let h = Harness::new("m_limbo_grace");
+        let mods = installed(&h, true);
+        let pid = limbo_join(&h, "Vic");
+        h.m.clear();
+        mods.0.poll();
+        mods.0.drop_expired_limbo(Instant::now() + LIMBO_GRACE - std::time::Duration::from_secs(1));
+        assert!(h.m.sent.borrow().is_empty());
+        mods.0.drop_expired_limbo(Instant::now() + LIMBO_GRACE + std::time::Duration::from_secs(1));
+        assert!(h.m.packets_to(&pid).is_empty());
+        assert_eq!(*h.m.removed.borrow(), vec![pid.clone()]);
+        assert_eq!(*h.m.disconnected.borrow(), vec![pid]);
+        assert!(h.srv.connected_client_ids().is_empty());
+    }
+
+    #[test]
+    fn vanilla_client_leaving_or_failing_is_forgotten() {
+        let h = Harness::new("m_limbo_gone");
+        let mods = installed(&h, true);
+        let a = limbo_join(&h, "Ann");
+        let b = limbo_join(&h, "Bob");
+        h.srv.match_player_did_change_state(&*h.m, &a, PlayerConnectionState::Disconnected);
+        h.srv.match_connection_with_player_failed_with_error(&*h.m, &b);
+        h.m.clear();
+        // Nothing left to drop.
+        mods.0.drop_expired_limbo(Instant::now() + LIMBO_GRACE * 2);
+        assert!(!mods.0.limbo_packet(&a) && !mods.0.limbo_packet(&b));
+        assert!(h.m.sent.borrow().is_empty());
+    }
+
+    #[test]
+    fn only_vanilla_clients_of_client_required_servers_get_the_limbo() {
+        // No client-required mods: the vanilla join is approved as before.
+        let h = Harness::new("m_limbo_optional");
+        let _mods = installed(&h, false);
+        let pid = h.join("Vic");
+        assert_eq!(h.srv.connected_client_ids(), vec![pid]);
+        // A client with a loader key is never held.
+        let h = Harness::new("m_limbo_key");
+        let mods = installed(&h, true);
+        assert!(!mods.0.limbo_join("e", "p", Some(&LoaderKey::default())));
+        assert!(!mods.0.limbo_packet("p"));
     }
 
     #[test]

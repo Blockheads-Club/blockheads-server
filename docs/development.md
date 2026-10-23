@@ -71,7 +71,14 @@ installed) and the `bhcModLoader` argument of `ModHooks::pre_login` (the 0x1f ch
   A client `CHANNEL_REGISTER` is ignored. Server mods sending to a player without the loader are a silent no-op.
 - `bhcModLoader` is never stored: the player info keeps only the listed vanilla keys.
 - Rejections: modded clients get `REJECT_TEXT` before `0x26` for a protocol mismatch, missing or stale acceptance
-  and `player-pre-login` refusals; vanilla clients only get `0x26`.
+  and `player-pre-login` refusals; vanilla clients never get a 0xBC byte.
+- Vanilla clients on a server with client-required mods (no `HELLO`, no `bhcModLoader`) are not rejected at the
+  `bhcModLoader` check but held in a limbo (`ModHooks::limbo_join`): the server sends a 0x01 world summary (the
+  world's own summary for a plain player, `welcomeMessage` = `mods::LIMBO_TEXT`; the vanilla game always shows it as
+  its "WELCOME TO <WORLD>!" popup), without approving the player (no `connected_clients` entry, no player record, no
+  `client_connected`, no `player-join` / `player-pre-login`). After `mods::LIMBO_GRACE` (20 s), or at once when the
+  peer sends any packet, it is disconnected without any `0x26` (a reason would replace the readable text with a misleading one); a disconnect just forgets it. Servers without
+  client-required mods are unchanged.
 
 The test client's modded mode (`bh_testclient::ModClient`, `bh_client join ADDR --alias A --modded CACHE_DIR`)
 does the client side: HELLO, list, downloads into a cache (resume, SHA-256 check), READY, the 0x1f key and

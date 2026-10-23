@@ -6,6 +6,7 @@
 //! it ([`ModNet::rekey`] moves the state at approval time). Only peers that sent `HELLO` ever receive a 0xBC byte.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::{Duration, Instant};
 
 use bhmod_core::types::ApiError;
 use bhmod_proto::{
@@ -62,6 +63,16 @@ struct Peer {
     announced: BTreeSet<u16>,
     transfer: Option<Transfer>,
     ready: Option<Hash>,
+    /// The mods of `READY.loaded`: the required client mods plus the optional ones the player switched on.
+    loaded: Option<BTreeSet<String>>,
+}
+
+/// A vanilla peer held in the limbo until `until`.
+#[derive(Debug)]
+struct Limbo {
+    peer: String,
+    player: String,
+    until: Instant,
 }
 
 /// Protocol state of the server.
@@ -76,6 +87,8 @@ pub struct ModNet {
     peers: BTreeMap<String, Peer>,
     /// Channel name -> wire id (ids start at 1 and are never reused).
     wire: BTreeMap<String, u16>,
+    /// Vanilla peers shown the readable rejection (not approved, not in the game).
+    limbo: Vec<Limbo>,
 }
 
 impl ModNet {
@@ -97,6 +110,12 @@ impl ModNet {
     /// The `acceptedHash` of the peer's `READY`.
     pub fn ready_hash(&self, peer: &str) -> Option<Hash> {
         self.peers.get(peer).and_then(|p| p.ready)
+    }
+
+    /// True when the client of `peer` runs mod `id`. A peer that never sent `READY` (all mods server-only) runs no
+    /// client mods; the server still sends it channel traffic, as before, so only a `READY` can say no.
+    pub fn runs_mod(&self, peer: &str, id: &str) -> bool {
+        self.peers.get(peer).and_then(|p| p.loaded.as_ref()).is_none_or(|l| l.contains(id))
     }
 
     /// The wire id of a channel, assigned on first use. `None` when all 65535 ids are taken.
@@ -213,6 +232,31 @@ impl ModNet {
         Some(REJECT_CLIENT_TOO_OLD)
     }
 
+    /// True when a join that failed [`ModNet::check_loader`] gets the limbo instead of the bare rejection: the
+    /// server requires client mods and the peer is vanilla (no `HELLO`, no `bhcModLoader`).
+    pub fn wants_limbo(&self, peer: &str, key: Option<&LoaderKey>) -> bool {
+        self.catalog.client_required && key.is_none() && !self.is_modded(peer)
+    }
+
+    /// Holds a vanilla peer (`player` is its player id) in the limbo for `grace` from `now`.
+    pub fn enter_limbo(&mut self, peer: &str, player: &str, now: Instant, grace: Duration) {
+        self.limbo.push(Limbo { peer: peer.to_string(), player: player.to_string(), until: now + grace });
+    }
+
+    /// Takes a peer (by either name) out of the limbo. `Some(player id)` when it was in it.
+    pub fn leave_limbo(&mut self, peer: &str) -> Option<String> {
+        let i = self.limbo.iter().position(|l| l.peer == peer || l.player == peer)?;
+        Some(self.limbo.remove(i).player)
+    }
+
+    /// Takes the peers whose grace ended at `now` out of the limbo. Returns their player ids.
+    pub fn expired_limbo(&mut self, now: Instant) -> Vec<String> {
+        let (gone, kept): (Vec<Limbo>, Vec<Limbo>) =
+            std::mem::take(&mut self.limbo).into_iter().partition(|l| l.until <= now);
+        self.limbo = kept;
+        gone.into_iter().map(|l| l.player).collect()
+    }
+
     /// Announces channels (`CHANNEL_REGISTER`) a peer has not seen yet.
     fn announce_to(&mut self, link: &dyn Link, peer: &str, names: &[String]) {
         for n in names {
@@ -242,8 +286,10 @@ impl ModNet {
         let id = self.wire_id(name).ok_or_else(|| ApiError::LimitExceeded("network channels".into()))?;
         let packet = Message::Channel(Channel { channel_id: id, payload: data.to_vec() }).encode();
         let mut n = 0;
+        // Channel names are `<mod-id>:<name>`; a player who declined that optional mod gets nothing.
+        let mod_id = name.split(':').next().unwrap_or(name);
         for peer in peers {
-            if !self.is_modded(peer) || !link.approved(peer) {
+            if !self.is_modded(peer) || !link.approved(peer) || !self.runs_mod(peer, mod_id) {
                 continue;
             }
             self.announce_to(link, peer, &[name.to_string()]);
@@ -355,6 +401,7 @@ impl ModNet {
             Message::Ready(r) => {
                 let p = self.peers.get_mut(peer).expect("modded");
                 p.ready = Some(r.accepted_hash);
+                p.loaded = Some(r.loaded.into_iter().map(|(id, _)| id).collect());
                 p.transfer = None;
             }
             Message::Channel(c) if link.approved(peer) => {

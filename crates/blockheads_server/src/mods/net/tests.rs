@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use bhmod_proto::{mods_hash, FileRequest, Hello, ModInfo, ModPermissions, Ready, CHUNK_SIZE, PACKET_TYPE};
 
@@ -190,6 +191,30 @@ fn download_window_resume_and_errors() {
     n.packet(&l, "e", &Message::Ready(Ready { accepted_hash: [1; 32], loaded: vec![] }).encode(), &[]);
     assert_eq!(n.ready_hash("e"), Some([1; 32]));
     assert_eq!(n.ready_hash("x"), None);
+}
+
+#[test]
+fn ready_tells_which_optional_mods_run() {
+    let l = Fake::default();
+    let mut n = net();
+    n.packet(&l, "e", &hello(1), &[]);
+    // Before READY nothing is known: as before, the peer gets every channel.
+    assert!(n.runs_mod("e", "m") && n.runs_mod("e", "other"));
+    let ready = |ids: &[&str]| {
+        let loaded = ids.iter().map(|i| (i.to_string(), "1.0.0".to_string())).collect();
+        Message::Ready(Ready { accepted_hash: [1; 32], loaded }).encode()
+    };
+    n.packet(&l, "e", &ready(&["m"]), &[]);
+    assert!(n.runs_mod("e", "m") && !n.runs_mod("e", "opt"));
+    n.rekey("e", "p");
+    l.approved.borrow_mut().push("p".into());
+    l.take();
+    // A channel of a mod the player declined is not sent to them.
+    let peers = vec!["p".to_string()];
+    assert_eq!(n.send_channel(&l, &peers, "opt:x", b"1"), Ok(0));
+    assert_eq!(n.send_channel(&l, &peers, "m:x", b"1"), Ok(1));
+    let got = l.take();
+    assert_eq!(got.len(), 2, "one CHANNEL_REGISTER and one CHANNEL, nothing for opt:x");
 }
 
 #[test]
@@ -404,4 +429,31 @@ fn cosmetics_full_delta_and_leave() {
     n.set_cosmetic(&l, "a", "hat", None).unwrap();
     assert_eq!(cosmetics(&l.take()).last().unwrap().1, vec![("a".to_string(), vec![])]);
     assert!(n.worn("a").is_empty());
+}
+
+#[test]
+fn limbo_holds_vanilla_peers_until_the_grace_ends() {
+    let mut n = net();
+    let now = Instant::now();
+    let grace = Duration::from_secs(20);
+    // Only a vanilla peer (no HELLO, no key) on a server with client-required mods.
+    assert!(n.wants_limbo("v", None));
+    assert!(!n.wants_limbo("v", Some(&LoaderKey::default())));
+    n.packet(&Fake::default(), "m", &hello(1), &[]);
+    assert!(!n.wants_limbo("m", None));
+    n.catalog.client_required = false;
+    assert!(!n.wants_limbo("v", None));
+    // The grace ends exactly at its deadline; either name ends the limbo once.
+    n.enter_limbo("e1", "p1", now, grace);
+    n.enter_limbo("e2", "p2", now + grace, grace);
+    n.enter_limbo("e3", "p3", now, grace);
+    assert!(n.expired_limbo(now + grace - Duration::from_millis(1)).is_empty());
+    assert_eq!(n.expired_limbo(now + grace), vec!["p1".to_string(), "p3".to_string()]);
+    assert_eq!(n.expired_limbo(now + grace * 2), vec!["p2".to_string()]);
+    assert!(n.expired_limbo(now + grace * 3).is_empty());
+    n.enter_limbo("e4", "p4", now, grace);
+    n.enter_limbo("e5", "p5", now, grace);
+    assert_eq!(n.leave_limbo("e4"), Some("p4".to_string()));
+    assert_eq!(n.leave_limbo("p5"), Some("p5".to_string()));
+    assert_eq!(n.leave_limbo("p5"), None);
 }

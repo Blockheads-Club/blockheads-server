@@ -28,6 +28,14 @@ mod server_host;
 /// The 0xBC mod protocol packet type (mod-sdk `docs/protocol-0xbc.md`). Only routed when a mod host is installed.
 pub const MOD_PACKET: u8 = 0xBC;
 
+/// How long a vanilla client waits in the readable-rejection limbo (see [`ModHooks::limbo_join`]) before the server
+/// drops it (no `0x26`).
+pub const LIMBO_GRACE: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// The `welcomeMessage` the vanilla client shows (as "WELCOME TO <WORLD>!") while it is in the limbo.
+pub const LIMBO_TEXT: &str = "This server uses Blockheads Club mods. Install the mod loader with Patcher \
+(blockheads.club/patcher), then join again. Your worlds stay.";
+
 /// The `bhcModLoader` dict a modded client adds to its 0x1f player information.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LoaderKey {
@@ -115,6 +123,16 @@ pub trait ModHooks {
     /// `peer` is the dispatcher's name of the connection, `loader` the 0x1f `bhcModLoader` key. `Some(reason)`:
     /// reject with that 0x26 reason byte (a modded client already got `REJECT_TEXT`).
     fn pre_login(&self, peer: &str, player_id: &str, alias: &str, loader: Option<&LoaderKey>) -> Option<u8>;
+    /// Called at the same place as [`ModHooks::pre_login`], before it. True: the peer is a vanilla client (no
+    /// `HELLO`, no `bhcModLoader`) on a server with client-required mods. The host then holds it in a limbo for
+    /// [`LIMBO_GRACE`]: the caller sends a world summary carrying [`LIMBO_TEXT`] (the vanilla game shows it as the
+    /// welcome popup), does not approve the player and returns. `pre_login` is not called for it.
+    fn limbo_join(&self, peer: &str, player_id: &str, loader: Option<&LoaderKey>) -> bool;
+    /// A packet arrived from `peer`. True when the peer was in the limbo: it is dropped now (no `0x26`) and the
+    /// packet must be ignored.
+    fn limbo_packet(&self, peer: &str) -> bool;
+    /// `peer` disconnected or failed: forgets it if it was in the limbo.
+    fn limbo_gone(&self, peer: &str);
     /// A player places `item` into a tile (0x10). True: cancelled (the caller takes the protected-tile path).
     fn block_place(&self, player_id: &str, pos: IntPair, item: u32, data_a: u16, data_b: u16) -> bool;
     /// A player removes a tile (0x11) or a back wall (0x3a). True: cancelled (protected-tile path).
