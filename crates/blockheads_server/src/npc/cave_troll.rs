@@ -2577,8 +2577,18 @@ pub(crate) mod test_support {
         pub regen: Cell<Option<u64>>,
         pub trade: Cell<Option<u64>>,
         pub nosim: Cell<Option<u64>>,
+        /// The food of the cactus the stand-in finds (None: no cactus).
+        pub cactus: Cell<Option<f32>>,
+        /// `world()` answers `None` while set.
+        pub no_world: Cell<bool>,
     }
     impl HostileHostStub for TestHost {
+        fn cactus_available_food_at(&self, _pos: IntPair) -> Option<f32> {
+            self.cactus.get()
+        }
+        fn set_cactus_available_food_at(&self, _pos: IntPair, v: f32) {
+            self.cactus.set(Some(v));
+        }
         fn bh_paused(&self, b: &ObjRef) -> bool {
             Some(b.unique_id()) == self.paused.get()
         }
@@ -2595,7 +2605,11 @@ pub(crate) mod test_support {
             }
         }
         fn world(&self) -> Option<Rc<World>> {
-            Some(self.world.clone())
+            if self.no_world.get() {
+                None
+            } else {
+                Some(self.world.clone())
+            }
         }
         fn custom_rules(&self) -> CustomRules {
             self.rules.get()
@@ -2677,6 +2691,8 @@ pub(crate) mod test_support {
             regen: Cell::new(None),
             trade: Cell::new(None),
             nosim: Cell::new(None),
+            cactus: Cell::new(None),
+            no_world: Cell::new(false),
         });
         set_hostile_host(host.clone());
         glibc_rand::srand(1);
