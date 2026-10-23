@@ -1142,11 +1142,16 @@ pub(crate) mod testkit {
         pub wb: RefCell<Option<ObjRef>>,
         pub wb_level: Cell<i32>,
         pub wb_type: Cell<u32>,
+        /// When set, `workbench_at_pos` only answers at this position.
+        pub wb_pos: Cell<Option<(i32, i32)>>,
         /// `obj_can_be_removed_by_blockhead` answers the opposite of the default.
         pub cannot_remove: Cell<bool>,
         /// Answers of `bh_current_interaction_type...` in order (then `INTERACTION_NONE`); `busy` is `!bh_is_idle`.
         pub goals: RefCell<Vec<InteractionType>>,
         pub busy: Cell<bool>,
+        /// What `path_users` returns, and whether a blockhead that is not asleep is meditating.
+        pub path_users: RefCell<Vec<ObjRef>>,
+        pub meditating: Cell<bool>,
     }
     impl Rec {
         pub fn push(&self, s: String) {
@@ -1165,6 +1170,12 @@ pub(crate) mod testkit {
         }
         fn bh_is_idle(&self, _bh: &ObjRef) -> bool {
             !self.busy.get()
+        }
+        fn path_users(&self) -> Vec<ObjRef> {
+            self.path_users.borrow().clone()
+        }
+        fn bh_meditating(&self, _bh: &ObjRef) -> bool {
+            self.meditating.get()
         }
         fn active_blockhead(&self) -> Option<ObjRef> {
             self.bh_by_id.borrow().clone()
@@ -1222,8 +1233,11 @@ pub(crate) mod testkit {
         fn blockhead_with_id_including_net(&self, _id: u64) -> Option<ObjRef> {
             self.bh_by_id.borrow().clone()
         }
-        fn workbench_at_pos(&self, _pos: IntPair) -> Option<ObjRef> {
-            self.wb.borrow().clone()
+        fn workbench_at_pos(&self, pos: IntPair) -> Option<ObjRef> {
+            match self.wb_pos.get() {
+                Some(p) if p != (pos.x, pos.y) => None,
+                _ => self.wb.borrow().clone(),
+            }
         }
         fn workbench_level(&self, _wb: &ObjRef) -> i32 {
             self.wb_level.get()

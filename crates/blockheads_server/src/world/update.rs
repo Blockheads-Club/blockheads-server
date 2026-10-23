@@ -574,3 +574,273 @@ mod tests {
         install_deps(Rc::new(NullDeps));
     }
 }
+
+/// The path pump with a path user that asks for paths, the catch-up simulation and sleepers.
+#[cfg(test)]
+mod path_pump_tests {
+    use super::*;
+    use crate::foundation::gsdict::GsDict;
+    use crate::objects::base::{DynamicObject, DynamicObjectBase};
+    use crate::objects::class_info::{ClassInfo, DYNAMIC_OBJECT_CLASS};
+    use crate::objects::protocols::PathUserDynamicObject;
+    use crate::path::path_creator::testutil::{new_user, new_world};
+    use crate::path::path_creator::PathCreator;
+    use crate::plist::value::{ClassTag, Origin, PlistDict};
+    use crate::types::structs::IntPair;
+    use crate::world::helpers::testutil::{dw_obj, new_obj};
+    use crate::world::misc::{install_deps, testkit};
+    use std::any::Any;
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+
+    struct Asker {
+        base: RefCell<DynamicObjectBase>,
+        needs: Cell<bool>,
+        info: RefCell<Option<PlistDict>>,
+        set: RefCell<Vec<String>>,
+        waiting: Cell<bool>,
+    }
+    impl DynamicObject for Asker {
+        fn base(&self) -> &RefCell<DynamicObjectBase> {
+            &self.base
+        }
+        fn class_info(&self) -> &'static ClassInfo {
+            &DYNAMIC_OBJECT_CLASS
+        }
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn as_path_user(&self) -> Option<&dyn PathUserDynamicObject> {
+            Some(self)
+        }
+    }
+    impl PathUserDynamicObject for Asker {
+        fn tile_is_lit_for_self_at_pos(&self, _tile: &crate::types::tile::Tile, _pos: IntPair) -> bool {
+            true
+        }
+        fn current_traverse_to_key_frame(&self) -> i32 {
+            0
+        }
+        fn next_pos(&self) -> IntPair {
+            self.base.borrow().pos
+        }
+        fn info_for_path_recalculation(&self) -> Option<PlistDict> {
+            self.info.borrow().clone()
+        }
+        fn set_path_type_goal_interaction_extra_data(
+            &self,
+            _me: &ObjRef,
+            p: Option<Vec<PlistValue>>,
+            t: i32,
+            g: i32,
+            e: Option<PlistValue>,
+        ) {
+            self.set.borrow_mut().push(format!("path({},{},{},{})", p.is_some(), t, g, e.is_some()));
+        }
+        fn set_waiting_for_path_to_pos(&self, _p: IntPair) {
+            self.waiting.set(true);
+        }
+        fn set_no_longer_waiting_for_path(&self) {
+            self.waiting.set(false);
+            self.set.borrow_mut().push("done".into());
+        }
+        fn waiting_for_path(&self) -> bool {
+            self.waiting.get()
+        }
+        fn can_crawl(&self) -> bool {
+            false
+        }
+        fn can_fly(&self) -> bool {
+            false
+        }
+        fn path_needs_recalculated(&self) -> bool {
+            self.needs.get()
+        }
+        fn set_path_needs_recalculated(&self, v: bool) {
+            self.needs.set(v);
+        }
+    }
+
+    fn asker(pos: IntPair) -> ObjRef {
+        let o: Rc<Asker> = crate::objects::handle::alloc_obj(|w| Asker {
+            base: RefCell::new(DynamicObjectBase::alloc_zeroed_with(w)),
+            needs: Cell::new(false),
+            info: RefCell::new(None),
+            set: RefCell::new(Vec::new()),
+            waiting: Cell::new(false),
+        });
+        o.base.borrow_mut().pos = pos;
+        o
+    }
+
+    fn knobs(o: &ObjRef) -> &Asker {
+        crate::objects::handle::downcast::<Asker>(o).unwrap()
+    }
+
+    fn request(gx: i32, gy: i32, interaction: i32, extra: bool) -> PlistDict {
+        let mut d =
+            PlistDict { map: GsDict::new(), tag: ClassTag { origin: Origin::Built, mutable: true, alt: false } };
+        for (k, v) in [("pathType", 0), ("goalX", gx), ("goalY", gy), ("goalInteraction", interaction)] {
+            d.map.insert(k.to_string(), PlistValue::int(v as i64));
+        }
+        if extra {
+            d.map.insert("extraData".to_string(), PlistValue::int(7));
+        }
+        d
+    }
+
+    #[test]
+    fn requests_are_queued_pumped_and_handed_back() {
+        let rec = testkit::install();
+        let (w, _l, fake) = new_world(32, 20);
+        let pc = PathCreator::init_with_world(&w);
+        *rec.path_creator.borrow_mut() = Some(pc.clone());
+        *rec.world.borrow_mut() = Some(Rc::downgrade(&w));
+        path_queue_clear();
+        assert_eq!(path_queue_len(), 0);
+        let user = asker(IntPair { x: 100, y: 21 });
+        rec.path_users.borrow_mut().push(user.clone());
+        rec.path_users.borrow_mut().push(new_obj()); // not a path user
+        rec.path_users.borrow_mut().push(asker(IntPair { x: 0, y: 21 })); // does not ask
+                                                                          // a request without info
+        knobs(&user).needs.set(true);
+        w.update_path_pump(false);
+        assert!(knobs(&user).needs.get());
+        // goal kinds: plain, craft with a workbench (on the goal and below it), interactive objects
+        let setups: [(i32, bool, Option<(i32, i32)>, bool); 8] = [
+            (0, false, None, false),
+            (4, true, None, false),
+            (4, true, Some((104, 20)), false),
+            (4, false, None, false),
+            (5, true, None, true),
+            (5, true, Some((104, 20)), true),
+            (5, false, None, true),
+            (5, true, Some((300, 20)), true),
+        ];
+        for (interaction, extra, wb_pos, with_io) in setups {
+            if interaction == 4 {
+                *rec.wb.borrow_mut() = Some(new_obj());
+                rec.wb_pos.set(Some(wb_pos.unwrap_or((104, 21))));
+            }
+            if with_io {
+                let at = wb_pos.map_or((104, 21), |p| (p.0, p.1));
+                fake.io.borrow_mut().insert(at, dw_obj(1043, 2, 0, false, true));
+            }
+            *knobs(&user).info.borrow_mut() = Some(request(104, 21, interaction, extra));
+            knobs(&user).needs.set(true);
+            w.update_path_pump(false);
+            for _ in 0..200 {
+                w.update_path_pump(false);
+            }
+            *rec.wb.borrow_mut() = None;
+            fake.io.borrow_mut().clear();
+        }
+        assert!(knobs(&user).set.borrow().iter().any(|l| l == "path(true,0,4,true)"), "{:?}", knobs(&user).set);
+        assert!(knobs(&user).set.borrow().iter().any(|l| l == "done"));
+        // a long walk keeps the creator busy: other requests wait in the queue and replace each other
+        let other = asker(IntPair { x: 100, y: 21 });
+        rec.path_users.borrow_mut().push(other.clone());
+        *knobs(&user).info.borrow_mut() = Some(request(400, 21, 0, false));
+        *knobs(&other).info.borrow_mut() = Some(request(110, 21, 0, false));
+        knobs(&user).needs.set(true);
+        w.update_path_pump(false);
+        assert!(pc.in_progress());
+        for _ in 0..3 {
+            knobs(&other).needs.set(true);
+            w.update_path_pump(false);
+        }
+        assert_eq!(path_queue_len(), 1);
+        // the busy user asks again: its own search is aborted
+        knobs(&user).needs.set(true);
+        w.update_path_pump(false);
+        // a user that is not the current one does not abort it
+        knobs(&other).needs.set(true);
+        w.update_path_pump(false);
+        for _ in 0..400 {
+            w.update_path_pump(false);
+        }
+        // the class chain of the stand-in
+        let _ = (
+            user.class_info(),
+            user.as_path_user().unwrap().waiting_for_path(),
+            user.as_path_user().unwrap().can_crawl(),
+        );
+        // nothing to pump without a creator
+        *rec.path_creator.borrow_mut() = None;
+        w.update_path_pump(false);
+        install_deps(Rc::new(crate::world::misc::NullDeps));
+        let _ = new_user;
+    }
+
+    #[test]
+    fn finished_paths_of_users_that_cannot_take_them() {
+        use crate::path::path_creator::PathRequest;
+        let rec = testkit::install();
+        let (w, _l, _fake) = new_world(32, 20);
+        let pc = PathCreator::init_with_world(&w);
+        *rec.path_creator.borrow_mut() = Some(pc.clone());
+        path_queue_clear();
+        let req = |user: Option<ObjRef>| PathRequest {
+            path_type: 0,
+            goal_x: 104,
+            goal_y: 21,
+            goal_interaction: 0,
+            extra_data: None,
+            path_user: user,
+        };
+        // no user, and an object that is no path user
+        for user in [None, Some(new_obj())] {
+            pc.create_path_with_dict(&req(user));
+            for _ in 0..50 {
+                w.update_path_pump(false);
+            }
+            assert!(!pc.has_path());
+        }
+        // the user queue helper
+        let a = new_obj();
+        assert!(same_user(&None, &None) && same_user(&Some(a.clone()), &Some(a.clone())));
+        assert!(!same_user(&None, &Some(a.clone())) && !same_user(&Some(a), &Some(new_obj())));
+        // a finished path while the same user has another request waiting keeps it waiting
+        let busy = asker(IntPair { x: 100, y: 21 });
+        pc.create_path_with_dict(&req(Some(busy.clone())));
+        PATH_QUEUE.with(|q| q.borrow_mut().push(req(Some(busy.clone()))));
+        for _ in 0..50 {
+            w.update_path_pump(false);
+        }
+        assert!(!knobs(&busy).set.borrow().is_empty());
+        // a queued request without a user does not match anybody; a goal that cannot be loaded is not queued
+        let user = asker(IntPair { x: 100, y: 21 });
+        rec.path_users.borrow_mut().push(user.clone());
+        *knobs(&user).info.borrow_mut() = Some(request(400, 21, 0, false));
+        knobs(&user).needs.set(true);
+        w.update_path_pump(false);
+        assert!(pc.in_progress());
+        PATH_QUEUE.with(|q| q.borrow_mut().push(req(None)));
+        *knobs(&user).info.borrow_mut() = Some(request(104, 21, 0, false));
+        knobs(&user).needs.set(true);
+        w.update_path_pump(false);
+        *knobs(&user).info.borrow_mut() = Some(request(104, 5000, 0, false));
+        knobs(&user).needs.set(true);
+        w.update_path_pump(false);
+        assert!(knobs(&user).needs.get());
+        path_queue_clear();
+        install_deps(Rc::new(crate::world::misc::NullDeps));
+    }
+
+    #[test]
+    fn catch_up_simulation_and_sleepers() {
+        let rec = testkit::install();
+        let w = World::alloc(32);
+        *rec.world.borrow_mut() = Some(Rc::downgrade(&w));
+        w.is_simulating.set(true);
+        w.update_accurate_dt_pinch_scale_drag_in_progress(0.2, 0.2, 1.0, false);
+        w.is_simulating.set(false);
+        // a blockhead that is meditating but not asleep counts as asleep for the fast forward
+        let bh = new_obj();
+        rec.blockheads.borrow_mut().push(bh);
+        rec.meditating.set(true);
+        w.update_accurate_dt_pinch_scale_drag_in_progress(0.2, 0.2, 1.0, false);
+        assert!(w.fast_forward.get());
+        install_deps(Rc::new(crate::world::misc::NullDeps));
+    }
+}
