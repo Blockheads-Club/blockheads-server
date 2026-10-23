@@ -953,18 +953,10 @@ impl Blockhead {
                     break 'end;
                 }
                 // TREE_PLACE
-                'tree_dig: {
-                    if has_item && item_type_is_placable_on_trees(item_t) {
-                        if (item_t.0 == 0xa3 || item_t.0 == 0x12d) && t().foreground_contents != 0 {
-                            break 'tree_dig;
-                        }
-                        if item_t.0 == 0x12d && !world.is_admin() {
-                            break 'tree_dig;
-                        }
-                        if y < 0x3f8 {
-                            return InteractionType::INTERACTION_PLACE_ITEM;
-                        }
-                    }
+                // (the sign guards of the original, `0xa3` / `0x12d` with an occupied foreground or a non-admin, can
+                // never fire: `itemTypeIsPlacableOnTrees` excludes both signs)
+                if has_item && item_type_is_placable_on_trees(item_t) && y < 0x3f8 {
+                    return InteractionType::INTERACTION_PLACE_ITEM;
                 }
                 return if tile_is_plant(Some(tref)) {
                     InteractionType::INTERACTION_DIG_FOREGROUND
@@ -2006,8 +1998,17 @@ pub(crate) mod testhost {
         pub npc: RefCell<Option<ObjRef>>,
         pub io_type: Cell<i32>,
         pub torch: RefCell<Option<ObjRef>>,
+        /// Scripted answers of the other `*_at_pos` lookups (`wire`, `column`, `painting`, `ladder`, `stairs`, `door`,
+        /// `window`, `egg`, `shaft`, `motor`).
+        pub misc: RefCell<std::collections::HashMap<&'static str, ObjRef>>,
+        /// `workbench_type` / `ridable_blockhead_can_ride_using_item` answers for stub objects.
+        pub wb_type: Cell<i32>,
+        pub can_ride: Cell<bool>,
     }
     impl AHost {
+        pub fn misc_obj(&self, k: &str) -> Option<ObjRef> {
+            self.misc.borrow().get(k).cloned()
+        }
         pub fn install() -> Rc<AHost> {
             let h = Rc::new(AHost::default());
             crate::blockhead::blockhead::set_host(h.clone());
@@ -2074,6 +2075,45 @@ pub(crate) mod testhost {
         }
         fn free_blocks_at_pos(&self, _p: IntPair) -> Vec<ObjRef> {
             self.fbs.borrow().clone()
+        }
+        fn wire_at_pos(&self, _p: IntPair) -> Option<ObjRef> {
+            self.misc_obj("wire")
+        }
+        fn workbench_type(&self, _wb: &ObjRef) -> i32 {
+            self.wb_type.get()
+        }
+        fn interaction_object_with_id(&self, _id: i64) -> Option<ObjRef> {
+            self.io.borrow().clone()
+        }
+        fn ridable_blockhead_can_ride_using_item(&self, _o: &ObjRef, _b: &Blockhead, _item: i32) -> bool {
+            self.can_ride.get()
+        }
+        fn column_at_pos(&self, _p: IntPair) -> Option<ObjRef> {
+            self.misc_obj("column")
+        }
+        fn painting_at_pos(&self, _p: IntPair) -> Option<ObjRef> {
+            self.misc_obj("painting")
+        }
+        fn ladder_at_pos(&self, _p: IntPair) -> Option<ObjRef> {
+            self.misc_obj("ladder")
+        }
+        fn stairs_at_pos(&self, _p: IntPair) -> Option<ObjRef> {
+            self.misc_obj("stairs")
+        }
+        fn door_at_pos(&self, _p: IntPair) -> Option<ObjRef> {
+            self.misc_obj("door")
+        }
+        fn window_at_pos(&self, _p: IntPair) -> Option<ObjRef> {
+            self.misc_obj("window")
+        }
+        fn egg_at_pos(&self, _p: IntPair) -> Option<ObjRef> {
+            self.misc_obj("egg")
+        }
+        fn elevator_shaft_at_pos(&self, _p: IntPair) -> Option<ObjRef> {
+            self.misc_obj("shaft")
+        }
+        fn elevator_motor_at_pos(&self, _p: IntPair) -> Option<ObjRef> {
+            self.misc_obj("motor")
         }
         fn interaction_object_at_pos(&self, _p: IntPair) -> Option<ObjRef> {
             self.io.borrow().clone()
@@ -2962,3 +3002,6 @@ mod tests {
         assert!(h.take().is_empty());
     }
 }
+
+#[cfg(test)]
+mod coverage_tests;
