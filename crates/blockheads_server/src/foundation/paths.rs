@@ -160,7 +160,10 @@ mod tests {
         assert_eq!(appsup(), "/thread/dir");
         set_data_dir_override(None);
         set_home_for_test("");
-        assert_eq!(home_dir(), crate::foundation::sys::passwd_home_dir().unwrap_or_else(|| "/".to_string()));
+        let passwd = crate::foundation::sys::passwd_home_dir().unwrap_or("/".to_string());
+        assert_eq!(home_dir(), passwd);
+        std::env::remove_var(HOME_VAR); // unset behaves like empty
+        assert_eq!(home_dir(), passwd);
         set_home_for_test("/home/bh");
         assert_eq!(last_path_component(""), "");
     }

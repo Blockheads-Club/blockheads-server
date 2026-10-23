@@ -28,7 +28,7 @@ impl Link for Fake {
         self.approved.borrow().iter().any(|p| p == peer)
     }
     fn alive(&self, peer: &str) -> bool {
-        self.approved(peer) || self.waiting.borrow().iter().any(|p| p == peer)
+        self.approved(peer) || self.waiting.borrow().contains(&peer.to_string())
     }
 }
 
@@ -105,6 +105,7 @@ fn err(ms: &[Message]) -> Option<u64> {
 
 #[test]
 fn hello_and_list() {
+    assert!(chunks(&[Message::ListRequest]).is_empty()); // only file chunks count
     let l = Fake::default();
     let mut n = net();
     // Nothing before HELLO; garbage and unknown ops are dropped.
@@ -114,22 +115,16 @@ fn hello_and_list() {
     assert!(l.take().is_empty());
     n.packet(&l, "e", &hello(1), &[]);
     assert!(n.is_modded("e") && n.has_peers());
-    match &l.take()[..] {
-        [Message::ServerHello(h)] => {
-            assert!(h.client_required);
-            assert_eq!(h.count, 1);
-            assert_eq!(h.mods_hash, n.catalog.mods_hash);
-        }
-        o => panic!("{o:?}"),
-    }
+    let sent = l.take();
+    let [Message::ServerHello(h)] = &sent[..] else { unreachable!() };
+    assert!(h.client_required);
+    assert_eq!(h.count, 1);
+    assert_eq!(h.mods_hash, n.catalog.mods_hash);
     n.packet(&l, "e", &Message::ListRequest.encode(), &["big:sync".to_string()]);
-    match &l.take()[..] {
-        [Message::ModList(m)] => {
-            assert_eq!(m.mods[0].id, "big");
-            assert_eq!(m.channels, vec![ChannelInfo { name: "big:sync".into(), id: 1 }]);
-        }
-        o => panic!("{o:?}"),
-    }
+    let sent = l.take();
+    let [Message::ModList(m)] = &sent[..] else { unreachable!() };
+    assert_eq!(m.mods[0].id, "big");
+    assert_eq!(m.channels, vec![ChannelInfo { name: "big:sync".into(), id: 1 }]);
     // HELLO from a peer in the game is ignored.
     l.approved.borrow_mut().push("p".into());
     n.packet(&l, "p", &hello(1), &[]);
@@ -307,10 +302,9 @@ fn wire_ids_run_out() {
     let mut list = ModNet { wire: n.wire.clone(), ..ModNet::default() };
     list.packet(&l, "e", &hello(1), &[]);
     list.packet(&l, "e", &Message::ListRequest.encode(), &["m:full".to_string()]);
-    match l.take().last() {
-        Some(Message::ModList(m)) => assert!(m.channels.is_empty()),
-        o => panic!("{o:?}"),
-    }
+    let sent = l.take();
+    let Some(Message::ModList(m)) = sent.last() else { unreachable!() };
+    assert!(m.channels.is_empty());
 }
 
 #[test]
@@ -333,9 +327,9 @@ fn loader_check() {
     let texts: Vec<String> = l
         .take()
         .into_iter()
-        .map(|m| match m {
-            Message::RejectText(r) => r.text,
-            o => panic!("{o:?}"),
+        .map(|m| {
+            let Message::RejectText(r) = m else { unreachable!() };
+            r.text
         })
         .collect();
     assert_eq!(texts, vec![STALE_TEXT.to_string(), proto_text(), STALE_TEXT.to_string()]);
@@ -373,10 +367,9 @@ fn mod_list_carries_the_registry() {
     with_cosmetics(&mut n);
     l.take();
     n.packet(&l, "e", &Message::ListRequest.encode(), &[]);
-    match &l.take()[..] {
-        [Message::ModList(m)] => assert_eq!(m.registry["cosmetics"]["hats:ember"], 2),
-        o => panic!("{o:?}"),
-    }
+    let sent = l.take();
+    let [Message::ModList(m)] = &sent[..] else { unreachable!() };
+    assert_eq!(m.registry["cosmetics"]["hats:ember"], 2);
 }
 
 #[test]

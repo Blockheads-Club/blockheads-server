@@ -14,16 +14,27 @@ const MDB_MAP_FULL: c_int = -30792;
 /// `MDB_NOTFOUND`.
 const MDB_NOTFOUND: c_int = -30798;
 
+/// The result code of one LMDB call. Under test a call can be made to fail (see `inject`), which reaches the error
+/// paths that real LMDB only takes when it runs out of resources.
+fn call(op: &'static str, real: &mut dyn FnMut() -> c_int) -> c_int {
+    #[cfg(test)]
+    if op == "txn_commit" {
+        // A failed commit still ends the transaction: run it, then report the injected code.
+        let rc = real();
+        return inject::take(op).unwrap_or(rc);
+    }
+    #[cfg(test)]
+    if let Some(rc) = inject::take(op) {
+        return rc;
+    }
+    let _ = op;
+    real()
+}
+
 /// `mdb_strerror(rc)` as a Rust string.
 fn strerror(rc: c_int) -> String {
-    unsafe {
-        let p = ffi::mdb_strerror(rc);
-        if p.is_null() {
-            String::new()
-        } else {
-            CStr::from_ptr(p).to_string_lossy().into_owned()
-        }
-    }
+    // SAFETY: `mdb_strerror` returns a static string, or libc's `strerror`, for every code; never NULL.
+    unsafe { CStr::from_ptr(ffi::mdb_strerror(rc)).to_string_lossy().into_owned() }
 }
 
 /// Log `"<what> failed:<rc> - <strerror>"`.
@@ -76,18 +87,18 @@ impl DatabaseEnvironment {
         let _ = std::fs::create_dir_all(path);
         unsafe {
             let mut env: *mut ffi::MDB_env = ptr::null_mut();
-            let rc = ffi::mdb_env_create(&mut env);
+            let rc = call("env_create", &mut || ffi::mdb_env_create(&mut env));
             if rc != 0 {
                 log_fail("mdb_env_create", rc);
                 return None;
             }
-            let rc = ffi::mdb_env_set_mapsize(env, 0x1000);
+            let rc = call("set_mapsize", &mut || ffi::mdb_env_set_mapsize(env, 0x1000));
             if rc != 0 {
                 log_fail("mdb_env_set_mapsize", rc);
                 ffi::mdb_env_close(env);
                 return None;
             }
-            let rc = ffi::mdb_env_set_maxdbs(env, max_databases as ffi::MDB_dbi);
+            let rc = call("set_maxdbs", &mut || ffi::mdb_env_set_maxdbs(env, max_databases as ffi::MDB_dbi));
             if rc != 0 {
                 log_fail("mdb_env_set_maxdbs", rc);
                 ffi::mdb_env_close(env);
@@ -95,7 +106,7 @@ impl DatabaseEnvironment {
             }
             // `[path UTF8String]`: a C string ends at the first NUL.
             let cpath = c_string_prefix(path);
-            let open_rc = ffi::mdb_env_open(env, cpath.as_ptr(), 0, 0o664);
+            let open_rc = call("env_open", &mut || ffi::mdb_env_open(env, cpath.as_ptr(), 0, 0o664));
             let mut info: ffi::MDB_envinfo = std::mem::zeroed();
             // : mdb_env_info runs even if the open failed. After a failed open LMDB's
             // `me_metas` are NULL/dangling, so the original dereferences them and dies with SIGSEGV
@@ -111,7 +122,7 @@ impl DatabaseEnvironment {
             while mb.wrapping_sub(4).wrapping_mul(1 << 20) < info.me_mapsize as usize && mb < 0x4000 {
                 mb <<= 1;
             }
-            let rc2 = ffi::mdb_env_set_mapsize(env, mb << 20);
+            let rc2 = call("set_mapsize", &mut || ffi::mdb_env_set_mapsize(env, mb << 20));
             if rc2 != 0 {
                 log_fail("mdb_env_set_mapsize", rc2);
                 ffi::mdb_env_close(env);
@@ -130,7 +141,7 @@ impl DatabaseEnvironment {
     pub fn start_bulk_transaction(&self) -> bool {
         if self.bulk_txn.get().is_null() {
             let mut t: *mut ffi::MDB_txn = ptr::null_mut();
-            let rc = unsafe { ffi::mdb_txn_begin(self.env, ptr::null_mut(), 0, &mut t) };
+            let rc = call("txn_begin", &mut || unsafe { ffi::mdb_txn_begin(self.env, ptr::null_mut(), 0, &mut t) });
             if rc != 0 {
                 log_fail("mdb startTransaction", rc);
                 return false;
@@ -144,7 +155,7 @@ impl DatabaseEnvironment {
     pub fn finish_bulk_transaction(&self) -> bool {
         let t = self.bulk_txn.get();
         if !t.is_null() {
-            let rc = unsafe { ffi::mdb_txn_commit(t) };
+            let rc = call("txn_commit", &mut || unsafe { ffi::mdb_txn_commit(t) });
             self.bulk_txn.set(ptr::null_mut());
             if rc != 0 {
                 log_fail("finishTransaction", rc);
@@ -174,7 +185,7 @@ impl DatabaseEnvironment {
             return b;
         }
         let mut t: *mut ffi::MDB_txn = ptr::null_mut();
-        let rc = unsafe { ffi::mdb_txn_begin(self.env, ptr::null_mut(), 0, &mut t) };
+        let rc = call("txn_begin", &mut || unsafe { ffi::mdb_txn_begin(self.env, ptr::null_mut(), 0, &mut t) });
         if rc != 0 {
             log_fail("mdb startTransaction", rc);
             return ptr::null_mut();
@@ -187,7 +198,7 @@ impl DatabaseEnvironment {
         if t == self.bulk_txn.get() {
             return true;
         }
-        let rc = unsafe { ffi::mdb_txn_commit(t) };
+        let rc = call("txn_commit", &mut || unsafe { ffi::mdb_txn_commit(t) });
         if rc == 0 {
             return true;
         }
@@ -226,19 +237,19 @@ impl Database {
             // early return can leak a write txn).
             let cname = c_string_prefix(name);
             let mut t: *mut ffi::MDB_txn = ptr::null_mut();
-            let rc = ffi::mdb_txn_begin(env.env, ptr::null_mut(), 0, &mut t);
+            let rc = call("txn_begin", &mut || ffi::mdb_txn_begin(env.env, ptr::null_mut(), 0, &mut t));
             if rc != 0 {
                 log_fail("mdb_txn_begin", rc);
                 return None;
             }
             let mut dbi: ffi::MDB_dbi = 0;
-            let rc = ffi::mdb_dbi_open(t, cname.as_ptr(), ffi::MDB_CREATE, &mut dbi);
+            let rc = call("dbi_open", &mut || ffi::mdb_dbi_open(t, cname.as_ptr(), ffi::MDB_CREATE, &mut dbi));
             if rc != 0 {
                 log_fail("mdb_dbi_open", rc);
                 ffi::mdb_txn_abort(t);
                 return None;
             }
-            let rc = ffi::mdb_txn_commit(t);
+            let rc = call("txn_commit", &mut || ffi::mdb_txn_commit(t));
             if rc != 0 {
                 log_fail("mdb_txn_commit", rc);
                 return None;
@@ -300,7 +311,7 @@ impl Database {
         }
         let mut k = val(key.as_bytes());
         let mut v = val(data);
-        let rc = unsafe { ffi::mdb_put(txn, self.dbi, &mut k, &mut v, 0) };
+        let rc = call("put", &mut || unsafe { ffi::mdb_put(txn, self.dbi, &mut k, &mut v, 0) });
         if rc == 0 {
             return self.env.finish_transaction(txn);
         }
@@ -326,7 +337,7 @@ impl Database {
             return false;
         }
         let mut k = val(key.as_bytes());
-        let rc = unsafe { ffi::mdb_del(txn, self.dbi, &mut k, ptr::null_mut()) };
+        let rc = call("del", &mut || unsafe { ffi::mdb_del(txn, self.dbi, &mut k, ptr::null_mut()) });
         self.env.finish_transaction(txn);
         if rc == 0 || rc == MDB_NOTFOUND {
             true
@@ -382,13 +393,15 @@ impl Database {
             let bulk = self.env.bulk_txn.get();
             let mut t = bulk;
             if t.is_null() {
-                let rc = ffi::mdb_txn_begin(self.env.env, ptr::null_mut(), ffi::MDB_RDONLY, &mut t);
+                let rc = call("txn_begin", &mut || {
+                    ffi::mdb_txn_begin(self.env.env, ptr::null_mut(), ffi::MDB_RDONLY, &mut t)
+                });
                 if rc != 0 {
                     return out;
                 }
             }
             let mut cur: *mut ffi::MDB_cursor = ptr::null_mut();
-            if ffi::mdb_cursor_open(t, self.dbi, &mut cur) == 0 {
+            if call("cursor_open", &mut || ffi::mdb_cursor_open(t, self.dbi, &mut cur)) == 0 {
                 let mut k = ffi::MDB_val { mv_size: 0, mv_data: ptr::null_mut() };
                 let mut v = ffi::MDB_val { mv_size: 0, mv_data: ptr::null_mut() };
                 let mut op = ffi::MDB_FIRST;
@@ -452,6 +465,20 @@ mod tests {
     }
 
     #[test]
+    fn a_four_megabyte_request_grows_to_eight() {
+        // The grow loop keeps the map more than 4 MB above what LMDB reports right after opening.
+        let p = tmp("grow");
+        let e = DatabaseEnvironment::new(&p, 1, 4).unwrap();
+        unsafe {
+            let mut i: ffi::MDB_envinfo = std::mem::zeroed();
+            ffi::mdb_env_info(e.env(), &mut i);
+            assert_eq!(i.me_mapsize as usize, 8 << 20);
+        }
+        drop(e);
+        let _ = std::fs::remove_dir_all(&p);
+    }
+
+    #[test]
     fn mb_small_is_one() {
         for m in [0usize, 1] {
             let p = tmp(&format!("mb{m}"));
@@ -501,6 +528,101 @@ mod tests {
         let _ = std::fs::remove_file(&f);
         assert_eq!(out.status.signal(), Some(libc::SIGSEGV));
         assert!(!String::from_utf8_lossy(&out.stderr).contains("failed:"));
+    }
+
+    #[test]
+    fn failing_calls_are_logged_and_cleaned_up() {
+        use inject::queue;
+        let p = tmp("fail");
+        // Each set-up call, failing in turn; the environment is closed and nothing is returned.
+        for (op, codes) in [
+            ("env_create", vec![Some(12)]),
+            ("set_mapsize", vec![Some(22)]),
+            ("set_maxdbs", vec![Some(22)]),
+            ("set_mapsize", vec![None, Some(22)]),
+            ("env_open", vec![Some(2)]),
+        ] {
+            queue(op, &codes);
+            assert!(DatabaseEnvironment::new(&p, 4, 16).is_none(), "{op}");
+        }
+        let e = DatabaseEnvironment::new(&p, 4, 16).unwrap();
+        // Opening a sub-database: begin, open and commit can each fail.
+        for op in ["txn_begin", "dbi_open", "txn_commit"] {
+            queue(op, &[Some(12)]);
+            assert!(Database::new(&e, "main").is_none(), "{op}");
+        }
+        let d = Database::new(&e, "main").unwrap();
+        assert!(d.put("a", b"1"));
+        // Without a transaction every operation gives up quietly.
+        queue("txn_begin", &[Some(12)]);
+        assert_eq!(d.get("a"), None);
+        queue("txn_begin", &[Some(12)]);
+        assert!(!d.put("b", b"2"));
+        queue("txn_begin", &[Some(12)]);
+        assert!(!d.remove("a"));
+        queue("txn_begin", &[Some(12)]);
+        assert!(!d.has_key(Some("a")));
+        // A commit that fails (not for lack of space) is reported to the caller.
+        queue("txn_commit", &[Some(5)]);
+        assert!(!d.put("c", b"3"));
+        queue("del", &[Some(22)]);
+        assert!(!d.remove("a"));
+        // Bulk transactions: begin and commit failures.
+        queue("txn_begin", &[Some(12)]);
+        assert!(!e.start_bulk_transaction());
+        assert!(e.start_bulk_transaction());
+        assert!(e.start_bulk_transaction()); // already running
+        queue("txn_commit", &[Some(5)]);
+        assert!(!e.finish_bulk_transaction());
+        assert!(e.finish_bulk_transaction()); // nothing running
+                                              // The read-only snapshot used by `entries` can fail to start or to open a cursor.
+        queue("txn_begin", &[Some(12)]);
+        assert!(d.entries().is_empty());
+        queue("cursor_open", &[Some(12)]);
+        assert!(d.entries().is_empty());
+        // Inside a bulk transaction `entries` reads through it.
+        assert!(e.start_bulk_transaction());
+        assert!(!d.entries().is_empty());
+        assert!(e.finish_bulk_transaction());
+        assert_eq!(inject::take("never queued"), None);
+        assert_eq!(d.mutable_data_for_key(Some("a")), d.data_for_key(Some("a")));
+        assert_eq!(d.dbi(), d.dbi());
+    }
+
+    /// The commit paths exit the process (status 0, after one log line) when the map is full; runs in a child.
+    #[test]
+    fn a_full_map_ends_the_process() {
+        use inject::queue;
+        if let Ok(kind) = std::env::var("BH_STORAGE_FULL") {
+            let p = tmp(&format!("full_{kind}"));
+            let e = DatabaseEnvironment::new(&p, 4, 16).unwrap();
+            let d = Database::new(&e, "main").unwrap();
+            match kind.as_str() {
+                "put" => queue("put", &[Some(MDB_MAP_FULL)]),
+                "commit" => queue("txn_commit", &[Some(MDB_MAP_FULL)]),
+                _ => {
+                    queue("txn_commit", &[Some(MDB_MAP_FULL)]);
+                    assert!(e.start_bulk_transaction());
+                    e.finish_bulk_transaction();
+                }
+            }
+            d.put("a", b"1");
+            std::process::exit(3);
+        }
+        for kind in ["put", "commit", "bulk"] {
+            let out = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "storage::lmdb::tests::a_full_map_ends_the_process",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env("BH_STORAGE_FULL", kind)
+                .output()
+                .unwrap();
+            assert_eq!(out.status.code(), Some(0), "{kind}");
+            assert!(String::from_utf8_lossy(&out.stderr).contains("Database map is full."), "{kind}");
+        }
     }
 
     #[test]
@@ -583,5 +705,28 @@ mod tests {
         drop((a, b, a2));
         drop(e);
         let _ = std::fs::remove_dir_all(&p);
+    }
+}
+
+/// Failure injection for the unit tests: the next calls of an operation return the queued codes instead of running
+/// (`None` lets one call through).
+#[cfg(test)]
+pub(crate) mod inject {
+    use std::cell::RefCell;
+    use std::collections::{HashMap, VecDeque};
+    use std::os::raw::c_int;
+
+    thread_local! {
+        static QUEUES: RefCell<HashMap<&'static str, VecDeque<Option<c_int>>>> = RefCell::new(HashMap::new());
+    }
+
+    /// Queue `codes` for `op`.
+    pub fn queue(op: &'static str, codes: &[Option<c_int>]) {
+        QUEUES.with(|q| q.borrow_mut().entry(op).or_default().extend(codes.iter().copied()));
+    }
+
+    /// The injected code for this call of `op`, if any.
+    pub fn take(op: &'static str) -> Option<c_int> {
+        QUEUES.with(|q| q.borrow_mut().get_mut(op).and_then(|v| v.pop_front()).flatten())
     }
 }

@@ -183,7 +183,7 @@ fn make_objects(
             None,
             Some("cid"),
         );
-        v.push((name, dw.object_of_type_at_pos(ot, at(x)).or_else(|| dw.add_snapshot(ot).last().cloned())));
+        v.push((name, dw.object_of_type_at_pos(ot, at(x))));
     }
     let bed_item = InventoryItem::new(ItemType(63), 0, 0, None, None);
     let bed = crate::building::bed::Bed::init_with_world_dynamic_world_at_position_cache_item_flipped_save_dict_placed_by_client_client_name(

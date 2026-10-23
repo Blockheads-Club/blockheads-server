@@ -344,11 +344,9 @@ mod tests {
             for line in src.replace(" =\n        ", " = ").lines() {
                 let Some((_, rest)) = line.trim().split_once(": ") else { continue };
                 let Some((ty, val)) = rest.split_once(" = ") else { continue };
-                let Some(arg) =
-                    val.strip_prefix(ty).and_then(|v| v.strip_prefix('(')).and_then(|v| v.strip_suffix(");"))
-                else {
-                    continue;
-                };
+                let candidate =
+                    val.strip_prefix(ty).and_then(|v| v.strip_prefix('(')).and_then(|v| v.strip_suffix(");"));
+                let Some(arg) = candidate else { continue };
                 let v: i64 = arg.parse().unwrap();
                 let (_, f) =
                     table.iter().find(|(n, _)| *n == ty).unwrap_or_else(|| panic!("{ty} missing from the sweep"));

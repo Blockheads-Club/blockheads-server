@@ -2895,6 +2895,11 @@ fn inventoryhost_adapters_forward_and_are_inert_without_targets() {
         let _ = crate::blockhead::inventory_model::InventoryHost::dynamic_world_is_client(&f.gone);
         crate::blockhead::inventory_model::InventoryHost::add_simulation_event_got(&f.bg, &f.stub, &f.stub);
         crate::blockhead::inventory_model::InventoryHost::add_simulation_event_got(&f.bg, &f.bh_obj, &f.bh_obj);
+        crate::blockhead::inventory_model::InventoryHost::add_simulation_event_got(
+            &f.bg,
+            &f.bh_obj,
+            f.obj("free_block"),
+        );
         crate::blockhead::inventory_model::InventoryHost::add_simulation_event_got(&f.dead_bg, &f.stub, &f.stub);
         crate::blockhead::inventory_model::InventoryHost::add_simulation_event_got(&f.gone, &f.stub, &f.stub);
         crate::blockhead::inventory_model::InventoryHost::world_start_using_camera(&f.bg);
@@ -3340,13 +3345,10 @@ fn path_extra_data_plist_keeps_numbers_only() {
     let mut a = PathExtraData::new();
     a.set("count", ExtraValue::Int(3));
     a.set("cio", ExtraValue::Any(Rc::new(1u8)));
-    match a.to_plist() {
-        PlistValue::Dict(d) => {
-            assert_eq!(d.map.get(&"count".to_string()).unwrap().int_value(), 3);
-            assert!(d.map.get(&"cio".to_string()).is_none());
-        }
-        _ => panic!("dict"),
-    }
+    let plist = a.to_plist();
+    let PlistValue::Dict(d) = plist else { panic!("dict") };
+    assert_eq!(d.map.get(&"count".to_string()).unwrap().int_value(), 3);
+    assert!(d.map.get(&"cio".to_string()).is_none());
     let mut b = PathExtraData::new();
     b.set("cio", ExtraValue::Int(9));
     let merged = b.with_objects_from(&a);

@@ -1044,9 +1044,8 @@ mod tests {
         assert_eq!((accepted, requester, ids), (true, 5, vec![1, 2]));
         assert!(matches!(sm(zoom_response(Some((3, 4)))), ServerMsg::ZoomResponse(Some((3, 4)))));
         assert!(matches!(sm(zoom_response(None)), ServerMsg::ZoomResponse(None)));
-        let ServerMsg::Welcome(Some(w)) = sm(welcome_message(Some(&PV::string("hi")), Some(&dict_of(vec![])))) else {
-            panic!()
-        };
+        let welcome = sm(welcome_message(Some(&PV::string("hi")), Some(&dict_of(vec![]))));
+        let ServerMsg::Welcome(Some(w)) = welcome else { panic!() };
         assert!(w.object_for_key("welcomeMessage").is_some() && w.object_for_key("customRules").is_some());
         assert!(matches!(sm(welcome_message(None, None)), ServerMsg::Welcome(Some(_))));
         let list = PV::array(vec![dict_of(vec![("name", PV::string("n")), ("id", PV::string("i"))])]);
@@ -1058,13 +1057,11 @@ mod tests {
         assert!(matches!(sm(price_offsets(&dict_of(vec![]))), ServerMsg::PriceOffsets(Some(_))));
         let ServerMsg::PortalChestAck { raw8, id } = sm(portal_chest_ack(0x0102)) else { panic!() };
         assert_eq!((id, raw8[0]), (0x0102, 2));
-        let ServerMsg::PortalChestAck { id, .. } = sm(portal_chest_ack_resend(&[7, 0, 1, 2, 3, 4, 5, 6])) else {
-            panic!()
-        };
+        let resent = sm(portal_chest_ack_resend(&[7, 0, 1, 2, 3, 4, 5, 6]));
+        let ServerMsg::PortalChestAck { id, .. } = resent else { panic!() };
         assert_eq!(id, 7);
-        let ServerMsg::PortalChestNotSaved { raw8, id } = sm(portal_chest_not_saved(&[9, 1, 0, 0, 0, 0, 0, 0])) else {
-            panic!()
-        };
+        let unsaved = sm(portal_chest_not_saved(&[9, 1, 0, 0, 0, 0, 0, 0]));
+        let ServerMsg::PortalChestNotSaved { raw8, id } = unsaved else { panic!() };
         assert_eq!((id, raw8[1]), (0x0109, 1));
         let ServerMsg::PortalChestAck { id, .. } = sm(vec![t::SERVER_PORTAL_CHEST_ACK, 5]) else { panic!() };
         assert_eq!(id, 5);

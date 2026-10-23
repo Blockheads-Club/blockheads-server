@@ -462,7 +462,7 @@ impl BhNetNode {
         let result = map.get(&peer_id.to_string()).cloned();
         if result.is_none() && peer_id == self.server_player_id() {
             for key in map.keys_in_order() {
-                if let Some(info) = map.get(&key) {
+                for info in map.get(&key) {
                     let is_owner = dget(&info.borrow(), "mod").and_then(|v| v.as_str()) == Some("owner");
                     if is_owner {
                         return Some(info.clone());
@@ -648,5 +648,179 @@ mod tests {
         let l = node.live_player_infos();
         assert_eq!(l.len(), 2);
         assert_eq!(dget(&incoming.borrow(), "photo").and_then(|v| v.as_str()), Some("P"));
+    }
+
+    #[test]
+    fn the_abstract_match_answers_its_defaults() {
+        let m = M;
+        m.set_delegate(None);
+        assert_eq!((m.local_player_id().as_str(), m.local_player_name().as_str()), ("local_player", "local_player"));
+        assert!(m.player_ids().is_none() && m.voice_chat_with_name("x").is_none());
+        m.disconnect();
+        assert_eq!(m.expected_player_count(), 0);
+        assert!(!m.send_data_to_players_with_data_mode_error(Some(b"x"), &["a".to_string()], SendDataMode::Reliable));
+        assert!(m.load_info_for_player("p").is_some());
+        assert!(m.client_player_information_recieved_from_peer(None, "e").is_none());
+        let i = info("p", false);
+        m.client_approved_with_info(&i);
+        m.send_player_information_to_server_password(Some(&i), Some("pw"));
+        assert_eq!(m.persistent_id_for_net_id("n").as_deref(), Some("n"));
+        assert!(!m.audio_chat_supported() && !m.requires_player_authentication());
+        assert!(!m.uses_game_center_player_information() && m.connected_player_ids().is_none());
+        m.remove_client("x");
+        m.disconnect_player("x");
+        assert!(!m.is_cloud_match() && !m.owned());
+        assert!(m.owner_name().is_none() && m.cloud_salt().is_none() && m.host().is_none() && m.port().is_none());
+        assert!(m.as_server_match().is_none());
+        // A list from the server replaces the live players: dictionaries are kept, anything else dropped.
+        let node = BhNetNode::init_with_delegate_match_net_node_type(None, Rc::new(M), NetNodeType::LocalClient);
+        let list = crate::plist::helpers::data_from_property_list(&PlistValue::array(vec![
+            PlistValue::Dict(new_info_dict()),
+            PlistValue::string("not a dictionary"),
+        ]))
+        .unwrap();
+        m.updated_player_list_recieved_from_server(&list, &node);
+        m.updated_player_list_recieved_from_server(b"not a plist", &node);
+    }
+
+    /// A match that records what the node does to it and lists some players.
+    struct R {
+        ids: Vec<String>,
+        log: RefCell<Vec<String>>,
+    }
+    impl BhMatch for R {
+        fn set_delegate(&self, d: Option<Weak<dyn MatchDelegate>>) {
+            self.log.borrow_mut().push(format!("delegate {}", d.is_some()));
+        }
+        fn player_ids(&self) -> Option<Vec<String>> {
+            Some(self.ids.clone())
+        }
+        fn disconnect(&self) {
+            self.log.borrow_mut().push("disconnect".to_string());
+        }
+        fn local_player_id(&self) -> String {
+            "me".to_string()
+        }
+    }
+
+    /// Never called: `update_match` only hands the delegate on to the match.
+    struct Nobody;
+    impl MatchDelegate for Nobody {
+        fn match_player_did_change_state(&self, _m: &dyn BhMatch, _p: &str, _s: PlayerConnectionState) {}
+        fn match_did_receive_data_from_player(&self, _m: &dyn BhMatch, _d: &[u8], _p: &str) {}
+        fn info_arrived_for_player(&self, _i: &PlayerInfo, _p: &str) {}
+        fn match_did_fail_with_error(&self, _m: &dyn BhMatch) {}
+        fn boot_all_clients_due_to_no_credit(&self) {}
+        fn match_connection_with_player_failed_with_error(&self, _m: &dyn BhMatch, _p: &str) {}
+    }
+
+    #[test]
+    fn replacing_the_match_resets_the_live_players() {
+        let first = Rc::new(R { ids: vec!["a".to_string()], log: RefCell::new(Vec::new()) });
+        let node = BhNetNode::init_with_delegate_match_net_node_type(None, first.clone(), NetNodeType::LocalClient);
+        assert_eq!(node.live_player_infos().len(), 2); // "me" and "a"
+        let nobody: Rc<dyn MatchDelegate> = Rc::new(Nobody);
+        nobody.match_player_did_change_state(&M, "p", PlayerConnectionState::Connected);
+        nobody.match_did_receive_data_from_player(&M, b"", "p");
+        nobody.info_arrived_for_player(&info("p", false), "p");
+        nobody.match_did_fail_with_error(&M);
+        nobody.boot_all_clients_due_to_no_credit();
+        nobody.match_connection_with_player_failed_with_error(&M, "p");
+        // The same match again keeps the players and only re-registers the delegate.
+        let same: Rc<dyn BhMatch> = first.clone();
+        node.update_match(same, Rc::downgrade(&nobody));
+        assert_eq!(node.live_player_infos().len(), 2);
+        assert_eq!(first.log.borrow().as_slice(), ["delegate true"]);
+        // Another match disconnects the old one and starts over with its own players.
+        let second = Rc::new(R { ids: vec!["b".to_string(), "c".to_string()], log: RefCell::new(Vec::new()) });
+        let other: Rc<dyn BhMatch> = second.clone();
+        node.update_match(other, Rc::downgrade(&nobody));
+        assert_eq!(first.log.borrow().as_slice(), ["delegate true", "delegate false", "disconnect"]);
+        assert_eq!(second.log.borrow().as_slice(), ["delegate true"]);
+        assert_eq!(node.live_player_infos().len(), 2); // the old list is dropped; "b" and "c" are the new players
+                                                       // After a cleanup there is no current match to compare with.
+        node.cleanup();
+        assert_eq!(second.log.borrow().as_slice(), ["delegate true", "delegate false", "disconnect"]);
+        let third: Rc<dyn BhMatch> = Rc::new(R { ids: vec![], log: RefCell::new(Vec::new()) });
+        node.update_match(third, Rc::downgrade(&nobody));
+        assert!(node.match_().is_some());
+        // A match that lists no players leaves the node with none, and the cleaned-up node ignores new arrivals.
+        node.update_match(Rc::new(M), Rc::downgrade(&nobody));
+        node.cleanup();
+        node.info_arrived_for_player(&info("q", false), "q");
+        node.remove_live_player_info_at(0);
+        assert!(node.live_player_infos().is_empty());
+        assert!(!node.load_info_for_player("x")); // no map, no match: nothing to load
+    }
+
+    #[test]
+    fn node_notifications_and_forwards() {
+        let d = Rc::new(D(Default::default()));
+        let dd: Rc<dyn NodeDelegate> = d.clone();
+        let node = BhNetNode::init_with_delegate_match_net_node_type(
+            Some(Rc::downgrade(&dd)),
+            Rc::new(M),
+            NetNodeType::OnlineClient,
+        );
+        let gone: Rc<dyn NodeDelegate> = Rc::new(D(Default::default()));
+        let orphan = BhNetNode::init_with_delegate_match_net_node_type(
+            Some(Rc::downgrade(&gone)),
+            Rc::new(M),
+            NetNodeType::OnlineClient,
+        );
+        drop(gone);
+        orphan.notify_players_changed(); // nobody left to tell
+        let base = d.0.get();
+        node.info_arrived_for_player(&info("a", false), "a");
+        // A failed connection marks the matching live player disconnected and tells the delegate; unknown ones do not.
+        node.match_connection_with_player_failed_with_error(&M, "a");
+        node.match_connection_with_player_failed_with_error(&M, "nobody");
+        assert_eq!(d.0.get(), base + 2);
+        assert_eq!(dget(&node.live_player_infos()[1].borrow(), "connected").map(|v| v.bool_value()), Some(false));
+        node.match_did_receive_data_from_player(&M, b"x", "a");
+        node.notify_players_changed();
+        assert_eq!(d.0.get(), base + 3);
+        assert_eq!(
+            (node.local_player_id().as_str(), node.local_player_name().as_str()),
+            ("local_player", "local_player")
+        );
+        assert!(!node.audio_chat_supported() && !node.voice_chat_active());
+        assert_eq!(node.net_node_type(), NetNodeType::OnlineClient);
+        node.remove_live_player_info_at(99); // out of range: nothing
+        node.remove_live_player_info_at(1);
+        assert_eq!(node.live_player_infos().len(), 1);
+        node.purge_chat_pic_cache();
+        // The virtual hooks reach the subclass.
+        struct V(RefCell<Vec<String>>);
+        impl NodeVirtuals for V {
+            fn cleanup(&self) {
+                self.0.borrow_mut().push("cleanup".to_string());
+            }
+            fn send_chat_message_display_notification_send_to_clients(&self, t: &str, d: bool, c: Option<&[String]>) {
+                self.0.borrow_mut().push(format!("{t} {d} {}", c.map_or(0, |c| c.len())));
+            }
+        }
+        let v = V(RefCell::new(Vec::new()));
+        node.match_did_fail_with_error(&v);
+        node.send_chat_message_send_to_clients("hi", Some(&["x".to_string()]), &v);
+        assert_eq!(v.0.borrow().as_slice(), ["cleanup", "hi true 1"]);
+        // After cleanup everything reads as nil: the forwards give empty answers, a player list update just notifies.
+        node.cleanup();
+        assert_eq!((node.local_player_id().as_str(), node.local_player_name().as_str()), ("", ""));
+        assert!(!node.audio_chat_supported());
+        let before = d.0.get();
+        node.update_player_list(&[info("z", false)]);
+        assert_eq!(d.0.get(), before + 1);
+        node.match_player_did_change_state(&M, "z", PlayerConnectionState::Disconnected);
+        assert_eq!(node.server_player_id(), "server");
+    }
+
+    #[test]
+    fn the_server_id_falls_back_to_the_owner_and_to_nothing() {
+        let node = BhNetNode::init_with_delegate_match_net_node_type(None, Rc::new(M), NetNodeType::LocalServer);
+        // Players that are no owner do not stand in for the server.
+        node.info_arrived_for_player(&info("guest", false), "guest");
+        assert!(node.player_info_for_peer_id("server").is_none());
+        assert!(node.player_info_for_peer_id("guest").is_some());
     }
 }
