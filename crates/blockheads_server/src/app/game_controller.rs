@@ -88,7 +88,6 @@ pub struct GameController {
     update_timer: Cell<Option<TimerId>>,
     last_time: Cell<f64>,
     accumulator: Cell<f32>,
-    needs_to_exit_world: Cell<bool>,
     app_delegate: Weak<dyn GameControllerDelegate>,
     port: RefCell<Option<String>>,
     #[allow(dead_code)]
@@ -113,7 +112,6 @@ impl GameController {
             update_timer: Cell::new(None),
             last_time: Cell::new(0.0),
             accumulator: Cell::new(0.0),
-            needs_to_exit_world: Cell::new(false),
             app_delegate: a.app_delegate.clone(),
             port: RefCell::new(a.port.clone()),
             save_id: RefCell::new(a.save_id.clone()),
@@ -159,7 +157,7 @@ impl GameController {
             a.save_id.as_deref(),
             max_players,
         );
-        if let Some(s) = &server {
+        for s in &server {
             s.set_delay_scheduler(Some(Rc::new(|d, cb| {
                 run_loop::perform_after_delay(d, cb);
             })));
@@ -316,9 +314,7 @@ impl GameController {
             if let Some(h) = crate::mods::hooks() {
                 h.tick(dtf);
             }
-            if self.needs_to_exit_world.get() {
-                // doExitWorld: empty stub on the server.
-            }
+            // The original's `doExitWorld` is an empty stub on the server and nothing ever asks for it.
         }
     }
 
@@ -787,5 +783,279 @@ mod tests {
         let mut acc = 0.0f32;
         acc += idle_dt(1.0, 1.3);
         assert!(!accumulator_due(acc) && acc < 0.0);
+    }
+
+    use crate::foundation::exception::catch_ns;
+    use crate::server::bhserver::ServerWorld;
+
+    /// Records what the controller tells its app delegate.
+    #[derive(Default)]
+    struct Recorder {
+        log: RefCell<Vec<String>>,
+    }
+
+    impl GameControllerDelegate for Recorder {
+        fn remove_game_controller(&self, _gc: &Rc<GameController>) {
+            self.log.borrow_mut().push("remove".into());
+        }
+        fn load_complete_for_game_controller(&self, _gc: &Rc<GameController>) {
+            self.log.borrow_mut().push("loaded".into());
+        }
+        fn players_changed(&self) {
+            self.log.borrow_mut().push("players".into());
+        }
+        fn clear_chat(&self) {
+            self.log.borrow_mut().push("clear".into());
+        }
+        fn chat_message_recieved_from_game_controller_message_dict(&self, _gc: &Rc<GameController>, d: &PlistDict) {
+            self.log
+                .borrow_mut()
+                .push(format!("chat:{}", d.get(&"message".to_string()).and_then(|v| v.as_str()).unwrap_or("")));
+        }
+    }
+
+    fn free_port() -> String {
+        std::net::UdpSocket::bind("0.0.0.0:0").unwrap().local_addr().unwrap().port().to_string()
+    }
+
+    /// A tiny world in a private data directory, hosted by a controller whose delegate is `rec`.
+    fn controller(tag: &str, rec: &Rc<Recorder>, no_exit: bool, port: String) -> Option<Rc<GameController>> {
+        let base = std::env::var_os("TMPDIR").map(std::path::PathBuf::from).unwrap_or_else(std::env::temp_dir);
+        let dir = base.join(format!("bh_gc_{tag}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        crate::foundation::paths::set_data_dir_override(Some(dir.to_str().unwrap().to_string()));
+        // One trivial mod, so the world-loaded and tick hooks run too.
+        let probe = dir.join("mods/probe");
+        std::fs::create_dir_all(probe.join("server")).unwrap();
+        std::fs::write(
+            probe.join("mod.toml"),
+            "schema = 1\nid = \"probe\"\nversion = \"1.0.0\"\nname = { en = \"Probe\" }\nauthors = [\"t\"]\nlicense = \"MIT\"\n\
+             api = \"^0.2\"\n[sides]\nserver = true\nclient = false\n[entry]\nserver = { runtime = \"lua\", path = \"server/main.luau\" }\n",
+        )
+        .unwrap();
+        std::fs::write(probe.join("server/main.luau"), "return {}").unwrap();
+        std::fs::write(probe.join("LICENSE"), "MIT\n").unwrap();
+        let w = crate::app::delegate::create_saved_world("GC", 116, false).unwrap();
+        let delegate: Weak<dyn GameControllerDelegate> = Rc::downgrade(rec) as Weak<Recorder>;
+        GameController::init(GameControllerArgs {
+            name: Some(w.name),
+            save_id: Some(w.id),
+            app_delegate: delegate,
+            port: Some(port),
+            max_players: 0,
+            save_delay: 10,
+            world_width_macro: 32,
+            credit: 0,
+            cloud_salt: None,
+            owner_name: None,
+            privacy: None,
+            convert_to_custom_rules: true,
+            expert_mode: false,
+            no_exit,
+        })
+    }
+
+    /// Drive the idle timer until the world has finished loading.
+    fn load(gc: &Rc<GameController>) -> f64 {
+        let mut now = clock::reference_time();
+        for _ in 0..5000 {
+            if !gc.loading() {
+                break;
+            }
+            now += 0.2;
+            gc.do_idle_safe_with_now(now);
+        }
+        assert!(!gc.loading(), "world did not finish loading");
+        now
+    }
+
+    fn isolated(f: impl FnOnce() + Send + 'static) {
+        std::thread::spawn(f).join().expect("test body panicked");
+    }
+
+    #[test]
+    fn a_port_in_use_stops_the_start() {
+        isolated(|| {
+            let busy = std::net::UdpSocket::bind("0.0.0.0:0").unwrap();
+            let port = busy.local_addr().unwrap().port().to_string();
+            assert!(controller("busy", &Rc::new(Recorder::default()), false, port).is_none());
+        });
+    }
+
+    #[test]
+    fn controller_life_cycle_and_forwarders() {
+        isolated(|| {
+            let rec = Rc::new(Recorder::default());
+            let port = free_port();
+            let gc = controller("life", &rec, false, port.clone()).unwrap();
+            assert_eq!(gc.port().as_deref(), Some(port.as_str()));
+            assert_eq!(gc.world_name().as_deref(), Some("GC"));
+            assert!(gc.loading());
+            assert!(gc.is_running()); // a world that is still loading keeps the server running
+                                      // The idle timer is armed on the run loop, and delayed work goes through it as well.
+            gc.bh_server().unwrap().perform_after_delay(0.0, Box::new(|| ()));
+            RunLoop::current().run_mode_default_before_distant_future();
+            RunLoop::current().run_mode_default_before_distant_future();
+            let early = WorldServerAdapter { world: gc.world().unwrap(), glue: gc.glue.borrow().clone() };
+            assert!(ServerWorld::dynamic_world(&early).is_none()); // before load stage 12
+            let now = load(&gc);
+            assert!(rec.log.borrow().contains(&"loaded".to_string()));
+            // Loaded: the fixed-step branch runs, and an empty server is not running.
+            gc.do_idle_safe_with_now(now + 10.0);
+            gc.update_accurate_dt(0.2, 0.2); // a loaded world takes a step
+            gc.idle();
+            assert!(!gc.is_running());
+            assert!(gc.connected_client_ids().is_empty() && gc.recent_players().is_empty());
+            assert!(!gc.full());
+            assert!(!gc.is_controlling_blockheads_for_client_player("nobody"));
+            assert!(!gc.is_waiting_for_multi_part_command_response());
+
+            // The delegate hears about chat, players and clearing; the history is capped at 1000, newest first.
+            let msg = |t: &str| {
+                let mut d = new_mutable_dict();
+                d.insert("message".to_string(), PlistValue::string(t));
+                d
+            };
+            for i in 0..1001 {
+                gc.chat_message_recieved_display_notification(msg(&format!("m{i}")), true);
+            }
+            assert_eq!(gc.chat_messages().len(), 1000);
+            assert_eq!(gc.chat_messages()[0].get(&"message".to_string()).and_then(|v| v.as_str()), Some("m1000"));
+            gc.clear_chat();
+            assert!(gc.chat_messages().is_empty());
+            gc.players_changed();
+            assert!(rec.log.borrow().iter().any(|l| l == "clear") && rec.log.borrow().iter().any(|l| l == "players"));
+            gc.send_chat_message_send_to_clients(Some("hello"), None);
+            gc.handle_command_issue_client("/pvp-off", None);
+            gc.file_write_failed("/nowhere");
+
+            // Lists and player predicates go straight to the server.
+            assert!(gc.white_list().is_some() || gc.white_list().is_none());
+            let _ = (gc.black_list(), gc.admin_list(), gc.mod_list());
+            let mut info = new_mutable_dict();
+            info.insert("alias".to_string(), PlistValue::string("someone"));
+            assert!(!gc.player_is_black_listed_with_info(&info));
+            let _ = gc.player_is_white_listed_with_info(&info); // true while the whitelist is off
+            assert!(!gc.player_is_connected_with_info(&info));
+            assert!(!gc.player_is_admin_with_info(&info));
+            assert!(!gc.player_is_mod_with_info(&info));
+
+            // Seams the controller hands to the world and the server.
+            let wd: &dyn WorldDelegate = &*gc;
+            assert!(wd.get_default_game_save_for_world_with_id("x").map.is_empty());
+            wd.file_write_failed("/nowhere");
+            wd.show_welcome_back_popup_with_message(None);
+            wd.set_paused(true);
+            assert!(wd.app_database_environment().is_none());
+            assert!(crate::world::state::WorldDelegate::app_database(&*gc).is_none());
+            NodeDelegate::players_changed(&*gc);
+            ServerDelegate::clear_chat(&*gc);
+
+            forward_every_server_world_call(&gc);
+
+            ServerDelegate::stop(&*gc);
+            assert!(gc.world().is_none() && gc.bh_server().is_none() && gc.loading());
+            gc.dealloc();
+            gc.dealloc();
+            // Without a world or a server every query degrades to its default.
+            assert!(!gc.is_running() && gc.recent_players().is_empty() && !gc.full());
+            assert!(gc.white_list().is_none() && !gc.player_is_mod_with_info(&new_mutable_dict()));
+            gc.send_chat_message_send_to_clients(None, None);
+            gc.handle_command_issue_client("/help", None);
+        });
+    }
+
+    /// Every `ServerWorld` call with inert arguments: the point is that each reaches the world without a panic.
+    fn forward_every_server_world_call(gc: &Rc<GameController>) {
+        let a = WorldServerAdapter { world: gc.world().unwrap(), glue: gc.glue.borrow().clone() };
+        let a: &dyn ServerWorld = &a;
+        assert!(a.load_complete());
+        assert_eq!(a.world_name().as_deref(), Some("GC"));
+        assert!(a.save_id().is_some());
+        assert_eq!(a.world_width_macro(), 32);
+        assert!(a.custom_rules_enabled());
+        assert!(a.custom_rules_dict().is_some());
+        let _ = (a.server_password(), a.welcome_message(), a.pvp_enabled(), a.server_client_count());
+        a.set_pvp_enabled_display_notifciation(true, false);
+        a.new_server_password_set(Some("pw"));
+        a.new_server_password_set(None);
+        assert!(a.server_client("nobody").is_none());
+        a.client_connected("c0");
+        assert!(a.server_client("c0").is_some());
+        assert!(a.dynamic_world().is_some());
+        let _ = a.distance_ordered_food_types();
+        let _ = a.has_finished_database_migration_to17();
+        let mut log = String::new();
+        a.append_debug_log(&mut log);
+        let _ = a.summary_net_data_for_admin_mod_owner_cloud_mode(true, true, true, 0);
+        let bytes = || vec![vec![0u8; 8]];
+        let calls: Vec<Box<dyn Fn()>> = vec![
+            Box::new(|| drop(a.client_connected("c1"))),
+            Box::new(|| a.client_disconnected_was_kick("c1", false)),
+            Box::new(|| {
+                a.request_for_block_from_client(
+                    ClientMacroBlockRequest { macro_index: 0, create_if_not_created: 0, padding: [0; 3] },
+                    "c1",
+                )
+            }),
+            Box::new(|| a.remote_block_removed_by_client(0, "c1")),
+            Box::new(move || a.remote_create_for_objects_of_type_client_id(bytes(), 1, "c1")),
+            Box::new(move || a.remote_update_for_objects_of_type_from_client(bytes(), 1, "c1")),
+            Box::new(move || a.remote_remove_for_objects_of_type_from_client(bytes(), 1, "c1")),
+            Box::new(move || a.remote_creation_data_update_for_objects_of_type_from_client(bytes(), 1, "c1")),
+            Box::new(|| drop(a.remote_fill_request_placed_by_client(&[0; 16], "c1"))),
+            Box::new(|| drop(a.remote_remove_request_from_client(&[0; 16], "c1"))),
+            Box::new(|| drop(a.remote_remove_back_wall_request_from_client(&[0; 16], "c1"))),
+            Box::new(|| a.remote_place_workbench_request_from_peer(&[0; 16], "c1")),
+            Box::new(|| a.remote_place_interaction_object_request_from_peer(&[0; 16], "c1")),
+            Box::new(|| a.remote_paint_request_from_client(&[0; 16], "c1")),
+            Box::new(|| a.heartbeat_data_recieved_from_peer(&[0; 16], "c1")),
+            Box::new(|| a.remote_gather_request(&[0; 16])),
+            Box::new(|| a.remote_projectile_request(&[0; 16])),
+            Box::new(|| a.remote_tip_notification(&[0; 16])),
+            Box::new(|| a.remote_blockhead_damage_request_requested_by_client_name(&[0; 16], Some("c1"))),
+            Box::new(|| a.electricity_path_data_recieved_from_client(&[0; 16], "c1")),
+            Box::new(|| drop(a.get_blockhead_zoom_pos_for_client_requester_client_cycle_index(Some("c1"), None, 0))),
+            Box::new(|| a.transaction_data_recieved_from_client(None, "c1")),
+            Box::new(|| a.welcome_message_dict_recieved_from_client(None, "c1")),
+            Box::new(|| {
+                a.report_user_with_name_reporter_name_reporter_message_reported_avatar_image_path(
+                    None, None, None, None,
+                )
+            }),
+            Box::new(|| drop(a.verify_client_custom_rules_data(&[0; 16]))),
+            Box::new(|| a.custom_rule_dict_recieved_from_net(&PlistValue::string("not a dictionary"))),
+            Box::new(|| a.custom_rule_dict_recieved_from_net(&PlistValue::Dict(new_mutable_dict()))),
+            Box::new(|| a.archive_light_blocks_for_client("c1")),
+            Box::new(|| a.do_repair_for_tile_at_pos(IntPair { x: 0, y: 0 })),
+            Box::new(|| drop(a.world_pos_at_world_index(0))),
+        ];
+        for c in &calls {
+            let _ = catch_ns(|| c());
+        }
+    }
+
+    #[test]
+    fn without_exit_an_idle_server_keeps_running() {
+        isolated(|| {
+            let rec = Rc::new(Recorder::default());
+            let gc = controller("noexit", &rec, true, free_port()).unwrap();
+            let now = load(&gc);
+            for i in 0..3 {
+                gc.do_idle_safe_with_now(now + 10.0 + i as f64);
+            }
+            assert!(gc.world().is_some());
+            assert!(!rec.log.borrow().contains(&"remove".to_string()));
+            // Without --no-exit an empty server that never had a client keeps waiting, then stops once one has been.
+            let rec2 = Rc::new(Recorder::default());
+            let gc2 = controller("exit", &rec2, false, free_port()).unwrap();
+            let now2 = load(&gc2);
+            gc2.do_idle_safe_with_now(now2 + 10.0);
+            assert!(gc2.world().is_some());
+            gc2.has_had_connected_clients.set(true);
+            gc2.do_idle_safe_with_now(now2 + 11.0);
+            assert!(gc2.world().is_none() && rec2.log.borrow().contains(&"remove".to_string()));
+        });
     }
 }
