@@ -1072,7 +1072,7 @@ fn update_alive(me: &ObjRef, d: &Dodo, s: &mut DodoState, dt: f32, is_simulation
         Npc::check_current_position_for_food(d, me);
         reload(d, s);
         me.base().borrow_mut().float_pos = Vector2 { x: (to.x as f32) + 0.5f32, y: to.y as f32 };
-        if turn_back && ((!me.is_net() && !b_ridden) || rider().map_or(false, |r| !r.is_net())) {
+        if turn_back && ((!me.is_net() && !b_ridden) || matches!(rider(), Some(r) if !r.is_net())) {
             s.to_square = turn_back_square;
             s.movement_direction = if s.from_square.x < s.to_square.x { 1 } else { -1 };
             s.walk_speed = 2.0f32;
@@ -2038,6 +2038,21 @@ mod tests {
             base: RefCell::new(DynamicObjectBase::alloc_zeroed_with(w)),
             steered,
         })
+    }
+
+    #[test]
+    fn the_steered_stand_in_answers() {
+        let o = steered_bh(true);
+        let api = o.as_blockhead().unwrap();
+        assert_eq!(api.client_id().as_deref(), Some("other"));
+        assert_eq!(api.local_net_id(), None);
+        assert!(api.is_client_blockhead_being_controlled_by_server());
+        assert!(!api.is_interacting_with_any_interaction_object());
+        api.set_interaction_object(None);
+        api.stop_interacting();
+        assert_eq!(o.class_info().name, "DynamicObject");
+        assert!(o.as_any().is::<SteeredBh>());
+        assert!(o.base().borrow().pos == o.pos());
     }
 
     #[test]

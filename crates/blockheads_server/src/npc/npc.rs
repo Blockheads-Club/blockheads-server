@@ -3741,6 +3741,7 @@ mod tests {
     struct BareNpc {
         base: RefCell<DynamicObjectBase>,
         npc: RefCell<NpcState>,
+        ridable: Cell<bool>,
     }
     impl DynamicObject for BareNpc {
         fn base(&self) -> &RefCell<DynamicObjectBase> {
@@ -3778,6 +3779,10 @@ mod tests {
         fn npc(&self) -> &RefCell<NpcState> {
             &self.npc
         }
+        // the only override: lets one class run every branch of the defaults that read it
+        fn ridable_when_tamed(&self) -> bool {
+            self.ridable.get()
+        }
     }
     impl_npc_protocols!(BareNpc);
 
@@ -3787,7 +3792,9 @@ mod tests {
         let me: ObjRef = alloc_npc(|w| BareNpc {
             base: RefCell::new(DynamicObjectBase::alloc_zeroed_with(w)),
             npc: RefCell::new(NpcState::default()),
+            ridable: Cell::new(true),
         });
+        assert_eq!(me.class_info().name, "TestNpc");
         let wr: WorldRef = fx.w.clone();
         let dr: DynamicWorldRef = fx.dw.clone();
         assert!(npc_init_with_world_dynamic_world_at_position_cache_save_dict_is_adult_was_placed_placed_by_client(
@@ -3810,6 +3817,15 @@ mod tests {
         assert!(!n.can_be_captured_by_blockhead_with_item_type(&b, 0));
         assert!(!npc_capture_by_blockhead_with_item_type(&me, &b, 0));
         assert!(!me.needs_removed());
+        // every branch of the ride option on this one class
+        let bare = me.as_any().downcast_ref::<BareNpc>().unwrap();
+        bare.npc.borrow_mut().age = 100.0;
+        assert_eq!(bare.second_option_title(), None);
+        bare.npc.borrow_mut().age = 1000.0;
+        assert_eq!(bare.second_option_title(), Some("RIDE"));
+        bare.ridable.set(false);
+        assert_eq!(bare.second_option_title(), None);
+        bare.ridable.set(true);
     }
 
     #[test]

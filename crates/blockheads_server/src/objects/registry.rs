@@ -1029,7 +1029,7 @@ mod tests {
     fn every_type_resolves() {
         install();
         for t in 1..=64 {
-            let f = class_for_dynamic_object_type(t).unwrap_or_else(|| panic!("type {t}"));
+            let f = class_for_dynamic_object_type(t).expect("a class for every type");
             assert_eq!(f.object_type, t);
             assert_eq!(Some(f.class.name), class_name_for_dynamic_object_type(t), "type {t}");
         }
@@ -1128,7 +1128,7 @@ mod tests {
             if matches!(npc_type, 4 | 5) && o.is_none() {
                 continue;
             }
-            let o = o.unwrap_or_else(|| panic!("npc type {npc_type}"));
+            let o = o.expect("an npc of every type");
             assert_eq!(o.object_type(), obj_type);
         }
         for t in [0, 9] {
@@ -1278,9 +1278,8 @@ mod tests {
                 f.from_position_interaction
                     .and_then(|c| c(&wr, &dr, pos, None, None, false, None, Some("c"), Some("n")))
             }));
-            if let Ok(Some(obj)) = made {
-                assert!(as_interaction_like(&obj).is_some(), "type {t}");
-            }
+            let obj = made.expect("no panic").expect("an interaction object");
+            assert!(as_interaction_like(&obj).is_some(), "type {t}");
         }
     }
 

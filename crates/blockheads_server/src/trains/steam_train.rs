@@ -511,11 +511,11 @@ impl SteamTrain {
             // `train_car_update_accurate_dt_is_simulation` above already resolved every id the dynamic world knows
             // and cleared it, so an id left here names an absent car: the lookup can only come back empty and the
             // original's clear-on-found step has nothing to clear.
-            if rid != 0 && !self.tc.borrow().right_car.as_ref().map_or(false, |c| c.unique_id() == rid) {
+            if rid != 0 {
                 self.tc.borrow_mut().right_car = dw.train_car_with_id(rid);
             }
             let lid = self.tc.borrow().remote_left_car_id;
-            if lid != 0 && !self.tc.borrow().left_car.as_ref().map_or(false, |c| c.unique_id() == lid) {
+            if lid != 0 {
                 self.tc.borrow_mut().left_car = dw.train_car_with_id(lid);
             }
         }

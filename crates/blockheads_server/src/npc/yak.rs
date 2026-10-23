@@ -647,7 +647,10 @@ mod tests {
         let drops = fx.env.drops.borrow().clone();
         assert_eq!(drops.len() as i32, leather + wheat + horn);
         assert!(drops.iter().take(leather as usize).all(|d| d.0 == 120));
-        assert!(drops.iter().skip(leather as usize).take(horn as usize).all(|d| d.0 == 321));
+        assert_eq!(
+            drops[leather as usize..(leather + horn) as usize].iter().map(|d| d.0).collect::<Vec<_>>(),
+            vec![321; horn as usize]
+        );
         assert!(drops.iter().rev().take(wheat as usize).all(|d| *d == (310, 0x7f, 0x7f, 1)));
         assert_eq!(glibc_rand::rand(), v[3]); // exactly three draws
         fx.env.drops.borrow_mut().clear();
@@ -714,5 +717,19 @@ mod tests {
             &c,
         )
         .is_none());
+    }
+
+    #[test]
+    fn milk_and_hair_come_back_from_the_save_dict() {
+        let fx = fixture();
+        let me = make(&fx, true, None);
+        let mut d = me.get_save_dict(&me);
+        d.map.insert("milk".to_string(), PlistValue::real_f32(12.5));
+        d.map.insert("hair".to_string(), PlistValue::real_f32(7.5));
+        let wr: WorldRef = fx.w.clone();
+        let dr: DynamicWorldRef = fx.dw.clone();
+        let back = Yak::init_with_world_dynamic_world_save_dict_cache(&wr, &dr, &d, None).expect("yak");
+        let y = yak_of(&back).yak.borrow();
+        assert_eq!((y.milk, y.hair), (12.5, 7.5));
     }
 }

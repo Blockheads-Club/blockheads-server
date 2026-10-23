@@ -1516,6 +1516,21 @@ mod tests {
         }
         let p: ObjRef = handle::alloc_obj(|w| Plain(RefCell::new(DynamicObjectBase::alloc_zeroed_with(w))));
         p.dealloc(&p);
+        assert_eq!(p.pos(), p.base().borrow().pos);
         assert_eq!(p.object_type(), MAX_DYNAMIC_OBJECT_TYPES);
+        // the remaining no-op defaults, and the stand-in's own accessors
+        let mut positions = vec![IntPair { x: 1, y: 1 }];
+        p.update_accurate_dt_is_simulation(&p, 0.1, 0.1, false);
+        p.world_changed(&p, &mut positions);
+        p.world_contents_changed(&p, &mut positions);
+        p.water_content_changed(&p, &mut positions);
+        assert!(p.creation_net_data_for_client(&p, None).is_none());
+        assert!(p.update_net_data_for_client(&p, None).is_none());
+        p.blockhead_unloaded(&p, &p);
+        p.blockheads_loaded(&p);
+        p.add_artificial_light_contribution_for_physical_block_loaded_at_x_pos_y_pos(&p, 0, 0);
+        p.child_needs_saving(&p, &p);
+        assert_eq!(p.class_info().name, "DynamicObject");
+        assert!(p.as_any().is::<Plain>());
     }
 }

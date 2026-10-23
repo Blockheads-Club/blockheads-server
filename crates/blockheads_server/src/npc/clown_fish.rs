@@ -1601,10 +1601,7 @@ mod sim_tests {
             let mut g = Gen(seed.wrapping_mul(0x9E3779B97F4A7C15) | 1);
             terrain(&f, &mut g);
             glibc_rand::srand(seed as u32);
-            let me = match make(&f, g.below(2) == 0, true) {
-                Some(m) => m,
-                None => continue,
-            };
+            let me = make(&f, g.below(2) == 0, true).expect("a placed fish spawns in a pool");
             if g.below(5) == 0 {
                 me.base().borrow_mut().is_net = true;
                 let mut s = fish_of(&me).clown_fish.borrow_mut();

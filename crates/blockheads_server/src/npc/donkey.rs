@@ -611,7 +611,7 @@ mod tests {
         let drops = fx.env.drops.borrow().clone();
         assert_eq!(drops.len() as i32, leather + carrots);
         assert!(drops.iter().take(leather as usize).all(|d| d.0 == 120));
-        assert!(drops.iter().skip(leather as usize).all(|d| d == &(71, 0x7f, 0x7f, 1)));
+        assert_eq!(drops[leather as usize..].to_vec(), vec![(71, 0x7f, 0x7f, 1); carrots as usize]);
         // expert
         fx.env.drops.borrow_mut().clear();
         fx.env.expert.set(true);

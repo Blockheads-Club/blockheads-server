@@ -1087,6 +1087,10 @@ mod tests {
         assert!(l.can_be_used_in_expert_mode_when_not_owned());
         assert!(!l.is_paintable());
         assert!(!l.is_double_height());
+        assert!(!l.two_blocks_wide());
+        assert_eq!(me.class_info().name, "InteractionObject");
+        assert!(me.as_any().is::<Plain>());
+        let _ = l.io_state();
         l.remove(&me, None);
         l.set_paused(&me, true);
         l.paint(&me, 5);
@@ -1146,5 +1150,52 @@ mod tests {
         img.is_in_use = 0;
         interaction_object_remote_update(&me, &img.to_vec());
         assert_eq!(*o.removes.borrow(), vec!["remove(false)".to_string()]);
+    }
+
+    #[test]
+    fn owner_name_from_the_save_dict_when_no_client_name_is_given() {
+        let (w, dw, _log) = setup(4, 4);
+        let o = TestIo::new();
+        let me: ObjRef = o.clone();
+        let wr: WorldRef = w.clone();
+        let dr: DynamicWorldRef = dw.clone();
+        let mut sd = crate::objects::base::new_mutable_dict();
+        sd.map.insert("ownerName".to_string(), PlistValue::string("Alice"));
+        assert!(interaction_object_init_with_world_dynamic_world_at_position_cache_item_flipped_save_dict_placed_by_client_client_name(
+            &me, &wr, &dr, IntPair { x: 40, y: 3 }, None, None, false, Some(&sd), Some("cid"), None
+        ));
+        assert_eq!(me.owner_name().as_deref(), Some("Alice"));
+    }
+
+    #[test]
+    fn in_use_without_a_known_blockhead() {
+        let (o, me, _w, _dw, _log) = mk(4);
+        // a second blockheadsLoaded finds the index already resolved
+        interaction_object_blockheads_loaded(&me);
+        o.io.borrow_mut().saved_blockhead_index = -1;
+        interaction_object_blockheads_loaded(&me);
+        // in use by somebody the replica has not met yet: the creation image names the remote id
+        {
+            let mut s = o.io.borrow_mut();
+            s.is_in_use = true;
+            s.current_blockhead = None;
+            s.remote_blockhead_in_use_unique_id = 9;
+        }
+        let nd = interaction_object_interaction_object_creation_net_data(&me);
+        assert_eq!(nd.is_in_use_blockhead_unique_id, 9);
+        // the update has nobody to check
+        interaction_object_update_accurate_dt_is_simulation(&me, 0.1, 0.1, false);
+        assert!(me.is_in_use());
+        // a remote update that names another user, while the current one is no blockhead at all
+        let plain: ObjRef = crate::objects::base::testutil::TestObj::new();
+        o.io.borrow_mut().current_blockhead = Some(plain);
+        let mut img = interaction_object_interaction_object_creation_net_data(&me);
+        img.is_in_use = 1;
+        img.is_in_use_blockhead_unique_id = 12345;
+        interaction_object_remote_update(&me, &img.to_vec());
+        assert!(me.current_blockhead().is_none());
+        // and again with nobody current
+        o.io.borrow_mut().is_in_use = true;
+        interaction_object_remote_update(&me, &img.to_vec());
     }
 }

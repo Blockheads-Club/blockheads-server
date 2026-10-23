@@ -4019,4 +4019,15 @@ mod spec_tests {
         assert_eq!(Npc::max_health(shark_of(&me)), 25);
         let _ = ITEM_SHARK_BUCKET;
     }
+
+    #[test]
+    fn a_full_update_with_a_local_rider_on_board() {
+        let f = fx();
+        let me = calm(&f);
+        npc_state(&me).borrow_mut().rider = Some(uid(1));
+        tick(&me, 0.1);
+        let net_rider = net_obj(2);
+        npc_state(&me).borrow_mut().rider = Some(net_rider);
+        tick(&me, 0.1);
+    }
 }

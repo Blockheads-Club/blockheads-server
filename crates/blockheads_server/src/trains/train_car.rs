@@ -1379,27 +1379,20 @@ pub fn rolling_car_update_after_super(me: &ObjRef, dtc: f32) {
         // replica: resolve pending ids, order right, left, engine
         // `train_car_update_accurate_dt_is_simulation` (the caller's `[super update:]`) already resolved and cleared
         // every id the dynamic world knows, so an id left here names an absent car: the lookup can only come back
-        // empty and the original's clear-on-found step has nothing to clear.
+        // empty and the original's clear-on-found step has nothing to clear. The same update leaves a non-zero id
+        // only while the matching link is still empty (a held link clears its id), so the lookup below never
+        // replaces a car that already carries that id.
         let rid = t.tc().borrow().remote_right_car_id;
         if rid != 0 {
-            let ok = t.tc().borrow().right_car.as_ref().map_or(false, |c| c.unique_id() == rid);
-            if !ok {
-                t.tc().borrow_mut().right_car = dw.train_car_with_id(rid);
-            }
+            t.tc().borrow_mut().right_car = dw.train_car_with_id(rid);
         }
         let lid = t.tc().borrow().remote_left_car_id;
         if lid != 0 {
-            let ok = t.tc().borrow().left_car.as_ref().map_or(false, |c| c.unique_id() == lid);
-            if !ok {
-                t.tc().borrow_mut().left_car = dw.train_car_with_id(lid);
-            }
+            t.tc().borrow_mut().left_car = dw.train_car_with_id(lid);
         }
         let eid = t.tc().borrow().remote_engine_car_id;
         if eid != 0 {
-            let ok = t.tc().borrow().engine_car.as_ref().map_or(false, |c| c.unique_id() == eid);
-            if !ok {
-                t.tc().borrow_mut().engine_car = dw.train_car_with_id(eid);
-            }
+            t.tc().borrow_mut().engine_car = dw.train_car_with_id(eid);
         }
     }
 
@@ -2117,6 +2110,7 @@ mod car_tests {
         tc: RefCell<TrainCarState>,
         world: Weak<World>,
         dw: Weak<DynamicWorld>,
+        engine: std::cell::Cell<bool>,
     }
     impl DynamicObject for BareCar {
         fn base(&self) -> &RefCell<DynamicObjectBase> {
@@ -2133,6 +2127,10 @@ mod car_tests {
         }
     }
     impl TrainCarLike for BareCar {
+        // the one override: lets a single class run both branches of the defaults that read it
+        fn is_engine(&self) -> bool {
+            self.engine.get()
+        }
         fn tc(&self) -> &RefCell<TrainCarState> {
             &self.tc
         }
@@ -2173,8 +2171,22 @@ mod car_tests {
             tc: RefCell::new(TrainCarState::alloc_zeroed()),
             world: Rc::downgrade(&world),
             dw: Rc::downgrade(&dw),
+            engine: std::cell::Cell::new(false),
         });
         assert!(!bare.requires_fuel());
+        // the stand-in's own accessors
+        let bare_obj: ObjRef = bare.clone();
+        assert_eq!(bare_obj.class_info().name, "DynamicObject");
+        assert!(bare_obj.as_any().is::<BareCar>());
+        assert_eq!(bare_obj.object_type(), DOT_TRAIN_CAR_HANDCAR);
+        assert!(bare.tc().borrow().riders[0].is_none());
+        // engineCar: itself when it is the engine, else the ivar
+        assert!(bare.engine_car(&bare_obj).is_none());
+        bare.engine.set(true);
+        assert!(bare.engine_car(&bare_obj).is_some());
+        bare.engine.set(false);
+        assert_eq!(bare_obj.pos(), bare_obj.base().borrow().pos);
+        let _ = (bare.tc_world(), bare.tc_dw());
         assert_eq!(bare.item_type(), 0);
         assert_eq!(bare.action_title(), "RIDE");
         assert_eq!(bare.rider_pos_for_blockhead(&me), [1.0; 4]);
@@ -2187,6 +2199,23 @@ mod car_tests {
         assert!(tc_of(&me).borrow().riders[0].is_some());
         bare.remove_rider(&me, &b);
         assert!(tc_of(&me).borrow().riders[0].is_none());
+        // the creation image names a second rider and every link that is set
+        {
+            let mut st = tc_of(&me).borrow_mut();
+            st.riders[1] = Some(b.clone());
+            st.left_car = Some(bare_obj.clone());
+            st.engine_car = Some(bare_obj.clone());
+        }
+        let cd = train_car_train_car_creation_net_data(&me);
+        assert_eq!(cd.rider1_id, b.unique_id());
+        assert_eq!(cd.left_car_id, bare_obj.unique_id());
+        assert_eq!(cd.engine_car_id, bare_obj.unique_id());
+        {
+            let mut st = tc_of(&me).borrow_mut();
+            st.riders[1] = None;
+            st.left_car = None;
+            st.engine_car = None;
+        }
     }
 
     /// The Ridable / TapChoice faces of every car class.

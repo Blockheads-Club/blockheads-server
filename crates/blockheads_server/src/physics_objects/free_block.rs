@@ -1403,6 +1403,13 @@ mod tests {
         assert_eq!(c[0x32], 1);
         assert!(c[0x33..0x38].iter().all(|b| *b == 0));
         let c2 = o2.creation_net_data_for_client(&o2, None).unwrap();
+        // a free block with a priority blockhead names it
+        let prio: ObjRef = crate::objects::base::testutil::TestObj::new();
+        prio.base().borrow_mut().unique_id = 31337;
+        fb(&o2).st.borrow_mut().priority_blockhead = Some(prio);
+        let c3 = o2.creation_net_data_for_client(&o2, None).unwrap();
+        assert_ne!(c3, c2);
+        fb(&o2).st.borrow_mut().priority_blockhead = None;
         assert_eq!(c2.len(), 0x38);
         assert_eq!(c2[0x32], 0);
         let u = o.update_net_data_for_client(&o, None).unwrap();
@@ -1841,9 +1848,6 @@ mod tests {
         fb(&lv).st.borrow_mut().fall_speed = 0.2;
         for _ in 0..20 {
             lv.update_accurate_dt_is_simulation(&lv, 0.5, 0.5, false);
-            if lv.needs_removed() {
-                break;
-            }
         }
         assert!(lv.needs_removed());
         // a huge frame length is clamped by the min()s

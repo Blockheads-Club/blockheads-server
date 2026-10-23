@@ -605,6 +605,15 @@ mod tests {
     fn beds_burn_and_are_removed() {
         let (w, dw, _r) = flat("fire_bed", 5);
         let bed = bed_at(&dw, 40, 6, 169);
+        {
+            let bo: ObjRef = bed.clone();
+            assert_eq!(bo.class_info().name, "InteractionObject");
+            assert!(bo.as_any().is::<BedStub>());
+            assert_eq!(bo.object_type(), DYNAMIC_OBJECT_TYPE_BED);
+            assert!(bo.as_interaction_object().is_some());
+            assert!(bo.as_interaction_like().is_some());
+            let _ = bed.io_state();
+        }
         let o = FireObject::new(&w, &dw, IntPair { x: 40, y: 6 }, None).unwrap();
         o.update_accurate_dt_is_simulation(&o, 0.01, 0.01, false);
         assert!(!o.needs_removed(), "the bed keeps the fire alive over an air tile");

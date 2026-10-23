@@ -1943,7 +1943,7 @@ mod tests {
         seed(&pc, idx(200, 22), idx(200, 21), 1, 0);
         // without the above probe the scan walks down: (200, 20) is solid ground and a landing cell
         let path = pc.calculate_fall_path();
-        assert!(path.is_none_or(|p| p[0].index != idx(200, 22)));
+        assert!(path.is_none() || path.unwrap()[0].index != idx(200, 22));
     }
 
     #[test]
