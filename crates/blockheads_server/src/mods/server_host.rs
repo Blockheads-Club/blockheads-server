@@ -252,16 +252,12 @@ impl ServerMods {
 }
 
 impl ServerMods {
-    /// Ends a vanilla peer's limbo: the old bare rejection (`0x26 03`), then the peer is removed like any rejected
-    /// one.
+    /// Ends a vanilla peer's limbo: the peer is removed like any dropped one, without a `0x26` (any reason would
+    /// replace the readable welcome text with a misleading message on the client).
     fn drop_limbo(&self, player: &str) {
         let Some(s) = self.srv.upgrade() else { return };
-        s.send_network_data_to_peers_reliable(
-            crate::protocol::messages::rejection(crate::protocol::codec::reject::CLIENT_TOO_OLD),
-            &[player.to_string()],
-            true,
-        );
         if let Some(m) = s.match_() {
+            m.disconnect_player(player);
             m.remove_client(player);
         }
         s.client_finished_away_simulation(player);
@@ -585,8 +581,9 @@ mod tests {
         let pid = limbo_join(&h, "Vic");
         h.m.clear();
         h.send(&pid, &[0x05]);
-        assert_eq!(h.m.packets_to(&pid), vec![vec![0x26, 3]]);
+        assert!(h.m.packets_to(&pid).is_empty());
         assert_eq!(*h.m.removed.borrow(), vec![pid.clone()]);
+        assert_eq!(*h.m.disconnected.borrow(), vec![pid.clone()]);
         // Later packets are ignored.
         h.m.clear();
         h.send(&pid, &[0x05]);
@@ -603,8 +600,9 @@ mod tests {
         mods.0.drop_expired_limbo(Instant::now() + LIMBO_GRACE - std::time::Duration::from_secs(1));
         assert!(h.m.sent.borrow().is_empty());
         mods.0.drop_expired_limbo(Instant::now() + LIMBO_GRACE + std::time::Duration::from_secs(1));
-        assert_eq!(h.m.packets_to(&pid), vec![vec![0x26, 3]]);
-        assert_eq!(*h.m.removed.borrow(), vec![pid]);
+        assert!(h.m.packets_to(&pid).is_empty());
+        assert_eq!(*h.m.removed.borrow(), vec![pid.clone()]);
+        assert_eq!(*h.m.disconnected.borrow(), vec![pid]);
         assert!(h.srv.connected_client_ids().is_empty());
     }
 

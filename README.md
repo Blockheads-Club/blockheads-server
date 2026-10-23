@@ -77,7 +77,7 @@ server's mods, downloads the packages from the server (resumable, SHA-256 checke
 talk over channels. Vanilla clients never receive a protocol byte; when a client mod is required they are not
 let in: they get the world summary with a welcome text ("This server uses Blockheads Club mods. Install the mod loader
 with Patcher ...", shown by the game as its welcome popup) and are dropped 20 seconds later (or with their next packet)
-with the vanilla reason 3. The server never offers a client mod that needs `native`.
+by a plain disconnect (no rejection text, so the popup stays the only message). The server never offers a client mod that needs `native`.
 
 ---
 

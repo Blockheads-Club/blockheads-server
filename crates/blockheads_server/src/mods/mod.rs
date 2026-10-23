@@ -27,7 +27,7 @@ mod server_host;
 pub const MOD_PACKET: u8 = 0xBC;
 
 /// How long a vanilla client waits in the readable-rejection limbo (see [`ModHooks::limbo_join`]) before the server
-/// drops it with the old `0x26 03`.
+/// drops it (no `0x26`).
 pub const LIMBO_GRACE: std::time::Duration = std::time::Duration::from_secs(20);
 
 /// The `welcomeMessage` the vanilla client shows (as "WELCOME TO <WORLD>!") while it is in the limbo.
@@ -126,7 +126,7 @@ pub trait ModHooks {
     /// [`LIMBO_GRACE`]: the caller sends a world summary carrying [`LIMBO_TEXT`] (the vanilla game shows it as the
     /// welcome popup), does not approve the player and returns. `pre_login` is not called for it.
     fn limbo_join(&self, peer: &str, player_id: &str, loader: Option<&LoaderKey>) -> bool;
-    /// A packet arrived from `peer`. True when the peer was in the limbo: it is dropped now (`0x26 03`) and the
+    /// A packet arrived from `peer`. True when the peer was in the limbo: it is dropped now (no `0x26`) and the
     /// packet must be ignored.
     fn limbo_packet(&self, peer: &str) -> bool;
     /// `peer` disconnected or failed: forgets it if it was in the limbo.

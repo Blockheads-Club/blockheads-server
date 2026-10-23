@@ -215,7 +215,7 @@ fn client_mods_reject_vanilla_and_serve_modded_clients() {
 
     // Vanilla client: held in the limbo. It gets the world summary with the readable welcomeMessage (the vanilla
     // game shows it as its welcome popup), is not a player and never sees a 0xBC byte; its next packet ends it
-    // with the old reason 3.
+    // with a plain disconnect (no 0x26).
     let mut v = srv.session("VANILLA");
     assert_eq!(v.join(10_000).unwrap(), JoinOutcome::Approved);
     let summary = v.received().iter().find(|rx| rx.data[0] == 0x01).unwrap().data.clone();
@@ -227,7 +227,9 @@ fn client_mods_reject_vanilla_and_serve_modded_clients() {
     assert_eq!(v.count_of(0x26), 0, "dropped before the grace ended");
     assert_eq!(v.count_of(0x17) + v.count_of(0x05), 0, "a limbo peer is not a player");
     v.request_initial_data().unwrap();
-    assert_eq!(v.wait_for(0x26, 5000).unwrap().unwrap().data, [0x26, 3]);
+    v.run_for(1500).unwrap();
+    assert!(v.state.disconnected, "dropped by its next packet");
+    assert_eq!(v.count_of(0x26), 0, "no rejection reason");
     no_mod_bytes(&v);
 
     // A vanilla client that leaves while in the limbo leaves nothing behind: it can join (limbo) again.

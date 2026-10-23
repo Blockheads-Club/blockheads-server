@@ -76,7 +76,7 @@ installed) and the `bhcModLoader` argument of `ModHooks::pre_login` (the 0x1f ch
   world's own summary for a plain player, `welcomeMessage` = `mods::LIMBO_TEXT`; the vanilla game always shows it as
   its "WELCOME TO <WORLD>!" popup), without approving the player (no `connected_clients` entry, no player record, no
   `client_connected`, no `player-join` / `player-pre-login`). After `mods::LIMBO_GRACE` (20 s), or at once when the
-  peer sends any packet, it gets the old `0x26 03` and is removed; a disconnect just forgets it. Servers without
+  peer sends any packet, it is disconnected without any `0x26` (a reason would replace the readable text with a misleading one); a disconnect just forgets it. Servers without
   client-required mods are unchanged.
 
 The test client's modded mode (`bh_testclient::ModClient`, `bh_client join ADDR --alias A --modded CACHE_DIR`)
