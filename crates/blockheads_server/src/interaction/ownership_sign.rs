@@ -126,18 +126,18 @@ impl OwnershipSign {
     ) -> Option<Rc<OwnershipSign>> {
         let me = Self::alloc(world, dw);
         let me_obj: ObjRef = me.clone();
-        if !sign_init_with_world_dynamic_world_at_position_cache_item_flipped_save_dict_placed_by_client_client_name(
-            &me_obj,
-            pos,
-            cache,
-            item,
-            flipped,
-            save_dict,
-            client_id,
-            client_name,
-        ) {
-            return None;
-        }
+        let init =
+            sign_init_with_world_dynamic_world_at_position_cache_item_flipped_save_dict_placed_by_client_client_name(
+                &me_obj,
+                pos,
+                cache,
+                item,
+                flipped,
+                save_dict,
+                client_id,
+                client_name,
+            );
+        init?;
         me.update_text();
         {
             let mut st = me.st.borrow_mut();
@@ -156,9 +156,7 @@ impl OwnershipSign {
     ) -> Option<Rc<OwnershipSign>> {
         let me = Self::alloc(world, dw);
         let me_obj: ObjRef = me.clone();
-        if !sign_init_with_world_dynamic_world_save_dict_cache(&me_obj, save_dict, cache) {
-            return None;
-        }
+        sign_init_with_world_dynamic_world_save_dict_cache(&me_obj, save_dict, cache)?;
         if save_dict.map.get(&"landOwnerID".to_string()).is_some() {
             let mut st = me.st.borrow_mut();
             st.land_owner_id =
@@ -190,9 +188,7 @@ impl OwnershipSign {
     ) -> Option<Rc<OwnershipSign>> {
         let me = Self::alloc(world, dw);
         let me_obj: ObjRef = me.clone();
-        if !sign_init_with_world_dynamic_world_cache_net_data(&me_obj, cache, net_data) {
-            return None;
-        }
+        sign_init_with_world_dynamic_world_cache_net_data(&me_obj, cache, net_data)?;
         let dict = gunzip_plist(subdata_from(net_data, 0x30));
         {
             let mut st = me.st.borrow_mut();
@@ -208,11 +204,9 @@ impl OwnershipSign {
             }
         }
         me.update_text();
-        for b in dw.blockheads() {
-            if let Some(bh) = handle::downcast::<crate::blockhead::blockhead::Blockhead>(&b) {
-                bh.net_interaction_object_was_loaded(&me_obj);
-            }
-        }
+        let blockheads = dw.blockheads();
+        let loaded = blockheads.iter().filter_map(|b| handle::downcast::<crate::blockhead::blockhead::Blockhead>(b));
+        loaded.for_each(|bh| bh.net_interaction_object_was_loaded(&me_obj));
         Some(me)
     }
 
@@ -679,6 +673,26 @@ mod tests {
     }
 
     #[test]
+    fn plain_dictionaries_and_virtual_remote_updates() {
+        let (w, d, s) = mk("os_plain");
+        let me: ObjRef = s.clone();
+        // a dictionary without owner keys or radii loads with defaults
+        let os = OwnershipSign::from_save_dict(&w, &d, &me.get_save_dict(&me), None).unwrap();
+        assert_eq!((os.land_owner_id(), os.width_radius(), os.height_radius()), (None, 15, 15));
+        // a lone height radius is saved
+        s.set_height_radius(&me, 7);
+        let saved = me.get_save_dict(&me);
+        assert_eq!(saved.map.get(&"h".to_string()).unwrap().int_value(), 7);
+        assert!(saved.map.get(&"w".to_string()).is_none());
+        // remote updates arrive through the object
+        let mut upd = me.creation_net_data_for_client(&me, None).unwrap();
+        me.remote_update(&me, &upd);
+        upd.truncate(0x30);
+        me.remote_update(&me, &upd);
+        assert_eq!(s.width_radius(), 15);
+    }
+
+    #[test]
     fn set_needs_removed_notifies_world_only_when_removed() {
         let (_w, _d, s) = mk("os_e");
         let me: ObjRef = s.clone();
@@ -686,5 +700,179 @@ mod tests {
         assert!(!me.needs_removed());
         me.set_needs_removed(&me, true);
         assert!(me.needs_removed());
+    }
+
+    use crate::objects::interaction_object::testutil::TestBh;
+
+    #[test]
+    fn replicas_carry_owner_and_radii() {
+        let (w, d, _pb) = mk_world("os_net");
+        let it = InventoryItem::new(ItemType(301), 0, 0, None, None);
+        let s = OwnershipSign::new(&w, &d, IntPair { x: 10, y: 10 }, None, Some(&it.borrow()), false, None, None, None)
+            .unwrap();
+        let me: ObjRef = s.clone();
+        s.set_land_owner_id_name(&me, Some("lo"), Some("Lana"));
+        s.set_width_radius(&me, 40);
+        s.set_height_radius(&me, 0);
+        assert_eq!((s.width_radius(), s.height_radius()), (30, 1));
+        let bytes = me.creation_net_data_for_client(&me, None).unwrap();
+        assert_eq!(bytes, me.update_net_data_for_client(&me, None).unwrap());
+        let (bw, _bd, bdw) = crate::blockhead::blockhead::testutil::setup();
+        d.blockheads.borrow_mut().push(crate::blockhead::blockhead::testutil::new_bh(&bw, &bdw, 0));
+        assert_eq!(d.blockheads().len(), 1);
+        assert!(
+            crate::objects::handle::downcast::<crate::blockhead::blockhead::Blockhead>(&d.blockheads()[0]).is_some()
+        );
+        let rep = OwnershipSign::from_net_data(&w, &d, None, &bytes).unwrap();
+        d.blockheads.borrow_mut().clear();
+        assert_eq!(rep.land_owner_id().as_deref(), Some("lo"));
+        assert_eq!(rep.land_owner_name().as_deref(), Some("Lana"));
+        assert_eq!((rep.width_radius(), rep.height_radius()), (30, 1));
+        assert_eq!(rep.text().as_deref(), Some("AREA PROTECTED\nOWNED BY\nLana"));
+        // a record without owner or radii keeps the defaults
+        let bare =
+            OwnershipSign::new(&w, &d, IntPair { x: 14, y: 10 }, None, Some(&it.borrow()), false, None, None, None)
+                .unwrap();
+        let bm: ObjRef = bare.clone();
+        let rep2 =
+            OwnershipSign::from_net_data(&w, &d, None, &bm.creation_net_data_for_client(&bm, None).unwrap()).unwrap();
+        assert_eq!((rep2.width_radius(), rep2.height_radius()), (15, 15));
+        assert_eq!(rep2.land_owner_id(), None);
+        // refusals
+        let mut far = bytes.clone();
+        far[8..12].copy_from_slice(&900u32.to_le_bytes());
+        far[12..16].copy_from_slice(&900u32.to_le_bytes());
+        assert!(OwnershipSign::from_net_data(&w, &d, None, &far).is_none());
+        let e = crate::foundation::exception::catch_ns(|| {
+            OwnershipSign::from_net_data(&w, &d, None, &bytes[..0x2c]).is_some()
+        })
+        .unwrap_err();
+        assert_eq!(e.name, "NSRangeException");
+    }
+
+    fn mk_world(name: &str) -> (Rc<World>, Rc<DynamicWorld>, crate::world::state::PhysicalBlockRef) {
+        let (w, d, pb) = world_with_block(name);
+        for x in 0..32 {
+            tile(pb, x, 9).set_type_index(6);
+        }
+        (w, d, pb)
+    }
+
+    #[test]
+    fn setters_tell_the_world_unless_replicated() {
+        let (_w, _d, s) = mk("os_setters");
+        let me: ObjRef = s.clone();
+        // unchanged values do nothing
+        s.set_width_radius(&me, 15);
+        s.set_height_radius(&me, 15);
+        assert!(!me.update_needs_to_be_sent());
+        s.set_width_radius(&me, 20);
+        s.set_height_radius(&me, 21);
+        assert_eq!((s.width_radius(), s.height_radius()), (20, 21));
+        assert!(me.update_needs_to_be_sent());
+        // a new owner, a case-only change of the same owner, an owner without a name
+        s.set_land_owner_id_name(&me, Some("a"), Some("Ann"));
+        s.set_land_owner_id_name(&me, Some("b"), Some("Bob"));
+        assert_eq!(s.land_owner_name().as_deref(), Some("Bob"));
+        s.set_land_owner_id_name(&me, Some("B"), Some("Bobby"));
+        assert_eq!(s.land_owner_name().as_deref(), Some("Bob"));
+        s.set_land_owner_id_name(&me, Some("c"), None);
+        assert_eq!(s.land_owner_id().as_deref(), Some("b"));
+        // replicas never tell the world
+        s.base.borrow_mut().is_net = true;
+        s.set_width_radius(&me, 5);
+        s.set_height_radius(&me, 6);
+        s.set_land_owner_id_name(&me, Some("d"), Some("Dee"));
+        assert_eq!((s.width_radius(), s.height_radius()), (5, 6));
+        assert_eq!(s.land_owner_id().as_deref(), Some("d"));
+    }
+
+    #[test]
+    fn remote_dictionaries_report_changes() {
+        let (_w, _d, s) = mk("os_remote");
+        let me: ObjRef = s.clone();
+        let dict = |id: Option<&str>, w: Option<i64>| {
+            let mut d = crate::objects::base::new_mutable_dict();
+            if let Some(i) = id {
+                d.map.insert("landOwnerID".to_string(), PlistValue::string(i));
+            }
+            if let Some(w) = w {
+                d.map.insert("w".to_string(), PlistValue::int(w));
+                d.map.insert("h".to_string(), PlistValue::int(w));
+            }
+            d
+        };
+        // none -> none, none -> some, some -> none, some -> same, some -> other
+        s.load_remote_update_data_dict(&me, &dict(None, None));
+        s.load_remote_update_data_dict(&me, &dict(Some("x"), None));
+        assert_eq!(s.land_owner_id().as_deref(), Some("x"));
+        s.load_remote_update_data_dict(&me, &dict(None, None));
+        assert_eq!(s.land_owner_id(), None);
+        s.load_remote_update_data_dict(&me, &dict(Some("x"), Some(4)));
+        s.load_remote_update_data_dict(&me, &dict(Some("X"), Some(4)));
+        s.load_remote_update_data_dict(&me, &dict(Some("y"), Some(4)));
+        assert_eq!((s.width_radius(), s.height_radius()), (4, 4));
+        // replicas do not report
+        s.base.borrow_mut().is_net = true;
+        s.load_remote_update_data_dict(&me, &dict(Some("z"), Some(9)));
+        assert_eq!(s.land_owner_id().as_deref(), Some("z"));
+    }
+
+    #[test]
+    fn object_views_and_removal() {
+        let (w, d, pb) = mk_world("os_views");
+        let it = InventoryItem::new(ItemType(301), 0, 0, None, None);
+        let s = OwnershipSign::new(
+            &w,
+            &d,
+            IntPair { x: 10, y: 10 },
+            None,
+            Some(&it.borrow()),
+            false,
+            None,
+            Some("c7"),
+            None,
+        )
+        .unwrap();
+        let me: ObjRef = s.clone();
+        assert_eq!(me.class_info().name, "OwnershipSign");
+        assert!(me.as_any().downcast_ref::<OwnershipSign>().is_some());
+        assert!(me.as_interaction_object().is_some() && me.as_interaction_like().is_some());
+        assert!(me.as_sign_text().is_some());
+        assert!(me.should_add_to_macro_block() && me.occupies_foreground_contents());
+        assert!(me.free_block_creation_save_dict(&me).is_some());
+        assert!(s.requires_human_interaction());
+        assert_eq!(s.two_blocks_wide(), s.offset_type() != 0);
+        assert!(s.io_state().borrow().current_blockhead.is_none());
+        assert_eq!(s.links().world().custom_rules().custom_rules_enabled, 0);
+        let st = SignTextDynamicObject::requires_single_line_text_editing(&*s);
+        assert!(!st);
+        SignTextDynamicObject::set_text(&*s, &me, Some("custom"));
+        assert_eq!(SignTextDynamicObject::text(&*s).as_deref(), Some("custom"));
+        me.update_accurate_dt_is_simulation(&me, 0.1, 0.1, false);
+        me.blockheads_loaded(&me);
+        let bh: ObjRef = TestBh::new(1, false);
+        me.blockhead_unloaded(&me, &bh);
+        me.world_changed(&me, &mut vec![IntPair { x: 30, y: 30 }]);
+        // painting and using
+        s.paint(&me, 3);
+        assert!(me.update_needs_to_be_sent());
+        let user: ObjRef = TestBh::new(7, false);
+        assert!(!s.can_be_used_by_blockhead(&me, &user));
+        w.set_is_admin(true);
+        assert!(s.can_be_used_by_blockhead(&me, &user));
+        // removal frees the tile and tells the world
+        s.remove(&me, None);
+        assert!(me.needs_removed());
+        assert_eq!(tile(pb, 10, 10).foreground_contents(), 0);
+        me.dealloc(&me);
+        assert_eq!((s.land_owner_id(), s.text()), (None, None));
+        // replicas that are removed stay quiet
+        let r = OwnershipSign::new(&w, &d, IntPair { x: 20, y: 10 }, None, Some(&it.borrow()), false, None, None, None)
+            .unwrap();
+        r.base.borrow_mut().is_net = true;
+        let rm: ObjRef = r.clone();
+        rm.set_needs_removed(&rm, true);
+        assert!(rm.needs_removed());
     }
 }
