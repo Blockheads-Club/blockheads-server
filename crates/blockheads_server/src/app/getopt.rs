@@ -11,33 +11,35 @@ pub struct LongOption {
     pub val: u8,
 }
 
-const fn lo(name: &'static str, has_arg: bool, val: u8) -> LongOption {
-    LongOption { name, has_arg, val }
+macro_rules! lo {
+    ($name:expr, $has_arg:expr, $val:expr) => {
+        LongOption { name: $name, has_arg: $has_arg, val: $val }
+    };
 }
 
 /// The long option table; the order is part of the contract (ambiguity lists).
 pub static LONGOPTS: [LongOption; 21] = [
-    lo("list", false, b'l'),
-    lo("help", false, b'h'),
-    lo("new", true, b'n'),
-    lo("load", true, b'o'),
-    lo("port", true, b'p'),
-    lo("max_players", true, b'm'),
-    lo("rename-from", true, b'r'),
-    lo("rename-to", true, b't'),
-    lo("delete", true, b'd'),
-    lo("force", false, b'f'),
-    lo("save_delay", true, b's'),
-    lo("world_width", true, b'w'),
-    lo("world_id", true, b'i'),
-    lo("credit", true, b'c'),
-    lo("cloud_salt", true, b'k'),
-    lo("owner_name", true, b'u'),
-    lo("privacy", true, b'P'),
-    lo("custom-rules", true, b'C'),
-    lo("convert-to-custum-rules", false, b'V'),
-    lo("expert-mode", false, b'e'),
-    lo("no-exit", false, b'N'),
+    lo!("list", false, b'l'),
+    lo!("help", false, b'h'),
+    lo!("new", true, b'n'),
+    lo!("load", true, b'o'),
+    lo!("port", true, b'p'),
+    lo!("max_players", true, b'm'),
+    lo!("rename-from", true, b'r'),
+    lo!("rename-to", true, b't'),
+    lo!("delete", true, b'd'),
+    lo!("force", false, b'f'),
+    lo!("save_delay", true, b's'),
+    lo!("world_width", true, b'w'),
+    lo!("world_id", true, b'i'),
+    lo!("credit", true, b'c'),
+    lo!("cloud_salt", true, b'k'),
+    lo!("owner_name", true, b'u'),
+    lo!("privacy", true, b'P'),
+    lo!("custom-rules", true, b'C'),
+    lo!("convert-to-custum-rules", false, b'V'),
+    lo!("expert-mode", false, b'e'),
+    lo!("no-exit", false, b'N'),
 ];
 
 /// The short option string handed to `getopt_long_only`.
@@ -115,9 +117,8 @@ impl Getopt {
             if self.last_nonopt > self.optind {
                 self.last_nonopt = self.optind;
             }
-            if self.first_nonopt > self.optind {
-                self.first_nonopt = self.optind;
-            }
+            // glibc also clamps `first_nonopt` to `optind` here; that only matters when a caller rewinds `optind`
+            // and there is no setter, so `first_nonopt <= optind` always holds.
             if self.first_nonopt != self.last_nonopt && self.last_nonopt != self.optind {
                 self.exchange();
             } else if self.last_nonopt != self.optind {
@@ -281,82 +282,171 @@ pub fn stderr_sink(m: &[u8]) {
 }
 
 #[cfg(test)]
+#[path = "getopt_golden.rs"]
+mod golden;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
-    fn dir() -> String {
-        crate::testenv::modules("app_cli_getopt")
-    }
+    type Outcome = (Vec<(i32, Option<String>)>, Vec<String>, Vec<String>, usize);
 
-    /// Same output format as ``.
-    fn run(corpus: &[u8]) -> String {
-        let mut out: Vec<String> = Vec::new();
-        let mut optopt = 0;
-        let text = corpus;
-        let mut lines: Vec<&[u8]> = text.split(|&b| b == b'\n').collect();
-        lines.pop();
-        let lossy = |b: &[u8]| String::from_utf8_lossy(b).into_owned();
-        for (n, line) in lines.iter().enumerate() {
-            let args: Vec<Vec<u8>> =
-                if line.is_empty() { vec![] } else { line.split(|&b| b == b'\t').map(|s| s.to_vec()).collect() };
-            let mut argv = vec![b"/opt/blockheads/blockheads_server171".to_vec()];
-            argv.extend(args.iter().cloned());
-            let mut hdr = format!("### {}:", n);
-            for a in &args {
-                hdr.push_str(&format!(" [{}]", lossy(a)));
+    /// Run `getopt_long_only` to the end (or the first `?`/`h`): options with optarg, diagnostics, final argv, optind.
+    fn collect(args: &[&str]) -> Outcome {
+        let mut argv = vec![b"prog".to_vec()];
+        argv.extend(args.iter().map(|a| a.as_bytes().to_vec()));
+        let mut g = Getopt::new(argv);
+        let (mut opts, mut errs) = (Vec::new(), Vec::new());
+        loop {
+            let mut diag = Vec::new();
+            let o = g.next(&mut |m| diag.push(String::from_utf8_lossy(m).into_owned()));
+            errs.extend(diag);
+            if o == -1 {
+                break;
             }
-            out.push(hdr);
-            let mut g = Getopt::new(argv);
-            g.set_optopt(optopt);
-            loop {
-                let mut diag: Vec<String> = Vec::new();
-                let o = g.next(&mut |m| diag.push(lossy(m)));
-                out.extend(diag);
-                if o == -1 {
-                    break;
-                }
-                let ch = if o > 32 && o < 127 { (o as u8 as char).to_string() } else { ".".to_string() };
-                let oa = g.optarg().map(lossy).unwrap_or_else(|| "(null)".to_string());
-                out.push(format!("opt={}('{}') optarg={} optopt={} optind={}", o, ch, oa, g.optopt(), g.optind()));
-                if o == b'h' as i32 || o == b'?' as i32 {
-                    break;
-                }
+            opts.push((o, g.optarg().map(|a| String::from_utf8_lossy(a).into_owned())));
+            if o == b'?' as i32 {
+                break;
             }
-            optopt = g.optopt();
-            let mut e = format!("end optind={} rest:", g.optind());
-            for a in &g.argv()[1..] {
-                e.push_str(&format!(" [{}]", lossy(a)));
-            }
-            out.push(e);
         }
-        out.join("\n")
+        let rest = g.argv()[1..].iter().map(|a| String::from_utf8_lossy(a).into_owned()).collect();
+        (opts, errs, rest, g.optind())
     }
 
-    fn check(tsv: &str, expected: &str) {
-        let (Ok(corpus), Ok(exp)) =
-            (std::fs::read(format!("{}/{tsv}", dir())), std::fs::read_to_string(format!("{}/{expected}", dir())))
-        else {
-            eprintln!("SKIP: private getopt corpus unavailable (set BH_PRIVATE_DOCS)");
-            return;
-        };
-        let got = run(&corpus);
-        let (g, e): (Vec<&str>, Vec<&str>) =
-            (got.split('\n').collect(), exp.trim_end_matches('\n').split('\n').collect());
-        for (i, (a, b)) in g.iter().zip(e.iter()).enumerate() {
-            assert_eq!(a, b, "{tsv} line {i}");
-        }
-        assert_eq!(g.len(), e.len(), "{tsv} line count");
+    fn o(c: u8, a: Option<&str>) -> (i32, Option<String>) {
+        (c as i32, a.map(str::to_string))
     }
 
-    /// 220 hand vectors against the real libc.
     #[test]
-    fn corpus() {
-        check("corpus.tsv", "corpus_expected.txt");
+    fn long_options_exact_abbreviated_and_with_values() {
+        let (opts, errs, rest, ind) =
+            collect(&["--list", "-help", "--port=1234", "--new", "w1", "-load=x", "--max_p", "8"]);
+        assert_eq!(
+            opts,
+            vec![
+                o(b'l', None),
+                o(b'h', None),
+                o(b'p', Some("1234")),
+                o(b'n', Some("w1")),
+                o(b'o', Some("x")),
+                o(b'm', Some("8"))
+            ]
+        );
+        assert!(errs.is_empty());
+        assert_eq!(rest.len(), 8);
+        assert_eq!(ind, 9);
     }
 
-    /// 3000 fuzz vectors against the real libc.
     #[test]
-    fn fuzz() {
-        check("fuzz.tsv", "fuzz_expected.txt");
+    fn non_options_are_permuted_to_the_end() {
+        let (opts, _, rest, ind) = collect(&["a", "-l", "b", "-", "-h", "c"]);
+        assert_eq!(opts, vec![o(b'l', None), o(b'h', None)]);
+        assert_eq!(rest, ["-l", "-h", "a", "b", "-", "c"]);
+        assert_eq!(ind, 3);
+    }
+
+    #[test]
+    fn double_dash_ends_the_options() {
+        let (opts, _, rest, ind) = collect(&["-l", "--", "-h", "x"]);
+        assert_eq!(opts, vec![o(b'l', None)]);
+        assert_eq!(rest, ["-l", "--", "-h", "x"].map(String::from));
+        assert_eq!(ind, 3);
+        let (opts, _, rest, ind) = collect(&["x", "--", "-h"]);
+        assert!(opts.is_empty());
+        assert_eq!(rest, ["--", "x", "-h"].map(String::from));
+        assert_eq!(ind, 2);
+        let (opts, _, _, ind) = collect(&["--"]);
+        assert!(opts.is_empty());
+        assert_eq!(ind, 2);
+        let (_, _, rest, _) = collect(&["x", "-l", "--", "y"]);
+        assert_eq!(rest, ["-l", "--", "x", "y"].map(String::from));
+    }
+
+    #[test]
+    fn clusters_and_attached_arguments() {
+        let (opts, errs, _, _) = collect(&["-lfe", "-p80", "-n", "w", "-NV"]);
+        assert_eq!(
+            opts,
+            vec![
+                o(b'l', None),
+                o(b'f', None),
+                o(b'e', None),
+                o(b'p', Some("80")),
+                o(b'n', Some("w")),
+                o(b'N', None),
+                o(b'V', None)
+            ]
+        );
+        assert!(errs.is_empty());
+    }
+
+    #[test]
+    fn short_option_diagnostics() {
+        let (opts, errs, _, _) = collect(&["-n"]);
+        assert_eq!(opts, vec![o(b'?', None)]);
+        assert_eq!(errs, ["prog: option requires an argument -- 'n'"]);
+        let (opts, errs, _, _) = collect(&["-lz"]);
+        assert_eq!(opts, vec![o(b'l', None), o(b'?', None)]);
+        assert_eq!(errs, ["prog: unrecognized option '-z'"]);
+        let (_, errs, _, _) = collect(&["-:"]);
+        assert_eq!(errs, ["prog: invalid option -- ':'"]);
+    }
+
+    #[test]
+    fn long_option_diagnostics() {
+        let (_, errs, _, _) = collect(&["--nosuch"]);
+        assert_eq!(errs, ["prog: unrecognized option '--nosuch'"]);
+        let (_, errs, _, _) = collect(&["-zzz"]);
+        assert_eq!(errs, ["prog: unrecognized option '-zzz'"]);
+        let (_, errs, _, _) = collect(&["--list=1"]);
+        assert_eq!(errs, ["prog: option '--list' doesn't allow an argument"]);
+        let (_, errs, _, _) = collect(&["-list=1"]);
+        assert_eq!(errs, ["prog: option '-list' doesn't allow an argument"]);
+        let (opts, errs, _, _) = collect(&["--port"]);
+        assert_eq!(opts, vec![o(b'?', None)]);
+        assert_eq!(errs, ["prog: option '--port' requires an argument"]);
+        let (_, errs, _, _) = collect(&["--max"]);
+        assert_eq!(errs.len(), 1);
+        let (_, errs, _, _) = collect(&["--c"]);
+        assert_eq!(
+            errs,
+            ["prog: option '--c' is ambiguous; possibilities: '--credit' '--convert-to-custum-rules' '--custom-rules' '--cloud_salt'"]
+        );
+        // An exact match wins over longer names sharing its prefix.
+        let (opts, errs, _, _) = collect(&["--new", "x"]);
+        assert_eq!(opts, vec![o(b'n', Some("x"))]);
+        assert!(errs.is_empty());
+        let (opts, _, _, _) = collect(&["--no-exit", "--co"]);
+        assert_eq!(opts[0], o(b'N', None));
+    }
+
+    #[test]
+    fn accessors_and_sticky_optopt() {
+        let mut g = Getopt::new(vec![b"prog".to_vec(), b"-z".to_vec()]);
+        g.set_optopt(7);
+        assert_eq!(g.optopt(), 7);
+        let mut seen = Vec::new();
+        assert_eq!(g.next(&mut |m| seen.push(m.to_vec())), b'?' as i32);
+        assert_eq!(g.optopt(), 0);
+        assert_eq!(seen.len(), 1);
+        assert_eq!(g.optarg(), None);
+        assert_eq!(g.next(&mut |_| ()), -1);
+        assert_eq!(g.optind(), 2);
+    }
+
+    #[test]
+    fn calling_again_after_the_end_keeps_returning_the_end() {
+        let mut g = Getopt::new(["prog", "-l", "--", "x", "y"].map(|a| a.as_bytes().to_vec()).to_vec());
+        assert_eq!(g.next(&mut |_| ()), b'l' as i32);
+        assert_eq!(g.next(&mut |_| ()), -1);
+        assert_eq!(g.optind(), 3);
+        // optind now sits below last_nonopt; the state is clamped, not corrupted.
+        assert_eq!(g.next(&mut |_| ()), -1);
+        assert_eq!(g.optind(), 3);
+    }
+
+    #[test]
+    fn stderr_sink_writes_without_panicking() {
+        stderr_sink(b"prog: test message from the getopt unit test");
     }
 }
