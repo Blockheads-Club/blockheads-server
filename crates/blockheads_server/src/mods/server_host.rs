@@ -573,7 +573,7 @@ mod tests {
         assert!(pk.iter().all(|p| p[0] != 0x26));
         assert!(h.srv.connected_client_ids().is_empty());
         assert!(h.srv.unapproved_clients.borrow().is_empty());
-        assert!(!h.w.calls.borrow().iter().any(|c| c.starts_with("client_connected")));
+        assert!(!h.w.calls.borrow().join("|").contains("client_connected"));
         assert!(h.m.approved.borrow().is_empty() && h.m.removed.borrow().is_empty());
         pid
     }
