@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use bhmod_proto::{mods_hash, FileRequest, Hello, ModInfo, ModPermissions, Ready, CHUNK_SIZE, PACKET_TYPE};
 
@@ -341,4 +342,31 @@ fn loader_check() {
     n.catalog.client_required = false;
     assert_eq!(n.check_loader(&l, "v", None), None);
     assert_eq!(pre_login_text(11), "A server mod refused the join (reason 11).");
+}
+
+#[test]
+fn limbo_holds_vanilla_peers_until_the_grace_ends() {
+    let mut n = net();
+    let now = Instant::now();
+    let grace = Duration::from_secs(20);
+    // Only a vanilla peer (no HELLO, no key) on a server with client-required mods.
+    assert!(n.wants_limbo("v", None));
+    assert!(!n.wants_limbo("v", Some(&LoaderKey::default())));
+    n.packet(&Fake::default(), "m", &hello(1), &[]);
+    assert!(!n.wants_limbo("m", None));
+    n.catalog.client_required = false;
+    assert!(!n.wants_limbo("v", None));
+    // The grace ends exactly at its deadline; either name ends the limbo once.
+    n.enter_limbo("e1", "p1", now, grace);
+    n.enter_limbo("e2", "p2", now + grace, grace);
+    n.enter_limbo("e3", "p3", now, grace);
+    assert!(n.expired_limbo(now + grace - Duration::from_millis(1)).is_empty());
+    assert_eq!(n.expired_limbo(now + grace), vec!["p1".to_string(), "p3".to_string()]);
+    assert_eq!(n.expired_limbo(now + grace * 2), vec!["p2".to_string()]);
+    assert!(n.expired_limbo(now + grace * 3).is_empty());
+    n.enter_limbo("e4", "p4", now, grace);
+    n.enter_limbo("e5", "p5", now, grace);
+    assert_eq!(n.leave_limbo("e4"), Some("p4".to_string()));
+    assert_eq!(n.leave_limbo("p5"), Some("p5".to_string()));
+    assert_eq!(n.leave_limbo("p5"), None);
 }
