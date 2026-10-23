@@ -590,3 +590,179 @@ fn modded_client_edge_cases() {
     std::fs::write(cache.join(format!("{}.bhmod", "zz".repeat(32))), b"").unwrap();
     assert!(ModClient::new(LoaderOptions::new(&cache)).cached().is_empty());
 }
+
+/// An original 1x1 PNG for the content fixture (not game art).
+const TINY_PNG: &[u8] = &[
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 1, 0, 0, 0, 1, 8,
+    6, 0, 0, 0, 0x1f, 0x15, 0xc4, 0x89, 0, 0, 0, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0xf8, 0xcf, 0xc0,
+    0xf0, 0x1f, 0, 5, 0, 2, 1, 0xa5, 0xf6, 0x45, 0x40, 0, 0, 0, 0, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+];
+
+/// A content mod with a client half (cosmetics) and a server half that equips them with commands.
+fn hats_mod(mods: &Path) {
+    let hats = mods.join("hats");
+    std::fs::create_dir_all(hats.join("client")).unwrap();
+    std::fs::create_dir_all(hats.join("server")).unwrap();
+    std::fs::create_dir_all(hats.join("assets")).unwrap();
+    std::fs::write(
+        hats.join("mod.toml"),
+        "schema = 1\nid = \"hats\"\nversion = \"1.0.0\"\nname = { en = \"Hats\" }\nauthors = [\"me\"]\nlicense = \"MIT\"\n\
+         api = \"^0.3\"\n[sides]\nserver = true\nclient = true\n[entry]\n\
+         server = { runtime = \"lua\", path = \"server/main.luau\" }\n\
+         client = { runtime = \"lua\", path = \"client/main.luau\" }\n\
+         [content]\ncosmetics = [\n\
+         { key = \"hats:crown\", slot = \"hat\", base = \"linen-cap\", texture = \"assets/crown.png\" },\n\
+         { key = \"hats:ember\", slot = \"hair\", texture = \"assets/crown.png\" },\n]\n",
+    )
+    .unwrap();
+    std::fs::write(hats.join("client/main.luau"), "return {}").unwrap();
+    std::fs::write(
+        hats.join("server/main.luau"),
+        r#"--!strict
+local mod = {}
+function mod.on_enable()
+	bh.commands.register({ name = "wear", description = "Wear.", usage = "/wear <key>" }, function(sender, label, args)
+		local ok, err = pcall(bh.content.equip, sender.player, args[1])
+		return { handled = true, reply = { if ok then "worn" else "refused" } }
+	end)
+	bh.commands.register({ name = "strip", description = "Strip.", usage = "/strip <slot>" }, function(sender, label, args)
+		bh.content.unequip(sender.player, args[1])
+		return { handled = true, reply = { "stripped" } }
+	end)
+end
+return mod
+"#,
+    )
+    .unwrap();
+    std::fs::write(hats.join("assets/crown.png"), TINY_PNG).unwrap();
+}
+
+fn cosmetic_msgs(s: &Session) -> Vec<bhmod_proto::Cosmetics> {
+    mod_packets(s, 0x12)
+        .iter()
+        .map(|p| match Message::decode(p).unwrap() {
+            Message::Cosmetics(c) => c,
+            m => panic!("{m:?}"),
+        })
+        .collect()
+}
+
+fn wait_cosmetics(s: &mut Session, count: usize) {
+    let end = Instant::now() + Duration::from_secs(5);
+    while cosmetic_msgs(s).len() < count && Instant::now() < end {
+        s.run_for(50).unwrap();
+    }
+}
+
+#[test]
+fn content_mods_get_ids_and_the_cosmetics_table() {
+    let _w = watchdog("content_mods", 240);
+    let tmp = tempfile::tempdir().unwrap();
+    let (data, wid) = world(tmp.path());
+    let mods = tmp.path().join("mods");
+    hats_mod(&mods);
+    let mut srv = start(&data, &wid, 15479, &mods);
+
+    let mut s = srv.session("MODDER");
+    let mut mc = ModClient::new(LoaderOptions::new(&tmp.path().join("cache")));
+    assert_eq!(mc.join(&mut s, 10_000).unwrap(), JoinOutcome::Approved, "{}", srv.log());
+    let list = mc.list.clone().expect("a content mod is client-required, so the list was fetched");
+    let cos = &list.registry["cosmetics"];
+    assert_eq!((cos["hats:crown"], cos["hats:ember"]), (1, 2));
+    assert_eq!(list.registry.len(), 1);
+    // The table arrives right after approval: full, nobody wears anything yet.
+    wait_cosmetics(&mut s, 1);
+    assert_eq!(
+        cosmetic_msgs(&s),
+        vec![bhmod_proto::Cosmetics { full: true, players: Default::default() }],
+        "{}",
+        srv.log()
+    );
+    // The ids are in the world's sidecar.
+    let side = walk(tmp.path()).into_iter().find(|p| p.ends_with("mods/registry.toml")).expect("registry.toml");
+    let text = std::fs::read_to_string(&side).unwrap();
+    assert!(text.contains("\"hats:crown\" = 1") && text.contains("\"hats:ember\" = 2"), "{text}");
+
+    // A second modded player watches. The mod equips through bh.content: deltas reach both, vanilla gets nothing.
+    let mut watcher = srv.session("WATCHER");
+    let mut wc = ModClient::new(LoaderOptions::new(&tmp.path().join("cache2")));
+    assert_eq!(wc.join(&mut watcher, 10_000).unwrap(), JoinOutcome::Approved, "{}", srv.log());
+    wait_cosmetics(&mut watcher, 1);
+    let me = Identity::new("MODDER").player_id();
+    s.chat("/wear hats:crown").unwrap();
+    wait_cosmetics(&mut s, 2);
+    wait_cosmetics(&mut watcher, 2);
+    for sess in [&s, &watcher] {
+        let last = cosmetic_msgs(sess).pop().unwrap();
+        assert!(!last.full);
+        assert_eq!(last.players, [(me.clone(), [("hat".to_string(), 1)].into())].into(), "{}", srv.log());
+    }
+    // Another slot adds to the set; a cosmetic of a wrong key is refused (nothing is sent).
+    s.chat("/wear hats:ember").unwrap();
+    s.chat("/wear hats:nope").unwrap();
+    s.chat("/wear other:crown").unwrap();
+    wait_cosmetics(&mut watcher, 3);
+    s.run_for(300).unwrap();
+    assert_eq!(cosmetic_msgs(&watcher).len(), 3, "{}", srv.log());
+    let last = cosmetic_msgs(&watcher).pop().unwrap();
+    assert_eq!(last.players[&me], [("hair".to_string(), 2), ("hat".to_string(), 1)].into());
+    s.chat("/strip hat").unwrap();
+    wait_cosmetics(&mut watcher, 4);
+    assert_eq!(cosmetic_msgs(&watcher).pop().unwrap().players[&me], [("hair".to_string(), 2)].into());
+    // A late joiner gets the table in its first message; the wearer leaving clears it for the others.
+    let mut late = srv.session("LATE");
+    let mut lc = ModClient::new(LoaderOptions::new(&tmp.path().join("cache3")));
+    assert_eq!(lc.join(&mut late, 10_000).unwrap(), JoinOutcome::Approved, "{}", srv.log());
+    wait_cosmetics(&mut late, 1);
+    let first = cosmetic_msgs(&late).remove(0);
+    assert!(first.full);
+    assert_eq!(first.players[&me], [("hair".to_string(), 2)].into());
+    s.disconnect();
+    wait_cosmetics(&mut watcher, 5);
+    let gone = cosmetic_msgs(&watcher).pop().unwrap();
+    assert_eq!(gone.players, [(me.clone(), Default::default())].into(), "{}", srv.log());
+    assert_eq!(srv.handle.stop(), Status::Stopped(0));
+}
+
+#[test]
+fn a_broken_registry_turns_content_off_without_touching_the_file() {
+    let _w = watchdog("broken_registry", 240);
+    let tmp = tempfile::tempdir().unwrap();
+    let (data, wid) = world(tmp.path());
+    let mods = tmp.path().join("mods");
+    hats_mod(&mods);
+    let mut srv = start(&data, &wid, 15481, &mods);
+    assert_eq!(srv.handle.stop(), Status::Stopped(0));
+    let side = walk(tmp.path()).into_iter().find(|p| p.ends_with("mods/registry.toml")).expect("registry.toml");
+    std::fs::write(&side, "not = valid [").unwrap();
+    let mut srv = start(&data, &wid, 15481, &mods);
+    assert!(srv.log().contains("content is off"), "{}", srv.log());
+    let mut s = srv.session("MODDER");
+    let mut mc = ModClient::new(LoaderOptions::new(&tmp.path().join("cache")));
+    assert_eq!(mc.join(&mut s, 10_000).unwrap(), JoinOutcome::Approved, "{}", srv.log());
+    s.run_for(500).unwrap();
+    assert!(mc.list.unwrap().registry.is_empty());
+    assert!(mod_packets(&s, 0x12).is_empty());
+    s.chat("/wear hats:crown").unwrap();
+    s.run_for(500).unwrap();
+    assert!(mod_packets(&s, 0x12).is_empty());
+    assert_eq!(std::fs::read_to_string(&side).unwrap(), "not = valid [");
+    assert_eq!(srv.handle.stop(), Status::Stopped(0));
+}
+
+#[test]
+fn servers_without_content_write_no_registry_and_send_no_cosmetics() {
+    let _w = watchdog("no_content", 180);
+    let tmp = tempfile::tempdir().unwrap();
+    let (data, wid) = world(tmp.path());
+    let mods = client_mods(tmp.path(), 1000);
+    let mut srv = start(&data, &wid, 15480, &mods);
+    let mut s = srv.session("MODDER");
+    let mut mc = ModClient::new(LoaderOptions::new(&tmp.path().join("cache")));
+    assert_eq!(mc.join(&mut s, 10_000).unwrap(), JoinOutcome::Approved, "{}", srv.log());
+    s.run_for(500).unwrap();
+    assert!(mc.list.unwrap().registry.is_empty());
+    assert!(mod_packets(&s, 0x12).is_empty());
+    assert!(!walk(tmp.path()).iter().any(|p| p.ends_with("registry.toml")));
+    assert_eq!(srv.handle.stop(), Status::Stopped(0));
+}
