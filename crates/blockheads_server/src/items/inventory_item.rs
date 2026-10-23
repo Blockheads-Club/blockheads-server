@@ -150,33 +150,29 @@ impl InventoryItem {
         ret.push(self.selected_sub_item_index);
         ret.push(0);
 
-        let mut extra = PlistValue::mutable_dict();
-        let mut extra_count = 0usize;
-        if let PlistValue::Dict(dd) = &mut extra {
-            if let Some(subs) = &self.sub_items {
-                if !subs.is_empty() {
-                    let mut found = false;
-                    let mut saved = Vec::new();
-                    for slot in subs {
-                        let mut save_slot = Vec::new();
-                        for item in slot.borrow().iter() {
-                            found = true;
-                            save_slot.push(PlistValue::data(item.borrow().save_data()));
-                        }
-                        saved.push(mutable_array_of(save_slot));
+        let mut dd = crate::objects::base::new_mutable_dict();
+        if let Some(subs) = &self.sub_items {
+            if !subs.is_empty() {
+                let mut found = false;
+                let mut saved = Vec::new();
+                for slot in subs {
+                    let mut save_slot = Vec::new();
+                    for item in slot.borrow().iter() {
+                        found = true;
+                        save_slot.push(PlistValue::data(item.borrow().save_data()));
                     }
-                    if found {
-                        dd.insert("s".to_string(), mutable_array_of(saved));
-                    }
+                    saved.push(mutable_array_of(save_slot));
+                }
+                if found {
+                    dd.insert("s".to_string(), mutable_array_of(saved));
                 }
             }
-            if let Some(d) = &self.dynamic_object_save_dict {
-                dd.insert("d".to_string(), d.clone());
-            }
-            extra_count = dd.len();
         }
-        if extra_count != 0 {
-            if let Some(xml) = data_from_property_list(&extra) {
+        if let Some(d) = &self.dynamic_object_save_dict {
+            dd.insert("d".to_string(), d.clone());
+        }
+        if dd.len() != 0 {
+            if let Some(xml) = data_from_property_list(&PlistValue::Dict(dd)) {
                 ret.extend_from_slice(&gzip_deflate(&xml));
             }
         }
@@ -270,15 +266,11 @@ mod tests {
         assert!(blob.len() > 8);
         let ex = extras(&blob);
         assert!(ex.object_for_key("d").is_none());
-        match ex.object_for_key("s") {
-            Some(PlistValue::Array(a)) => {
-                assert_eq!(a.items.len(), 4);
-                let lens: Vec<usize> =
-                    a.items.iter().map(|x| if let PlistValue::Array(s) = x { s.items.len() } else { 99 }).collect();
-                assert_eq!(lens, vec![0, 1, 0, 1]);
-            }
-            _ => panic!("no s"),
-        }
+        let Some(PlistValue::Array(a)) = ex.object_for_key("s") else { unreachable!("no s") };
+        assert_eq!(a.items.len(), 4);
+        let lens: Vec<usize> =
+            a.items.iter().map(|x| if let PlistValue::Array(s) = x { s.items.len() } else { 99 }).collect();
+        assert_eq!(lens, vec![0, 1, 0, 1]);
         let r = InventoryItem::from_save_data(&blob);
         assert_eq!(r.borrow().save_data(), blob);
         let r = r.borrow();
@@ -397,5 +389,32 @@ mod tests {
         assert_eq!(input[0].len(), 1);
         let non = InventoryItem::new(ItemType::ITEM_STICK, 0, 0, Some(&input), None);
         assert!(non.borrow().sub_items.is_none());
+    }
+
+    #[test]
+    fn save_data_skips_empty_slots_and_foreign_entries() {
+        // a basket whose slots are all empty has no extras at all
+        let bk = basket_with(&[]);
+        assert_eq!(bk.borrow().save_data().len(), 8);
+        // so does one without any slot list entries
+        bk.borrow_mut().sub_items = Some(Vec::new());
+        assert_eq!(bk.borrow().save_data().len(), 8);
+        // entries of a saved slot that are not data blobs are ignored on load
+        let mut dd = crate::objects::base::new_mutable_dict();
+        let slot = mutable_array_of(vec![
+            PlistValue::int(3),
+            PlistValue::data(plain(ItemType::ITEM_STICK, 1, 2).borrow().save_data()),
+        ]);
+        let empty = || mutable_array_of(vec![]);
+        // a slot that is not an array at all loads as an empty slot
+        dd.insert("s".to_string(), mutable_array_of(vec![slot, empty(), empty(), PlistValue::int(1)]));
+        let ex = PlistValue::Dict(dd);
+        let mut crafted = bk.borrow().save_data()[..8].to_vec();
+        crafted.extend(gzip_deflate(&data_from_property_list(&ex).unwrap()));
+        let r = InventoryItem::from_save_data(&crafted);
+        let r = r.borrow();
+        let slot0 = r.sub_items.as_ref().unwrap()[0].borrow();
+        assert_eq!(slot0.len(), 1);
+        assert_eq!(slot0[0].borrow().item_type, ItemType::ITEM_STICK);
     }
 }
