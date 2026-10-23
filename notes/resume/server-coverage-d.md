@@ -33,3 +33,22 @@ Branch `test/coverage-d` (worktree `server-wt/coverage-d`), based on origin/dev 
 - Round-1 agent, after its first report: trees/* scenario tests (every species through growth, fruit, save/reload, old
   age, dead-tile removal, pine food, unloaded ground; commits e2a6793 + 1830812). 1830812 also swept in round-2's
   then-uncommitted world/* edits by mistake. Its unverified building/column.rs scenario test was discarded; it then stopped.
+
+## Status (update 3, round 2 agent)
+- Lib-only measurement: `~/.cache/bhcov/iterl.sh "<filter>" <file suffix>` runs the filtered lib tests with its own
+  llvm-cov dir (`llvm-cov-target-dw`) and prints that file's missed lines; `showt.py <suffix> [ctx]` prints them with
+  source; `repl.py` reports all group D files from a full lib run (`liball-d.lcov`, 4 minutes). Use filter `world::`
+  for world/* (every test of the module contributes).
+- world/*: 100 % lines (lib only) except lifecycle.rs 2 lines (`initialize_databases`: the `blocks` database failing to
+  open while `main` opened; needs an LMDB failure, not reachable).
+- Test doubles added: misc.rs `testkit::Rec` (net_bh, controlled_bh, paintable, bh_by_id, wb/wb_level/wb_type/wb_pos,
+  cannot_remove, goals, busy, path_users, meditating, light blocks), lifecycle.rs `testkit::Rec`/`Bh` (path creator,
+  tips, asleep/regenerating/... flags), `testkit::APP_ENV` (app database environment of the test delegate),
+  helpers.rs `testutil::dw_obj_of_type`.
+- Hook trait defaults (`WorldCoreHooksStub`, `WorldOpsDepsStub`) are covered by generated calls through
+  `NullCoreHooks`/`NullDeps` (generator: `~/.cache/bhcov/genhooks.py`).
+- Dead code removed (proofs in the commit messages): tile_edit.rs fill arms for items that `item_type_is_valid_fill_item`
+  excludes, 3|5 back wall fix-ups, station neighbour `if let`; growth.rs duplicate guard; heartbeat.rs paused loop;
+  db_convertor.rs three impossible fallbacks; custom_rules.rs None arm; state.rs trim_free_physical_blocks `if let`.
+- Careful: tests that write save files must set a private HOME (`set_home_for_test` under `HOME_LOCK`), never the real one.
+- Next: building/*, lighting/*, worldgen/*, trees/* rest, plants rest.
