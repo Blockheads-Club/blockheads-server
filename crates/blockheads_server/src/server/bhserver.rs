@@ -1114,6 +1114,10 @@ pub(crate) mod test_support {
         pub infos: RefCell<HashMap<String, PlayerInfo>>,
         pub persistent: RefCell<HashMap<String, String>>,
         pub approved: RefCell<Vec<PlayerInfo>>,
+        /// Whether the transport authenticates players (the real one does).
+        pub authenticates: Cell<bool>,
+        /// When set, approving a client is not announced to the delegate and unknown players have no stored info.
+        pub quiet_approval: Cell<bool>,
     }
 
     impl MockMatch {
@@ -1129,6 +1133,8 @@ pub(crate) mod test_support {
                 infos: RefCell::new(HashMap::new()),
                 persistent: RefCell::new(HashMap::new()),
                 approved: RefCell::new(Vec::new()),
+                authenticates: Cell::new(true),
+                quiet_approval: Cell::new(false),
             })
         }
         pub fn packets_to(&self, id: &str) -> Vec<Vec<u8>> {
@@ -1156,7 +1162,7 @@ pub(crate) mod test_support {
             true
         }
         fn requires_player_authentication(&self) -> bool {
-            true
+            self.authenticates.get()
         }
         fn is_cloud_match(&self) -> bool {
             self.cloud.get()
@@ -1199,9 +1205,16 @@ pub(crate) mod test_support {
             // transport: delegate.info_arrived_for_player(info, P)
             let pid = dict_str(&info.borrow(), "playerID").unwrap_or_default();
             let d = self.base.delegate.borrow().as_ref().and_then(|w| w.upgrade());
-            if let Some(d) = d {
+            for d in d.filter(|_| !self.quiet_approval.get()) {
                 d.info_arrived_for_player(info, &pid);
             }
+        }
+        fn load_info_for_player(&self, player_id: &str) -> Option<PlayerInfo> {
+            let known = self.infos.borrow().get(player_id).cloned();
+            known.or_else(|| {
+                Some(crate::net::bhmatch::bhmatch_load_info_for_player(player_id))
+                    .filter(|_| !self.quiet_approval.get())
+            })
         }
     }
 
@@ -1254,6 +1267,8 @@ pub(crate) mod test_support {
         pub calls: RefCell<Vec<String>>,
         pub clients: RefCell<HashMap<String, Rc<ServerClient>>>,
         pub accept_clients: Cell<bool>,
+        /// Answer of the custom-rules verification.
+        pub rules_ok: Cell<bool>,
         /// What the summary method returns instead of the fixed bytes.
         pub summary: RefCell<Option<Vec<u8>>>,
         pub dw: Rc<MockDw>,
@@ -1271,6 +1286,7 @@ pub(crate) mod test_support {
                 calls: RefCell::new(Vec::new()),
                 clients: RefCell::new(HashMap::new()),
                 accept_clients: Cell::new(true),
+                rules_ok: Cell::new(true),
                 summary: RefCell::new(None),
                 dw: Rc::new(MockDw { calls: RefCell::new(Vec::new()) }),
             })
@@ -1448,11 +1464,12 @@ pub(crate) mod test_support {
         }
         fn get_blockhead_zoom_pos_for_client_requester_client_cycle_index(
             &self,
-            _p: Option<&str>,
+            p: Option<&str>,
             _r: Option<&str>,
             _c: i32,
         ) -> IntPair {
-            IntPair { x: 0, y: 0 }
+            // A player called "up" is found at (3, 4); anyone else is not on the map.
+            IntPair { x: 3 * (p == Some("up")) as i32, y: 4 * (p == Some("up")) as i32 }
         }
         fn transaction_data_recieved_from_client(&self, d: Option<&PlistValue>, id: &str) {
             self.rec_log(format!("transaction {} {}", d.is_some(), id));
@@ -1470,7 +1487,7 @@ pub(crate) mod test_support {
             self.rec_log(format!("report {:?} {:?} {:?}", n, r, a));
         }
         fn verify_client_custom_rules_data(&self, _p: &[u8]) -> bool {
-            true
+            self.rules_ok.get()
         }
         fn custom_rule_dict_recieved_from_net(&self, _d: &PlistValue) {
             self.rec_log("custom_rule");
@@ -1483,6 +1500,197 @@ pub(crate) mod test_support {
         }
         fn world_pos_at_world_index(&self, i: i32) -> IntPair {
             IntPair { x: i, y: i }
+        }
+    }
+
+    /// A scriptable mod host: every call is logged, the answers are set by the test.
+    pub struct StubHooks {
+        pub log: RefCell<Vec<String>>,
+        pub verdict: RefCell<crate::mods::ChatVerdict>,
+        pub owns: Cell<bool>,
+        pub consumes: Cell<bool>,
+        pub limbo: Cell<bool>,
+        pub limbo_packet: Cell<bool>,
+        pub pre_login: Cell<Option<u8>>,
+    }
+
+    impl StubHooks {
+        /// Installs a stub as the mod host of this thread; `uninstall` (or the end of the thread) removes it.
+        pub fn install() -> Rc<StubHooks> {
+            let h = Rc::new(StubHooks {
+                log: RefCell::new(Vec::new()),
+                verdict: RefCell::new(crate::mods::ChatVerdict::Keep),
+                owns: Cell::new(false),
+                consumes: Cell::new(true),
+                limbo: Cell::new(false),
+                limbo_packet: Cell::new(false),
+                pre_login: Cell::new(None),
+            });
+            let dynh: Rc<dyn crate::mods::ModHooks> = h.clone();
+            crate::mods::install(Some(dynh));
+            h
+        }
+        pub fn uninstall() {
+            crate::mods::install(None);
+        }
+        fn rec(&self, s: String) {
+            self.log.borrow_mut().push(s);
+        }
+        pub fn saw(&self, prefix: &str) -> bool {
+            self.log.borrow().iter().any(|l| l.starts_with(prefix))
+        }
+    }
+
+    impl crate::mods::ModHooks for StubHooks {
+        fn player_join(&self, id: &str) {
+            self.rec(format!("join {id}"));
+        }
+        fn player_quit(&self, id: &str, kick: bool) {
+            self.rec(format!("quit {id} {kick}"));
+        }
+        fn chat(&self, id: &str, text: &str) -> crate::mods::ChatVerdict {
+            self.rec(format!("chat {id} {text}"));
+            self.verdict.borrow().clone()
+        }
+        fn owns_command(&self, line: &str) -> bool {
+            self.rec(format!("owns {line}"));
+            self.owns.get()
+        }
+        fn command(&self, issuer: Option<&str>, line: &str) -> bool {
+            self.rec(format!("command {issuer:?} {line}"));
+            self.consumes.get()
+        }
+        fn tick(&self, dt: f32) {
+            self.rec(format!("tick {dt}"));
+        }
+        fn poll(&self) {
+            self.rec("poll".to_string());
+        }
+        fn world_loaded(&self, name: &str, id: &str) {
+            self.rec(format!("loaded {name} {id}"));
+        }
+        fn world_save(&self, post: bool) {
+            self.rec(format!("save {post}"));
+        }
+        fn server_stop(&self) {
+            self.rec("stop".to_string());
+        }
+        fn wants(&self, what: crate::mods::Optional) -> bool {
+            self.rec(format!("wants {what:?}"));
+            true
+        }
+        fn mod_packet(&self, peer: &str, data: &[u8]) {
+            self.rec(format!("packet {peer} {}", data.len()));
+        }
+        fn pre_login(&self, peer: &str, id: &str, alias: &str, _loader: Option<&crate::mods::LoaderKey>) -> Option<u8> {
+            self.rec(format!("pre_login {peer} {id} {alias}"));
+            self.pre_login.get()
+        }
+        fn limbo_join(&self, peer: &str, id: &str, _loader: Option<&crate::mods::LoaderKey>) -> bool {
+            self.rec(format!("limbo_join {peer} {id}"));
+            self.limbo.get()
+        }
+        fn limbo_packet(&self, peer: &str) -> bool {
+            self.rec(format!("limbo_packet {peer}"));
+            self.limbo_packet.get()
+        }
+        fn limbo_gone(&self, peer: &str) {
+            self.rec(format!("limbo_gone {peer}"));
+        }
+        fn block_place(&self, id: &str, pos: IntPair, item: u32, a: u16, b: u16) -> bool {
+            self.rec(format!("block_place {id} {} {} {item} {a} {b}", pos.x, pos.y));
+            false
+        }
+        fn block_break(&self, id: &str, pos: IntPair, back_wall: bool, tile: u32) -> bool {
+            self.rec(format!("block_break {id} {} {} {back_wall} {tile}", pos.x, pos.y));
+            false
+        }
+        fn block_changed(&self, pos: IntPair, tile: u32, id: Option<&str>) {
+            self.rec(format!("block_changed {} {} {tile} {id:?}", pos.x, pos.y));
+        }
+        fn object_place(&self, id: &str, pos: IntPair, workbench: bool, item: u32) -> bool {
+            self.rec(format!("object_place {id} {} {} {workbench} {item}", pos.x, pos.y));
+            false
+        }
+        fn damage(&self, id: Option<&str>, blockhead: u64, amount: f32, attacker: Option<&str>) -> Option<f32> {
+            self.rec(format!("damage {id:?} {blockhead} {amount} {attacker:?}"));
+            Some(amount)
+        }
+        fn death(&self, id: Option<&str>, blockhead: u64) {
+            self.rec(format!("death {id:?} {blockhead}"));
+        }
+        fn player_move(&self, id: &str, from: IntPair, to: IntPair) {
+            self.rec(format!("move {id} {} {} {} {}", from.x, from.y, to.x, to.y));
+        }
+    }
+
+    /// No-op timers for a real server match.
+    struct NoTimers;
+    impl crate::net::bhmatch::TimerScheduler for NoTimers {
+        fn schedule_repeating(&self, _interval: f64, _cb: Box<dyn FnMut()>) -> crate::net::bhmatch::TimerId {
+            1
+        }
+        fn invalidate(&self, _id: crate::net::bhmatch::TimerId) {}
+    }
+
+    /// A server over a real `BhNetServerMatch` (ephemeral port, no peers): for the cloud, credit and privacy paths.
+    pub struct RealMatchHarness {
+        pub srv: Rc<BHServer>,
+        pub m: Rc<crate::net::server_match::BhNetServerMatch>,
+        pub d: Rc<MockDelegate>,
+        pub w: Rc<MockWorld>,
+        pub world_dyn: Rc<dyn ServerWorld>,
+    }
+
+    impl RealMatchHarness {
+        /// `salt` makes it a cloud match; `privacy` and `credit` are the match's.
+        pub fn new(
+            tag: &str,
+            salt: Option<&str>,
+            owner: Option<&str>,
+            privacy: Option<&str>,
+            credit: f32,
+        ) -> RealMatchHarness {
+            init_env();
+            let id = format!("{:032x}", {
+                use std::hash::{Hash, Hasher};
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                tag.hash(&mut h);
+                std::process::id().hash(&mut h);
+                h.finish() as u128
+            });
+            let _ = std::fs::remove_dir_all(format!("{}/saves/{}", paths::appsup(), id));
+            let m = crate::net::server_match::BhNetServerMatch::init_with_port_user_name_photo_has_local_player_world_name_credit_cloud_salt_owner_name_privacy(
+                crate::net::server_match::ServerMatchArgs {
+                    port: Some("0".to_string()),
+                    user_name: Some("server".to_string()),
+                    has_local_player: false,
+                    world_name: Some("TestWorld".to_string()),
+                    credit,
+                    cloud_salt: salt.map(|s| s.to_string()),
+                    owner_name: owner.map(|s| s.to_string()),
+                    privacy: privacy.map(|s| s.to_string()),
+                },
+                Rc::new(NoTimers),
+            )
+            .expect("server match");
+            let d = MockDelegate::new();
+            let dd: Rc<dyn ServerDelegate> = d.clone();
+            let mm: Rc<dyn BhMatch> = m.clone();
+            let srv = BHServer::init_with_delegate_match_net_node_type_save_id_max_players(
+                Rc::downgrade(&dd),
+                mm,
+                NetNodeType::OnlineServer,
+                Some(&id),
+                32,
+            )
+            .expect("init");
+            let delayed: Rc<RefCell<Vec<(f64, Box<dyn FnOnce()>)>>> = Rc::new(RefCell::new(Vec::new()));
+            srv.set_delay_scheduler(Some(Rc::new(move |t, cb| delayed.borrow_mut().push((t, cb)))));
+            let w = MockWorld::new(&id);
+            let world_dyn: Rc<dyn ServerWorld> = w.clone();
+            srv.set_world(&world_dyn);
+            RealMatchHarness { srv, m, d, w, world_dyn }
         }
     }
 

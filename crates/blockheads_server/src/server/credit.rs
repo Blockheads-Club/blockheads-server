@@ -12,24 +12,17 @@ impl BHServer {
 
     /// `-credit` (float32): 0.0 unless a cloud match with a server match.
     pub fn credit(&self) -> f32 {
-        if !self.is_cloud_match() {
-            return 0.0;
-        }
         match self.node.match_() {
-            Some(m) => m.as_server_match().map_or(0.0, |s| s.credit()),
-            None => 0.0,
+            Some(m) if m.is_cloud_match() => m.as_server_match().map_or(0.0, |s| s.credit()),
+            _ => 0.0,
         }
     }
 
     /// `-updateCredit:`: no callers in the binary.
     pub fn update_credit(&self, dt: f32) {
-        if self.is_cloud_match() {
-            if let Some(m) = self.node.match_() {
-                if let Some(s) = m.as_server_match() {
-                    let c = s.credit();
-                    s.set_credit(c - dt);
-                }
-            }
+        let m = self.node.match_().filter(|m| m.is_cloud_match());
+        if let Some(s) = m.as_ref().and_then(|m| m.as_server_match()) {
+            s.set_credit(s.credit() - dt);
         }
     }
 
@@ -98,5 +91,19 @@ mod tests {
         assert_eq!(h.m.disconnected.borrow().as_slice(), &[pid.clone()]);
         let calls = h.w.calls.borrow().clone();
         assert!(calls.contains(&format!("client_disconnected {} false", pid)));
+    }
+
+    #[test]
+    fn a_real_cloud_match_has_credit_and_a_privacy_string() {
+        let h = RealMatchHarness::new("credit_real", Some("SALT"), Some("Boss"), Some("private"), 5.0);
+        assert!(h.srv.is_cloud_match());
+        assert_eq!(h.srv.credit(), 5.0);
+        h.srv.update_credit(2.0);
+        assert_eq!(h.srv.credit(), 3.0);
+        assert_eq!(h.srv.privacy_string().as_deref(), Some("private"));
+        for (level, text) in [(2, "searchable"), (1, "public")] {
+            h.m.set_privacy(level);
+            assert_eq!(h.srv.privacy_string().as_deref(), Some(text));
+        }
     }
 }

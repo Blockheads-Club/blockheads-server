@@ -48,11 +48,11 @@ pub fn match_did_receive_data_from_player(srv: &Rc<BHServer>, data: &[u8], peer:
             return;
         }
     }
+    // Unknown types decode to nothing, and the decoder's only errors are the original's exceptions.
     let msg = match decode_client_packet(data) {
         Ok(Some(m)) => m,
-        Ok(None) => return,
         Err(Malformed::Exception { name, reason }) => ns_raise(name, &reason),
-        Err(_) => return,
+        _ => return,
     };
     route(srv, msg, data, peer);
 }
@@ -563,11 +563,9 @@ fn chat(srv: &Rc<BHServer>, dict: Option<PlistValue>, peer: &str) {
         }
     }
     let Some(mut msg) = msg else {
-        let ex = messages::chat_nil_exception();
-        if let Malformed::Exception { name, reason } = ex {
-            ns_raise(name, &reason);
-        }
-        return;
+        let nil = messages::chat_nil_exception();
+        let Malformed::Exception { name, reason } = nil else { unreachable!() };
+        ns_raise(name, &reason)
     };
     // Mods (not in the original; `None` without mods): mod commands work for every player, chat can be cancelled
     // or rewritten before it is shown or broadcast.
@@ -621,7 +619,6 @@ fn alias_length(raw: &PlistValue) -> usize {
 
 /// Handshake (type 0x1f).
 fn handshake(srv: &Rc<BHServer>, payload: &[u8], peer: &str) {
-    let peer_list = || vec![peer.to_string()];
     let send_to =
         |target: &str, pkt: Vec<u8>| srv.send_network_data_to_peers_reliable(pkt, &[target.to_string()], true);
     let remove_unapproved = || srv.unapproved_clients.borrow_mut().retain(|e| e != peer);
@@ -630,17 +627,14 @@ fn handshake(srv: &Rc<BHServer>, payload: &[u8], peer: &str) {
         send_to(target, messages::rejection(r));
         remove_unapproved();
     };
-    // rejectP(r)
-    let reject_p = |r: u8, p: Option<&str>| {
-        reject_to(r, p.unwrap_or(peer));
-        if let Some(p) = p {
-            if let Some(m) = srv.match_() {
-                m.remove_client(p);
-            }
-            srv.client_finished_away_simulation(p);
+    // rejectP(r): the rejection goes to the persistent id `p`, which is then removed.
+    let reject_p = |r: u8, p: &str| {
+        reject_to(r, p);
+        if let Some(m) = srv.match_() {
+            m.remove_client(p);
         }
+        srv.client_finished_away_simulation(p);
     };
-    let _ = peer_list;
 
     // 1.
     let world = match srv.world() {
@@ -654,7 +648,7 @@ fn handshake(srv: &Rc<BHServer>, payload: &[u8], peer: &str) {
     if srv.is_cloud_match() {
         let credit = srv.credit();
         if (credit as f64) <= 0.001 || credit.is_nan() {
-            let wid = srv.save_id.clone().or_else(|| world.save_id()).unwrap_or_default();
+            let wid = srv.save_id.clone().or(world.save_id()).unwrap_or_default();
             send_to(peer, messages::rejection_no_credit(&wid, &world.world_name().unwrap_or_default()));
             remove_unapproved();
             return;
@@ -698,7 +692,7 @@ fn handshake(srv: &Rc<BHServer>, payload: &[u8], peer: &str) {
         let server_key = string_from_md5(&format!("{}{}", salt, info_alias.clone().unwrap_or_default()));
         let cloud_key = dict_str(&info.borrow(), "cloudKey");
         if cloud_key.is_none() || safe_ci(cloud_key.as_deref(), Some(&server_key)) != 0 {
-            reject_p(reject::INCORRECT_CLOUD_KEY, Some(p));
+            reject_p(reject::INCORRECT_CLOUD_KEY, p);
             return;
         }
     }
@@ -706,7 +700,7 @@ fn handshake(srv: &Rc<BHServer>, payload: &[u8], peer: &str) {
     if world.custom_rules_enabled() || world.world_width_macro() < 512 {
         let minor = dict_get(&info.borrow(), "minorVersion").map(|v| v.int_value());
         if minor.map_or(true, |v| v < 2) {
-            reject_p(reject::CLIENT_TOO_OLD, Some(p));
+            reject_p(reject::CLIENT_TOO_OLD, p);
             return;
         }
     }
@@ -717,7 +711,7 @@ fn handshake(srv: &Rc<BHServer>, payload: &[u8], peer: &str) {
         {
             let cp = dict_str(&info.borrow(), "clientPassword");
             if cp.as_deref() != Some(pw.as_str()) {
-                reject_p(reject::INCORRECT_PASSWORD, Some(p));
+                reject_p(reject::INCORRECT_PASSWORD, p);
                 return;
             }
         }
@@ -725,31 +719,23 @@ fn handshake(srv: &Rc<BHServer>, payload: &[u8], peer: &str) {
     let info_snapshot = info.borrow().clone();
     // 9.
     if srv.player_is_black_listed_with_info(&info_snapshot) {
-        reject_p(reject::BLACKLISTED, Some(p));
+        reject_p(reject::BLACKLISTED, p);
         return;
     }
     // 10.
     if !srv.player_is_white_listed_with_info(&info_snapshot) {
-        reject_p(reject::NOT_WHITELISTED, Some(p));
+        reject_p(reject::NOT_WHITELISTED, p);
         return;
     }
     // 11.
     if m.requires_player_authentication() {
         if !srv.is_cloud_match() {
+            // Every reset entry naming this alias is spent by the join.
             let mut is_reset = false;
-            let mut remove_list: Vec<String> = Vec::new();
-            if let Some(rl) = srv.reset_list.borrow().as_ref() {
-                for name in rl {
-                    if safe_ci(Some(name), info_alias.as_deref()) == 0 {
-                        remove_list.push(name.clone());
-                        is_reset = true;
-                    }
-                }
-            }
-            if !remove_list.is_empty() {
-                if let Some(rl) = srv.reset_list.borrow_mut().as_mut() {
-                    rl.retain(|x| !remove_list.contains(x));
-                }
+            if let Some(rl) = srv.reset_list.borrow_mut().as_mut() {
+                let before = rl.len();
+                rl.retain(|name| safe_ci(Some(name), info_alias.as_deref()) != 0);
+                is_reset = rl.len() != before;
             }
             if is_reset {
                 srv.save_reset_list();
@@ -770,7 +756,7 @@ fn handshake(srv: &Rc<BHServer>, payload: &[u8], peer: &str) {
                     auth = a.is_some() && a == dict_str(&old_d, "gameCenterID");
                 }
                 if !auth {
-                    reject_p(reject::USERNAME_TAKEN, Some(p));
+                    reject_p(reject::USERNAME_TAKEN, p);
                     return;
                 }
             }
@@ -782,7 +768,7 @@ fn handshake(srv: &Rc<BHServer>, payload: &[u8], peer: &str) {
             let same_udid = du.is_some() && du == new_udid;
             if same_udid && dict_str(&db, "playerID").as_deref() != Some(p) {
                 drop(db);
-                reject_p(reject::DEVICE_ALREADY_IN_USE_WITH_DIFFERENT_NAME, Some(p));
+                reject_p(reject::DEVICE_ALREADY_IN_USE_WITH_DIFFERENT_NAME, p);
                 return;
             }
         }
@@ -799,7 +785,7 @@ fn handshake(srv: &Rc<BHServer>, payload: &[u8], peer: &str) {
             return;
         }
         if let Some(r) = h.pre_login(peer, p, info_alias.as_deref().unwrap_or(""), loader.as_ref()) {
-            reject_p(r, Some(p));
+            reject_p(r, p);
             return;
         }
     }
@@ -820,23 +806,22 @@ fn handshake(srv: &Rc<BHServer>, payload: &[u8], peer: &str) {
             srv.save_all_players_array();
         }
     }
-    if let Some(w) = srv.world() {
-        if !w.client_connected(p) {
-            send_to(p, messages::rejection(reject::SERVER_FULL));
-            remove_unapproved();
-            srv.connected_clients.borrow_mut().retain(|e| e != p);
-            m.remove_client(peer);
-            srv.client_finished_away_simulation(peer);
-        } else {
-            let alias = srv.player_alias_for_peer_id(Some(p));
-            let a = alias.as_deref();
-            let cloud_mode = srv.cloud_mode_for_alias(a);
-            let admin = srv.player_is_admin_with_alias(a);
-            let moderator = srv.player_is_mod_with_alias(a);
-            let owner = srv.player_is_owner_with_alias(a);
-            let summary = w.summary_net_data_for_admin_mod_owner_cloud_mode(admin, moderator, owner, cloud_mode);
-            srv.send_network_data_to_peers_reliable(summary, &[p.to_string()], true);
-        }
+    // The world of step 1 (it cannot go away within one packet).
+    if !world.client_connected(p) {
+        send_to(p, messages::rejection(reject::SERVER_FULL));
+        remove_unapproved();
+        srv.connected_clients.borrow_mut().retain(|e| e != p);
+        m.remove_client(peer);
+        srv.client_finished_away_simulation(peer);
+    } else {
+        let alias = srv.player_alias_for_peer_id(Some(p));
+        let a = alias.as_deref();
+        let cloud_mode = srv.cloud_mode_for_alias(a);
+        let admin = srv.player_is_admin_with_alias(a);
+        let moderator = srv.player_is_mod_with_alias(a);
+        let owner = srv.player_is_owner_with_alias(a);
+        let summary = world.summary_net_data_for_admin_mod_owner_cloud_mode(admin, moderator, owner, cloud_mode);
+        srv.send_network_data_to_peers_reliable(summary, &[p.to_string()], true);
     }
     srv.players_changed();
     srv.send_updated_player_list_to_clients();
@@ -881,10 +866,9 @@ pub fn send_portal_chest_acknowledgement_if_needed_for_client(srv: &BHServer, cl
     srv.send_network_data_to_peers_reliable(messages::portal_chest_ack(tx as u16), &[client_id.to_string()], true);
     let mut d = new_mutable_dict();
     d.map.insert("transaction".to_string(), PlistValue::int(tx as i64));
-    if let Some(blob) = data_from_property_list(&PlistValue::Dict(d)) {
-        if let Some(db) = &srv.server_database {
-            db.set_data(Some(&blob), Some(&format!("{}_lastPortalChestAck", client_id)));
-        }
+    let blob = data_from_property_list(&PlistValue::Dict(d));
+    if let Some(db) = &srv.server_database {
+        db.set_data(blob.as_deref(), Some(&format!("{}_lastPortalChestAck", client_id)));
     }
     if let Some(t) = srv.trade_portal_transactions.borrow_mut().as_mut() {
         t.remove(client_id);
@@ -1142,10 +1126,8 @@ mod tests {
         h.send(&a, &[0x10, 0, 0, 0, 0]);
         let r =
             c.get_and_remove_all_reciept_data_for_macro_pos_world(crate::types::structs::IntPair { x: 0, y: 0 }, &*h.w);
-        match r {
-            Some(PlistValue::Array(arr)) => assert_eq!(arr.items.len(), 1),
-            other => panic!("{:?}", other),
-        }
+        let Some(PlistValue::Array(arr)) = r else { unreachable!() };
+        assert_eq!(arr.items.len(), 1);
     }
 
     #[test]
@@ -1217,3 +1199,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "dispatch_tests.rs"]
+mod routing_tests;
