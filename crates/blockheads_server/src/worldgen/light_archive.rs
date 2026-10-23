@@ -442,10 +442,10 @@ mod tests {
 
 #[cfg(test)]
 mod more_tests {
+    use super::super::tile_loader::set_host;
     use super::super::tile_loader::testutil::*;
     use super::*;
     use crate::plist::keyed_archiver::archive_index_set;
-    use super::super::tile_loader::set_host;
 
     fn marked(world: &crate::world::state::World, x: i32, y: i32) -> PhysicalBlockRef {
         let pb = world.take_physical_block();
@@ -536,10 +536,16 @@ mod more_tests {
         l.unarchive_light_blocks_for_client("c");
         assert!(!db.has_key(Some("c_archiveKeys")));
         // a list whose data has the wrong size, then one that fits but contains a key that exists already
-        db.set_data(Some(&keys(PlistValue::array(vec![PlistValue::string("1_2"), PlistValue::string("bad")]))), Some("c_archiveKeys"));
+        db.set_data(
+            Some(&keys(PlistValue::array(vec![PlistValue::string("1_2"), PlistValue::string("bad")]))),
+            Some("c_archiveKeys"),
+        );
         db.set_data(Some(&gzip_deflate(&[1u8; 5])), Some("c_archiveData"));
         l.unarchive_light_blocks_for_client("c");
-        db.set_data(Some(&keys(PlistValue::array(vec![PlistValue::string("1_2"), PlistValue::string("bad")]))), Some("c_archiveKeys"));
+        db.set_data(
+            Some(&keys(PlistValue::array(vec![PlistValue::string("1_2"), PlistValue::string("bad")]))),
+            Some("c_archiveKeys"),
+        );
         db.set_data(Some(&gzip_deflate(&[1u8; 0x400])), Some("c_archiveData"));
         db.set_data(Some(&[9u8; 0x400]), Some("c_1_2"));
         l.unarchive_light_blocks_for_client("c");
@@ -559,7 +565,8 @@ mod more_tests {
         l.archive_light_blocks_for_client("d");
         // a legacy light block file
         std::fs::create_dir_all(dir.join("blocks/playerLightBlocks/e/f/ghi")).unwrap();
-        std::fs::write(dir.join("blocks/playerLightBlocks/e/f/ghi/2_3_lightBlock"), gzip_deflate(&[7u8; 0x400])).unwrap();
+        std::fs::write(dir.join("blocks/playerLightBlocks/e/f/ghi/2_3_lightBlock"), gzip_deflate(&[7u8; 0x400]))
+            .unwrap();
         let pb = marked(&world, 2, 3);
         l.load_light_block_for_client_light_block_index_client_id_into_physical_block(1, "efghi", pb);
         assert_eq!(pb.client_light_blocks.borrow()[1].as_ref().unwrap()[0], 7);
