@@ -142,9 +142,8 @@ impl WirePathCreator {
         if start_tile.is_none() {
             return finish(self, open, closed, 0);
         }
-        let Some(sp) = self.tile_derived_properties_at_world_index(start_index) else {
-            return finish(self, open, closed, 0);
-        };
+        // the slot count was reset above, so the cap check cannot refuse the first index
+        let sp = self.tile_derived_properties_at_world_index(start_index).expect("slot cap on an empty map");
         self.with_slot(sp, |p| {
             p.g = 0;
             p.f = 0;
@@ -206,14 +205,14 @@ impl WirePathCreator {
                 );
                 if let Some(wb) = wb {
                     let avail = wb.available_electricity();
+                    // only a source with at least the 10 units the tile test asks for gets here, and `amount_left`
+                    // is not zero inside the loop, so something is always taken
                     let take = avail.min(amount_left);
-                    if take != 0 {
-                        wb.subtract_electricty(take);
-                        amount_left -= take;
-                        // addElectricityParticleWithPath:size: is a no-op on the dedicated server
-                        if amount_left == 0 {
-                            return finish(self, open, closed, required_power as i32);
-                        }
+                    wb.subtract_electricty(take);
+                    amount_left -= take;
+                    // addElectricityParticleWithPath:size: is a no-op on the dedicated server
+                    if amount_left == 0 {
+                        return finish(self, open, closed, required_power as i32);
                     }
                 }
             }
@@ -402,6 +401,20 @@ mod tests {
         let src = wb(9, true, false, true);
         let (_w, wp, user, _h) = setup(src.clone(), 2);
         assert_eq!(wp.find_and_subtract_all_power_up_to_for_user(5, Some(&user)), 0);
+        set_dynamic_world_hooks(None);
+    }
+
+    /// A workbench tile the dynamic world knows nothing about conducts nothing; `dealloc` empties the search state.
+    #[test]
+    fn unknown_workbench_and_dealloc() {
+        let src = wb(100, true, false, true);
+        let (_w, wp, user, hooks) = setup(src.clone(), 2);
+        hooks.wbs.borrow_mut().clear();
+        assert_eq!(wp.find_and_subtract_all_power_up_to_for_user(10, Some(&user)), 0);
+        wp.dealloc();
+        assert_eq!(wp.tile_derived_properties_at_world_index(7), Some(1));
+        assert!(!hooks.has_lights_to_add());
+        assert!(!hooks.blockhead_occupies_tile_at_pos_ignore_blockhead(ip(0, 0), None));
         set_dynamic_world_hooks(None);
     }
 
