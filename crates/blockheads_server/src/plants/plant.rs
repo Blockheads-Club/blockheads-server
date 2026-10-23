@@ -120,17 +120,14 @@ pub trait PlantLike: DynamicObject {
     fn tile_is_kind_of_self(&self, _tile: &Tile) -> bool {
         false
     }
-    /// `-tileHarvested:removeBlockhead:correctToolMultiplier:` (Plant: remove the plant, 0 items).
+    /// `-tileHarvested:removeBlockhead:correctToolMultiplier:` (every concrete plant overrides it).
     fn tile_harvested_remove_blockhead_correct_tool_multiplier(
         &self,
         me: &ObjRef,
-        _tile_pos: IntPair,
-        _remove_blockhead: Option<&ObjRef>,
-        _correct_tool_multiplier: i32,
-    ) -> i32 {
-        plant_remove_plant_without_creating_freeblocks(me);
-        0
-    }
+        tile_pos: IntPair,
+        remove_blockhead: Option<&ObjRef>,
+        correct_tool_multiplier: i32,
+    ) -> i32;
     /// `-gatherProgressForTile:` (Plant: the plain ivar).
     fn gather_progress_for_tile(&self, _tile_pos: IntPair) -> i32 {
         self.plant_state().borrow().gather_progress
@@ -1375,5 +1372,164 @@ mod integration_tests {
 
     fn new_mutable_dict_for_test() -> PlistDict {
         crate::objects::base::new_mutable_dict()
+    }
+}
+
+/// Scenario tests of the shared plant plumbing: the base class defaults, neighbour changes and the class tables.
+#[cfg(test)]
+mod scenario_tests {
+    use super::*;
+    use crate::objects::base::DynamicObjectBase;
+    use crate::objects::handle;
+    use crate::plants::kelp::KelpPlant;
+    use crate::plants::simple_plants::NormalPlantKind;
+    use crate::trees::tree::testenv::env;
+    use crate::world::tiles::tile_at_world_position_loaded;
+
+    /// A plant that keeps every `Plant` default.
+    struct Bare {
+        base: RefCell<DynamicObjectBase>,
+        st: RefCell<PlantState>,
+        world: Rc<World>,
+        dw: Rc<DynamicWorld>,
+    }
+    impl DynamicObject for Bare {
+        fn base(&self) -> &RefCell<DynamicObjectBase> {
+            &self.base
+        }
+        fn class_info(&self) -> &'static ClassInfo {
+            &PLANT_CLASS
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+    impl PlantLike for Bare {
+        fn plant_state(&self) -> &RefCell<PlantState> {
+            &self.st
+        }
+        fn plant_world(&self) -> Rc<World> {
+            self.world.clone()
+        }
+        fn plant_dw(&self) -> Rc<DynamicWorld> {
+            self.dw.clone()
+        }
+        fn tile_harvested_remove_blockhead_correct_tool_multiplier(
+            &self,
+            _me: &ObjRef,
+            _tile_pos: IntPair,
+            _remove_blockhead: Option<&ObjRef>,
+            _correct_tool_multiplier: i32,
+        ) -> i32 {
+            0
+        }
+    }
+
+    #[test]
+    fn the_base_class_defaults() {
+        let (w, d) = env("pl_bare");
+        let bare = handle::alloc_obj(|sw| Bare {
+            base: RefCell::new(DynamicObjectBase::alloc_zeroed_with(sw)),
+            st: RefCell::new(PlantState::default()),
+            world: w.clone(),
+            dw: d.clone(),
+        });
+        let me: ObjRef = bare.clone();
+        me.base().borrow_mut().pos = IntPair { x: 20, y: 10 };
+        assert_eq!(bare.plant_type(), PLANT_NOTHING);
+        assert!(bare.is_required_soil_type(6) && !bare.is_required_soil_type(1));
+        assert!(!bare.tile_is_kind_of_self(&Tile::default()));
+        bare.set_gather_progress_for_tile(4, IntPair { x: 0, y: 0 });
+        assert_eq!(bare.gather_progress_for_tile(IntPair { x: 0, y: 0 }), 4);
+        assert_eq!(bare.dropped_item_type(), 0);
+        assert!(!bare.can_breed());
+        assert_eq!((bare.number_of_occupied_tiles_above(), bare.number_of_occupied_tiles_below()), (0, 0));
+        assert!(!bare.is_growing_in_compost(&me));
+        tile_at_world_position_loaded(20, 9, &w).unwrap().set_type_index(48);
+        assert!(bare.is_growing_in_compost(&me));
+        bare.set_flowering(&me, true);
+        assert!(bare.is_flowering());
+        assert_eq!(bare.available_food(), 0.0);
+        bare.set_available_food(3.0);
+        // tiles that are not loaded are no compost
+        for mx in 0..2 {
+            *w.macro_tiles().get(mx).unwrap().physical_block.borrow_mut() = None;
+        }
+        assert!(!bare.is_growing_in_compost(&me));
+    }
+
+    #[test]
+    fn neighbour_changes_pull_plants_that_lost_their_soil_or_room() {
+        let (w, d) = env("pl_world_changed");
+        let tile = |x, y| tile_at_world_position_loaded(x, y, &w).unwrap();
+        // flax loses the soil below it
+        let flax = NormalPlant::init_with_world_dynamic_world_at_position_cache_max_age_gene_growth_rate_gene_tree_density_noise_function_season_offset_noise_function_adult_plant(
+            NormalPlantKind::Flax, &w, &d, IntPair { x: 20, y: 10 }, None, 128, 128, None, None, false,
+        )
+        .unwrap();
+        let flax_ref: ObjRef = flax.clone();
+        flax_ref.world_changed(&flax_ref, &mut vec![IntPair { x: 20, y: 9 }]);
+        assert!(!flax_ref.needs_removed());
+        tile(20, 9).set_type_index(2);
+        flax_ref.world_changed(&flax_ref, &mut vec![IntPair { x: 21, y: 9 }, IntPair { x: 20, y: 9 }]);
+        assert!(flax_ref.needs_removed());
+        // removed plants and vines ignore changes
+        flax_ref.world_changed(&flax_ref, &mut vec![IntPair { x: 20, y: 9 }]);
+        // kelp with something solid in its stalk
+        tile(20, 9).set_type_index(6);
+        for y in 10..=14 {
+            tile(20, y).update(|t| {
+                t.type_index = 3;
+                t.foreground_contents = 0;
+            });
+        }
+        let kelp = KelpPlant::init_with_world_dynamic_world_at_position_cache_max_age_gene_growth_rate_gene_tree_density_noise_function_season_offset_noise_function_adult_plant(
+            &w, &d, IntPair { x: 20, y: 10 }, None, 128, 128, None, None, false,
+        )
+        .unwrap();
+        let kelp_ref: ObjRef = kelp.clone();
+        kelp.kelp.borrow_mut().number_of_occupied_tiles_above = 4;
+        tile(20, 12).set_type_index(6);
+        kelp_ref.world_changed(&kelp_ref, &mut vec![IntPair { x: 20, y: 12 }]);
+        assert!(kelp.kelp.borrow().number_of_occupied_tiles_above < 4);
+        let vine_ref: ObjRef = crate::plants::vine::VinePlant::init_with_net_data(&w, &d, None, &{
+            let mut n = kelp.plant_creation_net_data(&kelp_ref);
+            n.dynamic_object_net_data.pos_x = 25;
+            n.dynamic_object_net_data.pos_y = 20;
+            crate::types::structs::WireStruct::to_vec(&n)
+        })
+        .unwrap();
+        vine_ref.world_changed(&vine_ref, &mut vec![IntPair { x: 25, y: 19 }]);
+    }
+
+    #[test]
+    fn the_class_tables_build_every_plant_type() {
+        let (w, d) = env("pl_tables");
+        for (i, ty) in [10, 11, 12, 27, 33, 34, 58, 59, 61, 62].iter().enumerate() {
+            let x = 22 + 2 * i as i32;
+            let pos = IntPair { x, y: 10 };
+            let plant_type = (1..=10).find(|p| plant_object_type_for_plant_type(*p) == *ty).unwrap();
+            if *ty == 34 {
+                tile_at_world_position_loaded(x, 10, &w).unwrap().set_type_index(3);
+            }
+            if *ty == 58 {
+                tile_at_world_position_loaded(x, 10, &w).unwrap().set_type_index(6);
+            }
+            let made = new_plant_for_type(plant_type, &w, &d, pos, None, 128, 128, None, None, false);
+            let obj = made.expect("plant");
+            assert_eq!(obj.object_type(), *ty);
+            let dict = obj.get_save_dict(&obj);
+            assert!(new_plant_from_save_dict(*ty, &w, &d, &dict, None, None, None).is_some());
+            let net = plant_creation_net_data_of(&obj);
+            assert!(new_plant_from_net_data(*ty, &w, &d, None, &net).is_some());
+        }
+        assert!(new_plant_for_type(99, &w, &d, IntPair { x: 3, y: 10 }, None, 1, 1, None, None, false).is_none());
+        let PlistValue::Dict(empty) = PlistValue::mutable_dict() else { unreachable!() };
+        assert!(new_plant_from_save_dict(99, &w, &d, &empty, None, None, None).is_none());
+        assert!(new_plant_from_net_data(99, &w, &d, None, &[0u8; 0x28]).is_none());
+    }
+
+    fn plant_creation_net_data_of(o: &ObjRef) -> Vec<u8> {
+        crate::types::structs::WireStruct::to_vec(&pl(o).plant_creation_net_data(o))
     }
 }

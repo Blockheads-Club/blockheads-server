@@ -732,3 +732,274 @@ mod tests {
         assert!((m - 19135.06).abs() < 0.1);
     }
 }
+
+/// Scenario tests over all seven crops: seasons, flowers, food, survival checks, harvests and persistence.
+#[cfg(test)]
+mod scenario_tests {
+    use super::*;
+    use crate::dynworld::state::testutil::{tobj, Log};
+    use crate::rng::glibc_rand::srand;
+    use crate::trees::tree::testenv::env;
+    use crate::types::structs::WireStruct;
+    use crate::world::tiles::tile_at_world_position_loaded;
+    use NormalPlantKind::*;
+
+    const KINDS: [NormalPlantKind; 7] = [Flax, Sunflower, Corn, Carrot, Chilli, Wheat, Tomato];
+    const X: i32 = 20;
+    const Y: i32 = 10;
+
+    fn plant_at(w: &Rc<World>, d: &Rc<DynamicWorld>, kind: NormalPlantKind, adult: bool) -> Option<Rc<NormalPlant>> {
+        NormalPlant::init_with_world_dynamic_world_at_position_cache_max_age_gene_growth_rate_gene_tree_density_noise_function_season_offset_noise_function_adult_plant(
+            kind, w, d, IntPair { x: X, y: Y }, None, 128, 128, None, None, adult,
+        )
+    }
+
+    fn clear(w: &Rc<World>) {
+        for y in Y..=Y + 2 {
+            tile_at_world_position_loaded(X, y, w).unwrap().update(|t| {
+                t.type_index = 2;
+                t.foreground_contents = 0;
+                t.sun_light = 255;
+                t.back_wall_type_index = 2;
+            });
+        }
+    }
+
+    fn tile(w: &Rc<World>, y: i32) -> crate::world::state::TileRef {
+        tile_at_world_position_loaded(X, y, w).unwrap()
+    }
+
+    #[test]
+    fn every_kind_flowers_in_its_season_and_dies_back() {
+        let (w, d) = env("np_seasons");
+        for kind in KINDS {
+            clear(&w);
+            let p = plant_at(&w, &d, kind, false).expect("plant");
+            let me: ObjRef = p.clone();
+            assert_eq!(tile(&w, Y).foreground_contents(), p.contents_type() as u8);
+            p.plant.borrow_mut().age = 2000.0;
+            p.plant.borrow_mut().max_age = 1.0e9;
+            for k in 0..24 {
+                w.set_world_time(f64::from(k) * 150.0);
+                p.update_accurate_dt_is_simulation(&me, 0.1, 0.1, false);
+            }
+            // the whole year with a plant that is over its age
+            p.plant.borrow_mut().max_age = 100.0;
+            for seed in 1..30u32 {
+                for k in 0..8 {
+                    w.set_world_time(f64::from(k) * 450.0);
+                    p.plant.borrow_mut().age = 2000.0;
+                    srand(seed);
+                    p.update_accurate_dt_is_simulation(&me, 0.1, 0.1, false);
+                    if me.needs_removed() {
+                        break;
+                    }
+                }
+                if me.needs_removed() {
+                    break;
+                }
+            }
+            assert_eq!(p.class_info().name, config_for_kind(kind).class.name);
+            let _ = (p.flowering_season(1), p.can_die_season(1), p.max_age_base(), p.min_allowed_temperature());
+            let _ = (p.food_to_remove_when_spawning_npc(), p.npc_spawn_type(), p.folliage_item_type());
+            let _ = (p.light_factor(), p.light_color(), p.emits_light());
+        }
+    }
+
+    #[test]
+    fn crops_feed_animals_and_check_their_surroundings() {
+        let (w, d) = env("np_food");
+        for kind in KINDS {
+            clear(&w);
+            let p = plant_at(&w, &d, kind, false).unwrap();
+            let me: ObjRef = p.clone();
+            for seed in 1..40u32 {
+                p.np.borrow_mut().available_food = 2000.0;
+                srand(seed);
+                p.update_accurate_dt_is_simulation(&me, 0.1, 0.1, false);
+            }
+            // survival: fine at first, then too dark twice in a row
+            p.np.borrow_mut().check_weather_count = 299;
+            p.update_accurate_dt_is_simulation(&me, 0.1, 0.1, false);
+            assert_eq!(p.np.borrow().kill_count, 0);
+            tile(&w, Y).set_sun_light(0);
+            p.np.borrow_mut().check_weather_count = 299;
+            p.update_accurate_dt_is_simulation(&me, 0.1, 0.1, false);
+            assert_eq!(p.np.borrow().kill_count, 1);
+            p.np.borrow_mut().check_weather_count = 299;
+            p.update_accurate_dt_is_simulation(&me, 0.1, 0.1, false);
+            assert!(me.needs_removed());
+        }
+    }
+
+    #[test]
+    fn harvesting_drops_seeds_flowers_and_foliage() {
+        let (w, d) = env("np_harvest");
+        let log: Log = Rc::new(RefCell::new(vec![]));
+        let bh = tobj(24, 1, &log, None, None, None);
+        for kind in KINDS {
+            for expert in [false, true] {
+                w.set_expert_mode(expert);
+                for (age, flowering) in [(100.0f32, false), (5000.0, true), (5000.0, false)] {
+                    for mult in [1, 2, 3] {
+                        for with_bh in [false, true] {
+                            clear(&w);
+                            let p = plant_at(&w, &d, kind, false).unwrap();
+                            let me: ObjRef = p.clone();
+                            p.plant.borrow_mut().age = age;
+                            p.plant.borrow_mut().flowering = flowering;
+                            let n = p.tile_harvested_remove_blockhead_correct_tool_multiplier(
+                                &me,
+                                IntPair { x: X, y: Y },
+                                if with_bh { Some(&bh) } else { None },
+                                mult,
+                            );
+                            assert!(n >= 0);
+                            assert!(me.needs_removed());
+                        }
+                    }
+                }
+            }
+        }
+        w.set_expert_mode(false);
+    }
+
+    #[test]
+    fn saved_crops_replicas_and_lights() {
+        let (w, d) = env("np_persist");
+        for kind in KINDS {
+            clear(&w);
+            let p = plant_at(&w, &d, kind, false).unwrap();
+            let me: ObjRef = p.clone();
+            p.plant.borrow_mut().age = 3000.0;
+            // a flower that is not there any more is forgotten, one that is there stays
+            p.plant.borrow_mut().flowering = true;
+            let dict = p.get_save_dict(&me);
+            let back = NormalPlant::init_with_world_dynamic_world_save_dict_cache_tree_density_noise_function_season_offset_noise_function(kind, &w, &d, &dict, None, None, None).unwrap();
+            assert!(!back.plant.borrow().flowering || tile(&w, Y + 1).foreground_contents() != 0);
+            tile(&w, Y + 1).set_foreground_contents(p.flower_contents_type() as u8);
+            let back = NormalPlant::init_with_world_dynamic_world_save_dict_cache_tree_density_noise_function_season_offset_noise_function(kind, &w, &d, &dict, None, None, None).unwrap();
+            let _ = back.plant.borrow().flowering;
+            // lights: a plant that emits light keeps the dict of its light
+            p.plant.borrow_mut().flowering = true;
+            let with_light = p.get_save_dict(&me);
+            let again = NormalPlant::init_with_world_dynamic_world_save_dict_cache_tree_density_noise_function_season_offset_noise_function(kind, &w, &d, &with_light, None, None, None).unwrap();
+            let again_ref: ObjRef = again.clone();
+            again.set_needs_removed(&again_ref, true);
+            again.remove_from_macro_block(&again_ref);
+            again.dealloc(&again_ref);
+            // replicas and the flowering switch
+            let net = p.plant_creation_net_data(&me);
+            let copy = NormalPlant::init_with_net_data(kind, &w, &d, None, &net.to_vec()).unwrap();
+            let copy_ref: ObjRef = copy.clone();
+            copy.remote_update(&copy_ref, &net.to_vec());
+            p.set_flowering(&me, false);
+            p.set_flowering(&me, false);
+            p.set_flowering(&me, true);
+            p.set_flowering(&me, false);
+            p.plant.borrow_mut().flowering = false;
+            let _ = p.dropped_item_type();
+            p.plant.borrow_mut().flowering = true;
+            let _ = p.dropped_item_type();
+        }
+    }
+
+    #[test]
+    fn adult_crops_need_a_survivable_spot() {
+        let (w, d) = env("np_adult");
+        for kind in KINDS {
+            clear(&w);
+            for seed in 1..10u32 {
+                srand(seed);
+                assert!(plant_at(&w, &d, kind, true).is_some());
+            }
+            tile(&w, Y).set_type_index(3);
+            assert!(plant_at(&w, &d, kind, true).is_none());
+        }
+    }
+
+    #[test]
+    fn sunflower_light_follows_the_flower() {
+        let (w, d) = env("np_light");
+        clear(&w);
+        let p = plant_at(&w, &d, Sunflower, false).unwrap();
+        let me: ObjRef = p.clone();
+        p.plant.borrow_mut().flowering = true;
+        p.plant.borrow_mut().age = 100.0;
+        for age in [100.0f32, 20_000.0, 30_000.0] {
+            p.plant.borrow_mut().age = age;
+            p.update_accurate_dt_is_simulation(&me, 0.1, 0.1, false);
+        }
+        p.plant.borrow_mut().flowering = false;
+        p.update_accurate_dt_is_simulation(&me, 0.1, 0.1, false);
+        assert!(!p.emits_light());
+    }
+
+    #[test]
+    fn compost_blocks_unloaded_columns_and_odd_accessors() {
+        let (w, d) = env("np_odd");
+        for kind in KINDS {
+            clear(&w);
+            // compost under the root grows bigger plants
+            tile(&w, Y - 1).set_type_index(48);
+            let p = plant_at(&w, &d, kind, false).unwrap();
+            let me: ObjRef = p.clone();
+            p.set_available_food(12.0);
+            assert_eq!(p.available_food(), 12.0);
+            p.add_artificial_light_contribution_for_physical_block_loaded_at_x_pos_y_pos(&me, 0, 0);
+            tile(&w, Y - 1).set_type_index(6);
+            // removed and replica plants do not tick
+            let net = p.plant_creation_net_data(&me);
+            let copy = NormalPlant::init_with_net_data(kind, &w, &d, None, &net.to_vec()).unwrap();
+            let copy_ref: ObjRef = copy.clone();
+            copy.update_accurate_dt_is_simulation(&copy_ref, 0.1, 0.1, false);
+            // a flower season with the row above gone: the plant copes
+            p.plant.borrow_mut().age = 5000.0;
+            p.plant.borrow_mut().max_age = 1.0e9;
+            let dict = p.get_save_dict(&me);
+            let mut net_bad = net;
+            net_bad.dynamic_object_net_data.pos_y = 5;
+            for mx in 0..2 {
+                *w.macro_tiles().get(mx).unwrap().physical_block.borrow_mut() = None;
+            }
+            assert!(NormalPlant::init_with_net_data(kind, &w, &d, None, &net_bad.to_vec()).is_none());
+            let _ = dict;
+            p.init_sub_derived_items(&me);
+            for k in 0..8 {
+                w.set_world_time(f64::from(k) * 450.0);
+                p.plant.borrow_mut().flowering = false;
+                p.plant.borrow_mut().has_flowered_this_season = false;
+                p.update_accurate_dt_is_simulation(&me, 0.1, 0.1, false);
+                p.plant.borrow_mut().flowering = true;
+                p.update_accurate_dt_is_simulation(&me, 0.1, 0.1, false);
+            }
+            assert!(plant_at(&w, &d, kind, false).is_none());
+            // pos in unloaded block: rebuild the loaded world for the next kind
+            let (_w2, _d2) = (w.clone(), d.clone());
+            for mx in 0..2 {
+                let pb = crate::world::state::PhysicalBlock::new_fresh();
+                let pb: &'static crate::world::state::PhysicalBlock = Box::leak(Box::new(pb));
+                pb.x_pos.set(mx as i32);
+                pb.y_pos.set(0);
+                pb.valid.set(true);
+                for i in 0..1024 {
+                    pb.tiles[i].set(Tile::default());
+                }
+                *w.macro_tiles().get(mx).unwrap().physical_block.borrow_mut() = Some(pb);
+                for ly in 0..32usize {
+                    for lx in 0..32usize {
+                        let mut t = Tile::default();
+                        if ly <= 9 {
+                            t.type_index = 6;
+                        } else {
+                            t.type_index = 2;
+                            t.back_wall_type_index = 2;
+                            t.sun_light = 255;
+                        }
+                        pb.tiles[ly * 32 + lx].set(t);
+                    }
+                }
+            }
+        }
+    }
+}

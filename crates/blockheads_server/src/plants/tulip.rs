@@ -653,3 +653,150 @@ mod tests {
         assert!(t.can_breed());
     }
 }
+
+/// Scenario tests: flowering seasons, mates, food, harvests and the gene lotteries.
+#[cfg(test)]
+mod scenario_tests {
+    use super::*;
+    use crate::dynworld::state::testutil::{tobj, Log};
+    use crate::rng::glibc_rand::srand;
+    use crate::trees::tree::testenv::env;
+    use crate::world::tiles::tile_at_world_position_loaded;
+
+    const X: i32 = 20;
+    const Y: i32 = 10;
+
+    fn tulip_at(w: &Rc<World>, d: &Rc<DynamicWorld>, x: i32, genes: u16, adult: bool) -> Option<Rc<TulipPlant>> {
+        TulipPlant::init_with_world_dynamic_world_at_position_cache_max_age_gene_growth_rate_gene_tree_density_noise_function_season_offset_noise_function_adult_plant(
+            w, d, IntPair { x, y: Y }, None, genes, 0x1100, None, None, adult,
+        )
+    }
+
+    fn tile(w: &Rc<World>, x: i32, y: i32) -> crate::world::state::TileRef {
+        tile_at_world_position_loaded(x, y, w).unwrap()
+    }
+
+    #[test]
+    fn tulips_flower_pair_up_and_get_picked() {
+        let (w, d) = env("tp_flow");
+        let t1 = tulip_at(&w, &d, X, 0x3456, false).unwrap();
+        let m1: ObjRef = t1.clone();
+        let t2 = tulip_at(&w, &d, X + 2, 0x4321, false).unwrap();
+        d.do_set(59, 1, m1.clone());
+        d.do_set(59, 2, t2.clone());
+        t1.set_color_genes(0x3456);
+        for (k, tulip) in [&t1, &t2].iter().enumerate() {
+            let me: ObjRef = (*tulip).clone();
+            tulip.plant.borrow_mut().age = 1000.0;
+            for step in 0..16 {
+                w.set_world_time(f64::from(step) * 225.0);
+                srand(k as u32 + 1);
+                tulip.update_accurate_dt_is_simulation(&me, 0.1, 0.1, false);
+            }
+        }
+        assert_eq!(t1.dropped_item_type(), ITEM_TULIP_BULB);
+        t1.set_available_food(2000.0);
+        assert_eq!(t1.available_food(), 2000.0);
+        t1.update_accurate_dt_is_simulation(&m1, 0.1, 0.1, false);
+        // too dark twice in a row kills the plant
+        tile(&w, X, Y).set_sun_light(0);
+        for _ in 0..2 {
+            t1.tulip.borrow_mut().check_weather_count = 299;
+            t1.update_accurate_dt_is_simulation(&m1, 0.1, 0.1, false);
+        }
+        assert!(m1.needs_removed());
+        t1.update_accurate_dt_is_simulation(&m1, 0.1, 0.1, false);
+        t1.set_flowering(&m1, true);
+        t1.set_flowering(&m1, true);
+        assert_eq!(t1.class_info().name, "TulipPlant");
+    }
+
+    #[test]
+    fn harvests_give_bulbs_and_sometimes_seeds() {
+        let (w, d) = env("tp_harvest");
+        let log: Log = Rc::new(RefCell::new(vec![]));
+        let bh = tobj(24, 1, &log, None, None, None);
+        for (age, flowering) in [(100.0f32, false), (2000.0, false), (100.0, true), (2000.0, true)] {
+            for mult in [1, 2, 3] {
+                for seed in 1..12u32 {
+                    let t = tulip_at(&w, &d, X, 0x3456, false).unwrap();
+                    let me: ObjRef = t.clone();
+                    t.plant.borrow_mut().age = age;
+                    t.plant.borrow_mut().flowering = flowering;
+                    t.tulip.borrow_mut().mate_color_genes = 0x5432;
+                    srand(seed);
+                    let n = t.tile_harvested_remove_blockhead_correct_tool_multiplier(
+                        &me,
+                        IntPair { x: X, y: Y },
+                        Some(&bh),
+                        mult,
+                    );
+                    assert!(n >= 1);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn gene_lotteries() {
+        let (w, d) = env("tp_genes");
+        let t = tulip_at(&w, &d, X, 0x3456, false).unwrap();
+        for seed in 1..400u32 {
+            srand(seed);
+            t.tulip.borrow_mut().mix_genes = [0x0000, 0x8800, 0x4400, 0x1200][(seed % 4) as usize];
+            let _ = t.mix_genes_variation();
+            t.tulip.borrow_mut().color_genes = [0x3456, 0x3333, 0x2468, 0x7531][(seed % 4) as usize];
+            t.tulip.borrow_mut().mate_color_genes = [0x3456, 0x8764, 0x1357, 0x4321][((seed / 4) % 4) as usize];
+            let _ = t.color_genes_variation();
+        }
+        // a mutation roll of exactly zero picks a new colour for one slot
+        let mut slots = std::collections::HashSet::new();
+        for seed in 1..60_000u32 {
+            srand(seed);
+            let before = glibc_rand::rand_tagged("probe") % 100;
+            srand(seed);
+            if before == 0 {
+                slots.insert(t.color_genes_variation());
+            }
+            if slots.len() > 40 {
+                break;
+            }
+        }
+        assert!(!slots.is_empty());
+    }
+
+    #[test]
+    fn saved_tulips_replicas_and_adults() {
+        let (w, d) = env("tp_save");
+        let t = tulip_at(&w, &d, X, 0x3456, false).unwrap();
+        let me: ObjRef = t.clone();
+        let dict = t.get_save_dict(&me);
+        let back = TulipPlant::init_with_world_dynamic_world_save_dict_cache_tree_density_noise_function_season_offset_noise_function(&w, &d, &dict, None, None, None).unwrap();
+        assert_eq!(back.color_genes(), 0x3456);
+        let net = t.plant_creation_net_data(&me);
+        let copy = TulipPlant::init_with_net_data(&w, &d, None, &net.to_vec()).unwrap();
+        let copy_ref: ObjRef = copy.clone();
+        copy.remote_update(&copy_ref, &net.to_vec());
+        copy.update_accurate_dt_is_simulation(&copy_ref, 0.1, 0.1, false);
+        t.remove_from_macro_block(&me);
+        t.set_needs_removed(&me, true);
+        t.dealloc(&me);
+        for seed in 1..5u32 {
+            srand(seed);
+            assert!(tulip_at(&w, &d, X + 4, 0x3456, true).is_some());
+        }
+        tile(&w, X + 4, Y).set_type_index(3);
+        assert!(tulip_at(&w, &d, X + 4, 0x3456, true).is_none());
+        // blocks that are not loaded
+        for mx in 0..2 {
+            *w.macro_tiles().get(mx).unwrap().physical_block.borrow_mut() = None;
+        }
+        assert!(tulip_at(&w, &d, X, 0x3456, false).is_none());
+        let mut bad = net;
+        bad.dynamic_object_net_data.pos_y = 5;
+        assert!(TulipPlant::init_with_net_data(&w, &d, None, &bad.to_vec()).is_none());
+        t.init_sub_derived_items(&me);
+        t.plant.borrow_mut().age = 1000.0;
+        t.update_accurate_dt_is_simulation(&me, 0.1, 0.1, false);
+    }
+}

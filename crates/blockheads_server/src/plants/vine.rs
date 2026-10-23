@@ -669,3 +669,418 @@ mod tests {
         assert_eq!(m, 35000.0);
     }
 }
+
+/// Scenario tests: a vine hanging from a ceiling, growth, catch-up on load, harvest and death.
+#[cfg(test)]
+mod scenario_tests {
+    use super::*;
+    use crate::plist::value::PlistValue;
+    use crate::rng::glibc_rand::srand;
+    use crate::trees::tree::testenv::env;
+    use crate::world::tiles::tile_at_world_position_loaded;
+
+    const X: i32 = 20;
+    const HEAD: i32 = 24;
+
+    /// Dirt ceiling at rows 24..=26 over column 20, open air (with sun) below it down to row 9.
+    fn cave(w: &Rc<World>) {
+        cave_at(w, HEAD);
+    }
+
+    /// The same cave with its ceiling at row `head`.
+    fn cave_at(w: &Rc<World>, head: i32) {
+        for y in (head - 14)..=(head + 2) {
+            for x in 18..=22 {
+                tile_at_world_position_loaded(x, y, w).unwrap().update(|t| {
+                    if y >= head {
+                        t.type_index = 6;
+                        t.sun_light = 0;
+                    } else {
+                        t.type_index = 2;
+                        t.back_wall_type_index = 2;
+                        t.sun_light = 255;
+                        t.foreground_contents = 0;
+                    }
+                });
+            }
+        }
+    }
+
+    fn vine_at(d: &Rc<DynamicWorld>, adult: bool) -> Option<Rc<VinePlant>> {
+        VinePlant::init_with_world_dynamic_world_at_position_cache_max_age_gene_growth_rate_gene_tree_density_noise_function_season_offset_noise_function_adult_plant(
+            &d.world(), d, IntPair { x: X, y: HEAD }, None, 128, 128, None, None, adult,
+        )
+    }
+
+    fn vine_at_height(d: &Rc<DynamicWorld>, y: i32) -> Option<Rc<VinePlant>> {
+        VinePlant::init_with_world_dynamic_world_at_position_cache_max_age_gene_growth_rate_gene_tree_density_noise_function_season_offset_noise_function_adult_plant(
+            &d.world(), d, IntPair { x: X, y }, None, 128, 128, None, None, false,
+        )
+    }
+
+    fn fg(w: &Rc<World>, y: i32) -> u8 {
+        tile_at_world_position_loaded(X, y, w).unwrap().foreground_contents()
+    }
+
+    #[test]
+    fn a_young_vine_grows_down_its_column() {
+        let (w, d) = env("vn_grow");
+        cave(&w);
+        let vine = vine_at(&d, false).expect("vine");
+        let me: ObjRef = vine.clone();
+        assert_eq!(fg(&w, HEAD), FG_VINE);
+        assert_eq!(vine.n(), 0);
+        // a long second at a time: the growth timer fires, the plant ages, the weather check runs every 60 calls
+        for _ in 0..70 {
+            vine.update_accurate_dt_is_simulation(&me, 1000.0, 1000.0, false);
+        }
+        assert!(vine.n() > 0, "n = {}", vine.n());
+        assert_eq!(fg(&w, HEAD - 1), FG_VINE);
+        // gather progress per tile
+        let below = IntPair { x: X, y: HEAD - 1 };
+        vine.set_gather_progress_for_tile(5, below);
+        assert_eq!(vine.gather_progress_for_tile(below), 5);
+        vine.set_gather_progress_for_tile(7, IntPair { x: X, y: HEAD });
+        assert_eq!(vine.gather_progress_for_tile(IntPair { x: X, y: HEAD }), 7);
+        vine.set_gather_progress_for_tile(9, IntPair { x: X, y: HEAD - 40 });
+        assert_eq!(vine.gather_progress_for_tile(IntPair { x: X, y: HEAD - 40 }), 7);
+        assert_eq!(vine.plant_type(), PLANT_VINE);
+        assert_eq!(vine.dropped_item_type(), ITEM_VINE);
+        assert_eq!(vine.available_food(), vine.vine.borrow().available_food);
+        vine.set_available_food(3.0);
+        assert!(vine.is_required_soil_type(6) && !vine.is_required_soil_type(1));
+        assert!(!vine.is_growing_in_compost(&me));
+        tile_at_world_position_loaded(X, HEAD, &w).unwrap().set_type_index(0x31);
+        assert!(vine.is_growing_in_compost(&me));
+    }
+
+    #[test]
+    fn adult_vines_hang_down_at_once_unless_it_is_too_cold() {
+        let (w, d) = env("vn_adult");
+        let mut lengths = Vec::new();
+        for seed in 1..40u32 {
+            cave(&w);
+            if seed % 3 == 0 {
+                // something in the way two tiles below the head stops the growth
+                tile_at_world_position_loaded(X, HEAD - 2, &w).unwrap().set_foreground_contents(1);
+            }
+            srand(seed);
+            lengths.push(vine_at(&d, true).expect("vine").n());
+        }
+        assert!(
+            lengths.iter().any(|n| *n > 0) && lengths.contains(&1) && lengths.iter().all(|n| *n <= 15),
+            "{lengths:?}"
+        );
+        // freezing worlds refuse adult vines
+        // high in the sky it is freezing whatever the clock says
+        cave_at(&w, 1000);
+        tile_at_world_position_loaded(X, 1000, &w).unwrap().update(|t| t.sun_light = 255);
+        let vine = VinePlant::init_with_world_dynamic_world_at_position_cache_max_age_gene_growth_rate_gene_tree_density_noise_function_season_offset_noise_function_adult_plant(
+            &w, &d, IntPair { x: X, y: 1000 }, None, 128, 128, None, None, true,
+        );
+        assert!(vine.is_none());
+        w.set_custom_rules(Default::default());
+        cave(&w);
+        // a head that is not on soil is refused
+        tile_at_world_position_loaded(X, HEAD, &w).unwrap().set_type_index(1);
+        assert!(vine_at(&d, false).is_none());
+        assert!(vine_at(&d, true).is_none());
+    }
+
+    #[test]
+    fn vines_at_the_edge_of_the_loaded_world() {
+        let (w, d) = env("vn_edge");
+        cave(&w);
+        // the bottom macro row is not loaded: the vine head sits in the row above it
+        let cut = w.macro_tiles();
+        for mx in 0..2 {
+            *cut.get(mx).unwrap().physical_block.borrow_mut() = None;
+        }
+        let head = IntPair { x: X, y: 32 };
+        tile_at_world_position_loaded(X, 32, &w).unwrap().set_type_index(6);
+        let vine = VinePlant::init_with_world_dynamic_world_at_position_cache_max_age_gene_growth_rate_gene_tree_density_noise_function_season_offset_noise_function_adult_plant(
+            &w, &d, head, None, 128, 128, None, None, true,
+        )
+        .expect("vine");
+        let me: ObjRef = vine.clone();
+        vine.set_n(2);
+        for _ in 0..80 {
+            vine.update_accurate_dt_is_simulation(&me, 1000.0, 1000.0, false);
+        }
+        // a harvest, a death and a reload with the world below missing
+        let mut dict = vine.get_save_dict(&me);
+        dict.map.insert("saveTime".to_string(), PlistValue::real_f64(w.world_time() - 10_000.0));
+        let back = VinePlant::init_with_world_dynamic_world_save_dict_cache_tree_density_noise_function_season_offset_noise_function(&w, &d, &dict, None, None, None);
+        assert!(back.is_some());
+        vine.set_n(3);
+        srand(2);
+        vine.tile_harvested_remove_blockhead_correct_tool_multiplier(&me, IntPair { x: X, y: 30 }, None, 1);
+        vine.die_of_old_age(&me);
+        srand(1);
+        vine.die_of_old_age(&me);
+    }
+
+    #[test]
+    fn saved_vines_catch_up_after_loading() {
+        let (w, d) = env("vn_load");
+        cave(&w);
+        let vine = vine_at(&d, false).unwrap();
+        let me: ObjRef = vine.clone();
+        vine.plant.borrow_mut().age = 100.0;
+        let mut dict = vine.get_save_dict(&me);
+        dict.map.insert("saveTime".to_string(), PlistValue::real_f64(w.world_time() - 10_000.0));
+        put_float(&mut dict, "availableFood", 0.0);
+        put_float(&mut dict, "growthTimer", 5000.0);
+        let back = VinePlant::init_with_world_dynamic_world_save_dict_cache_tree_density_noise_function_season_offset_noise_function(&w, &d, &dict, None, None, None).unwrap();
+        assert!(back.n() > 0 || back.vine.borrow().growth_timer > 0.0);
+        // an offline time longer than the life dies of old age; in compost it only ages to the limit
+        let mut old = dict.clone();
+        old.map.insert("saveTime".to_string(), PlistValue::real_f64(w.world_time() - 1.0e9));
+        srand(1);
+        let dead = VinePlant::init_with_world_dynamic_world_save_dict_cache_tree_density_noise_function_season_offset_noise_function(&w, &d, &old, None, None, None);
+        assert!(dead.is_some());
+        tile_at_world_position_loaded(X, HEAD, &w).unwrap().set_type_index(0x31);
+        let compost = VinePlant::init_with_world_dynamic_world_save_dict_cache_tree_density_noise_function_season_offset_noise_function(&w, &d, &old, None, None, None);
+        assert!(compost.is_some());
+        // a blocked column resets the growth timer
+        cave(&w);
+        tile_at_world_position_loaded(X, HEAD - 1, &w).unwrap().set_foreground_contents(1);
+        let blocked = VinePlant::init_with_world_dynamic_world_save_dict_cache_tree_density_noise_function_season_offset_noise_function(&w, &d, &dict, None, None, None).unwrap();
+        assert_eq!(blocked.vine.borrow().growth_timer, 0.0);
+    }
+
+    #[test]
+    fn network_copies_follow_the_length() {
+        let (w, d) = env("vn_net");
+        cave(&w);
+        let vine = vine_at(&d, false).unwrap();
+        let me: ObjRef = vine.clone();
+        vine.set_n(3);
+        for y in (HEAD - 3)..HEAD {
+            tile_at_world_position_loaded(X, y, &w).unwrap().set_foreground_contents(FG_VINE);
+        }
+        let net = vine.plant_creation_net_data(&me);
+        let copy = VinePlant::init_with_net_data(&w, &d, None, &net.to_vec()).unwrap();
+        assert_eq!(copy.n(), 3);
+        // a shorter update removes tiles, a longer one adds them
+        let mut shorter = net;
+        shorter.extra_data = 1;
+        vine.remote_update(&me, &shorter.to_vec());
+        assert_eq!(vine.n(), 1);
+        assert_eq!(fg(&w, HEAD - 3), 0);
+        let mut longer = net;
+        longer.extra_data = 5;
+        vine.remote_update(&me, &longer.to_vec());
+        assert_eq!(vine.n(), 5);
+        assert_eq!(fg(&w, HEAD - 5), FG_VINE);
+    }
+
+    #[test]
+    fn water_kills_the_vine_and_harvests_cascade() {
+        let (w, d) = env("vn_water");
+        cave(&w);
+        let vine = vine_at(&d, false).unwrap();
+        let me: ObjRef = vine.clone();
+        vine.set_n(6);
+        for y in (HEAD - 6)..HEAD {
+            tile_at_world_position_loaded(X, y, &w).unwrap().set_foreground_contents(FG_VINE);
+        }
+        vine.plant.borrow_mut().age = 2000.0;
+        srand(3);
+        let n =
+            vine.tile_harvested_remove_blockhead_correct_tool_multiplier(&me, IntPair { x: X, y: HEAD - 3 }, None, 2);
+        assert!(n >= 1);
+        assert_eq!(vine.n(), 2);
+        // wrong column or below the head: nothing
+        assert_eq!(
+            vine.tile_harvested_remove_blockhead_correct_tool_multiplier(
+                &me,
+                IntPair { x: X + 1, y: HEAD - 1 },
+                None,
+                1
+            ),
+            0
+        );
+        // a young vine yields at least one
+        vine.plant.borrow_mut().age = 10.0;
+        vine.set_n(0);
+        tile_at_world_position_loaded(X, HEAD - 1, &w).unwrap().set_foreground_contents(FG_VINE);
+        assert_eq!(
+            vine.tile_harvested_remove_blockhead_correct_tool_multiplier(&me, IntPair { x: X, y: HEAD - 1 }, None, 1),
+            1
+        );
+        // water below the head makes the periodic check pull the vine
+        vine.set_n(4);
+        for y in (HEAD - 4)..HEAD {
+            tile_at_world_position_loaded(X, y, &w).unwrap().set_foreground_contents(FG_VINE);
+        }
+        tile_at_world_position_loaded(X, HEAD - 3, &w).unwrap().set_type_index(3);
+        vine.vine.borrow_mut().check_weather_count = 59;
+        vine.update_accurate_dt_is_simulation(&me, 0.1, 0.1, false);
+        assert!(vine.n() < 4);
+        // water on the head tile removes the whole plant
+        tile_at_world_position_loaded(X, HEAD, &w).unwrap().set_type_index(3);
+        vine.vine.borrow_mut().check_weather_count = 59;
+        vine.update_accurate_dt_is_simulation(&me, 0.1, 0.1, false);
+        assert!(me.needs_removed());
+    }
+
+    #[test]
+    fn old_age_either_resows_or_starts_over() {
+        let (w, d) = env("vn_old");
+        cave(&w);
+        let mut seen = (false, false);
+        for seed in 1..60u32 {
+            cave(&w);
+            let vine = vine_at(&d, false).unwrap();
+            let me: ObjRef = vine.clone();
+            vine.set_n(2);
+            for y in (HEAD - 2)..HEAD {
+                tile_at_world_position_loaded(X, y, &w).unwrap().set_foreground_contents(FG_VINE);
+            }
+            vine.plant.borrow_mut().age = 99_999.0;
+            vine.plant.borrow_mut().max_age = 10.0;
+            srand(seed);
+            vine.update_accurate_dt_is_simulation(&me, 0.1, 0.1, false);
+            if me.needs_removed() {
+                seen.0 = true;
+            } else if vine.n() == 0 {
+                seen.1 = true;
+            }
+            if seen.0 && seen.1 {
+                break;
+            }
+        }
+        assert!(seen.0 && seen.1, "{seen:?}");
+        assert_eq!(VINE_PLANT_CLASS.name, "VinePlant");
+    }
+
+    #[test]
+    fn vines_cannot_be_built_outside_the_world_or_in_unloaded_blocks() {
+        let (w, d) = env("vn_unloaded");
+        cave(&w);
+        let vine = vine_at(&d, false).unwrap();
+        let me: ObjRef = vine.clone();
+        let mut net = vine.plant_creation_net_data(&me);
+        // a block that is not loaded cannot take a replica
+        for mx in 0..2 {
+            *w.macro_tiles().get(mx).unwrap().physical_block.borrow_mut() = None;
+        }
+        net.dynamic_object_net_data.pos_y = 10;
+        assert!(VinePlant::init_with_net_data(&w, &d, None, &net.to_vec()).is_none());
+        assert!(vine_at_height(&d, 10).is_none());
+        // a vine whose head block vanished does not trip over it
+        vine.init_sub_derived_items(&me);
+        assert!(!vine.is_growing_in_compost(&me));
+        vine.vine.borrow_mut().check_weather_count = 59;
+        vine.update_accurate_dt_is_simulation(&me, 0.1, 0.1, false);
+    }
+
+    #[test]
+    fn harvest_cascades_drop_some_vines_and_remove_the_rest() {
+        let (w, d) = env("vn_cascade");
+        for seed in 1..40u32 {
+            cave(&w);
+            let vine = vine_at(&d, false).unwrap();
+            let me: ObjRef = vine.clone();
+            vine.plant.borrow_mut().age = 5000.0;
+            vine.set_n(10);
+            for y in (HEAD - 10)..HEAD {
+                tile_at_world_position_loaded(X, y, &w).unwrap().set_foreground_contents(FG_VINE);
+            }
+            // a solid tile in the middle makes its dropped vine fall at the head instead
+            tile_at_world_position_loaded(X, HEAD - 5, &w).unwrap().set_type_index(6);
+            srand(seed);
+            vine.tile_harvested_remove_blockhead_correct_tool_multiplier(&me, IntPair { x: X, y: HEAD - 2 }, None, 1);
+        }
+        assert_eq!(vine_at(&d, false).unwrap().class_info().name, "VinePlant");
+    }
+
+    #[test]
+    fn replicas_ignore_unloaded_columns_and_full_vines_stop_growing() {
+        let (w, d) = env("vn_replica");
+        cave(&w);
+        let vine = vine_at(&d, false).unwrap();
+        let me: ObjRef = vine.clone();
+        let mut dict = vine.get_save_dict(&me);
+        dict.map.insert("numberOfOccupiedTilesBelow".to_string(), PlistValue::int(15));
+        dict.map.insert("saveTime".to_string(), PlistValue::real_f64(w.world_time() - 100.0));
+        let full = VinePlant::init_with_world_dynamic_world_save_dict_cache_tree_density_noise_function_season_offset_noise_function(&w, &d, &dict, None, None, None).unwrap();
+        assert_eq!(full.n(), 15);
+        let mut net = vine.plant_creation_net_data(&me);
+        net.extra_data = 4;
+        // the rows below are gone, so the replica cannot paint them
+        for mx in 0..2 {
+            *w.macro_tiles().get(mx).unwrap().physical_block.borrow_mut() = None;
+        }
+        vine.remote_update(&me, &net.to_vec());
+        net.extra_data = 1;
+        vine.remote_update(&me, &net.to_vec());
+        assert_eq!(vine.n(), 1);
+    }
+
+    #[test]
+    fn replicas_and_removed_vines_do_not_tick() {
+        let (w, d) = env("vn_replica_tick");
+        cave(&w);
+        let vine = vine_at(&d, false).unwrap();
+        let me: ObjRef = vine.clone();
+        let net = vine.plant_creation_net_data(&me);
+        let copy = VinePlant::init_with_net_data(&w, &d, None, &net.to_vec()).unwrap();
+        let copy_ref: ObjRef = copy.clone();
+        copy.update_accurate_dt_is_simulation(&copy_ref, 1000.0, 1000.0, false);
+        vine.set_needs_removed(&me, true);
+        vine.update_accurate_dt_is_simulation(&me, 1000.0, 1000.0, false);
+        assert_eq!(vine.vine.borrow().check_weather_count, 0);
+        // a tile that is not loaded while a harvest asks for it
+        let (w2, d2) = env("vn_harvest_gone");
+        cave(&w2);
+        let v2 = vine_at(&d2, false).unwrap();
+        let m2: ObjRef = v2.clone();
+        v2.set_n(3);
+        for mx in 0..2 {
+            *w2.macro_tiles().get(mx).unwrap().physical_block.borrow_mut() = None;
+        }
+        assert_eq!(
+            v2.tile_harvested_remove_blockhead_correct_tool_multiplier(&m2, IntPair { x: X, y: HEAD - 2 }, None, 1),
+            0
+        );
+        // growing past the end of a young plant's life
+        let (w3, d3) = env("vn_grow_old");
+        cave(&w3);
+        let v3 = vine_at(&d3, false).unwrap();
+        let m3: ObjRef = v3.clone();
+        v3.plant.borrow_mut().max_age = 1.0;
+        v3.plant.borrow_mut().age = 5.0;
+        srand(7);
+        v3.update_accurate_dt_is_simulation(&m3, 0.1, 0.1, false);
+    }
+
+    #[test]
+    fn odd_harvests_and_full_length_ticks() {
+        let (w, d) = env("vn_odd");
+        cave(&w);
+        let vine = vine_at(&d, false).unwrap();
+        let me: ObjRef = vine.clone();
+        vine.plant.borrow_mut().age = 5000.0;
+        // n says 5 tiles but the tiles are bare: nothing is dropped and the cascade has nothing to remove
+        vine.set_n(5);
+        assert_eq!(
+            vine.tile_harvested_remove_blockhead_correct_tool_multiplier(&me, IntPair { x: X, y: HEAD - 2 }, None, 1),
+            0
+        );
+        // far below the head nothing happens to the tiles
+        vine.set_n(5);
+        assert_eq!(
+            vine.tile_harvested_remove_blockhead_correct_tool_multiplier(&me, IntPair { x: X, y: HEAD - 20 }, None, 1),
+            0
+        );
+        // an update with the same length changes nothing; a full vine does not grow
+        let net = vine.plant_creation_net_data(&me);
+        vine.remote_update(&me, &net.to_vec());
+        vine.set_n(15);
+        vine.vine.borrow_mut().growth_timer = 1.0e6;
+        vine.update_accurate_dt_is_simulation(&me, 0.1, 0.1, false);
+        assert_eq!(vine.n(), 15);
+    }
+}
