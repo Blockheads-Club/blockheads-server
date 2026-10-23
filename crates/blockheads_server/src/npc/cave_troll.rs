@@ -316,16 +316,6 @@ pub(crate) fn snap_float_pos(me: &ObjRef, sq: IntPair) {
     set_float_pos(me, (sq.x as f32) + 0.5f32, sq.y as f32);
 }
 
-/// `[a == b]` handle identity of two optional handles (`nil == nil` is true).
-#[allow(dead_code)]
-pub(crate) fn opt_same(a: &Option<ObjRef>, b: &Option<ObjRef>) -> bool {
-    match (a, b) {
-        (None, None) => true,
-        (Some(a), Some(b)) => ptr_eq(a, b),
-        _ => false,
-    }
-}
-
 /// `x == obj` for an optional handle (`nil == obj` is false).
 pub(crate) fn is_same(a: &Option<ObjRef>, b: &ObjRef) -> bool {
     a.as_ref().map_or(false, |a| ptr_eq(a, b))
@@ -869,10 +859,8 @@ impl CaveTroll {
             }
             t.from_tile = tile;
             t.to_tile = tile;
-            if let Some(ft) = tile {
-                if ft.get().light > 0x7f {
-                    t.was_lit = true;
-                }
+            if tile.map_or(false, |ft| ft.get().light > 0x7f) {
+                t.was_lit = true;
             }
         });
         o.init_sub_derived_stuff_stuff();
@@ -1791,10 +1779,8 @@ impl CaveTroll {
                         });
                         if ttype == tt::FALL {
                             self.tm(|t| {
+                                // td >= 10 here, so the speed is >= 3.75
                                 t.travel_speed = ((td as f32) + 20.0f32) / 8.0f32;
-                                if t.travel_speed < 1.0f32 {
-                                    t.travel_speed = 1.0f32;
-                                }
                             });
                             let tokf = self.t(|t| t.traverse_to_key_frame);
                             if local && tokf == kf::STAND && td < 99999 {
@@ -2539,6 +2525,50 @@ pub(crate) mod test_support {
         }
     }
 
+    /// A client blockhead that the server is controlling (cannot ride).
+    pub struct CtlBh {
+        base: RefCell<DynamicObjectBase>,
+    }
+    impl CtlBh {
+        pub fn alloc(id: u64) -> ObjRef {
+            let o: ObjRef = crate::objects::handle::alloc_obj(|w| CtlBh {
+                base: RefCell::new(DynamicObjectBase::alloc_zeroed_with(w)),
+            });
+            o.base().borrow_mut().unique_id = id;
+            o
+        }
+    }
+    impl crate::objects::base::BlockheadApi for CtlBh {
+        fn client_id(&self) -> Option<String> {
+            None
+        }
+        fn local_net_id(&self) -> Option<String> {
+            None
+        }
+        fn is_client_blockhead_being_controlled_by_server(&self) -> bool {
+            true
+        }
+        fn is_interacting_with_any_interaction_object(&self) -> bool {
+            false
+        }
+        fn set_interaction_object(&self, _o: Option<&ObjRef>) {}
+        fn stop_interacting(&self) {}
+    }
+    impl DynamicObject for CtlBh {
+        fn base(&self) -> &RefCell<DynamicObjectBase> {
+            &self.base
+        }
+        fn class_info(&self) -> &'static ClassInfo {
+            &crate::objects::class_info::DYNAMIC_OBJECT_CLASS
+        }
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn as_blockhead(&self) -> Option<&dyn crate::objects::base::BlockheadApi> {
+            Some(self)
+        }
+    }
+
     pub struct TestEnv {
         pub world: Rc<World>,
         pub bhs: RefCell<Vec<ObjRef>>,
@@ -2827,10 +2857,7 @@ mod tests {
         let (t, me) = mk_troll(&f, ip(10, 11));
         t.data_mut().state.sub_animation_type = 4;
         let d = me.get_save_dict(&me);
-        match d.map.get(&"state".to_string()) {
-            Some(PlistValue::Data(b)) => assert_eq!(b.bytes.len(), 36),
-            other => panic!("state: {:?}", other),
-        }
+        assert!(matches!(d.map.get(&"state".to_string()), Some(PlistValue::Data(b)) if b.bytes.len() == 36));
         assert!(matches!(d.map.get(&"dead".to_string()), Some(PlistValue::Bool(false))));
         assert_eq!(d.map.get(&"defendSquare.x".to_string()).unwrap().int_value(), 10);
         assert_eq!(d.map.get(&"defendSquare.y".to_string()).unwrap().int_value(), 11);
@@ -3168,5 +3195,602 @@ mod tests {
         let o = crate::npc::npc::new_npc_for_type(6, &f.wref, &f.dwr, ip(10, 11), None, None, true, false, None)
             .expect("troll");
         assert_eq!(o.object_type(), 39);
+    }
+}
+
+/// Seeded cave simulations: random caverns, paths of every traverse type, riders and replicas.
+#[cfg(test)]
+mod sim_tests {
+    use super::test_support::*;
+    use super::*;
+    use crate::path::path_creator::testutil::edit;
+
+    struct Gen(u64);
+    impl Gen {
+        fn next(&mut self) -> u32 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            (self.0 >> 16) as u32
+        }
+        fn below(&mut self, n: u32) -> u32 {
+            self.next() % n
+        }
+        fn unit(&mut self) -> f32 {
+            self.below(2001) as f32 / 1000.0 - 1.0
+        }
+    }
+
+    fn ip(x: i32, y: i32) -> IntPair {
+        IntPair { x, y }
+    }
+
+    /// A cavern: x 6..=46, y 8..=26 of random air, rock, water, gates, ladders, doors and fire.
+    fn cavern(f: &Fx, g: &mut Gen) {
+        for x in 6..=46 {
+            for y in 8..=26 {
+                let k = g.below(100);
+                let wall = if g.below(3) == 0 { 0u8 } else { 1u8 };
+                edit(&f.world, x, y, |t| {
+                    t.type_index = 2;
+                    t.contents = 0;
+                    t.foreground_contents = 0;
+                    t.background_contents = 0;
+                    t.partial_content_left = 0;
+                    t.on_fire = 0;
+                    t.back_wall_type_index = wall;
+                    match k {
+                        0..=54 => {}
+                        55..=79 => t.type_index = 1,
+                        80..=85 => {
+                            t.type_index = 3;
+                            t.partial_content_left = 0x80 + g.below(0x7f) as u8
+                        }
+                        86..=87 => t.contents = 0x92,
+                        88..=90 => t.foreground_contents = 0x42,
+                        91 => t.background_contents = 0x46,
+                        92 => t.background_contents = 0x4B,
+                        93 => t.on_fire = 1,
+                        94..=95 => t.type_index = 5,
+                        _ => t.contents = 7,
+                    }
+                });
+            }
+        }
+    }
+
+    fn step(g: &mut Gen, center: IntPair) -> PathStep {
+        let types = [1, 1, 1, 2, 3, 4, 4, 5, 6, 7, 8, 11, 12, 13, 14, 15, 16, 17, 17, 19, 20, 21, 22, 23, 24, 25, 0];
+        let tds = [5, 10, 10, 40, 80, 150, 99999];
+        let x = (center.x + g.below(9) as i32 - 4).clamp(6, 46);
+        let y = (center.y + g.below(7) as i32 - 3).clamp(8, 26);
+        PathStep {
+            index: y * 128 + x,
+            terrain_difficulty: tds[g.below(7) as usize],
+            traverse_type: types[g.below(types.len() as u32) as usize],
+            traverse_to_key_frame: g.below(9) as i32,
+            parent_index: None,
+            properties_g: None,
+        }
+    }
+
+    fn random_path(g: &mut Gen, center: IntPair) -> Option<Vec<PathStep>> {
+        if g.below(6) == 0 {
+            return None;
+        }
+        let n = g.below(5);
+        Some((0..n).map(|_| step(g, center)).collect())
+    }
+
+    fn update_data(g: &mut Gen) -> CaveTrollUpdateData {
+        let mut u = CaveTrollUpdateData::default();
+        u.to_square_x = 6 + g.below(40);
+        u.to_square_y = 8 + g.below(18);
+        u.interacting_square_x = 6 + g.below(40);
+        u.interacting_square_y = 8 + g.below(18);
+        u.traverse_type = [0u8, 1, 2, 4, 5, 17, 19, 24][g.below(8) as usize];
+        u.traverse_to_key_frame = g.below(9) as u8;
+        u.terrain_difficulty = [10u16, 40, 60000][g.below(3) as usize];
+        u.interacting = g.below(2) as u8;
+        u.interaction_type = [0u8, 10, 12][g.below(3) as usize];
+        u.animation_type = g.below(28) as u8;
+        u.sub_animation_type = [0u8, 3, 4][g.below(3) as usize];
+        u
+    }
+
+    #[test]
+    fn seeded_caverns_cover_the_troll() {
+        for seed in 1..=400u64 {
+            let f = fixture(10);
+            let mut g = Gen(seed.wrapping_mul(0x9E3779B97F4A7C15) | 1);
+            cavern(&f, &mut g);
+            glibc_rand::srand(seed as u32);
+            let pos = ip(10 + g.below(30) as i32, 9 + g.below(16) as i32);
+            let troll = CaveTroll::init_with_world_dynamic_world_at_position_cache_save_dict_is_adult_was_placed_placed_by_client(
+                &f.wref, &f.dwr, pos, None, None, true, false, None,
+            )
+            .expect("troll");
+            let me: ObjRef = troll.clone();
+            let mode = g.below(8);
+            let mut rider: Option<ObjRef> = None;
+            match mode {
+                0 => me.base().borrow_mut().is_net = true,
+                1 => rider = Some(TestBh::alloc(900, ip(0, 0))),
+                2 => {
+                    let r = TestBh::alloc(901, ip(0, 0));
+                    r.base().borrow_mut().is_net = true;
+                    rider = Some(r)
+                }
+                _ => {}
+            }
+            troll.npc.borrow_mut().rider = rider.clone();
+            {
+                let mut n = troll.npc.borrow_mut();
+                n.damage = [0u16, 100, 250][g.below(3) as usize];
+                if g.below(6) == 0 {
+                    n.tamed_client_id = Some("server".into());
+                }
+            }
+            {
+                let mut d = troll.data_mut();
+                d.defend_square = if g.below(4) == 0 {
+                    ip(pos.x + 60, pos.y)
+                } else {
+                    ip(10 + g.below(30) as i32, 9 + g.below(16) as i32)
+                };
+                d.cannot_return = g.below(3) == 0;
+                d.random_ai_wait = [0.0, 0.0, 2.0][g.below(3) as usize];
+                d.random_idle_wait = [0.1, 5.0][g.below(2) as usize];
+                d.state.drown_fraction = [0.0, 0.5, 1.2][g.below(3) as usize];
+                d.travel_fraction = g.below(100) as f32 / 100.0;
+                d.waiting_for_path = g.below(15) == 0;
+                d.last_path_was_move_only = g.below(4) == 0;
+                d.last_path_was_falling = g.below(4) == 0;
+            }
+            let mut bhs = vec![];
+            for i in 0..g.below(4) {
+                let v =
+                    TestBh::alloc(500 + i as u64, ip(pos.x + g.below(21) as i32 - 10, pos.y + g.below(9) as i32 - 4));
+                if g.below(5) == 0 {
+                    v.base().borrow_mut().is_net = true;
+                }
+                bhs.push(v);
+            }
+            *f.env.bhs.borrow_mut() = bhs.clone();
+            if g.below(6) == 0 {
+                f.host.paused.set(Some(500));
+            }
+            if g.below(6) == 0 {
+                f.host.regen.set(Some(500));
+            }
+            if g.below(8) == 0 {
+                f.host.trade.set(Some(501));
+            }
+            f.host.expert.set(g.below(4) == 0);
+            match g.below(6) {
+                0 => set_difficulty(&f, CUSTOM_RULE_NPC_HARD),
+                1 => set_difficulty(&f, CUSTOM_RULE_NPC_PASSIVE),
+                2 => set_difficulty(&f, CUSTOM_RULE_NPC_EASY),
+                _ => {}
+            }
+            if g.below(5) == 0 {
+                troll.data_mut().waiting_before_retaliation_blockhead = bhs.first().cloned();
+            }
+            if g.below(8) == 0 {
+                if let Some(v) = bhs.first() {
+                    troll.data_mut().tapped_npc = Some(v.clone());
+                    troll.data_mut().chasing_npc = true;
+                    troll.data_mut().last_known_npc_position = v.pos();
+                }
+            }
+            if g.below(5) == 0 {
+                troll.data_mut().tapped_npc = bhs.first().cloned();
+            }
+            let dts = [0.05f32, 0.2, 0.7];
+            let dt = dts[g.below(3) as usize];
+            for tick in 0..220 {
+                if me.needs_removed() {
+                    break;
+                }
+                if g.below(120) == 0 {
+                    troll.npc.borrow_mut().dead = true;
+                }
+                if !troll.control_is_local() {
+                } else if troll.path_needs_recalculated() && g.below(4) != 0 {
+                    let ty = [0, 1, 2, 3, 4, 5][g.below(6) as usize];
+                    let goal = [0, 10, 12][g.below(3) as usize];
+                    let p = random_path(&mut g, me.pos());
+                    troll.set_path(&me, p, ty, goal, None);
+                } else if g.below(35) == 0 {
+                    let ty = [0, 1, 2, 3, 4, 5][g.below(6) as usize];
+                    let goal = [0, 10, 12][g.below(3) as usize];
+                    let p = random_path(&mut g, me.pos());
+                    troll.set_path(&me, p, ty, goal, None);
+                }
+                if g.below(30) == 0 {
+                    troll.data_mut().rider_target_velocity = Vector2 { x: g.unit(), y: g.unit() };
+                }
+                if g.below(50) == 0 {
+                    troll.data_mut().waiting_for_path = false;
+                }
+                if g.below(25) == 0 {
+                    let fp = me.float_pos();
+                    let big = g.below(10) == 0;
+                    let mut m = [0.0f32; 16];
+                    m[12] = fp.x;
+                    m[13] = fp.y + if big { 1500.0 } else { 0.5 + g.below(30) as f32 / 10.0 };
+                    troll.data_mut().mhead_matrix = m;
+                }
+                if g.below(8) == 0 {
+                    for v in bhs.iter() {
+                        let p = v.pos();
+                        v.base().borrow_mut().pos = ip(p.x + g.below(3) as i32 - 1, p.y + g.below(3) as i32 - 1);
+                    }
+                }
+                if g.below(200) == 0 {
+                    f.host.no_world.set(!f.host.no_world.get());
+                }
+                if g.below(4) == 0 {
+                    let mut u = update_data(&mut g);
+                    if g.below(2) == 0 {
+                        let (ts, it) = {
+                            let d = troll.data();
+                            (d.to_square, d.state.interacting)
+                        };
+                        u.to_square_x = ts.x as u32;
+                        u.to_square_y = ts.y as u32;
+                        u.interacting = it;
+                    }
+                    if me.is_net() || mode == 2 {
+                        let q = troll.data().current_net_queue_size;
+                        troll.data_mut().current_net_queue_size = q.max(0);
+                        troll.do_remote_update(&me, &u);
+                    }
+                }
+                if g.below(60) == 0 {
+                    let q = ip(10 + g.below(30) as i32, 9 + g.below(16) as i32);
+                    edit(&f.world, q.x, q.y, |t| t.on_fire = 1);
+                }
+                me.update_accurate_dt_is_simulation(&me, dt, dt, tick % 3 == 0);
+            }
+            me.update_accurate_dt_is_simulation(&me, dt, dt, false);
+        }
+    }
+
+    fn mk(f: &Fx, pos: IntPair) -> (Rc<CaveTroll>, ObjRef) {
+        let t =
+            CaveTroll::init_with_world_dynamic_world_at_position_cache_save_dict_is_adult_was_placed_placed_by_client(
+                &f.wref, &f.dwr, pos, None, None, true, false, None,
+            )
+            .expect("troll");
+        let me: ObjRef = t.clone();
+        (t, me)
+    }
+
+    /// The default host answers from the concrete world; the dynamic-world host from the dynamic world.
+    #[test]
+    fn host_defaults_and_dynamic_world_host() {
+        let f = fixture(10);
+        let d: Rc<dyn HostileHost> = Rc::new(DefaultHost);
+        let b: ObjRef = TestBh::alloc(1, ip(20, 11));
+        assert!(d.world().is_some());
+        let _ = d.custom_rules();
+        assert!(!d.expert_mode());
+        assert!(!d.tutorial_active());
+        let _ = d.day_night_fraction(20.0, 0.0);
+        d.fire_projectile(Vector2 { x: 1.0, y: 11.0 }, Vector2 { x: 5.0, y: 11.0 }, None, 167, None);
+        d.add_damage_simulation_event(&b, "x");
+        assert!(!d.npc_exists_at_pos_ignore_npc(ip(1, 1), None));
+        assert!(!d.blockhead_occupies_tile_at_pos(ip(1, 1)));
+        d.create_free_block(ip(1, 1), 1, None);
+        d.load_baby_npc_at_position(ip(1, 1), 6);
+        assert!(d.cactus_available_food_at(ip(1, 1)).is_none());
+        d.set_cactus_available_food_at(ip(1, 1), 1.0);
+        assert!(!d.bh_paused(&b) && !d.bh_regenerating(&b) && !d.bh_on_trade_mission(&b));
+        assert!(!d.bh_should_continue_simulating(&b));
+        d.bh_suffer_damage(&b, 0.1, false, false);
+        assert_eq!(d.bh_center(&b), b.float_pos());
+        let (_t0, troll_obj) = mk(&f, ip(22, 11));
+        assert_eq!(d.bh_center(&troll_obj), troll_obj.as_harmable().unwrap().center());
+        let _host = crate::blockhead::blockhead::testutil::TestHost::install();
+        *f.world.distance_ordered_food_types.borrow_mut() = vec![1, 2, 3, 4];
+        let real = crate::blockhead::blockhead::Blockhead::init_with_world_dynamic_world_at_position_cache_blockhead_number_craftable_item_object_unique_id(
+            &f.world, &f.dwr, ip(24, 11), None, 0, None, 4242,
+        )
+        .expect("a real blockhead");
+        d.bh_suffer_damage(&real, 0.05, true, false);
+        let dwh = DynamicWorldHost(crate::dynworld::state::testutil::dw("troll_host", 1));
+        let (_t, me) = mk(&f, ip(20, 11));
+        assert!(!dwh.npc_exists_at_pos_ignore_npc(ip(20, 11), Some(&me)));
+        assert!(!dwh.blockhead_occupies_tile_at_pos(ip(20, 11)));
+        dwh.create_free_block(ip(20, 11), 167, None);
+        dwh.load_baby_npc_at_position(ip(20, 11), 6);
+        assert!(dwh.cactus_available_food_at(ip(20, 11)).is_none());
+        dwh.set_cactus_available_food_at(ip(20, 11), 1.0);
+        // the installed default host
+        set_hostile_host(Rc::new(DefaultHost));
+        assert!(hostile_host().world().is_some());
+    }
+
+    #[test]
+    fn helpers_and_small_accessors() {
+        let f = fixture(10);
+        assert!(climable(tile_loaded(20, 11), ip(20, 11)) == climable(tile_loaded(20, 11), ip(20, 11)));
+        assert_eq!(wrap_dx(100, 2, 4), -30);
+        assert_eq!(wrap_dx(2, 100, 4), 30);
+        assert_eq!(wrap_dx(5, 2, 4), 3);
+        let (t, me) = mk(&f, ip(20, 11));
+        assert!(tile_unloaded(20, 11).is_some());
+        assert_eq!(world_time(&me), f.world.world_time());
+        let a = tile_loaded(20, 11);
+        assert!(tile_eq(&None, &None) && tile_eq(&a, &a) && !tile_eq(&a, &None));
+        assert_eq!(dict_float(&crate::objects::base::new_mutable_dict(), "x"), 0.0);
+        assert_eq!(pos_of(&None), ip(0, 0));
+        assert_eq!(me.render_pos(), Vector2 { x: me.float_pos().x, y: me.float_pos().y + 0.3 });
+        t.data_mut().state.animation_type = cta::LIE;
+        assert!(t.crouching());
+        t.data_mut().state.animation_type = cta::CRAWL;
+        assert!(t.crouching());
+        t.data_mut().state.animation_type = cta::WALK;
+        assert!(!t.crouching());
+        assert_eq!(t.current_animation_type(), cta::WALK as i32);
+        t.data_mut().state.interaction_type = 10;
+        assert_eq!(t.current_interaction_type(), 10);
+        // heading for a square: the first path step is in another place
+        t.data_mut().path = Some(vec![PathStep {
+            index: 12 * 128 + 5,
+            terrain_difficulty: 10,
+            traverse_type: 1,
+            traverse_to_key_frame: 0,
+            parent_index: None,
+            properties_g: None,
+        }]);
+        assert!(!t.is_heading_for_square(ip(9, 9)));
+        assert!(t.is_heading_for_square(ip(5, 12)));
+        f.host.no_world.set(true);
+        assert!(!t.is_heading_for_square(ip(9, 9)));
+        // setPath without a world, and a failed return to the defence square
+        t.set_path(&me, Some(vec![]), path_type::WORLD_TAPPED, 0, None);
+        t.set_path(
+            &me,
+            Some(vec![PathStep {
+                index: 1,
+                terrain_difficulty: 10,
+                traverse_type: 1,
+                traverse_to_key_frame: 0,
+                parent_index: None,
+                properties_g: None,
+            }]),
+            path_type::WORLD_TAPPED,
+            0,
+            None,
+        );
+        assert_eq!(t.data().final_goal_square, ip(0, 0));
+        f.host.no_world.set(false);
+        t.data_mut().return_to_defense = true;
+        t.set_path(&me, None, path_type::FALL, 0, None);
+        assert!(t.data().cannot_return);
+    }
+
+    #[test]
+    fn replica_from_creation_data_and_remote_updates() {
+        let f = fixture(10);
+        let (t, me) = mk(&f, ip(20, 11));
+        let bh: ObjRef = TestBh::alloc(77, ip(21, 11));
+        crate::npc::npc::faces::exercise_faces(&me, &bh);
+        let nd = me.creation_net_data_for_client(&me, None).unwrap();
+        // a lit tile marks the replica lit
+        edit(&f.world, 20, 11, |t| t.light = 0xff);
+        let rep = CaveTroll::init_with_world_dynamic_world_cache_net_data(&f.wref, &f.dwr, None, &nd).expect("replica");
+        assert!(rep.base.borrow().is_net);
+        assert!(rep.data().was_lit);
+        let mut bad = nd.clone();
+        bad[12..16].copy_from_slice(&100000u32.to_le_bytes());
+        assert!(CaveTroll::init_with_world_dynamic_world_cache_net_data(&f.wref, &f.dwr, None, &bad).is_none());
+        // remote_update on a replica queues, on a local troll it is ignored, on a dead one it may un-remove
+        let rme: ObjRef = rep.clone();
+        let up = me.update_net_data_for_client(&me, None).unwrap();
+        rme.remote_update(&rme, &up);
+        rme.remote_update(&rme, &up);
+        assert!(rep.data().current_net_queue_size >= 1);
+        rme.remote_creation_data_update(&rme, &nd);
+        me.remote_update(&me, &up);
+        rep.npc.borrow_mut().dead = true;
+        rep.data_mut().travel_fraction = 0.5;
+        rme.base().borrow_mut().needs_removed = true;
+        rme.remote_update(&rme, &up);
+        assert!(!rme.needs_removed());
+        // unloading the tapped blockhead stops the chase; the rider's steering resets
+        t.data_mut().tapped_npc = Some(bh.clone());
+        t.data_mut().chasing_npc = true;
+        me.blockhead_unloaded(&me, &bh);
+        assert!(!t.data().chasing_npc);
+        t.npc.borrow_mut().rider = Some(bh.clone());
+        t.data_mut().rider_target_velocity = Vector2 { x: 1.0, y: 1.0 };
+        me.blockhead_unloaded(&me, &bh);
+        assert_eq!(t.data().rider_target_velocity, Vector2 { x: 0.0, y: 0.0 });
+        let mut wm = vec![];
+        me.world_changed(&me, &mut wm);
+        me.world_contents_changed(&me, &mut wm);
+        // riders
+        t.npc.borrow_mut().rider = None;
+        let r: ObjRef = TestBh::alloc(80, ip(20, 11));
+        let other: ObjRef = TestBh::alloc(81, ip(20, 11));
+        Npc::add_rider(&*t, &me, &r);
+        assert_eq!(Npc::ride_direction(&*t), 0);
+        t.data_mut().rider_target_velocity = Vector2 { x: 0.5, y: 0.0 };
+        assert_eq!(Npc::ride_direction(&*t), 1);
+        t.data_mut().rider_target_velocity = Vector2 { x: -0.5, y: 0.0 };
+        assert_eq!(Npc::ride_direction(&*t), -1);
+        Npc::remove_rider(&*t, &me, &other);
+        assert!(t.npc.borrow().rider.is_some());
+        Npc::remove_rider(&*t, &me, &r);
+        assert_eq!(Npc::ride_direction(&*t), 0);
+        assert!(!Npc::blockhead_can_ride_using_item(&*t, &r, 0));
+        Npc::set_target_velocity(&*t, Vector2 { x: 0.3, y: 0.0 });
+        assert_eq!(t.data().rider_target_velocity.x, 0.3);
+    }
+
+    #[test]
+    fn tap_strike_interpolation_and_load_edges() {
+        let f = fixture(10);
+        let (t, me) = mk(&f, ip(2, 11));
+        let fp = me.float_pos();
+        assert!(t.tap_is_within_body_radius_impl(Vector2 { x: fp.x, y: fp.y + 1.0 }));
+        assert!(t.tap_is_within_body_radius_impl(Vector2 { x: fp.x + 128.0, y: fp.y + 1.0 }));
+        assert!(t.tap_is_within_body_radius_impl(Vector2 { x: fp.x - 128.0, y: fp.y + 1.0 }));
+        assert!(!t.tap_is_within_body_radius_impl(Vector2 { x: fp.x + 3.0, y: fp.y + 1.0 }));
+        t.npc.borrow_mut().dead = true;
+        assert!(!t.tap_is_within_body_radius_impl(Vector2 { x: fp.x, y: fp.y + 1.0 }));
+        t.npc.borrow_mut().dead = false;
+        // strike: simulated, with and without the victim regenerating
+        let v = TestBh::alloc(500, ip(3, 11));
+        t.data_mut().tapped_npc = Some(v.clone());
+        let host = hostile_host();
+        t.strike(&me, true, &host);
+        f.host.regen.set(Some(500));
+        t.strike(&me, true, &host);
+        assert_eq!(f.host.sim_events.borrow().len(), 2);
+        // interpolation across the world seam, both ways
+        for (a, b) in [(2, 126), (126, 2)] {
+            {
+                let mut d = t.data_mut();
+                d.from_square = ip(a, 11);
+                d.to_square = ip(b, 11);
+                d.travel_fraction = 0.5;
+                d.state.animation_type = cta::WALK;
+            }
+            t.interpolate_float_pos(&me);
+        }
+        // dying twice
+        Npc::die(&*t, &me, None);
+        Npc::die(&*t, &me, None);
+        // a save dict without the state blob loads, as does an unlit replica
+        let mut d = me.get_save_dict(&me);
+        d.map.remove(&"state".to_string());
+        let t2 = CaveTroll::init_with_world_dynamic_world_save_dict_cache(&f.wref, &f.dwr, &d, None).expect("load");
+        assert_eq!(t2.data().state.interacting, 0);
+        let (t3, me3) = mk(&f, ip(30, 11));
+        t3.data_mut().state.interacting = 1;
+        t3.data_mut().state.interacting_square = ip(31, 11);
+        let mut d3 = me3.get_save_dict(&me3);
+        d3.map.insert("x".to_string(), PlistValue::int(0));
+        let t4 = CaveTroll::init_with_world_dynamic_world_save_dict_cache(&f.wref, &f.dwr, &d3, None).expect("load");
+        assert!(t4.data().interacting_tile.is_some());
+        let nd = me.creation_net_data_for_client(&me, None).unwrap();
+        edit(&f.world, 2, 11, |t| t.light = 0);
+        assert!(
+            !CaveTroll::init_with_world_dynamic_world_cache_net_data(&f.wref, &f.dwr, None, &nd)
+                .unwrap()
+                .data()
+                .was_lit
+        );
+    }
+
+    #[test]
+    fn real_cactus_through_the_dynamic_world_host() {
+        use crate::trees::tree::testenv::{env, GROUND};
+        let (w, d) = env("troll_cactus");
+        let cactus =
+            crate::trees::cactus::CactusTree::new(&w, &d, ip(10, GROUND + 1), None, 100, 100, None, None, false, 0.0)
+                .unwrap();
+        d.register_with_pos(&cactus, cactus.object_type(), ip(10, GROUND + 1));
+        let host = DynamicWorldHost(d);
+        let food = host.cactus_available_food_at(ip(10, GROUND + 1)).expect("a cactus");
+        host.set_cactus_available_food_at(ip(10, GROUND + 1), food + 1.0);
+        assert_eq!(host.cactus_available_food_at(ip(10, GROUND + 1)), Some(food + 1.0));
+    }
+
+    #[test]
+    fn leftovers_of_the_path_user_and_rider_protocols() {
+        let f = fixture(10);
+        let (t, me) = mk(&f, ip(20, 11));
+        use crate::objects::protocols::PathUserDynamicObject as P;
+        assert_eq!(P::current_traverse_to_key_frame(&*t), 0);
+        assert_eq!(P::next_pos(&*t), ip(20, 11));
+        f.host.no_world.set(true);
+        assert!(!climable(tile_loaded(20, 11), ip(20, 11)));
+        f.host.no_world.set(false);
+        t.data_mut().path = None;
+        assert!(!t.is_heading_for_square(ip(1, 1)));
+        // hits that do not provoke a retaliation
+        let h: ObjRef = TestBh::alloc(9, ip(21, 11));
+        Npc::hit_with_force_blockhead(&*t, &me, 0, Some(&h));
+        Npc::hit_with_force_blockhead(&*t, &me, 3, None);
+        assert!(t.data().waiting_before_retaliation_blockhead.is_none());
+        // the rider stand-ins
+        let ctl: ObjRef = CtlBh::alloc(82);
+        t.data_mut().rider_target_velocity = Vector2 { x: 0.7, y: 0.0 };
+        Npc::add_rider(&*t, &me, &ctl);
+        assert_eq!(t.data().rider_target_velocity, Vector2 { x: 0.0, y: 0.0 });
+        let r: ObjRef = TestBh::alloc(83, ip(20, 11));
+        Npc::add_rider(&*t, &me, &r);
+        t.remove_rider_opt(&me, None);
+        assert!(t.npc.borrow().rider.is_some());
+        assert_eq!(h.class_info().name, "DynamicObject");
+        let api = ctl.as_blockhead().unwrap();
+        assert_eq!((api.client_id(), api.local_net_id()), (None, None));
+        assert!(!api.is_interacting_with_any_interaction_object());
+        api.set_interaction_object(None);
+        api.stop_interacting();
+        assert_eq!(ctl.class_info().name, "DynamicObject");
+        assert!(ctl.as_any().is::<CtlBh>());
+    }
+
+    #[test]
+    fn paused_target_is_not_attacked_and_queued_interaction_replays() {
+        let f = fixture(10);
+        let (t, me) = mk(&f, ip(20, 11));
+        let v = TestBh::alloc(500, ip(21, 11));
+        f.host.paused.set(Some(500));
+        t.data_mut().tapped_npc = Some(v);
+        t.set_path(
+            &me,
+            Some(vec![PathStep {
+                index: 11 * 128 + 21,
+                terrain_difficulty: 10,
+                traverse_type: 1,
+                traverse_to_key_frame: 0,
+                parent_index: None,
+                properties_g: None,
+            }]),
+            path_type::WORLD_TAPPED,
+            10,
+            None,
+        );
+        me.update_accurate_dt_is_simulation(&me, 0.1, 0.1, false);
+        assert!(t.data().interacting_tile.is_none());
+        // already interacting with that very tile: nothing starts again
+        let (t2, me2) = mk(&f, ip(26, 11));
+        t2.data_mut().state.interacting = 1;
+        t2.data_mut().interacting_tile = tile_loaded(27, 11);
+        t2.set_path(
+            &me2,
+            Some(vec![PathStep {
+                index: 11 * 128 + 27,
+                terrain_difficulty: 10,
+                traverse_type: 1,
+                traverse_to_key_frame: 0,
+                parent_index: None,
+                properties_g: None,
+            }]),
+            path_type::WORLD_TAPPED,
+            10,
+            None,
+        );
+        me2.update_accurate_dt_is_simulation(&me2, 0.1, 0.1, false);
+        // a replica told "same square, but interacting now"
+        let (r, rme) = mk(&f, ip(24, 11));
+        rme.base().borrow_mut().is_net = true;
+        {
+            let mut d = r.data_mut();
+            d.current_net_queue_size = 1;
+            d.next_to_square[0] = d.to_square;
+            d.next_interacting[0] = true;
+            d.next_interaction_type[0] = 10;
+            d.travel_fraction = 1.0;
+        }
+        rme.update_accurate_dt_is_simulation(&rme, 0.1, 0.1, false);
+        assert_eq!(r.data().state.interacting, 1);
     }
 }

@@ -1998,50 +1998,6 @@ mod tests {
         }
     }
 
-    /// A client blockhead that the server is controlling.
-    struct CtlBh {
-        base: RefCell<DynamicObjectBase>,
-    }
-    impl CtlBh {
-        fn alloc(id: u64) -> ObjRef {
-            let o: ObjRef = crate::objects::handle::alloc_obj(|w| CtlBh {
-                base: RefCell::new(DynamicObjectBase::alloc_zeroed_with(w)),
-            });
-            o.base().borrow_mut().unique_id = id;
-            o
-        }
-    }
-    impl crate::objects::base::BlockheadApi for CtlBh {
-        fn client_id(&self) -> Option<String> {
-            None
-        }
-        fn local_net_id(&self) -> Option<String> {
-            None
-        }
-        fn is_client_blockhead_being_controlled_by_server(&self) -> bool {
-            true
-        }
-        fn is_interacting_with_any_interaction_object(&self) -> bool {
-            false
-        }
-        fn set_interaction_object(&self, _o: Option<&ObjRef>) {}
-        fn stop_interacting(&self) {}
-    }
-    impl DynamicObject for CtlBh {
-        fn base(&self) -> &RefCell<DynamicObjectBase> {
-            &self.base
-        }
-        fn class_info(&self) -> &'static ClassInfo {
-            &crate::objects::class_info::DYNAMIC_OBJECT_CLASS
-        }
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-        fn as_blockhead(&self) -> Option<&dyn crate::objects::base::BlockheadApi> {
-            Some(self)
-        }
-    }
-
     fn creation_bytes(me: &ObjRef, target: u64, spitting: u8) -> Vec<u8> {
         let mut nd = me.creation_net_data_for_client(me, None).unwrap();
         nd[0x70..0x78].copy_from_slice(&target.to_le_bytes());
@@ -2170,19 +2126,6 @@ mod tests {
         s.data_mut().rider_target_velocity = 0.9;
         me.blockhead_unloaded(&me, &r1);
         assert_eq!(s.data().rider_target_velocity, 0.0);
-    }
-
-    #[test]
-    fn the_server_controlled_blockhead_stand_in_answers() {
-        let c = CtlBh::alloc(5);
-        let api = c.as_blockhead().unwrap();
-        assert_eq!((api.client_id(), api.local_net_id()), (None, None));
-        assert!(api.is_client_blockhead_being_controlled_by_server());
-        assert!(!api.is_interacting_with_any_interaction_object());
-        api.set_interaction_object(None);
-        api.stop_interacting();
-        assert_eq!(c.class_info().name, "DynamicObject");
-        assert!(c.as_any().is::<CtlBh>());
     }
 
     #[test]
