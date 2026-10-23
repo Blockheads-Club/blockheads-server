@@ -8,12 +8,14 @@ use std::path::{Path, PathBuf};
 use std::rc::{Rc, Weak};
 use std::time::Instant;
 
+use bhmod_content::Kind;
 use bhmod_core::storage::{KvBackend, StorageProvider};
 use bhmod_core::types::{
-    ApiError, BreakLayer, ChannelSource, ChannelTarget, CommandSender, Event, EventKind, LogLevel, ObjectKind, Pos,
-    RejectReason, Role, SavePhase, Side,
+    ApiError, BreakLayer, ChannelSource, ChannelTarget, CommandSender, ContentKind, Event, EventKind, LogLevel,
+    ObjectKind, Pos, RejectReason, Role, SavePhase, Side,
 };
 use bhmod_core::{GameBridge, HostOptions, ModHost};
+use bhmod_manifest::content::SLOTS;
 use bhmod_wasm::{WasmConfig, WasmRuntime};
 
 use super::net::{pre_login_text, Link, ModNet};
@@ -163,6 +165,22 @@ impl GameBridge for Bridge {
         let all = h.dynamic_world_all_blockheads_including_net();
         all.iter().find(|b| h.blockhead_client_id(b).as_deref() == Some(id)).map(|b| pos(b.pos()))
     }
+    fn content_id(&self, kind: ContentKind, key: &str) -> Option<u64> {
+        self.net.borrow().content.id(registry_kind(kind), key)
+    }
+    fn content_key(&self, kind: ContentKind, id: u64) -> Option<String> {
+        self.net.borrow().content.key(registry_kind(kind), id).map(str::to_string)
+    }
+    fn set_cosmetic(&self, player: &str, slot: &str, id: Option<u64>) -> Result<(), ApiError> {
+        if !SLOTS.contains(&slot) {
+            return Err(ApiError::InvalidArgument(format!("unknown slot `{slot}`")));
+        }
+        let s = self.srv.upgrade().filter(|s| self.online(s, player)).ok_or(ApiError::StaleHandle)?;
+        self.net.borrow_mut().set_cosmetic(&SrvLink(&s), player, slot, id)
+    }
+    fn cosmetics_of(&self, player: &str) -> Vec<(String, u64)> {
+        self.net.borrow().worn(player)
+    }
     fn channel_send(&self, _mod_id: &str, name: &str, target: &ChannelTarget, data: &[u8]) -> Result<(), ApiError> {
         let one = match target {
             ChannelTarget::Player(p) => Some(p.clone()),
@@ -175,6 +193,14 @@ impl GameBridge for Bridge {
         // Players without the mod loader (or not in the game yet) are skipped.
         let peers = one.map_or_else(|| net.approved_peers(&link), |p| vec![p]);
         net.send_channel(&link, &peers, name, data).map(|_| ())
+    }
+}
+
+fn registry_kind(kind: ContentKind) -> Kind {
+    match kind {
+        ContentKind::Block => Kind::Blocks,
+        ContentKind::Item => Kind::Items,
+        ContentKind::Cosmetic => Kind::Cosmetics,
     }
 }
 
@@ -275,6 +301,9 @@ impl ServerMods {
 impl ModHooks for ServerMods {
     fn player_join(&self, player_id: &str) {
         self.joined.borrow_mut().insert(player_id.to_string());
+        if let Some(s) = self.srv.upgrade() {
+            self.net.borrow().cosmetics_full(&SrvLink(&s), player_id);
+        }
         self.with((), |h| {
             h.fire(Event::PlayerJoin { player: player_id.to_string() });
         });
@@ -282,6 +311,9 @@ impl ModHooks for ServerMods {
     fn player_quit(&self, player_id: &str, was_kick: bool) {
         if !self.joined.borrow_mut().remove(player_id) {
             return;
+        }
+        if let Some(s) = self.srv.upgrade() {
+            self.net.borrow_mut().player_left(&SrvLink(&s), player_id);
         }
         self.with((), |h| {
             h.fire(Event::PlayerQuit { player: player_id.to_string(), was_kick });
@@ -442,9 +474,7 @@ pub(super) fn load(dir: &Path, save_id: Option<&str>, server: &Rc<BHServer>) -> 
     opts.budgets.step *= scale;
     // WASM components; compiled code is cached in `<mods>/.cache` (hidden, so discovery skips it).
     let wasm = WasmConfig { cache_dir: Some(dir.join(".cache")), ..WasmConfig::default() };
-    if let Ok(rt) = WasmRuntime::new(wasm) {
-        opts.runtimes.push(Box::new(rt));
-    }
+    opts.runtimes.extend(WasmRuntime::new(wasm).ok().map(|rt| Box::new(rt) as _));
     // JVM mods: only when the owner turned them on (feature `jvm`, `BLOCKHEADS_JVM=1`). Logged once the bridge exists.
     #[cfg(feature = "jvm")]
     let mut notes: Vec<(LogLevel, String)> = Vec::new();
@@ -487,7 +517,13 @@ pub(super) fn load(dir: &Path, save_id: Option<&str>, server: &Rc<BHServer>) -> 
             &format!("offering {offered} client mod(s) to modded clients ({req})"),
         );
     }
+    let offered: Vec<String> =
+        catalog.entries.iter().filter(|e| e.bytes.is_some()).map(|e| e.info.id.clone()).collect();
+    let content = super::content::build(dir, &offered, &world_dir.join("mods/registry.toml"), &mut |m| {
+        GameBridge::log(&*bridge, None, LogLevel::Error, &m)
+    });
     net.borrow_mut().catalog = catalog;
+    net.borrow_mut().content = content;
     Some(Rc::new(ServerMods {
         host: RefCell::new(host),
         srv: Rc::downgrade(server),
@@ -523,6 +559,41 @@ mod tests {
     }
 
     #[test]
+    fn content_bridge_without_a_server() {
+        let b = Bridge { srv: Weak::new(), net: Rc::default() };
+        b.net.borrow_mut().content = crate::mods::content::Content {
+            wire: [("cosmetics".to_string(), [("hats:crown".to_string(), 1u64)].into())].into(),
+            cosmetics: [(1, "hat".to_string())].into(),
+        };
+        assert_eq!(b.content_id(ContentKind::Cosmetic, "hats:crown"), Some(1));
+        assert_eq!(b.content_id(ContentKind::Cosmetic, "hats:none"), None);
+        assert_eq!(b.content_key(ContentKind::Cosmetic, 1).as_deref(), Some("hats:crown"));
+        assert_eq!(b.content_key(ContentKind::Cosmetic, 7), None);
+        assert_eq!(b.content_key(ContentKind::Item, 1), None);
+        assert_eq!(b.content_id(ContentKind::Block, "hats:crown"), None);
+        assert_eq!(b.content_id(ContentKind::Item, "hats:crown"), None);
+        assert!(matches!(b.set_cosmetic("p", "cape", Some(1)), Err(ApiError::InvalidArgument(_))));
+        assert_eq!(b.set_cosmetic("p", "hat", Some(1)), Err(ApiError::StaleHandle));
+        assert!(b.cosmetics_of("p").is_empty());
+    }
+
+    #[test]
+    fn cosmetics_are_set_for_an_online_player() {
+        let h = Harness::new("m_bridge_cosmetics");
+        let pid = h.join("Ann");
+        let b = Bridge { srv: Rc::downgrade(&h.srv), net: Rc::default() };
+        b.net.borrow_mut().content = crate::mods::content::Content {
+            wire: [("cosmetics".to_string(), [("hats:crown".to_string(), 1u64)].into())].into(),
+            cosmetics: [(1, "hat".to_string())].into(),
+        };
+        assert_eq!(b.set_cosmetic(&pid, "hat", Some(1)), Ok(()));
+        assert_eq!(b.cosmetics_of(&pid), vec![("hat".to_string(), 1)]);
+        assert_eq!(b.set_cosmetic(&pid, "hat", None), Ok(()));
+        assert!(b.cosmetics_of(&pid).is_empty());
+        assert_eq!(b.set_cosmetic("nobody", "hat", Some(1)), Err(ApiError::StaleHandle));
+    }
+
+    #[test]
     fn busy_host_returns_defaults() {
         let tmp = tempfile::tempdir().unwrap();
         let bridge = Rc::new(Bridge { srv: Weak::new(), net: Rc::default() });
@@ -543,6 +614,9 @@ mod tests {
         // Without a server the protocol hooks do nothing.
         assert_eq!(sm.pre_login("e", "p", "a", None), None);
         sm.mod_packet("e", &[0xbc, 0x02, 0xa0]);
+        // Joining and leaving without a server tell nobody anything.
+        sm.player_join("p");
+        sm.player_quit("p", false);
         sm.net.borrow_mut().rekey("x", "y");
         sm.poll();
         // Nor does the limbo: a peer in it is forgotten, not dropped.
@@ -624,6 +698,21 @@ mod tests {
         assert!(h.m.packets_to(&pid).is_empty());
         assert_eq!(*h.m.removed.borrow(), vec![pid.clone()]);
         assert_eq!(*h.m.disconnected.borrow(), vec![pid]);
+        assert!(h.srv.connected_client_ids().is_empty());
+    }
+
+    #[test]
+    fn limbo_peer_is_dropped_even_without_a_match() {
+        let h = Harness::new("m_limbo_no_match");
+        let mods = installed(&h, true);
+        let pid = limbo_join(&h, "Vic");
+        // the server's match is gone (cleanup): nothing to disconnect the peer on, but the drop still completes
+        h.srv.node.cleanup();
+        assert!(h.srv.match_().is_none());
+        h.m.clear();
+        mods.0.drop_expired_limbo(Instant::now() + LIMBO_GRACE + std::time::Duration::from_secs(1));
+        assert!(h.m.removed.borrow().is_empty() && h.m.disconnected.borrow().is_empty());
+        assert!(!mods.0.limbo_packet(&pid));
         assert!(h.srv.connected_client_ids().is_empty());
     }
 

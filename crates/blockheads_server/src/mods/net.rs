@@ -10,11 +10,12 @@ use std::time::{Duration, Instant};
 
 use bhmod_core::types::ApiError;
 use bhmod_proto::{
-    file_error, hex, Channel, ChannelInfo, ChannelRegister, FileChunk, FileError, Hash, Message, ModList, RejectText,
-    ServerHello, CHUNK_SIZE, MAX_IN_FLIGHT, PROTO, REJECT_CLIENT_TOO_OLD,
+    file_error, hex, Channel, ChannelInfo, ChannelRegister, Cosmetics, FileChunk, FileError, Hash, Message, ModList,
+    RejectText, ServerHello, CHUNK_SIZE, MAX_IN_FLIGHT, PROTO, REJECT_CLIENT_TOO_OLD,
 };
 
 use super::catalog::Catalog;
+use super::content::Content;
 use super::LoaderKey;
 
 /// Most peers downloading at the same time; more get `FILE_ERROR` BUSY.
@@ -79,6 +80,10 @@ struct Limbo {
 pub struct ModNet {
     /// What the server offers.
     pub catalog: Catalog,
+    /// The world's content ids and cosmetics (empty without content mods).
+    pub content: Content,
+    /// Player id -> slot -> cosmetic id. Not saved: mods re-equip on join.
+    worn: BTreeMap<String, BTreeMap<String, u64>>,
     peers: BTreeMap<String, Peer>,
     /// Channel name -> wire id (ids start at 1 and are never reused).
     wire: BTreeMap<String, u16>,
@@ -144,6 +149,60 @@ impl ModNet {
     /// Modded peers that are in the game.
     pub fn approved_peers(&self, link: &dyn Link) -> Vec<String> {
         self.peers.keys().filter(|k| link.approved(k)).cloned().collect()
+    }
+
+    /// What a player wears as `(slot, cosmetic id)`.
+    pub fn worn(&self, player: &str) -> Vec<(String, u64)> {
+        self.worn.get(player).map(|m| m.iter().map(|(s, i)| (s.clone(), *i)).collect()).unwrap_or_default()
+    }
+
+    /// Sends the whole `COSMETICS` table to one modded peer (right after it joined). Nothing when no cosmetic is
+    /// declared or the peer has no mod loader.
+    pub fn cosmetics_full(&self, link: &dyn Link, peer: &str) {
+        if self.content.has_cosmetics() && self.is_modded(peer) {
+            let m = Message::Cosmetics(Cosmetics { full: true, players: self.worn.clone() });
+            link.send(peer, m.encode());
+        }
+    }
+
+    /// Puts cosmetic `id` (or nothing) on a player in `slot` and tells every modded peer in the game. The id must
+    /// be a cosmetic of that slot.
+    pub fn set_cosmetic(&mut self, link: &dyn Link, player: &str, slot: &str, id: Option<u64>) -> Result<(), ApiError> {
+        if let Some(id) = id {
+            match self.content.cosmetics.get(&id) {
+                Some(s) if s == slot => {}
+                Some(s) => return Err(ApiError::InvalidArgument(format!("cosmetic {id} is for the {s} slot"))),
+                None => return Err(ApiError::InvalidArgument(format!("unknown cosmetic {id}"))),
+            }
+        } else if !self.content.has_cosmetics() {
+            return Err(ApiError::Unsupported);
+        }
+        let set = self.worn.entry(player.to_string()).or_default();
+        match id {
+            Some(id) => set.insert(slot.to_string(), id),
+            None => set.remove(slot),
+        };
+        let now = set.clone();
+        if now.is_empty() {
+            self.worn.remove(player);
+        }
+        self.cosmetics_delta(link, player, now);
+        Ok(())
+    }
+
+    /// A player left: they wear nothing any more.
+    pub fn player_left(&mut self, link: &dyn Link, player: &str) {
+        if self.worn.remove(player).is_some() {
+            self.cosmetics_delta(link, player, BTreeMap::new());
+        }
+    }
+
+    fn cosmetics_delta(&self, link: &dyn Link, player: &str, set: BTreeMap<String, u64>) {
+        let m = Message::Cosmetics(Cosmetics { full: false, players: BTreeMap::from([(player.to_string(), set)]) });
+        let packet = m.encode();
+        for peer in self.approved_peers(link) {
+            link.send(&peer, packet.clone());
+        }
     }
 
     /// Sends `REJECT_TEXT` to a modded peer (nothing to a vanilla one).
@@ -334,7 +393,7 @@ impl ModNet {
                 let list = ModList {
                     mods: self.catalog.entries.iter().map(|e| e.info.clone()).collect(),
                     channels,
-                    registry: BTreeMap::new(),
+                    registry: self.content.wire.clone(),
                 };
                 link.send(peer, Message::ModList(list).encode());
             }

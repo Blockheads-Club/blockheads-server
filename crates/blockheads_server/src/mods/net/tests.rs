@@ -7,6 +7,7 @@ use bhmod_proto::{mods_hash, FileRequest, Hello, ModInfo, ModPermissions, Ready,
 
 use super::*;
 use crate::mods::catalog::{Bytes, Entry};
+use crate::mods::content::Content;
 
 #[derive(Default)]
 struct Fake {
@@ -342,6 +343,92 @@ fn loader_check() {
     n.catalog.client_required = false;
     assert_eq!(n.check_loader(&l, "v", None), None);
     assert_eq!(pre_login_text(11), "A server mod refused the join (reason 11).");
+}
+
+fn with_cosmetics(n: &mut ModNet) {
+    n.content = Content {
+        wire: [("cosmetics".to_string(), [("hats:crown".to_string(), 1u64), ("hats:ember".to_string(), 2)].into())]
+            .into(),
+        cosmetics: [(1, "hat".to_string()), (2, "hair".to_string())].into(),
+    };
+}
+
+fn cosmetics(ms: &[Message]) -> Vec<(bool, Vec<(String, Vec<(String, u64)>)>)> {
+    ms.iter()
+        .filter_map(|m| match m {
+            Message::Cosmetics(c) => Some((
+                c.full,
+                c.players.iter().map(|(p, s)| (p.clone(), s.iter().map(|(a, b)| (a.clone(), *b)).collect())).collect(),
+            )),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn mod_list_carries_the_registry() {
+    let l = Fake::default();
+    let mut n = net();
+    n.packet(&l, "e", &hello(1), &[]);
+    with_cosmetics(&mut n);
+    l.take();
+    n.packet(&l, "e", &Message::ListRequest.encode(), &[]);
+    match &l.take()[..] {
+        [Message::ModList(m)] => assert_eq!(m.registry["cosmetics"]["hats:ember"], 2),
+        o => panic!("{o:?}"),
+    }
+}
+
+#[test]
+fn cosmetics_full_delta_and_leave() {
+    let l = Fake::default();
+    let mut n = net();
+    // Without declared cosmetics nothing is sent and equipping is unsupported.
+    n.packet(&l, "a", &hello(1), &[]);
+    l.take();
+    n.cosmetics_full(&l, "a");
+    assert!(l.take().is_empty());
+    assert_eq!(n.set_cosmetic(&l, "a", "hat", None), Err(ApiError::Unsupported));
+    with_cosmetics(&mut n);
+    l.approved.borrow_mut().extend(["a".to_string(), "v".to_string()]);
+    n.packet(&l, "b", &hello(1), &[]);
+    n.rekey("b", "b2");
+    l.approved.borrow_mut().push("b2".into());
+    // Full: only to a modded peer, empty table at first.
+    n.cosmetics_full(&l, "a");
+    n.cosmetics_full(&l, "v");
+    assert_eq!(cosmetics(&l.take()), vec![(true, vec![])]);
+    // Validation.
+    assert!(matches!(n.set_cosmetic(&l, "a", "hat", Some(9)), Err(ApiError::InvalidArgument(_))));
+    assert!(matches!(n.set_cosmetic(&l, "a", "hat", Some(2)), Err(ApiError::InvalidArgument(_))));
+    assert!(l.take().is_empty());
+    // A delta goes to every modded peer in the game (not to the vanilla one), including the wearer.
+    n.set_cosmetic(&l, "a", "hat", Some(1)).unwrap();
+    n.set_cosmetic(&l, "a", "hair", Some(2)).unwrap();
+    let sent: Vec<String> = l.sent.borrow().iter().map(|(p, _)| p.clone()).collect();
+    assert_eq!(sent, ["a", "b2", "a", "b2"]);
+    assert_eq!(
+        cosmetics(&l.take()).last().unwrap().1,
+        vec![("a".to_string(), vec![("hair".to_string(), 2), ("hat".to_string(), 1)])]
+    );
+    assert_eq!(n.worn("a"), vec![("hair".to_string(), 2), ("hat".to_string(), 1)]);
+    // The next joiner gets the table.
+    n.cosmetics_full(&l, "b2");
+    assert_eq!(cosmetics(&l.take())[0].0, true);
+    // Taking off, then leaving.
+    n.set_cosmetic(&l, "a", "hat", None).unwrap();
+    l.take();
+    n.player_left(&l, "a");
+    assert_eq!(cosmetics(&l.take())[0].1, vec![("a".to_string(), vec![])]);
+    assert!(n.worn("a").is_empty());
+    n.player_left(&l, "a");
+    n.set_cosmetic(&l, "a", "hair", None).unwrap();
+    assert!(n.worn("a").is_empty());
+    l.take();
+    n.set_cosmetic(&l, "a", "hat", Some(1)).unwrap();
+    n.set_cosmetic(&l, "a", "hat", None).unwrap();
+    assert_eq!(cosmetics(&l.take()).last().unwrap().1, vec![("a".to_string(), vec![])]);
+    assert!(n.worn("a").is_empty());
 }
 
 #[test]
