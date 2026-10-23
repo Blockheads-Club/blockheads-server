@@ -325,6 +325,9 @@ fn acting_on_each_kind_of_found_tile() {
     give(0x11);
     act(5);
     give(21);
+    for _ in 0..12 {
+        b.bh.borrow().inventory_items[1].borrow_mut().push(InventoryItem::new(ItemType(21), 0, 0, None, None));
+    }
     act(10);
     give(8);
     act(5);
@@ -418,6 +421,10 @@ fn flowering_plants_without_a_tool_and_the_other_corners() {
     });
     assert!(!ai.test_tile_at_pos(pos));
     ai.with_state(|s| s.found_tile = [false; 16]);
+    // a plant that does not flower is left alone
+    let still = h.plant.borrow().clone().unwrap();
+    crate::plants::plant::as_plant(&still).unwrap().set_flowering(&still, false);
+    assert!(!ai.test_tile_at_pos(pos));
     // soil at the very top of the loaded block with a sowable item, but no tile above it
     set(&w, 16, 31, |t| {
         t.type_index = 6;

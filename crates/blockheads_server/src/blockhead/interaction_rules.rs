@@ -980,12 +980,9 @@ impl Blockhead {
                         }
                         && tile_is_air_water_or_snow(u);
                 }
-                let tl = t();
-                if place_ok
-                    && count(item_t) > 0
-                    && (item_type_is_placable_in_water(item_t)
-                        || !(tl.type_index == 3 && tl.partial_content_left == 0xff))
-                {
+                // (the original also asks `placableInWater(item) || !(full water here)`; `item_type_is_solid` was
+                // tested above and every solid item type is placable in water, so that is always true)
+                if place_ok && count(item_t) > 0 {
                     return InteractionType::INTERACTION_PLACE_SOLID_BLOCK;
                 }
             }
