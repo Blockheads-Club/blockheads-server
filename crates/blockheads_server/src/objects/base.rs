@@ -1336,4 +1336,186 @@ mod tests {
         assert!(handle::is_kind_of_class(&me, &crate::objects::class_info::DYNAMIC_OBJECT_CLASS));
         assert!(!handle::is_member_of_class(&me, &crate::objects::class_info::INTERACTION_OBJECT_CLASS));
     }
+
+    struct AdminServer(bool);
+    impl ServerApi for AdminServer {
+        fn player_is_admin_with_id(&self, _client_id: Option<&str>) -> bool {
+            self.0
+        }
+    }
+
+    /// The constants and nil answers of a plain object, the type-save-dict initialiser (which ignores its extras).
+    #[test]
+    fn more_defaults() {
+        let (w, dw, _log) = setup(4, 4);
+        let o = TestObj::new();
+        let me: ObjRef = o.clone();
+        assert!(base_init_with_world_dynamic_world_at_position_cache_type_save_dict_placed_by_client(
+            &me,
+            &wr(&w),
+            &dr(&dw),
+            IntPair { x: 40, y: 3 },
+            None,
+            99,
+            None,
+            Some("cid"),
+        ));
+        assert_eq!(me.pos(), IntPair { x: 40, y: 3 });
+        assert!(!me.is_downlight() && !me.is_uplight());
+        assert_eq!(me.get_light_rgb(), [0.0; 3]);
+        assert_eq!((me.free_block_creation_data_a(), me.free_block_creation_data_b()), (0, 0));
+        assert!(me.update_net_data_for_client(&me, None).is_none());
+        me.child_needs_saving(&me, &me);
+        assert!(me.as_path_user().is_none() && me.as_tap_choice().is_none() && me.as_power_user().is_none());
+    }
+
+    #[test]
+    #[should_panic]
+    fn float_pos_of_the_wrong_kind_raises() {
+        let (w, dw, _log) = setup(4, 4);
+        let mut d = new_mutable_dict();
+        d.map.insert("floatPos".into(), PlistValue::string("nope"));
+        let o = TestObj::new();
+        let me: ObjRef = o.clone();
+        base_init_with_world_dynamic_world_save_dict_cache(&me, &wr(&w), &dr(&dw), &d, None);
+    }
+
+    /// An object that is not kept in macro tiles is neither removed from one, nor moved between them.
+    #[test]
+    fn objects_outside_macro_tiles() {
+        let (w, dw, log) = setup(4, 4);
+        let o = TestObj::new();
+        let me: ObjRef = o.clone();
+        base_init_with_world_dynamic_world_at_position_cache(&me, &wr(&w), &dr(&dw), IntPair { x: 40, y: 3 }, None);
+        o.add_to_block.set(false);
+        log.borrow_mut().clear();
+        me.remove_from_macro_block(&me);
+        assert!(log.borrow().is_empty());
+    }
+
+    /// Crossing into another macro tile when the old tile has no object list, or no tile is recorded at all.
+    #[test]
+    fn crossing_with_a_damaged_owner() {
+        let (w, dw, _log) = setup(4, 4);
+        let o = TestObj::new();
+        let me: ObjRef = o.clone();
+        base_init_with_world_dynamic_world_at_position_cache(&me, &wr(&w), &dr(&dw), IntPair { x: 40, y: 3 }, None);
+        // the old tile lost its list
+        *w.tiles[1].objs.borrow_mut() = None;
+        me.update_position(&me, IntPair { x: 70, y: 3 });
+        assert_eq!(w.tiles[2].objs.borrow().as_ref().unwrap().len(), 1);
+        // no recorded tile (the original would dereference NULL; the port carries on)
+        me.base().borrow_mut().macro_tile_owner = None;
+        me.update_position(&me, IntPair { x: 100, y: 3 });
+        assert_eq!(w.tiles[3].objs.borrow().as_ref().unwrap().len(), 1);
+    }
+
+    /// Who may remove an object: a world that is gone, a server admin, a protected tile, owners.
+    #[test]
+    fn removal_rules() {
+        // no world at all: only the owner rule decides, and a non-blockhead has no net id
+        let o = TestObj::new();
+        let me: ObjRef = o.clone();
+        let other: ObjRef = TestObj::new();
+        assert!(me.can_be_removed_by_blockhead(&me, &other));
+        me.set_owner_id(Some("owner".into()));
+        assert!(!me.can_be_removed_by_blockhead(&me, &other));
+
+        // a world that is not an admin world: the server's admin list, then protection, then the owner rule
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let mut mw = MockWorld::new(4, 4, log.clone());
+        mw.admin = false;
+        let w = Rc::new(mw);
+        let dw =
+            Rc::new(MockDw { next_id: std::cell::Cell::new(100), log, server: true, blockheads: RefCell::new(vec![]) });
+        let o = TestObj::new();
+        let me: ObjRef = o.clone();
+        base_init_with_world_dynamic_world_at_position_cache(&me, &wr(&w), &dr(&dw), IntPair { x: 40, y: 3 }, None);
+        // a server that knows admins
+        *w.server.borrow_mut() = Some(Rc::new(AdminServer(true)));
+        assert!(me.can_be_removed_by_blockhead(&me, &other));
+        *w.server.borrow_mut() = Some(Rc::new(AdminServer(false)));
+        // unowned: protected tiles refuse, others allow
+        w.protected.set(true);
+        assert!(!me.can_be_removed_by_blockhead(&me, &other));
+        w.protected.set(false);
+        assert!(me.can_be_removed_by_blockhead(&me, &other));
+        // owned: only the owner (a non-blockhead is nobody)
+        me.set_owner_id(Some("owner".into()));
+        assert!(!me.can_be_removed_by_blockhead(&me, &other));
+    }
+
+    /// A world that cannot create the physical block leaves the object unregistered.
+    #[test]
+    fn world_without_physical_blocks() {
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let mut mw = MockWorld::new(4, 4, log.clone());
+        mw.create_physical = false;
+        mw.tiles[1].physical.set(false);
+        let w = Rc::new(mw);
+        let dw =
+            Rc::new(MockDw { next_id: std::cell::Cell::new(100), log, server: true, blockheads: RefCell::new(vec![]) });
+        let o = TestObj::new();
+        let me: ObjRef = o.clone();
+        base_init_with_world_dynamic_world_at_position_cache(&me, &wr(&w), &dr(&dw), IntPair { x: 40, y: 3 }, None);
+        assert!(!w.tiles[1].physical.get());
+        assert!(!w.protected.get() || me.pos().x == 40);
+        assert!(!w.tile_is_protected_at_pos_against_blockhead(me.pos(), &me));
+    }
+
+    /// A blockhead as the one asking: net or server-controlled ones lose the admin shortcut, the owner's own
+    /// blockhead may remove an owned object.
+    #[test]
+    fn removal_by_blockheads() {
+        use crate::blockhead::blockhead::testutil::{bh_of, new_bh, setup as bh_setup, TestHost};
+        let _h = TestHost::install();
+        let (bw, _bmock, bdw) = bh_setup();
+        let bh = new_bh(&bw, &bdw, 0);
+        let (w, dw, _log) = setup(4, 4);
+        let o = TestObj::new();
+        let me: ObjRef = o.clone();
+        base_init_with_world_dynamic_world_at_position_cache(&me, &wr(&w), &dr(&dw), IntPair { x: 40, y: 3 }, None);
+        // admin world: an ordinary blockhead may remove
+        assert!(me.can_be_removed_by_blockhead(&me, &bh));
+        // a net blockhead and a server-controlled one do not get the shortcut; the unowned object still goes
+        bh.base().borrow_mut().is_net = true;
+        assert!(me.can_be_removed_by_blockhead(&me, &bh));
+        w.protected.set(true);
+        assert!(!me.can_be_removed_by_blockhead(&me, &bh));
+        bh.base().borrow_mut().is_net = false;
+        bh_of(&bh).bh.borrow_mut().is_client_blockhead_being_controlled_by_server = true;
+        assert!(!me.can_be_removed_by_blockhead(&me, &bh));
+        // owned by the blockhead's own net id
+        bh_of(&bh).set_client_id("abc");
+        let local = bh_of(&bh).local_net_id().expect("local net id");
+        assert_eq!(local, "abc");
+        me.set_owner_id(Some(local));
+        assert!(me.can_be_removed_by_blockhead(&me, &bh));
+        // and a world that is gone decides the same way
+        let loose = TestObj::new();
+        let loose_me: ObjRef = loose.clone();
+        loose_me.set_owner_id(me.owner_id());
+        assert!(loose_me.can_be_removed_by_blockhead(&loose_me, &bh));
+    }
+
+    /// A bare `DynamicObject` keeps every default, including `dealloc`.
+    #[test]
+    fn plain_object_defaults() {
+        use crate::objects::class_info::DYNAMIC_OBJECT_CLASS;
+        struct Plain(RefCell<DynamicObjectBase>);
+        impl DynamicObject for Plain {
+            fn base(&self) -> &RefCell<DynamicObjectBase> {
+                &self.0
+            }
+            fn class_info(&self) -> &'static ClassInfo {
+                &DYNAMIC_OBJECT_CLASS
+            }
+            fn as_any(&self) -> &dyn Any {
+                self
+            }
+        }
+        let p: ObjRef = handle::alloc_obj(|w| Plain(RefCell::new(DynamicObjectBase::alloc_zeroed_with(w))));
+        p.dealloc(&p);
+        assert_eq!(p.object_type(), MAX_DYNAMIC_OBJECT_TYPES);
+    }
 }
