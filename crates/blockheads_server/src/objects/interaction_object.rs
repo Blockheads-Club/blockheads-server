@@ -221,9 +221,9 @@ pub fn interaction_object_init_with_world_dynamic_world_at_position_cache_item_f
     client_id: Option<&str>,
     client_name: Option<&str>,
 ) -> bool {
-    if !base_init_with_world_dynamic_world_at_position_cache(me, world, dw, pos, cache) {
-        return false;
-    }
+    // the base initialiser always succeeds when the position is given
+    let inited = base_init_with_world_dynamic_world_at_position_cache(me, world, dw, pos, cache);
+    debug_assert!(inited);
     let sd = |k: &str| save_dict.and_then(|d| d.map.get(&k.to_string()));
     let owner_name = match client_name {
         Some(n) => Some(n.to_string()),
@@ -251,9 +251,8 @@ pub fn interaction_object_init_with_world_dynamic_world_save_dict_cache(
     save_dict: &PlistDict,
     cache: CacheRef,
 ) -> bool {
-    if !base_init_with_world_dynamic_world_save_dict_cache(me, world, dw, save_dict, cache) {
-        return false;
-    }
+    let inited = base_init_with_world_dynamic_world_save_dict_cache(me, world, dw, save_dict, cache);
+    debug_assert!(inited);
     let sd = |k: &str| save_dict.map.get(&k.to_string());
     let owner_id = sd("ownerID").and_then(|v| v.as_str()).map(|s| s.to_string());
     let mut owner_name = sd("ownerName").and_then(|v| v.as_str()).map(|s| s.to_string());
@@ -1044,9 +1043,108 @@ mod tests {
         assert!(me.owner_id().is_none());
     }
 
+    /// An interaction object that overrides nothing: the defaults of the trait, and the stand-ins' own faces.
     #[test]
-    fn unused() {
-        // keep the DynamicWorldApi import used in release test builds
-        fn _f(_: &dyn DynamicWorldApi) {}
+    fn trait_defaults_and_stand_ins() {
+        struct Plain {
+            base: RefCell<DynamicObjectBase>,
+            io: RefCell<InteractionObjectState>,
+        }
+        impl DynamicObject for Plain {
+            fn base(&self) -> &RefCell<DynamicObjectBase> {
+                &self.base
+            }
+            fn class_info(&self) -> &'static ClassInfo {
+                &crate::objects::class_info::INTERACTION_OBJECT_CLASS
+            }
+            fn as_any(&self) -> &dyn Any {
+                self
+            }
+            fn as_interaction_object(&self) -> Option<&RefCell<InteractionObjectState>> {
+                Some(&self.io)
+            }
+            fn as_interaction_like(&self) -> Option<&dyn InteractionObjectLike> {
+                Some(self)
+            }
+        }
+        impl InteractionObjectLike for Plain {
+            fn io_state(&self) -> &RefCell<InteractionObjectState> {
+                &self.io
+            }
+        }
+        use crate::objects::base::DynamicObjectBase;
+        use crate::objects::class_info::ClassInfo;
+        use std::any::Any;
+        let p: Rc<Plain> = crate::objects::handle::alloc_obj(|w| Plain {
+            base: RefCell::new(DynamicObjectBase::alloc_zeroed_with(w)),
+            io: RefCell::new(InteractionObjectState::default()),
+        });
+        let me: ObjRef = p.clone();
+        let l = like(&me);
+        assert_eq!(l.interaction_object_type(), 0);
+        assert_eq!(l.destroy_item_type(), 0);
+        assert!(!l.requires_human_interaction());
+        assert!(l.can_be_used_in_expert_mode_when_not_owned());
+        assert!(!l.is_paintable());
+        assert!(!l.is_double_height());
+        l.remove(&me, None);
+        l.set_paused(&me, true);
+        l.paint(&me, 5);
+        assert_eq!(p.io.borrow().paint_color, 5);
+        l.set_proxy_object_owner(&me, Some(&me));
+        l.set_proxy_object_owner(&me, None);
+        let b: ObjRef = TestBh::new(3, false);
+        assert!(l.can_be_used_by_blockhead(&me, &b));
+        l.remote_blockhead_removed_with_id(&me, 3);
+        // the stand-ins answer for themselves
+        let t = TestIo::new();
+        let tm: ObjRef = t.clone();
+        assert!(std::ptr::eq(InteractionObjectLike::io_state(&*t), &t.io));
+        assert_eq!(tm.class_info().name, "InteractionObject");
+        assert_eq!(tm.object_type(), 46);
+        assert!(tm.as_any().is::<TestIo>());
+        let bh = TestBh::new(9, false);
+        let bm: ObjRef = bh.clone();
+        assert_eq!(bm.class_info().name, "DynamicObject");
+        assert!(bm.as_any().is::<TestBh>());
+        let api = bm.as_blockhead().unwrap();
+        assert_eq!(api.client_id().as_deref(), Some("c9"));
+        assert_eq!(api.local_net_id().as_deref(), Some("c9"));
+        assert!(!api.is_client_blockhead_being_controlled_by_server());
+        assert!(api.is_interacting_with_any_interaction_object());
+        let _: Option<&dyn DynamicWorldApi> = None;
+    }
+
+    /// A net image whose macro tile is not loaded is refused.
+    #[cfg(not(feature = "faithful-crashes"))]
+    #[test]
+    fn net_image_at_an_unloaded_tile_is_refused() {
+        let (w, dw, _log) = setup(4, 4);
+        let o = TestIo::new();
+        let me: ObjRef = o.clone();
+        let (wr, dr): (WorldRef, DynamicWorldRef) = (w.clone(), dw.clone());
+        let nd = crate::types::netdata::DynamicObjectNetData::new(9, 4000, 4, false);
+        assert!(!interaction_object_init_with_world_dynamic_world_cache_net_data(&me, &wr, &dr, None, &nd.to_vec()));
+    }
+
+    /// A save dict may carry the owner when no client placed the object; a flagged object goes once its use ends.
+    #[test]
+    fn owner_from_the_save_dict_and_deferred_removal() {
+        let (w, dw, _log) = setup(4, 4);
+        let o = TestIo::new();
+        let me: ObjRef = o.clone();
+        let (wr, dr): (WorldRef, DynamicWorldRef) = (w.clone(), dw.clone());
+        let mut sd = new_mutable_dict();
+        sd.map.insert("ownerID".to_string(), PlistValue::string("saved-owner"));
+        assert!(interaction_object_init_with_world_dynamic_world_at_position_cache_item_flipped_save_dict_placed_by_client_client_name(
+            &me, &wr, &dr, IntPair { x: 40, y: 3 }, None, None, false, Some(&sd), None, None
+        ));
+        assert_eq!(me.owner_id().as_deref(), Some("saved-owner"));
+        // an update that ends the use removes an object flagged for it
+        o.io.borrow_mut().needs_to_be_removed_when_interaction_ends = true;
+        let mut img = InteractionObjectCreationNetData::default();
+        img.is_in_use = 0;
+        interaction_object_remote_update(&me, &img.to_vec());
+        assert_eq!(*o.removes.borrow(), vec!["remove(false)".to_string()]);
     }
 }
