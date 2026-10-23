@@ -74,7 +74,10 @@ vanilla. Vanilla game clients can join servers with server-side mods.
 Mods with a client half are offered to modded clients (PC loader, Android loader installed with Patcher) over the
 [0xBC mod protocol](https://github.com/Blockheads-Club/mod-sdk/blob/dev/docs/protocol-0xbc.md): the client lists the
 server's mods, downloads the packages from the server (resumable, SHA-256 checked) and joins; server and client mods
-talk over channels. Vanilla clients never receive a protocol byte; when a client mod is required they are not
+talk over channels and, since API 0.3.1, service calls: a client mod can call a service a server mod provides (and the
+other way round), asynchronously over `SERVICE_CALL` / `SERVICE_RESULT`. Only services the provider marks `remote = true` in its
+`mod.toml` are reachable, every player has a rate limit (bursts of 20 calls, 10 per second; `BLOCKHEADS_MODS_REMOTE_BURST` and
+`BLOCKHEADS_MODS_REMOTE_RATE` change it) and the provider runs under its own time budget. Vanilla clients never receive a protocol byte; when a client mod is required they are not
 let in: they get the world summary with a welcome text ("This server uses Blockheads Club mods. Install the mod loader
 with Patcher ...", shown by the game as its welcome popup) and are dropped 20 seconds later (or with their next packet)
 by a plain disconnect (no rejection text, so the popup stays the only message). The server never offers a client mod that needs `native`.
