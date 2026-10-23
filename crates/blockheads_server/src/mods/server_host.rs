@@ -578,6 +578,22 @@ mod tests {
     }
 
     #[test]
+    fn cosmetics_are_set_for_an_online_player() {
+        let h = Harness::new("m_bridge_cosmetics");
+        let pid = h.join("Ann");
+        let b = Bridge { srv: Rc::downgrade(&h.srv), net: Rc::default() };
+        b.net.borrow_mut().content = crate::mods::content::Content {
+            wire: [("cosmetics".to_string(), [("hats:crown".to_string(), 1u64)].into())].into(),
+            cosmetics: [(1, "hat".to_string())].into(),
+        };
+        assert_eq!(b.set_cosmetic(&pid, "hat", Some(1)), Ok(()));
+        assert_eq!(b.cosmetics_of(&pid), vec![("hat".to_string(), 1)]);
+        assert_eq!(b.set_cosmetic(&pid, "hat", None), Ok(()));
+        assert!(b.cosmetics_of(&pid).is_empty());
+        assert_eq!(b.set_cosmetic("nobody", "hat", Some(1)), Err(ApiError::StaleHandle));
+    }
+
+    #[test]
     fn busy_host_returns_defaults() {
         let tmp = tempfile::tempdir().unwrap();
         let bridge = Rc::new(Bridge { srv: Weak::new(), net: Rc::default() });
