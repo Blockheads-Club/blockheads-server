@@ -107,9 +107,8 @@ impl SnowSurfaceBlock {
         let me = Self::alloc(world);
         let me_obj: ObjRef = me.clone();
         let wref: WorldRef = world.clone();
-        if !base_init_with_world_dynamic_world_at_position_cache(&me_obj, &wref, dw, pos, cache) {
-            return None;
-        }
+        // The base init always succeeds for a new object (it ignores a failed registration).
+        let _ = base_init_with_world_dynamic_world_at_position_cache(&me_obj, &wref, dw, pos, cache);
         me.init_sub_derived_items();
         let p = me.pos();
         let tile = tile_at_world_position_loaded(p.x, p.y, world);
@@ -135,9 +134,8 @@ impl SnowSurfaceBlock {
         let me = Self::alloc(world);
         let me_obj: ObjRef = me.clone();
         let wref: WorldRef = world.clone();
-        if !base_init_with_world_dynamic_world_save_dict_cache(&me_obj, &wref, dw, save_dict, cache) {
-            return None;
-        }
+        // The base init always succeeds for a saved object.
+        let _ = base_init_with_world_dynamic_world_save_dict_cache(&me_obj, &wref, dw, save_dict, cache);
         me.init_sub_derived_items();
         Some(me)
     }
@@ -840,16 +838,12 @@ mod tests {
         below.set_type_index(6);
         rec.take();
         // search seeds until a draw lands on a grass tile at y=39 (dy = -1)
-        let mut spread = false;
-        for seed in 1..400 {
+        let spread = (1..400).any(|seed| {
             below.set_type_index(6);
             srand(seed);
             b.spread_grass_tile(&below, &t);
-            if below.type_index() == 27 {
-                spread = true;
-                break;
-            }
-        }
+            below.type_index() == 27
+        });
         assert!(spread);
         assert!(rec.take().contains(&"snow(1,1)".to_string()));
     }
@@ -926,5 +920,345 @@ mod tests {
         assert_eq!(b3.partial_content(), 0.0);
         assert!(rec.take().contains(&"fill(50,39,0x422)".to_string()));
         let _ = b;
+    }
+
+    fn lit(w: &Rc<World>, x: i32, y: i32, f: impl Fn(&mut Tile)) {
+        tile(w, x, y).update(f);
+    }
+
+    #[test]
+    fn rain_makes_drops_only_when_it_rains_on_a_lit_open_tile() {
+        install_rec();
+        let w = setup();
+        let (b, _o) = mk(&w, 40, 40);
+        let wet = |b: &SnowSurfaceBlock| {
+            let mut st = b.st.borrow_mut();
+            st.temperature = 5.0;
+            st.rain_random_timer = 0.0;
+        };
+        // 1 draw for the timer, 2 for the splash position, 2 per drop for 4 drops
+        wet(&b);
+        assert!(draws(11, 5, || b.update_rain_dt(0.5, 0.1)));
+        // Too little rain, or freezing: nothing happens at all.
+        wet(&b);
+        assert!(draws(0, 5, || b.update_rain_dt(0.04, 0.1)));
+        b.st.borrow_mut().temperature = 0.0;
+        assert!(draws(0, 5, || b.update_rain_dt(0.5, 0.1)));
+        // The timer has not run out yet.
+        wet(&b);
+        b.st.borrow_mut().rain_random_timer = 5.0;
+        assert!(draws(0, 5, || b.update_rain_dt(0.5, 0.1)));
+        // Unlit, covered or non-air tiles only re-arm the timer.
+        for edit in
+            [(|t: &mut Tile| t.sun_light = 100) as fn(&mut Tile), |t| t.back_wall_type_index = 1, |t| t.type_index = 1]
+        {
+            wet(&b);
+            lit(&w, 40, 40, |t| {
+                t.sun_light = 255;
+                t.back_wall_type_index = 2;
+                t.type_index = 2;
+            });
+            lit(&w, 40, 40, edit);
+            assert!(draws(1, 5, || b.update_rain_dt(0.5, 0.1)));
+        }
+        // At the bottom of the world there is no tile below to splash on.
+        let (edge, _o2) = mk(&w, 41, 0);
+        lit(&w, 41, 0, |t| t.sun_light = 255);
+        {
+            let mut st = edge.st.borrow_mut();
+            st.temperature = 5.0;
+            st.rain_random_timer = 0.0;
+        }
+        assert!(draws(1, 5, || edge.update_rain_dt(0.5, 0.1)));
+    }
+
+    #[test]
+    fn particle_colour_follows_the_strongest_light_and_the_day() {
+        install_rec();
+        let w = setup();
+        let (b, _o) = mk(&w, 40, 40);
+        let colour = |r: u16, g: u16, bl: u16| {
+            let mut t = tile(&w, 40, 40).get();
+            t.artificial_light_r = r;
+            t.artificial_light_g = g;
+            t.artificial_light_b = bl;
+            t.sun_light = 128;
+            b.particle_color(&w, &t, 1.0)
+        };
+        // Whichever channel is brightest decides the scale; beyond 1.0 everything is normalised.
+        for (r, g, bl) in [(100, 200, 50), (100, 50, 200), (200, 100, 50), (4000, 2000, 1000), (0, 0, 0)] {
+            let c = colour(r, g, bl);
+            assert!(c.x.is_finite() && c.y.is_finite() && c.z.is_finite(), "{r} {g} {bl}");
+        }
+    }
+
+    #[test]
+    fn grass_spreads_from_compost_and_through_open_air_only() {
+        let rec = install_rec();
+        let w = setup();
+        let (b, _o) = mk(&w, 40, 40);
+        b.st.borrow_mut().temperature = 10.0;
+        let below = tile(&w, 40, 39);
+        let t = tile(&w, 40, 40);
+        // Compost ground, or compost under a plain back wall, turns into compost grass on a lucky draw.
+        let mut hit = (false, false);
+        for seed in 1..200 {
+            below.update(|x| {
+                x.type_index = 48;
+                x.back_wall_type_index = 1;
+            });
+            srand(seed);
+            b.spread_grass_tile(&below, &t);
+            hit.0 |= below.type_index() == 49;
+            below.update(|x| {
+                x.type_index = 1;
+                x.back_wall_type_index = 48;
+            });
+            srand(seed);
+            b.spread_grass_tile(&below, &t);
+            hit.1 |= below.back_wall_type_index() == 49;
+        }
+        assert_eq!(hit, (true, true));
+        assert!(rec.take().contains(&"snow(1,1)".to_string()));
+        // Dirt looks at a random tile nearby: grass in the sky above the ground spreads when the straight line to it
+        // is open, and does not when something solid is in the way.
+        for x in 24..57 {
+            for y in 30..50 {
+                let ground = y <= 39;
+                lit(&w, x, y, |t| {
+                    t.type_index = if ground { 6 } else { 2 };
+                    t.back_wall_type_index = if ground { 1 } else { 2 };
+                    t.sun_light = 255;
+                });
+            }
+        }
+        // Grass pockets above and below the line, with a solid wall and open air between in different places.
+        for y in 30..40 {
+            lit(&w, 43, y, |t| t.type_index = 2); // an open shaft below the surface
+        }
+        for (x, y, ty) in [(36, 41, 27), (44, 41, 49), (43, 32, 49), (38, 33, 27), (36, 45, 27)] {
+            lit(&w, x, y, |t| t.type_index = ty);
+        }
+        lit(&w, 40, 42, |t| t.type_index = 1);
+        let (mut spread, mut kept, mut bw) = (false, false, false);
+        for seed in 1..3000 {
+            below.update(|x| {
+                x.type_index = 6;
+                x.back_wall_type_index = 1;
+            });
+            srand(seed);
+            b.spread_grass_tile(&below, &t);
+            let went = below.type_index() == 27;
+            spread |= went;
+            kept |= !went;
+            below.update(|x| {
+                x.type_index = 1;
+                x.back_wall_type_index = 6;
+            });
+            t.update(|x| x.back_wall_type_index = 2);
+            srand(seed);
+            b.spread_grass_tile(&below, &t);
+            bw |= below.back_wall_type_index() == 27;
+        }
+        assert_eq!((spread, kept, bw), (true, true, true));
+    }
+
+    #[test]
+    fn thawing_and_removing_snow_cover_the_remaining_ground_cases() {
+        let rec = install_rec();
+        let w = setup();
+        let (b, o) = mk(&w, 40, 40);
+        let below = tile(&w, 40, 39);
+        let t = tile(&w, 40, 40);
+        // Frozen compost grass thaws again; a snowy tile with a snow layer counts as freezing too.
+        below.set_type_index(50);
+        b.st.borrow_mut().temperature = 5.0;
+        b.update_ground_frozen_tile(&below, &t);
+        assert_eq!(below.type_index(), 49);
+        b.st.borrow_mut().temperature = 0.0;
+        t.update(|x| {
+            x.type_index = 5;
+            x.partial_content_left = 10;
+        });
+        below.set_type_index(27);
+        b.update_ground_frozen_tile(&below, &t);
+        assert_eq!(below.type_index(), 28);
+        // Snow content: water and ice tiles keep their type; unchanged content without force does nothing.
+        for ty in [3u8, 4] {
+            t.set_type_index(ty);
+            b.set_partial_content(0.5);
+            b.update_snow_content_tile(true, &t);
+        }
+        t.update(|x| {
+            x.type_index = 5;
+            x.partial_content_left = 127;
+        });
+        rec.take();
+        b.update_snow_content_tile(false, &t);
+        assert!(rec.take().is_empty());
+        b.set_partial_content(0.0);
+        b.update_snow_content_tile(true, &t);
+        assert_eq!(t.type_index(), 2); // no snow left on a snow tile: back to air
+                                       // removeAllSnow only touches snowy tiles that are not ice or water.
+        t.update(|x| {
+            x.type_index = 3;
+            x.partial_content_left = 9;
+        });
+        b.remove_all_snow();
+        assert_eq!(t.partial_content_left(), 9);
+        t.set_type_index(2);
+        // Removing when the ground vanished, was water, or the own tile is ice or missing.
+        assert!(!o.needs_removed());
+        below.set_type_index(3);
+        assert!(!b.remove_if_floating());
+        below.set_type_index(2);
+        t.set_type_index(TILE_ICE);
+        assert!(!b.remove_if_floating());
+        t.set_type_index(2);
+        assert!(b.remove_if_floating());
+        assert!(o.needs_removed());
+        // The unloaded neighbourhood: the block outside the loaded area has no tile at all.
+        let (far, _of) = mk(&w, 100, 100);
+        assert!(!far.remove_if_floating());
+        far.remove_all_snow();
+        let mut positions = vec![IntPair { x: 100, y: 100 }];
+        _of.world_changed(&_of, &mut positions);
+        // Changes elsewhere in the column or away from it are ignored; a removed block ignores everything.
+        let (c, oc) = mk(&w, 50, 40);
+        oc.world_changed(&oc, &mut vec![IntPair { x: 50, y: 45 }, IntPair { x: 51, y: 40 }]);
+        assert!(!oc.needs_removed());
+        tile(&w, 50, 40).set_type_index(TILE_ICE);
+        oc.world_changed(&oc, &mut vec![IntPair { x: 50, y: 40 }]);
+        assert!(!oc.needs_removed());
+        tile(&w, 50, 40).set_type_index(3);
+        oc.world_changed(&oc, &mut vec![IntPair { x: 50, y: 40 }]);
+        assert!(oc.needs_removed());
+        oc.world_changed(&oc, &mut vec![IntPair { x: 50, y: 40 }]);
+        c.update_in_time_since_saved();
+        oc.update_accurate_dt_is_simulation(&oc, 0.1, 0.1, false);
+        oc.dealloc(&oc);
+        oc.set_needs_removed(&oc, false);
+        assert!(!oc.needs_removed());
+    }
+
+    #[test]
+    fn nets_and_edges() {
+        install_rec();
+        let w = setup();
+        let (_d, dwr) = test_dw();
+        let nd =
+            crate::types::netdata::DynamicObjectNetData { unique_id: 7, pos_x: 40, pos_y: 40, ..Default::default() };
+        let bytes = crate::types::structs::WireStruct::to_vec(&nd);
+        let made = SnowSurfaceBlock::init_with_world_dynamic_world_cache_net_data(&w, &dwr, None, &bytes);
+        assert!(made.is_some());
+        // An object at an unloaded position cannot be created from the network.
+        let far =
+            crate::types::netdata::DynamicObjectNetData { unique_id: 8, pos_x: 100, pos_y: 100, ..Default::default() };
+        let bytes = crate::types::structs::WireStruct::to_vec(&far);
+        assert!(SnowSurfaceBlock::init_with_world_dynamic_world_cache_net_data(&w, &dwr, None, &bytes).is_none());
+    }
+
+    #[test]
+    fn weather_samples_clamp_at_their_limits() {
+        let rec = install_rec();
+        rec.weather.set(0.9);
+        let w = setup();
+        let (b, o) = mk(&w, 40, 40);
+        // Freezing at the first light level that snows: the light factor is exactly zero, so nothing accumulates.
+        lit(&w, 40, 40, |t| {
+            t.artificial_heat = -60;
+            t.sun_light = 240;
+        });
+        o.update_accurate_dt_is_simulation(&o, 0.1, 0.1, false);
+        assert_eq!(b.partial_content(), 0.0);
+        b.update_in_time_since_saved();
+        // Barely above freezing with little weather: the melt step uses no weather bonus and snaps tiny layers to 0.
+        rec.weather.set(0.1);
+        lit(&w, 40, 40, |t| {
+            t.artificial_heat = 60;
+            t.sun_light = 255;
+        });
+        b.set_partial_content(0.0015);
+        o.update_accurate_dt_is_simulation(&o, 0.1, 0.1, false);
+        assert_eq!(b.partial_content(), 0.0);
+        b.set_partial_content(0.3);
+        b.update_in_time_since_saved();
+        b.set_partial_content(0.3);
+        o.update_accurate_dt_is_simulation(&o, 0.1, 0.1, false);
+        assert!(b.partial_content() < 0.3);
+        // The class descriptor and the downcast hook.
+        assert_eq!(o.class_info().name, "SnowSurfaceBlock");
+        assert!(o.as_any().is::<SnowSurfaceBlock>());
+    }
+
+    #[test]
+    fn blocks_outside_the_loaded_area_and_odd_neighbours() {
+        let rec = install_rec();
+        let w = setup();
+        let (far, ofar) = mk(&w, 100, 100);
+        far.update_in_time_since_saved();
+        ofar.update_accurate_dt_is_simulation(&ofar, 0.1, 0.1, false);
+        far.st.borrow_mut().temperature = 5.0;
+        far.st.borrow_mut().rain_random_timer = 0.0;
+        far.update_rain_dt(0.5, 0.1);
+        // Water at the block's own tile removes it; air below too, unless the tile is ice.
+        let (_b, o) = mk(&w, 40, 40);
+        tile(&w, 40, 40).set_type_index(3);
+        o.update_accurate_dt_is_simulation(&o, 0.1, 0.1, false);
+        assert!(o.needs_removed());
+        let (_b2, o2) = mk(&w, 42, 40);
+        tile(&w, 42, 39).set_type_index(2);
+        o2.update_accurate_dt_is_simulation(&o2, 0.1, 0.1, false);
+        assert!(o2.needs_removed());
+        // Ice that freezes the water on both sides.
+        let (_b3, o3) = mk(&w, 46, 40);
+        tile(&w, 46, 40).update(|t| {
+            t.type_index = 4;
+            t.explored_fraction = 200;
+            t.artificial_heat = -300;
+        });
+        tile(&w, 45, 40).set_type_index(3);
+        tile(&w, 47, 40).set_type_index(3);
+        rec.take();
+        o3.update_accurate_dt_is_simulation(&o3, 0.1, 0.1, false);
+        let log = rec.take();
+        assert!(log.contains(&"fill(45,40,0x422)".to_string()) && log.contains(&"fill(47,40,0x422)".to_string()));
+        // Ice at a mild temperature neither melts nor freezes anything.
+        let (b5, o5) = mk(&w, 52, 40);
+        let calm = (-60..60i16).any(|heat| {
+            tile(&w, 52, 40).update(|t| {
+                t.type_index = 4;
+                t.explored_fraction = 200;
+                t.artificial_heat = heat;
+            });
+            o5.update_accurate_dt_is_simulation(&o5, 0.1, 0.1, false);
+            (-2.0..=1.0).contains(&b5.st.borrow().temperature)
+        });
+        assert!(calm);
+        // Snow settles on any tile type without turning it into snow; a solid floor keeps the block.
+        let (b6, _o6) = mk(&w, 54, 40);
+        tile(&w, 54, 40).set_type_index(1);
+        b6.set_partial_content(0.5);
+        b6.update_snow_content_tile(true, &tile(&w, 54, 40));
+        assert!(!b6.remove_if_floating());
+        // Grass near the east edge of the loaded area: some random picks land outside it.
+        let (edge, _oe) = mk(&w, 62, 40);
+        edge.st.borrow_mut().temperature = 10.0;
+        lit(&w, 62, 39, |t| t.type_index = 6);
+        lit(&w, 62, 40, |t| t.sun_light = 255);
+        let (below, here) = (tile(&w, 62, 39), tile(&w, 62, 40));
+        for seed in 1..200 {
+            below.set_type_index(6);
+            srand(seed);
+            edge.spread_grass_tile(&below, &here);
+        }
+        // A block that is freezing on a snowy tile with a snow layer already counts the layer.
+        let (_b4, o4) = mk(&w, 48, 40);
+        tile(&w, 48, 40).update(|t| {
+            t.type_index = 2;
+            t.artificial_heat = 40;
+            t.partial_content_left = 50;
+        });
+        o4.update_accurate_dt_is_simulation(&o4, 0.1, 0.1, false);
     }
 }
