@@ -549,7 +549,7 @@ pub fn tree_init_with_world_dynamic_world_save_dict_cache_tdnf_sonf(
     cache: CacheRef,
     tdnf: NoiseRef,
     sonf: NoiseRef,
-) -> bool {
+) {
     link_world(me, world, dw, tdnf, sonf);
     let wr: WorldRef = world.clone();
     let dr: DynamicWorldRef = dw.clone();
@@ -558,7 +558,6 @@ pub fn tree_init_with_world_dynamic_world_save_dict_cache_tdnf_sonf(
     tl(me).load_save_dict_values(me, d);
     let save_time = d.map.get(&"saveTime".to_string()).map_or(0.0, |v| v.double_value());
     tree_grow_in_time_since_saved(me, save_time);
-    true
 }
 
 // ------------------------------------------------------------------------------------------------ simple queries
@@ -1815,6 +1814,47 @@ pub(crate) mod testenv {
             *m.physical_block.borrow_mut() = Some(pb);
         }
         (w, d)
+    }
+
+    /// Scatter random obstacles (solid blocks, fire, foreign contents) around column `x`, rows above the ground;
+    /// `density` out of 100 per tile, from the LCG state `seed`.
+    pub fn scatter(w: &World, x: i32, seed: u64, density: u64) {
+        let mut s = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        for y in GROUND + 1..GROUND + 30 {
+            for dx in -10..=10 {
+                s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                let r = s >> 33;
+                if r % 100 >= density {
+                    continue;
+                }
+                if let Some(tr) = tile_at(w, x + dx, y) {
+                    tr.update(|t| match (r >> 8) % 4 {
+                        0 => t.type_index = 6,
+                        1 => t.on_fire = 1,
+                        _ => t.contents = 0x30,
+                    });
+                }
+            }
+        }
+    }
+
+    /// Undo `scatter` and everything a tree left behind around column `x`.
+    pub fn wipe(w: &World, x: i32) {
+        for y in GROUND + 1..GROUND + 40 {
+            for dx in -12..=12 {
+                if let Some(tr) = tile_at(w, x + dx, y) {
+                    tr.update(|t| {
+                        t.type_index = 2;
+                        t.contents = 0;
+                        t.foreground_contents = 0;
+                        t.on_fire = 0;
+                        t.dynamic_object_owner = 0;
+                        t.back_wall_type_index = 2;
+                        t.sun_light = 255;
+                    });
+                }
+            }
+        }
     }
 
     /// `n` rand draws after `srand(seed)`.

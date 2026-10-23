@@ -129,9 +129,7 @@ impl AppleTree {
         sonf: NoiseRef,
     ) -> Option<ObjRef> {
         let me = Self::alloc();
-        if !tree_init_with_world_dynamic_world_save_dict_cache_tdnf_sonf(&me, world, dw, d, cache, tdnf, sonf) {
-            return None;
-        }
+        tree_init_with_world_dynamic_world_save_dict_cache_tdnf_sonf(&me, world, dw, d, cache, tdnf, sonf);
         let v = d.map.get(&"availableFood".to_string());
         downcast::<AppleTree>(&me).unwrap().available_food.set(v.map_or(0.0, |v| v.float_value()));
         Some(me)

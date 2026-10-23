@@ -147,9 +147,7 @@ impl PineTree {
         sonf: NoiseRef,
     ) -> Option<ObjRef> {
         let me = Self::alloc();
-        if !tree_init_with_world_dynamic_world_save_dict_cache_tdnf_sonf(&me, world, dw, d, cache, tdnf, sonf) {
-            return None;
-        }
+        tree_init_with_world_dynamic_world_save_dict_cache_tdnf_sonf(&me, world, dw, d, cache, tdnf, sonf);
         let get = |k: &str| d.map.get(&k.to_string());
         let food = get("availableFood").map_or(0.0f32, |v| v.float_value());
         let save_time = get("saveTime").map_or(0.0f32, |v| v.float_value());
