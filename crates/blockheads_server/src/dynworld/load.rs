@@ -2131,7 +2131,7 @@ mod population_tests {
         let dw = DynamicWorld::new(DynamicWorldInit {
             world: w,
             world_tile_loader: None,
-            server: if server { Some(Rc::new(Srv)) } else { None },
+            server: if server { Some(Rc::new(Srv { admin: false })) } else { None },
             server_clients: if server { Some(clients) } else { None },
             cache: None,
             tree_density_noise_function: Some(noise.clone()),
@@ -3125,201 +3125,6 @@ mod load_save_tests {
 
     type Log = Rc<RefCell<Vec<String>>>;
 
-    /// An object with scriptable net data, owner and `blockheadsLoaded` counting.
-    struct TObj {
-        base: RefCell<DynamicObjectBase>,
-        ty: i32,
-        log: Log,
-        creation: Option<Vec<u8>>,
-        update: Option<Vec<u8>>,
-        owner: Option<String>,
-    }
-    fn tobj(
-        ty: i32,
-        id: u64,
-        log: &Log,
-        creation: Option<&[u8]>,
-        update: Option<&[u8]>,
-        owner: Option<&str>,
-    ) -> ObjRef {
-        let o = crate::objects::handle::alloc_obj(|w| TObj {
-            base: RefCell::new(DynamicObjectBase::alloc_zeroed_with(w)),
-            ty,
-            log: log.clone(),
-            creation: creation.map(|c| c.to_vec()),
-            update: update.map(|c| c.to_vec()),
-            owner: owner.map(str::to_string),
-        });
-        o.base.borrow_mut().unique_id = id;
-        o
-    }
-    impl DynamicObject for TObj {
-        fn base(&self) -> &RefCell<DynamicObjectBase> {
-            &self.base
-        }
-        fn class_info(&self) -> &'static ClassInfo {
-            &DYNAMIC_OBJECT_CLASS
-        }
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-        fn object_type(&self) -> i32 {
-            self.ty
-        }
-        fn creation_net_data_for_client(&self, _me: &ObjRef, _c: Option<&str>) -> Option<Vec<u8>> {
-            self.creation.clone()
-        }
-        fn update_net_data_for_client(&self, _me: &ObjRef, _c: Option<&str>) -> Option<Vec<u8>> {
-            self.update.clone()
-        }
-        fn client_id_for_saving_seperately_and_only_loading_while_player_online(&self) -> Option<String> {
-            self.owner.clone()
-        }
-        fn blockheads_loaded(&self, _me: &ObjRef) {
-            self.log.borrow_mut().push(format!("loaded({})", self.base.borrow().unique_id));
-        }
-    }
-
-    /// Scriptable hooks: what the constructors return and which flags the blockhead/chest/freight hooks report.
-    struct Hk {
-        log: Log,
-        existing: RefCell<Option<ObjRef>>,
-        fail_blockhead: Cell<bool>,
-        fail_construct: Cell<bool>,
-        level: Cell<i32>,
-        save_dir: RefCell<Option<String>>,
-        chest_type: Cell<i32>,
-        chest_chain: Cell<bool>,
-        freight_dict: Cell<bool>,
-        freight_flag: Cell<bool>,
-        no_dir: RefCell<Vec<u64>>,
-        save_ok: Cell<bool>,
-    }
-    impl crate::dynworld::state::DwHooksStub for Hk {
-        fn blockhead_with_id_including_net(&self, _id: u64) -> Option<ObjRef> {
-            self.existing.borrow().clone()
-        }
-        fn blockhead_will_be_unloaded(&self, b: &ObjRef) {
-            self.log.borrow_mut().push(format!("unload({})", b.unique_id()));
-        }
-        fn blockhead_from_save_dict(
-            &self,
-            d: &crate::plist::value::PlistDict,
-            _slots: Option<PlistValue>,
-            _repos: bool,
-            _dir: Option<&str>,
-            _local: Option<PlistValue>,
-        ) -> Option<ObjRef> {
-            if self.fail_blockhead.get() {
-                return None;
-            }
-            let id = d.map.get(&"uniqueID".to_string()).map_or(0, |v| v.unsigned_long_value());
-            Some(tobj(24, id, &self.log, None, None, None))
-        }
-        fn fully_load_if_needed_around_pos(&self, _p: IntPair, _i: u32, b: &ObjRef) {
-            self.log.borrow_mut().push(format!("fullload({})", b.unique_id()));
-        }
-        fn blockhead_stop_interacting_if_no_interaction_object(&self, b: &ObjRef) {
-            self.log.borrow_mut().push(format!("stop({})", b.unique_id()));
-        }
-        fn blockhead_die(&self, b: &ObjRef) {
-            self.log.borrow_mut().push(format!("die({})", b.unique_id()));
-        }
-        fn blockhead_prepare_inventory_for_saving(&self, b: &ObjRef) {
-            self.log.borrow_mut().push(format!("prep({})", b.unique_id()));
-        }
-        fn blockhead_inventory_needs_saving(&self, _b: &ObjRef) -> bool {
-            true
-        }
-        fn blockhead_set_inventory_needs_saving(&self, b: &ObjRef, v: bool) {
-            self.log.borrow_mut().push(format!("needs({},{})", b.unique_id(), v));
-        }
-        fn blockhead_client_save_dir(&self, b: &ObjRef) -> Option<String> {
-            if self.no_dir.borrow().contains(&b.unique_id()) {
-                return None;
-            }
-            self.save_dir.borrow().clone()
-        }
-        fn save_physical_block_for_macro_tile(&self, mt: &MacroTileRef, rel: bool, dont: bool, only: bool) -> bool {
-            self.log.borrow_mut().push(format!("savepb({},{},{}){}", rel, dont, only, mt.dynamic_objects_loaded.get()));
-            self.save_ok.get()
-        }
-        fn save_light_block_for_client_light_block_index(&self, i: i32, pb: Option<PhysicalBlockRef>, now: bool) {
-            self.log.borrow_mut().push(format!("lightblock({},{},{})", i, pb.is_some(), now));
-        }
-        fn blockhead_save_item_slots_array(&self, _b: &ObjRef) -> PlistValue {
-            PlistValue::array(vec![PlistValue::int(1)])
-        }
-        fn blockhead_save_dict_including_workbench_or_interaction_object(&self, b: &ObjRef, inc: bool) -> PlistValue {
-            dict_of(vec![("uniqueID", PlistValue::int(b.unique_id() as i64)), ("inc", PlistValue::boolean(inc))])
-        }
-        fn workbench_level(&self, _w: &ObjRef) -> i32 {
-            self.level.get()
-        }
-        fn workbench_set_level_silently(&self, _w: &ObjRef, l: i32) {
-            self.log.borrow_mut().push(format!("level({l})"));
-        }
-        fn tree_update_all_owned_tiles_to_new_id_size(&self, t: &ObjRef) {
-            self.log.borrow_mut().push(format!("treetiles({})", t.unique_id()));
-        }
-        fn dynamic_world_changed_at_pos_object_type(&self, p: IntPair, t: i32) {
-            self.log.borrow_mut().push(format!("changed({},{},{})", p.x, p.y, t));
-        }
-        fn chest_type(&self, _c: &ObjRef) -> i32 {
-            self.chest_type.get()
-        }
-        fn chest_inventory_data_allowing_empty(&self, _c: &ObjRef) -> Option<Vec<u8>> {
-            self.chest_chain.get().then(|| b"inv".to_vec())
-        }
-        fn chest_save_dict_excluding_inventory(&self, _c: &ObjRef) -> Option<PlistValue> {
-            self.chest_chain.get().then(|| dict_of(vec![("chest", PlistValue::boolean(true))]))
-        }
-        fn freight_needs_chest_save(&self, _c: &ObjRef) -> bool {
-            self.freight_flag.get()
-        }
-        fn freight_set_needs_chest_save(&self, c: &ObjRef, v: bool) {
-            self.log.borrow_mut().push(format!("freightflag({},{})", c.unique_id(), v));
-        }
-        fn freight_chest_save_dict(&self, _c: &ObjRef) -> Option<PlistValue> {
-            self.freight_dict.get().then(|| dict_of(vec![("items", PlistValue::int(3))]))
-        }
-        fn construct_from_save_dict(
-            &self,
-            kind: SaveLoadKind,
-            t: i32,
-            d: &crate::plist::value::PlistDict,
-            chest: Option<&crate::plist::value::PlistDict>,
-        ) -> Option<ObjRef> {
-            self.log.borrow_mut().push(format!("construct({:?},{},{})", kind, t, chest.is_some()));
-            if self.fail_construct.get() {
-                return None;
-            }
-            let id = d.map.get(&"uniqueID".to_string()).map_or(0, |v| v.unsigned_long_value());
-            let o = tobj(t, id, &self.log, None, None, None);
-            let x = d.map.get(&"pos_x".to_string()).map_or(0, |v| v.int_value());
-            let y = d.map.get(&"pos_y".to_string()).map_or(0, |v| v.int_value());
-            o.base().borrow_mut().pos = IntPair { x, y };
-            Some(o)
-        }
-    }
-
-    fn hk(log: &Log) -> Rc<Hk> {
-        Rc::new(Hk {
-            log: log.clone(),
-            existing: RefCell::new(None),
-            fail_blockhead: Cell::new(false),
-            fail_construct: Cell::new(false),
-            level: Cell::new(0),
-            save_dir: RefCell::new(None),
-            chest_type: Cell::new(0),
-            chest_chain: Cell::new(false),
-            freight_dict: Cell::new(true),
-            freight_flag: Cell::new(true),
-            no_dir: RefCell::new(vec![]),
-            save_ok: Cell::new(true),
-        })
-    }
-
     fn fixture(name: &str) -> (Rc<DynamicWorld>, Log, Rc<Hk>) {
         let d = dw(name, 1);
         let log: Log = Rc::new(RefCell::new(vec![]));
@@ -3341,7 +3146,7 @@ mod load_save_tests {
         let d = DynamicWorld::new(DynamicWorldInit {
             world: w,
             world_tile_loader: None,
-            server: Some(Rc::new(Srv)),
+            server: Some(Rc::new(Srv { admin: false })),
             server_clients: Some(clients),
             cache: None,
             tree_density_noise_function: None,
