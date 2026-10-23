@@ -240,13 +240,7 @@ impl RunLoop {
         if virt {
             if let (Some(w), Some(l)) = (wait, limit) {
                 clock::advance_virtual(w);
-                // f64 rounding of `start + elapsed` can leave the clock an ulp short of the timer date, which
-                // would stall the virtual clock forever; nudge by sub-microsecond steps (unobservable).
-                let mut eps = 1e-9;
-                while clock::reference_time() < l && eps < 1e-3 {
-                    clock::advance_virtual(eps);
-                    eps *= 2.0;
-                }
+                nudge_virtual_clock_to(l);
             }
         }
         if ready {
@@ -294,6 +288,16 @@ impl TimerScheduler for RunLoop {
     }
 }
 
+/// f64 rounding of `start + elapsed` can leave the virtual clock an ulp short of a timer date, which would stall it
+/// forever; nudge by sub-microsecond steps (unobservable).
+fn nudge_virtual_clock_to(limit: f64) {
+    let mut eps = 1e-9;
+    while clock::reference_time() < limit && eps < 1e-3 {
+        clock::advance_virtual(eps);
+        eps *= 2.0;
+    }
+}
+
 /// GNUstep `acceptInputForMode:beforeDate:` truncates the poll timeout (`(int)(wait*1000)`); the run loop then
 /// re-polls with 0 until the timer date has passed. This keeps the idle-timer latency constant (r3_console_2).
 fn trunc_timeout_ms(wait: f64) -> i64 {
@@ -322,7 +326,8 @@ mod trunc_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
 
     static CLOCK_LOCK: &Mutex<()> = &crate::foundation::clock::TEST_CLOCK_LOCK;
     const START: f64 = 1_000_000_000.0;
@@ -476,5 +481,146 @@ mod tests {
             rl.run_mode_default_before_distant_future();
         }
         assert_eq!(hits.get(), 1);
+    }
+
+    /// The free helpers and the `TimerScheduler` face go through the current loop.
+    #[test]
+    fn free_functions_and_scheduler_face() {
+        let (_g, rl) = setup();
+        let hits = Rc::new(Cell::new(0));
+        let h = hits.clone();
+        let id = perform_after_delay(0.0, Box::new(move || h.set(h.get() + 1)));
+        invalidate(id);
+        let h = hits.clone();
+        perform_after_delay(0.0, Box::new(move || h.set(h.get() + 10)));
+        let h = hits.clone();
+        let st = rl.scheduled_timer(0.1, false, Box::new(move || h.set(h.get() + 100)));
+        let sched: &dyn TimerScheduler = &*rl;
+        let h = hits.clone();
+        let rep = sched.schedule_repeating(0.1, Box::new(move || h.set(h.get() + 1000)));
+        sched.invalidate(rep);
+        let _ = st;
+        for _ in 0..4 {
+            rl.run_mode_default_before_distant_future();
+        }
+        assert_eq!(hits.get(), 110);
+        rl.run_until(&|| true);
+        rl.invalidate(424_242); // unknown ids are ignored
+    }
+
+    #[test]
+    fn nudging_stops_at_the_limit_or_after_the_step_cap() {
+        let (_g, _rl) = setup();
+        let now = clock::reference_time();
+        nudge_virtual_clock_to(now + 3e-6);
+        assert!(clock::reference_time() >= now + 3e-6);
+        let before = clock::reference_time();
+        nudge_virtual_clock_to(before + 10.0);
+        assert!(clock::reference_time() < before + 0.01); // gives up after the steps reach 1 ms
+        nudge_virtual_clock_to(0.0);
+    }
+
+    /// `fire` guards that the iteration itself never trips.
+    #[test]
+    fn fire_ignores_what_cannot_fire() {
+        let (_g, rl) = setup();
+        let now = clock::reference_time();
+        rl.fire(999, now); // unknown id
+        let hits = Rc::new(Cell::new(0));
+        let h = hits.clone();
+        let id = rl.add_timer(now + 10.0, 1.0, true, Box::new(move || h.set(h.get() + 1)));
+        rl.fire(id, now); // not due yet
+        rl.invalidate(id);
+        rl.fire(id, now + 20.0); // invalidated
+        assert_eq!(hits.get(), 0);
+        // A repeating entry that carries a one-shot closure, and a spent one-shot: hand-made, the API never builds them.
+        for (repeats, cb) in [(true, TimerCb::Once(Some(Box::new(|| ())))), (false, TimerCb::Once(None))] {
+            rl.insert(Timer { id: 500, fire_date: now, interval: 1.0, repeats, valid: true, cb });
+            rl.fire(500, now + 1.0);
+            rl.state.borrow_mut().timers.retain(|t| t.id != 500);
+        }
+        // Rescheduling after a long stall lands on the grid, strictly after now.
+        let h = hits.clone();
+        let id = rl.add_timer(now + 1.0, 1.0, true, Box::new(move || h.set(h.get() + 1)));
+        for t in [now + 1.0, now + 3.5, now + 5.0] {
+            rl.fire(id, t);
+        }
+        assert_eq!(hits.get(), 3);
+        let next = rl.state.borrow().timers.iter().find(|t| t.id == id).unwrap().fire_date;
+        assert!(near(next, now + 6.0), "{next}");
+    }
+
+    /// Stdin, the main-thread queue and the server's pending delays are serviced once per iteration.
+    #[test]
+    fn iteration_services_input_queue_and_server_delays() {
+        let (_g, rl) = setup();
+        let got = Rc::new(RefCell::new(Vec::<usize>::new()));
+        let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+        let handle = StdinHandle::from_channel(rx);
+        let g2 = got.clone();
+        handle.add_read_completion_observer(Rc::new(move |d| g2.borrow_mut().push(d.len())));
+        handle.read_in_background_and_notify();
+        rl.set_stdin_source(handle);
+        tx.send(b"abc".to_vec()).unwrap();
+        let ran = Arc::new(AtomicBool::new(false));
+        let r2 = ran.clone();
+        rl.main_thread_sender().send(Box::new(move || r2.store(true, Ordering::SeqCst))).unwrap();
+        let h = crate::server::bhserver::test_support::Harness::new("rl_delays");
+        h.srv.set_delay_scheduler(None);
+        let delayed = Rc::new(Cell::new(false));
+        let d2 = delayed.clone();
+        h.srv.perform_after_delay(0.0, Box::new(move || d2.set(true)));
+        // No timers at all: the virtual clock has nothing to advance to, the queue is polled quickly.
+        rl.run_mode_default_before_distant_future();
+        rl.run_mode_default_before_distant_future();
+        assert_eq!(*got.borrow(), vec![3]);
+        assert!(ran.load(Ordering::SeqCst) && delayed.get());
+        // Real clock, nothing to wait for: sleeps in short slices because the queue is in use.
+        clock::set_virtual(None);
+        rl.run_mode_default_before_distant_future();
+        clock::set_virtual(Some(START));
+        // No stdin source at all.
+        let bare = std::thread::spawn(|| {
+            let rl = RunLoop::current();
+            rl.add_timer(clock::reference_time() + 0.001, 1.0, false, Box::new(|| ()));
+            rl.run_mode_default_before_distant_future()
+        });
+        assert!(bare.join().unwrap());
+    }
+
+    /// An exception escaping a one-shot or a queued call ends the process like an uncaught one.
+    #[test]
+    fn escaping_exceptions_end_the_process() {
+        for kind in ["delay", "queue"] {
+            let out = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "app::run_loop::tests::child", "--nocapture", "--test-threads=1"])
+                .env("BH_TEST_CHILD", kind)
+                .output()
+                .unwrap();
+            assert_eq!(out.status.code(), Some(1), "{kind}: {}", String::from_utf8_lossy(&out.stderr));
+            assert!(String::from_utf8_lossy(&out.stderr).contains("Uncaught exception NSRangeException"), "{kind}");
+        }
+    }
+
+    /// Does nothing in the test run; the check above starts it with `BH_TEST_CHILD` set.
+    #[test]
+    fn child() {
+        let rl = RunLoop::current();
+        match std::env::var("BH_TEST_CHILD").as_deref() {
+            Ok("delay") => {
+                rl.perform_after_delay(
+                    0.0,
+                    Box::new(|| crate::foundation::exception::ns_raise("NSRangeException", "r")),
+                );
+                rl.run_mode_default_before_distant_future();
+            }
+            Ok("queue") => {
+                rl.main_thread_sender()
+                    .send(Box::new(|| crate::foundation::exception::ns_raise("NSRangeException", "r")))
+                    .unwrap();
+                rl.run_mode_default_before_distant_future();
+            }
+            _ => {}
+        }
     }
 }

@@ -236,6 +236,45 @@ mod chan_tests {
         assert!(h.at_eof());
         assert!(!h.wait_readable(1));
     }
+
+    #[test]
+    fn channel_pending_empty_and_dropped_sender_paths() {
+        let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+        let h = StdinHandle::from_channel(rx);
+        let got: Rc<RefCell<Vec<usize>>> = Rc::new(RefCell::new(vec![]));
+        let g2 = got.clone();
+        h.add_read_completion_observer(Rc::new(move |d| g2.borrow_mut().push(d.len())));
+        h.service_readable(); // disarmed: nothing happens
+        h.read_in_background_and_notify();
+        h.service_readable(); // armed but nothing queued: still waiting
+        assert!(got.borrow().is_empty() && !h.at_eof());
+        tx.send(b"ab".to_vec()).unwrap();
+        assert!(h.wait_readable(100));
+        assert!(h.wait_readable(100)); // the chunk is already pending
+        h.service_readable();
+        assert_eq!(*got.borrow(), vec![2]);
+        // Input that arrived without a wait is taken straight from the channel.
+        h.read_in_background_and_notify();
+        tx.send(b"cde".to_vec()).unwrap();
+        h.service_readable();
+        assert_eq!(*got.borrow(), vec![2, 3]);
+        got.borrow_mut().pop();
+        // A sender that is gone without a pending chunk is end of input as well.
+        h.read_in_background_and_notify();
+        drop(tx);
+        h.service_readable();
+        assert_eq!(*got.borrow(), vec![2, 0]);
+        assert!(h.at_eof());
+        // And so is one that vanishes while the loop waits.
+        let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+        let h = StdinHandle::from_channel(rx);
+        h.add_read_completion_observer(Rc::new(|_| ()));
+        h.read_in_background_and_notify();
+        drop(tx);
+        assert!(h.wait_readable(100));
+        h.service_readable();
+        assert!(h.at_eof());
+    }
 }
 
 #[cfg(all(test, unix))]
@@ -314,6 +353,58 @@ mod tests {
         let (r, w) = pipe();
         let h = StdinHandle::with_fd(r);
         h.add_read_completion_observer(Rc::new(|_| crate::foundation::exception::ns_raise("NSRangeException", "boom")));
+        h.read_in_background_and_notify();
+        write_all(w, b"x");
+        h.service_readable();
+        assert!(h.poll_fd().is_none());
+        unsafe {
+            libc::close(w);
+            libc::close(r);
+        }
+    }
+
+    /// `wait_readable` on a descriptor: false on timeout, true with input, and a disarmed handle just sleeps.
+    #[test]
+    fn descriptor_waits_and_read_errors() {
+        let (r, w) = pipe();
+        let h = StdinHandle::with_fd(r);
+        let got: Rc<RefCell<Vec<usize>>> = Rc::new(RefCell::new(vec![]));
+        let g2 = got.clone();
+        h.add_read_completion_observer(Rc::new(move |d| g2.borrow_mut().push(d.len())));
+        assert!(!h.wait_readable(-5)); // disarmed: sleeps for the (clamped) timeout
+        h.service_readable();
+        h.read_in_background_and_notify();
+        assert!(!h.wait_readable(1));
+        write_all(w, b"hi");
+        assert!(h.wait_readable(1000));
+        h.service_readable();
+        assert_eq!(*got.borrow(), vec![2]);
+        // An interrupted or would-block read is retried on the next iteration, still armed.
+        h.read_in_background_and_notify();
+        unsafe { libc::fcntl(r, libc::F_SETFL, libc::O_NONBLOCK) };
+        h.service_readable();
+        assert_eq!(h.poll_fd(), Some(r));
+        // A hard error is delivered as end of input.
+        unsafe {
+            libc::close(w);
+            libc::close(r);
+        }
+        h.service_readable();
+        assert!(h.at_eof());
+        assert_eq!(*got.borrow(), vec![2, 0]);
+    }
+
+    #[test]
+    fn standard_input_handle_is_not_read_until_armed() {
+        let h = StdinHandle::file_handle_with_standard_input();
+        assert!(h.poll_fd().is_none() && !h.at_eof());
+    }
+
+    /// An observer without a registered closure is fine.
+    #[test]
+    fn no_observer_means_no_notification() {
+        let (r, w) = pipe();
+        let h = StdinHandle::with_fd(r);
         h.read_in_background_and_notify();
         write_all(w, b"x");
         h.service_readable();
