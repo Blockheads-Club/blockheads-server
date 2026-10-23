@@ -486,60 +486,59 @@ impl<'a> Runner<'a> {
                 }
                 other => {
                     let a = self.active_idx(line)?;
-                    self.simple_step(a, line, other)?;
+                    send_step(&mut self.clients[a], line, other)?;
                 }
             }
         }
         Ok(())
     }
+}
 
-    /// Steps that are a single send on the active client.
-    fn simple_step(&mut self, a: usize, line: usize, step: &Step) -> Result<(), ScenarioError> {
-        let s = &mut self.clients[a];
-        match step {
-            Step::InitialData => s.request_initial_data()?,
-            Step::RequestBlocks { idx, create } => {
-                for &i in idx {
-                    s.request_block(i, *create)?;
-                }
-            }
-            Step::RequestBlockXY { mx, my, create } => s.request_block_xy(*mx, *my, *create)?,
-            Step::RequestBlockTile { tile_x, tile_y, create } => {
-                let i = s.macro_index_for_tile(*tile_x, *tile_y);
+/// Steps that are a single send on a client; every other step does nothing here.
+fn send_step(s: &mut Session, line: usize, step: &Step) -> Result<(), ScenarioError> {
+    match step {
+        Step::InitialData => s.request_initial_data()?,
+        Step::RequestBlocks { idx, create } => {
+            for &i in idx {
                 s.request_block(i, *create)?;
             }
-            Step::CreateBlockhead(spec) => s.create_blockhead(spec)?,
-            Step::UploadInventory { blockhead, slots } => {
-                let id =
-                    match blockhead {
-                        BlockheadRef::Id(i) => *i,
-                        BlockheadRef::Last => {
-                            s.state.created.iter().rev().find(|c| c.object_type == 24).map(|c| c.unique_id).ok_or_else(
-                                || Self::err_unexpected(line, "no created blockhead known (@LAST_BLOCKHEAD)"),
-                            )?
-                        }
-                    };
-                s.upload_inventory(id, slots)?;
-            }
-            Step::Fill(r) => s.fill(*r, None)?,
-            Step::Remove(r) => s.remove(*r)?,
-            Step::Paint(r) => s.paint(*r)?,
-            Step::PlaceWorkbench { r, tail } => s.place_workbench(*r, tail.as_ref())?,
-            Step::HeartbeatOld => s.heartbeat_request_old()?,
-            Step::HeartbeatRules(r) => s.heartbeat_request_with_rules(*r)?,
-            Step::Chat(t) => s.chat(t)?,
-            Step::Raw(b) => s.send_raw(b)?,
-            Step::Xml { ty, text } => s.send_xml(*ty, text)?,
-            Step::Gz { ty, text } => {
-                let mut p = vec![*ty];
-                p.extend(blockheads_server::protocol::codec::gz(text.as_bytes()));
-                s.send_raw(&p)?;
-            }
-            Step::Zoom { player_id, cycle } => s.zoom_request(player_id, *cycle)?,
-            _ => {}
         }
-        Ok(())
+        Step::RequestBlockXY { mx, my, create } => s.request_block_xy(*mx, *my, *create)?,
+        Step::RequestBlockTile { tile_x, tile_y, create } => {
+            let i = s.macro_index_for_tile(*tile_x, *tile_y);
+            s.request_block(i, *create)?;
+        }
+        Step::CreateBlockhead(spec) => s.create_blockhead(spec)?,
+        Step::UploadInventory { blockhead, slots } => {
+            let id = match blockhead {
+                BlockheadRef::Id(i) => *i,
+                BlockheadRef::Last => {
+                    let blockhead = s.state.created.iter().rev().find(|c| c.object_type == 24);
+                    blockhead
+                        .map(|c| c.unique_id)
+                        .ok_or_else(|| Runner::err_unexpected(line, "no created blockhead known (@LAST_BLOCKHEAD)"))?
+                }
+            };
+            s.upload_inventory(id, slots)?;
+        }
+        Step::Fill(r) => s.fill(*r, None)?,
+        Step::Remove(r) => s.remove(*r)?,
+        Step::Paint(r) => s.paint(*r)?,
+        Step::PlaceWorkbench { r, tail } => s.place_workbench(*r, tail.as_ref())?,
+        Step::HeartbeatOld => s.heartbeat_request_old()?,
+        Step::HeartbeatRules(r) => s.heartbeat_request_with_rules(*r)?,
+        Step::Chat(t) => s.chat(t)?,
+        Step::Raw(b) => s.send_raw(b)?,
+        Step::Xml { ty, text } => s.send_xml(*ty, text)?,
+        Step::Gz { ty, text } => {
+            let mut p = vec![*ty];
+            p.extend(blockheads_server::protocol::codec::gz(text.as_bytes()));
+            s.send_raw(&p)?;
+        }
+        Step::Zoom { player_id, cycle } => s.zoom_request(player_id, *cycle)?,
+        _ => {}
     }
+    Ok(())
 }
 
 // ----------------------------------------------------------------------------------------------
@@ -878,28 +877,12 @@ mod tests {
         assert!(Scenario::parse(t).is_ok());
     }
 
-    /// U8: two_clients/scriptA.txt parses, errors carry line numbers, builder == parser.
-    #[test]
-    fn u8_script_a() {
-        let p = crate::harness::private_docs().join("protocol_vectors/two_clients/scriptA.txt");
-        if let Ok(text) = std::fs::read_to_string(&p) {
-            let sc = Scenario::parse(&text).unwrap();
-            assert!(sc.steps.len() > 10);
-            assert!(matches!(sc.steps[0], Step::Raw(_)));
-            assert!(sc.steps.iter().any(|s| matches!(s, Step::Xml { ty: 0x24, .. })));
-        }
-    }
-
     #[test]
     fn u8_errors() {
-        match Scenario::parse("# c\nsleep 1\nbogus 1\n") {
-            Err(ScenarioError::Parse { line, .. }) => assert_eq!(line, 3),
-            other => panic!("{:?}", other.map(|s| s.steps.len())),
-        }
-        match Scenario::parse("send zz\n") {
-            Err(ScenarioError::Parse { line, msg }) => assert_eq!((line, msg.contains("bad hex")), (1, true)),
-            _ => panic!(),
-        }
+        let e = Scenario::parse("# c\nsleep 1\nbogus 1\n");
+        assert!(matches!(e, Err(ScenarioError::Parse { line: 3, .. })));
+        let Err(ScenarioError::Parse { line, msg }) = Scenario::parse("send zz\n") else { panic!() };
+        assert_eq!((line, msg.contains("bad hex")), (1, true));
         assert!(Scenario::parse("wait\n").is_err());
     }
 
@@ -941,15 +924,165 @@ mod tests {
     #[test]
     fn inventory_json() {
         let sc = Scenario::parse("inventory @LAST_BLOCKHEAD [[],[\"AAEC\"],{\"a\":1},[],[],[],[],[]]\n").unwrap();
-        match &sc.steps[0] {
-            Step::UploadInventory { blockhead: BlockheadRef::Last, slots: PV::Array(a) } => {
-                assert_eq!(a.items.len(), 8);
-                match &a.items[1] {
-                    PV::Array(x) => assert!(matches!(&x.items[0], PV::Data(d) if d.bytes == vec![0, 1, 2])),
-                    _ => panic!(),
-                }
+        let first = &sc.steps[0];
+        let Step::UploadInventory { blockhead: BlockheadRef::Last, slots: PV::Array(a) } = first else { panic!() };
+        assert_eq!(a.items.len(), 8);
+        let PV::Array(x) = &a.items[1] else { panic!() };
+        assert!(matches!(&x.items[0], PV::Data(d) if d.bytes == vec![0, 1, 2]));
+    }
+
+    fn step(line: &str) -> Step {
+        Scenario::parse(line).unwrap().steps.remove(0)
+    }
+    fn bad(line: &str) -> String {
+        let Err(ScenarioError::Parse { msg, .. }) = Scenario::parse(line) else { panic!("{line} parses") };
+        msg
+    }
+
+    #[test]
+    fn every_command_parses_with_its_arguments() {
+        assert!(
+            matches!(step("client A udid=u password=p minor=4 dialect=gnustep"), Step::Connect { id } if id.udid == "u" && id.password.as_deref() == Some("p") && id.minor_version == 4 && id.plist_dialect == PlistDialect::GnuStep)
+        );
+        assert!(
+            matches!(step("client A dialect=apple"), Step::Connect { id } if id.plist_dialect == PlistDialect::Apple)
+        );
+        assert!(matches!(step("use A"), Step::UseClient(a) if a == "A"));
+        assert!(matches!(step("join-raw A"), Step::JoinRaw { alias } if alias == "A"));
+        assert!(matches!(step("sleep 0x10"), Step::Sleep(16)));
+        assert!(matches!(step("quiet 5"), Step::WaitQuiet(5)));
+        assert!(matches!(step("wait 0x1e 70"), Step::WaitFor { ty: 0x1e, timeout_ms: Some(70) }));
+        assert!(matches!(step("wait 1e"), Step::WaitFor { ty: 0x1e, timeout_ms: None }));
+        assert!(matches!(step("expect 04"), Step::Expect(4)));
+        assert!(matches!(step("expect-none 27 5"), Step::ExpectNone { ty: 0x27, within_ms: 5 }));
+        assert!(matches!(step("expect-reject 14"), Step::ExpectRejection(14)));
+        assert!(matches!(step("send 0e01"), Step::Raw(b) if b == [0x0e, 1]));
+        assert!(matches!(step("xml 24 <a/>"), Step::Xml { ty: 0x24, text } if text == "<a/>"));
+        assert!(matches!(step("gz 0x2e <a/>"), Step::Gz { ty: 0x2e, .. }));
+        assert!(matches!(step("initial-data"), Step::InitialData));
+        assert!(matches!(step("block 5 create=0"), Step::RequestBlocks { idx, create: false } if idx == [5]));
+        assert!(matches!(step("block 5 1"), Step::RequestBlocks { create: true, .. }));
+        assert!(matches!(step("block-xy 1 -2"), Step::RequestBlockXY { mx: 1, my: -2, create: true }));
+        assert!(matches!(step("block-tile 3 4 0"), Step::RequestBlockTile { tile_x: 3, tile_y: 4, create: false }));
+        assert!(matches!(step("blocks 1,2 create=0"), Step::RequestBlocks { idx, create: false } if idx == [1, 2]));
+        assert!(matches!(step("uid"), Step::UniqueId));
+        assert!(matches!(step("blockhead Bob 1 2"), Step::CreateBlockhead(s) if s.name == "Bob" && s.pos_y == 2));
+        assert!(matches!(step("inventory 77 []"), Step::UploadInventory { blockhead: BlockheadRef::Id(77), .. }));
+        assert!(
+            matches!(step("fill 1 2 3 4 5 6"), Step::Fill(r) if (r.pos_x, r.pos_y, r.data_a, r.data_b, r.z_index) == (1, 2, 4, 5, 6))
+        );
+        assert!(matches!(step("fill 1 2 3"), Step::Fill(r) if (r.data_a, r.z_index) == (0, 0)));
+        assert!(matches!(step("remove 1 2 9"), Step::Remove(r) if r.z_index == 9));
+        assert!(matches!(step("remove 1 2"), Step::Remove(r) if r.z_index == 0));
+        assert!(matches!(step("paint 1 2 3 4"), Step::Paint(r) if (r.pos_x, r.pos_y) == (1, 2)));
+        assert!(matches!(step("workbench 1 2 3"), Step::PlaceWorkbench { tail: None, .. }));
+        assert!(matches!(step("hb-old"), Step::HeartbeatOld));
+        assert!(matches!(step("hb-rules"), Step::HeartbeatRules(None)));
+        let sixty_four = "00".repeat(64);
+        assert!(matches!(step(&format!("hb-rules {sixty_four}")), Step::HeartbeatRules(Some(r)) if r == [0u8; 64]));
+        assert!(matches!(step("chat hello  there"), Step::Chat(t) if t == "hello  there"));
+        assert!(matches!(step("cmd /help me"), Step::Command(c) if c == "/help me"));
+        assert!(matches!(step("zoom pid 3"), Step::Zoom { cycle: 3, .. }));
+        assert!(matches!(step("zoom pid"), Step::Zoom { cycle: 0, .. }));
+        assert!(matches!(step("disconnect"), Step::Disconnect));
+    }
+
+    #[test]
+    fn bad_commands_report_what_is_wrong() {
+        assert!(bad("client").contains("needs 1 argument"));
+        assert!(bad("client A nokey").contains("bad option 'nokey'"));
+        assert!(bad("client A dialect=x").contains("bad dialect 'x'"));
+        assert!(bad("client A weird=1").contains("unknown client option 'weird'"));
+        assert!(bad("client A minor=x").contains("bad minor 'x'"));
+        assert!(bad("sleep 99999999999999999999").contains("bad ms"));
+        assert!(bad("block-xy 1").contains("needs 2 argument"));
+        assert!(bad("block 1 create=2").contains("bad create flag"));
+        assert!(bad("block 300000000000").contains("out of range"));
+        assert!(bad("wait zz").contains("bad hex type"));
+        assert!(bad("xml 24").contains("needs HEXTYPE and plist text"));
+        assert!(bad("gz").contains("needs HEXTYPE"));
+        assert!(bad("send zz").contains("bad hex"));
+        assert!(bad("inventory").contains("needs @LAST_BLOCKHEAD"));
+        assert!(bad("inventory 5 {nope").contains("bad JSON slots"));
+        assert!(bad("hb-rules zz").contains("bad hex"));
+        assert!(bad("hb-rules 00").contains("exactly 64 bytes"));
+        assert!(bad("cmd").contains("needs a command line"));
+        assert!(bad("frobnicate").contains("unknown command 'frobnicate'"));
+        assert!(bad("expect-none 04").contains("needs 2 argument"));
+        assert!(bad("blocks 1,x").contains("bad index"));
+    }
+
+    #[test]
+    fn json_slots_become_plists() {
+        let st = step("inventory @LAST_BLOCKHEAD [null,true,1,2.5,\"AAEC\",\"not base64!\",{\"k\":[\"AQ==\"]}]");
+        let Step::UploadInventory { slots, .. } = st else { panic!() };
+        let PV::Array(a) = slots else { panic!() };
+        assert!(
+            matches!(a.items[0], PV::Null) && matches!(a.items[1], PV::Bool(true)) && matches!(a.items[2], PV::Int(1))
+        );
+        assert!(matches!(a.items[3], PV::Real { value, .. } if value == 2.5));
+        assert!(matches!(&a.items[4], PV::Data(d) if d.bytes == [0, 1, 2]));
+        assert!(matches!(&a.items[5], PV::String(s) if s.s == "not base64!"));
+        assert_eq!(a.items[6].object_for_key("k").unwrap().class_name().is_empty(), false);
+        // outside arrays strings stay strings
+        let Step::UploadInventory { slots, .. } = step("inventory 1 \"AAEC\"") else { panic!() };
+        assert!(matches!(slots, PV::String(_)));
+    }
+
+    #[test]
+    fn steps_that_are_not_sends_do_nothing() {
+        let mut host = blockheads_server::net::enet_host::EnetHost::create(0).unwrap();
+        let port = host.local_port();
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let s2 = stop.clone();
+        let t = std::thread::spawn(move || {
+            while !s2.load(std::sync::atomic::Ordering::SeqCst) {
+                let _ = host.service_wait(5);
             }
-            _ => panic!(),
-        }
+        });
+        let cfg = ClientConfig { addr: format!("127.0.0.1:{port}").parse().unwrap(), ..Default::default() };
+        let mut s = Session::connect(cfg, Identity::new("U")).unwrap();
+        send_step(&mut s, 1, &Step::Sleep(1)).unwrap();
+        send_step(&mut s, 1, &Step::Disconnect).unwrap();
+        stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        t.join().unwrap();
+    }
+
+    #[test]
+    fn errors_display_and_convert() {
+        assert_eq!(ScenarioError::Timeout { line: 3, what: "x".into() }.to_string(), "FAIL 3 timeout: x");
+        assert_eq!(ScenarioError::Unexpected { line: 4, what: "y".into() }.to_string(), "FAIL 4 y");
+        assert_eq!(ScenarioError::Parse { line: 5, msg: "z".into() }.to_string(), "parse error at line 5: z");
+        let io: ScenarioError = io::Error::from(io::ErrorKind::TimedOut).into();
+        assert!(io.is_connect_failure() && io.to_string().starts_with("io error: "));
+        assert!(ScenarioError::from(io::Error::from(io::ErrorKind::ConnectionRefused)).is_connect_failure());
+        assert!(!ScenarioError::from(io::Error::from(io::ErrorKind::Other)).is_connect_failure());
+        assert!(!ScenarioError::Timeout { line: 1, what: String::new() }.is_connect_failure());
+        let opts = RunOptions::default();
+        assert_eq!((opts.default_timeout_ms, opts.client_port_base.is_none()), (5000, true));
+    }
+
+    #[test]
+    fn builder_covers_the_remaining_steps() {
+        let sc = Scenario::new("b")
+            .connect_with(Identity::new("A"))
+            .join_raw("B")
+            .then_client("A")
+            .request_block_xy(1, 2, true)
+            .request_block_at_tile(3, 4, false)
+            .upload_inventory(BlockheadRef::Last, PV::array(vec![]))
+            .paint(PaintNetRequest::default())
+            .place_workbench(PlaceWorkbenchNetRequest::default(), None)
+            .heartbeat_request_with_rules()
+            .xml(0x24, "<a/>");
+        assert_eq!(sc.steps.len(), 10);
+        assert!(sc.lines.iter().all(|l| *l == 0));
+        assert_eq!(builtin("nope").map(|_| ()), None);
+        assert_eq!(builtin_script("nope"), None);
+        assert_eq!(builtin("heartbeat").unwrap().name, "heartbeat");
     }
 }
+
+#[cfg(test)]
+#[path = "scenario_golden.rs"]
+mod golden;
