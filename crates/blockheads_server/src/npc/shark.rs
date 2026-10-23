@@ -1735,6 +1735,13 @@ mod tests {
 
     #[test]
     fn dead_drops_fish_jaw_and_clothing_rand_order() {
+        // the clothing draws branch on the stream, so several streams exercise every branch
+        for seed in 1..=40u32 {
+            dead_drop_case(seed);
+        }
+    }
+
+    fn dead_drop_case(seed: u32) {
         let fx = fixture();
         water(&fx, 30, 50, 0, 10);
         let me = make(&fx, true, true).unwrap();
@@ -1743,8 +1750,8 @@ mod tests {
         npc_state(&me).borrow_mut().dead = true;
         npc_state(&me).borrow_mut().kill_blockhead = Some(killer);
         shark_of(&me).shark.borrow_mut().travel_fraction = 0.99;
-        let v = raw(9, 10);
-        glibc_rand::srand(9);
+        let v = raw(seed, 10);
+        glibc_rand::srand(seed);
         me.update_accurate_dt_is_simulation(&me, 0.1, 0.1, false);
         assert!(me.needs_removed());
         let drops = fx.env.drops.borrow().clone();
@@ -1773,7 +1780,7 @@ mod tests {
                 used += 1;
             }
         }
-        assert_eq!(glibc_rand::rand(), raw(9, used + 1)[used]);
+        assert_eq!(glibc_rand::rand(), raw(seed, used + 1)[used]);
     }
 
     #[test]
