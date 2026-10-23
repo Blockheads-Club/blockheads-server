@@ -857,9 +857,7 @@ impl Workbench {
             self.abort_craft(&t.me);
             return false;
         }
-        if !self.in_use() {
-            return true;
-        }
+        // nothing above can end the interaction except `abort_craft`, which returned
         let ci = self.recipe();
         let mult: f64 = if wb_host.bh_double_time_unlocked(&user) { 0.5 } else { 1.0 };
         let secs = ci.seconds_required;
@@ -1198,15 +1196,11 @@ mod tests {
         let (wb, me) = make(&f, 3, 10, 10);
         // tile above is air: not burnable -> no fire; turn it into a tree-ish burnable block (type 9)
         crate::world::tiles::tile_at_world_position_loaded(10, 11, &f.world).unwrap().update(|t| t.type_index = 9);
-        let mut placed = false;
-        for _ in 0..40 {
+        let placed = (0..40).any(|_| {
             wb.st.borrow_mut().fire_spread_timer = 0.0;
             wb.update_accurate_dt_is_simulation_impl(&me, 0.1, 0.1, false);
-            if f.deps.log.borrow().iter().any(|l| l == "fire(10,11)") {
-                placed = true;
-                break;
-            }
-        }
+            f.deps.log.borrow().iter().any(|l| l == "fire(10,11)")
+        });
         assert!(placed);
     }
 
@@ -1221,10 +1215,8 @@ mod tests {
         let d = wb.get_save_dict_impl(&me);
         assert!(d.map.contains_key(&"craftingItemDatav2".to_string()));
         assert_eq!(d.map.get(&"count".to_string()).unwrap().int_value(), 2);
-        match d.map.get(&"sourceItems_0".to_string()) {
-            Some(PlistValue::Array(a)) => assert_eq!(a.items.len(), 4),
-            _ => panic!("sourceItems_0"),
-        }
+        let Some(PlistValue::Array(a)) = d.map.get(&"sourceItems_0".to_string()) else { unreachable!("sourceItems_0") };
+        assert_eq!(a.items.len(), 4);
         assert_eq!(d.map.get(&"currentBlockheadIndex".to_string()).unwrap().int_value(), 0);
         let wb2 = Workbench::init_with_world_dynamic_world_save_dict_cache(&f.world, &f.dwr, &d, None).expect("reload");
         let me2: ObjRef = wb2.clone();
@@ -1797,12 +1789,10 @@ mod tests {
     fn sunlit(f: &Fixture) {
         for y in 8..16 {
             for x in 8..13 {
-                if let Some(t) = crate::world::tiles::tile_at_world_position_loaded(x, y, &f.world) {
-                    t.update(|t| {
-                        t.sun_light = 255;
-                        t.contents = 0;
-                    });
-                }
+                crate::world::tiles::tile_at_world_position_loaded(x, y, &f.world).unwrap().update(|t| {
+                    t.sun_light = 255;
+                    t.contents = 0;
+                });
             }
         }
     }
@@ -1952,5 +1942,50 @@ mod tests {
         wb.io.borrow_mut().current_blockhead = Some(blockhead(5, false));
         wb.craft_completed(&me);
         assert_eq!(wb.count_left(), 0);
+    }
+
+    #[test]
+    fn shim_is_a_dynamic_object_carrying_the_recipe() {
+        let shim = craftable_item_shim(cio(recipe()));
+        assert_eq!(shim.class_info().name, "DynamicObject");
+        assert_eq!(shim.base().borrow().unique_id, 0);
+        assert_eq!(craftable_item_object_of_shim(&shim).unwrap().craftable_item(), recipe());
+    }
+
+    #[test]
+    fn abort_immediately_needs_an_interaction_in_progress() {
+        let f = fixture();
+        let (wb, me) = make(&f, 2, 10, 10);
+        // no user at all
+        wb.abort_immediately_and_restore_blockhead_items(&me);
+        // a user but nothing is being crafted
+        wb.io.borrow_mut().current_blockhead = Some(blockhead(5, false));
+        wb.abort_immediately_and_restore_blockhead_items(&me);
+        assert!(f.host.log.borrow().iter().all(|l| !l.starts_with("craftItemFinished")));
+    }
+
+    #[test]
+    fn finished_crystal_craft_keeps_the_balance_and_survives_a_lost_world() {
+        let f = fixture();
+        let (wb, me) = make(&f, 2, 10, 10);
+        let bh = blockhead(5, false);
+        let mut ci = recipe();
+        ci.required_items[0] = 11;
+        ci.required_item_counts[0] = 3;
+        set_crystal_wallet(10);
+        assert!(wb.craft_item_with_blockhead_craft_progress_ui_count(&me, cio(ci), &bh, None, 1));
+        wb.craft_completed(&me);
+        assert_eq!(wb.count_left(), 0);
+        assert_eq!(crystal_amount(), 7);
+        assert!(f.host.log.borrow().iter().any(|l| l == "craftItemFinished(true)"));
+        // the same finish without a world cannot report anything but still completes
+        let (wb2, me2) = make(&f, 2, 20, 10);
+        f.host.stock.borrow_mut().push((20, 2));
+        assert!(wb2.craft_item_with_blockhead_craft_progress_ui_count(&me2, cio(recipe()), &bh, None, 1));
+        let Fixture { world, dw, dwr, deps, host } = f;
+        drop(world);
+        wb2.craft_completed(&me2);
+        assert_eq!(wb2.count_left(), 0);
+        drop((dw, dwr, deps, host));
     }
 }

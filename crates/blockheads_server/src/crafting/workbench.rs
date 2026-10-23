@@ -50,8 +50,8 @@ use crate::objects::interaction_object::{
     interaction_object_init_with_world_dynamic_world_cache_net_data,
     interaction_object_init_with_world_dynamic_world_save_dict_cache,
     interaction_object_interaction_object_creation_net_data, interaction_object_remote_blockhead_removed_with_id,
-    interaction_object_remote_update, interaction_object_requires_physical_block,
-    interaction_object_should_add_to_macro_block, InteractionObjectLike, InteractionObjectState,
+    interaction_object_remote_update, interaction_object_should_add_to_macro_block, InteractionObjectLike,
+    InteractionObjectState,
 };
 use crate::objects::protocols::PowerUser;
 use crate::path::wire_path::WirePowerSource;
@@ -974,12 +974,10 @@ impl Workbench {
         if tile.contents == 46 {
             return 0.0;
         }
+        // `sun_light` is a byte, so `s` cannot exceed 1.0
         let mut s = powf((tile.sun_light as f32) / 255.0f32, 4.0f32);
         let mut a =
             tile.artificial_light_r.wrapping_add(tile.artificial_light_g).wrapping_add(tile.artificial_light_b) as f32;
-        if 1.0f32 < s {
-            s = 1.0;
-        }
         if s <= 0.0 {
             s = 0.0;
         }
@@ -1816,9 +1814,7 @@ impl Workbench {
             }
             return in_use;
         }
-        if interaction_object_requires_physical_block() {
-            return true;
-        }
+        // (`InteractionObject`'s own `requiresPhysicalBlock` is a constant NO)
         if in_use_fuel || in_use {
             return true;
         }
@@ -2242,12 +2238,7 @@ pub(crate) mod testkit {
         f();
         let next = crate::rng::glibc_rand::rand();
         crate::rng::glibc_rand::srand(777);
-        for n in 0..400 {
-            if crate::rng::glibc_rand::rand() == next {
-                return n;
-            }
-        }
-        usize::MAX
+        (0..400).find(|_| crate::rng::glibc_rand::rand() == next).unwrap_or(usize::MAX)
     }
 }
 
@@ -2477,10 +2468,8 @@ mod tests {
             "xScroll",
         ];
         assert_eq!(keys, want.iter().map(|s| s.to_string()).collect::<Vec<_>>());
-        let ld = match d.map.get(&"lightDict".to_string()) {
-            Some(PlistValue::Dict(l)) => l.clone(),
-            _ => panic!("lightDict"),
-        };
+        let ld = d.map.get(&"lightDict".to_string()).cloned();
+        let Some(PlistValue::Dict(ld)) = ld else { unreachable!("lightDict") };
         assert_eq!(ld.map.get(&"maxRed".to_string()).unwrap().int_value(), 153);
         assert_eq!(ld.map.get(&"maxHeat".to_string()).unwrap().int_value(), -2);
         assert_eq!(ld.map.get(&"radius".to_string()).unwrap().int_value(), 12);
@@ -3433,8 +3422,10 @@ mod tests {
     #[test]
     fn save_and_restore_edge_cases() {
         let f = fixture();
-        // a placed portal whose stone tile is not loaded
-        let (_p, _pme) = make(&f, 13, 10, 0);
+        // a placed portal whose stone tile is not loaded still lights up when it is upgraded
+        let (p, pme) = make(&f, 13, 10, 0);
+        p.upgrade_to_next_level(&pme);
+        assert_eq!(p.level(), 1);
         // empty stored source slots are not written; missing arrays leave the slot unset
         let (wb, me) = make(&f, 2, 12, 10);
         {
@@ -3445,6 +3436,8 @@ mod tests {
         wb.io.borrow_mut().is_in_use = true;
         let sd = wb.get_save_dict_impl(&me);
         assert!(sd.map.get(&"sourceItems_0".to_string()).is_none());
+        wb.st.borrow_mut().source_items[0] = None;
+        assert!(wb.get_save_dict_impl(&me).map.get(&"sourceItems_0".to_string()).is_none());
         let ci = recipe_two_sources();
         let mut plain = new_mutable_dict();
         plain.map.insert("craftingItemData".into(), PlistValue::data(ci.to_vec()));
@@ -3479,5 +3472,89 @@ mod tests {
         wb.remove(&me, None);
         assert!(me.needs_removed());
         drop((dw, dwr, deps, host));
+    }
+
+    #[test]
+    fn trait_object_views() {
+        let f = fixture();
+        let (wb, me) = make(&f, 21, 10, 10);
+        wb.st.borrow_mut().available_electricity = 4096;
+        // DynamicObject
+        assert!(me.occupies_normal_contents());
+        assert_eq!(me.freeblock_creation_item_type(), wb.destroy_item_type().0 as i32);
+        assert!(me.free_block_creation_save_dict(&me).is_some());
+        assert_eq!((me.free_block_creation_data_a(), me.free_block_creation_data_b()), (0, 0));
+        assert_eq!(me.get_light_rgb(), [0.0, 0.0, 0.0]);
+        // InteractionObject
+        let il = me.as_interaction_like().unwrap();
+        assert!(!il.is_double_height());
+        assert_eq!(il.destroy_item_type(), wb.destroy_item_type().0 as i32);
+        assert_eq!(il.title(), "FLYWHEEL");
+        assert!(!il.requires_human_interaction());
+        assert!(!il.can_be_used_in_expert_mode_when_not_owned());
+        il.set_paused(&me, true);
+        assert!(wb.st.borrow().paused);
+        assert!(il.io_state().borrow().owner_name.is_none());
+        let bh = blockhead(5, false);
+        il.blockhead_would_like_to_take_ownership_with_save_dict(&me, &bh, None);
+        assert!(me.is_in_use());
+        il.remote_blockhead_removed_with_id(&me, 77);
+        // PowerUser / WirePowerSource
+        assert!(me.as_power_user().unwrap().is_storage_device());
+        let src: &dyn WirePowerSource = &*wb;
+        assert_eq!(src.available_electricity(), 4096);
+        assert!(src.is_storage_device() && src.conducts_electricity() && !src.generates_electricity());
+        assert!(src.subtract_electricty(96));
+        assert_eq!(wb.available_electricity(), 4000);
+        // the basic portal may be used in expert mode without owning it
+        let (_portal, pme) = make(&f, 1, 20, 10);
+        assert!(pme.as_interaction_like().unwrap().can_be_used_in_expert_mode_when_not_owned());
+        // virtual dispatch of the object itself
+        assert_eq!(me.class_info().name, "Workbench");
+        me.update_accurate_dt_is_simulation(&me, 0.1, 0.1, false);
+        assert_eq!(me.get_save_dict(&me).map.get(&"workbenchType".to_string()).unwrap().int_value(), 21);
+        let created = me.creation_net_data_for_client(&me, None).unwrap();
+        assert_eq!(created, me.update_net_data_for_client(&me, None).unwrap());
+        me.remote_update(&me, &created);
+        me.blockheads_loaded(&me);
+        me.blockhead_unloaded(&me, &bh);
+        me.add_artificial_light_contribution_for_physical_block_loaded_at_x_pos_y_pos(&me, 0, 0);
+        let (camp, cme) = make(&f, 3, 5, 10);
+        assert!(camp.st.borrow().light.is_some());
+        cme.add_artificial_light_contribution_for_physical_block_loaded_at_x_pos_y_pos(&cme, 0, 0);
+        // a solar panel in the dark does not need its block loaded, one in the sun does
+        let (solar, sme) = make(&f, 20, 1, 10);
+        solar.st.borrow_mut().available_electricity = 1;
+        assert!(!sme.requires_physical_block());
+        crate::world::tiles::tile_at_world_position_loaded(1, 11, &f.world).unwrap().update(|t| t.sun_light = 255);
+        assert!(sme.requires_physical_block());
+        // a bench that is being used without a recipe still saves
+        let (idle, ime) = make(&f, 2, 3, 10);
+        idle.io.borrow_mut().is_in_use = true;
+        assert!(idle.get_save_dict_impl(&ime).map.get(&"craftingItemDatav2".to_string()).is_none());
+        // the test doubles
+        assert!(f.dwr.get_owner_name_for_object_owner_id("nobody").is_none());
+        let deps = crate::world::misc::deps();
+        let (bench, bme) = make(&f, 2, 25, 10);
+        assert_eq!(deps.workbench_level(&bme), 0);
+        deps.workbench_upgrade_to_next_level(&bme);
+        assert_eq!(bench.level(), 1);
+        assert_eq!(deps.workbench_level(&bme), 1);
+        deps.workbench_upgrade_to_next_level(&blockhead(9, false));
+    }
+
+    #[test]
+    fn net_replica_physical_block_rules() {
+        let f = fixture();
+        let (src, sme) = make(&f, 2, 10, 10);
+        let nd = src.update_net_data_for_client_impl(&sme);
+        let rep = Workbench::init_with_world_dynamic_world_cache_net_data(&f.world, &f.dwr, None, &nd).unwrap();
+        let rme: ObjRef = rep.clone();
+        assert!(!rme.requires_physical_block());
+        rep.io.borrow_mut().is_in_use = true;
+        assert!(rme.requires_physical_block());
+        rep.io.borrow_mut().is_in_use = false;
+        rep.st.borrow_mut().is_in_use_fuel = true;
+        assert!(rme.requires_physical_block());
     }
 }
