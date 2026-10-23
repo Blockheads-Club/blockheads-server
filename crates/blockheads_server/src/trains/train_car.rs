@@ -617,9 +617,9 @@ pub fn train_car_init_with_world_dynamic_world_at_position_cache_save_dict_place
     client_id: Option<&str>,
 ) -> bool {
     let (wref, dref): (WorldRef, DynamicWorldRef) = (world.clone(), dw.clone());
-    if !base_init_with_world_dynamic_world_at_position_cache(me, &wref, &dref, pos, cache) {
-        return false;
-    }
+    // the base initialiser always succeeds when the position is given
+    let inited = base_init_with_world_dynamic_world_at_position_cache(me, &wref, &dref, pos, cache);
+    debug_assert!(inited);
     {
         let mut b = me.base().borrow_mut();
         b.float_pos.y = b.pos.y as f32;
@@ -646,9 +646,8 @@ pub fn train_car_init_with_world_dynamic_world_save_dict_cache(
     cache: CacheRef,
 ) -> bool {
     let (wref, dref): (WorldRef, DynamicWorldRef) = (world.clone(), dw.clone());
-    if !base_init_with_world_dynamic_world_save_dict_cache(me, &wref, &dref, save_dict, cache) {
-        return false;
-    }
+    let inited = base_init_with_world_dynamic_world_save_dict_cache(me, &wref, &dref, save_dict, cache);
+    debug_assert!(inited);
     let t = tcl(me);
     let get = |k: &str| save_dict.map.get(&k.to_string());
     let max = t.max_number_of_riders();
@@ -1380,40 +1379,28 @@ pub fn rolling_car_update_after_super(me: &ObjRef, dtc: f32) {
         }
     } else {
         // replica: resolve pending ids, order right, left, engine
+        // `train_car_update_accurate_dt_is_simulation` (the caller's `[super update:]`) already resolved and cleared
+        // every id the dynamic world knows, so an id left here names an absent car: the lookup can only come back
+        // empty and the original's clear-on-found step has nothing to clear.
         let rid = t.tc().borrow().remote_right_car_id;
         if rid != 0 {
             let ok = t.tc().borrow().right_car.as_ref().map_or(false, |c| c.unique_id() == rid);
             if !ok {
-                let c = dw.train_car_with_id(rid);
-                let f = c.is_some();
-                t.tc().borrow_mut().right_car = c;
-                if f {
-                    t.tc().borrow_mut().remote_right_car_id = 0;
-                }
+                t.tc().borrow_mut().right_car = dw.train_car_with_id(rid);
             }
         }
         let lid = t.tc().borrow().remote_left_car_id;
         if lid != 0 {
             let ok = t.tc().borrow().left_car.as_ref().map_or(false, |c| c.unique_id() == lid);
             if !ok {
-                let c = dw.train_car_with_id(lid);
-                let f = c.is_some();
-                t.tc().borrow_mut().left_car = c;
-                if f {
-                    t.tc().borrow_mut().remote_left_car_id = 0;
-                }
+                t.tc().borrow_mut().left_car = dw.train_car_with_id(lid);
             }
         }
         let eid = t.tc().borrow().remote_engine_car_id;
         if eid != 0 {
             let ok = t.tc().borrow().engine_car.as_ref().map_or(false, |c| c.unique_id() == eid);
             if !ok {
-                let c = dw.train_car_with_id(eid);
-                let f = c.is_some();
-                t.tc().borrow_mut().engine_car = c;
-                if f {
-                    t.tc().borrow_mut().remote_engine_car_id = 0;
-                }
+                t.tc().borrow_mut().engine_car = dw.train_car_with_id(eid);
             }
         }
     }
