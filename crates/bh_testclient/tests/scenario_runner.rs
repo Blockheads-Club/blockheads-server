@@ -145,13 +145,20 @@ fn failing_scripts_report_the_line_and_the_reason() {
     assert!(failure(&cfg, "client A\ninitial-data\nexpect-none 06 1200\n")
         .contains("unexpected 0x06 packet within 1200 ms"));
     // rejected joins are recorded, not fatal
-    let ok =
-        run(&cfg, "client ABCDEFGHIJKLMNOPQ\nexpect-reject 14\nclient Server\nexpect-reject 2\n", &fast()).unwrap();
+    let ok = (0..10)
+        .find_map(|_| {
+            run(&cfg, "client ABCDEFGHIJKLMNOPQ\nexpect-reject 14\nclient Server\nexpect-reject 2\n", &fast()).ok()
+        })
+        .expect("both rejections seen in ten tries");
     assert!(
         ok.notes.iter().any(|n| n.contains("join rejected 14"))
             && ok.notes.iter().any(|n| n.contains("join rejected 2"))
     );
-    let wrong = failure(&cfg, "client ABCDEFGHIJKLMNOPQ\nexpect-reject 3\n");
+    // the server may hang up before the rejection arrives (a disconnect drops what is still queued): try again
+    let wrong = (0..10)
+        .map(|_| failure(&cfg, "client ABCDEFGHIJKLMNOPQ\nexpect-reject 3\n"))
+        .find(|e| e.contains("expected rejection 3"))
+        .expect("rejection 14 seen in ten tries");
     assert!(wrong.contains("expected rejection 3, got Some(14)"), "{wrong}");
     // join-raw stops after the contact packet; a second 0x1f is sent by hand
     run(&cfg, "join-raw R\nsleep 100\nexpect 23\ndisconnect\n", &fast()).unwrap();
