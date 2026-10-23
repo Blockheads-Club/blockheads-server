@@ -1065,9 +1065,22 @@ pub(crate) mod testutil {
         pub save_ok: Cell<bool>,
         /// `(unique id, client id)` pairs answered by `blockhead_client_id`.
         pub client_of: RefCell<Vec<(u64, String)>>,
+        /// `workbench_type` answer.
+        pub wb_type: Cell<i32>,
+        /// Whether `construct_from_net_data` builds nothing.
+        pub net_none: Cell<bool>,
+        /// `(type, interaction type)` of every `construct_from_net_data` call.
+        pub net_made: RefCell<Vec<(i32, Option<i32>)>>,
+        /// `item_type` answer.
+        pub item: Cell<i32>,
+        /// Ids that `blockhead_with_id_including_net` knows.
+        pub known_ids: RefCell<Vec<u64>>,
     }
     impl crate::dynworld::state::DwHooksStub for Hk {
-        fn blockhead_with_id_including_net(&self, _id: u64) -> Option<ObjRef> {
+        fn blockhead_with_id_including_net(&self, id: u64) -> Option<ObjRef> {
+            if self.known_ids.borrow().contains(&id) {
+                return Some(tobj(24, id, &self.log, None, None, None));
+            }
             self.existing.borrow().clone()
         }
         fn blockhead_will_be_unloaded(&self, b: &ObjRef) {
@@ -1084,6 +1097,29 @@ pub(crate) mod testutil {
         }
         fn blockhead_stop_riding(&self, b: &ObjRef) {
             self.log.borrow_mut().push(format!("riding({})", b.unique_id()));
+        }
+        fn workbench_type(&self, _w: &ObjRef) -> i32 {
+            self.wb_type.get()
+        }
+        fn item_type(&self, _o: &ObjRef) -> i32 {
+            self.item.get()
+        }
+        fn blockhead_from_net_data(&self, net: &[u8]) -> Option<ObjRef> {
+            if self.fail_blockhead.get() {
+                return None;
+            }
+            let id = u64::from_le_bytes(net[0..8].try_into().unwrap());
+            Some(tobj(24, id, &self.log, None, None, None))
+        }
+        fn construct_from_net_data(&self, t: i32, ito: Option<i32>, net: &[u8]) -> Option<ObjRef> {
+            self.net_made.borrow_mut().push((t, ito));
+            if self.net_none.get() {
+                return None;
+            }
+            let id = u64::from_le_bytes(net[0..8].try_into().unwrap());
+            let o = tobj(t, id, &self.log, None, None, None);
+            o.base().borrow_mut().pos = IntPair { x: 3, y: 4 };
+            Some(o)
         }
         fn blockhead_from_save_dict(
             &self,
@@ -1201,6 +1237,11 @@ pub(crate) mod testutil {
             no_dir: RefCell::new(vec![]),
             save_ok: Cell::new(true),
             client_of: RefCell::new(vec![]),
+            wb_type: Cell::new(0),
+            net_none: Cell::new(false),
+            net_made: RefCell::new(vec![]),
+            item: Cell::new(0),
+            known_ids: RefCell::new(vec![]),
         })
     }
 
@@ -1208,16 +1249,30 @@ pub(crate) mod testutil {
     pub struct Sc {
         id: String,
         pub tamed: RefCell<Vec<HashSet<u32>>>,
+        /// Every object wired for the client, in order.
         pub wired: RefCell<Vec<u64>>,
+        /// What `block_is_wired` answers.
+        pub wired_block: Cell<bool>,
+        /// What `connected` answers.
+        pub online: Cell<bool>,
+        /// What the client was sent, one line per call.
+        pub events: RefCell<Vec<String>>,
     }
     impl Sc {
         pub fn new(id: &str) -> Sc {
-            Sc { id: id.into(), tamed: RefCell::new(vec![HashSet::new(); 65]), wired: RefCell::new(vec![]) }
+            Sc {
+                id: id.into(),
+                tamed: RefCell::new(vec![HashSet::new(); 65]),
+                wired: RefCell::new(vec![]),
+                wired_block: Cell::new(false),
+                online: Cell::new(true),
+                events: RefCell::new(vec![]),
+            }
         }
     }
     impl DwServerClient for Sc {
         fn connected(&self) -> bool {
-            true
+            self.online.get()
         }
         fn client_id(&self) -> String {
             self.id.clone()
@@ -1226,20 +1281,34 @@ pub(crate) mod testutil {
             0
         }
         fn block_is_wired(&self, _m: i32) -> bool {
-            false
+            self.wired_block.get()
         }
-        fn dynamic_object_is_wired(&self, _u: u64) -> bool {
-            false
+        fn dynamic_object_is_wired(&self, u: u64) -> bool {
+            self.wired.borrow().contains(&u)
         }
         fn wire_dynamic_object(&self, u: u64) {
+            self.events.borrow_mut().push(format!("wire({u})"));
             self.wired.borrow_mut().push(u);
         }
-        fn unwire_dynamic_object(&self, _u: u64) {}
-        fn add_creation_object_data_to_send_of_type_object_id(&self, _d: &NetBlob, _t: u8, _i: u64) {}
-        fn add_creation_data_update_object_data_to_send_of_type(&self, _d: &NetBlob, _t: u8) {}
-        fn add_update_object_data_to_send_of_type_reliable(&self, _d: &NetBlob, _t: u8, _r: bool) {}
-        fn add_removal_object_data_to_send_of_type_object_id(&self, _d: &NetBlob, _t: u8, _i: u64) {}
-        fn send_all_object_data(&self) {}
+        fn unwire_dynamic_object(&self, u: u64) {
+            self.events.borrow_mut().push(format!("unwire({u})"));
+            self.wired.borrow_mut().retain(|w| *w != u);
+        }
+        fn add_creation_object_data_to_send_of_type_object_id(&self, _d: &NetBlob, t: u8, i: u64) {
+            self.events.borrow_mut().push(format!("create({t},{i})"));
+        }
+        fn add_creation_data_update_object_data_to_send_of_type(&self, _d: &NetBlob, t: u8) {
+            self.events.borrow_mut().push(format!("cdu({t})"));
+        }
+        fn add_update_object_data_to_send_of_type_reliable(&self, _d: &NetBlob, t: u8, r: bool) {
+            self.events.borrow_mut().push(format!("update({t},{r})"));
+        }
+        fn add_removal_object_data_to_send_of_type_object_id(&self, _d: &NetBlob, t: u8, i: u64) {
+            self.events.borrow_mut().push(format!("remove({t},{i})"));
+        }
+        fn send_all_object_data(&self) {
+            self.events.borrow_mut().push("sendAll".to_string());
+        }
         fn world_indices_containing_tamed_animals(&self) -> &RefCell<Vec<HashSet<u32>>> {
             &self.tamed
         }
@@ -1442,7 +1511,10 @@ mod tests {
         assert_eq!(sc.light_block_index(), 0);
         assert!(!sc.block_is_wired(1));
         assert!(!sc.dynamic_object_is_wired(2));
+        sc.wired_block.set(true);
+        assert!(sc.block_is_wired(1));
         sc.wire_dynamic_object(3);
+        assert!(sc.dynamic_object_is_wired(3));
         sc.unwire_dynamic_object(3);
         let blob: NetBlob = vec![1];
         sc.add_creation_object_data_to_send_of_type_object_id(&blob, 1, 2);
@@ -1450,7 +1522,8 @@ mod tests {
         sc.add_update_object_data_to_send_of_type_reliable(&blob, 1, true);
         sc.add_removal_object_data_to_send_of_type_object_id(&blob, 1, 2);
         sc.send_all_object_data();
-        assert_eq!(*sc.wired.borrow(), vec![3]);
+        assert_eq!(*sc.wired.borrow(), Vec::<u64>::new());
+        assert_eq!(sc.events.borrow().len(), 7);
         assert_eq!(sc.world_indices_containing_tamed_animals().borrow().len(), 65);
         let srv = Srv { admin: true };
         assert!(srv.player_info_for_peer_id("p").is_none());

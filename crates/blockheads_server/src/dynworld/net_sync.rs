@@ -161,10 +161,8 @@ impl DynamicWorld {
             // ---- creations ----
             let client_ids: Vec<String> = self.net_create_dynamic_objects.borrow()[i].keys_in_order();
             for client_id in client_ids {
-                let arr: Vec<NetBlob> = match self.net_create_dynamic_objects.borrow()[i].get(&client_id) {
-                    Some(a) => a.clone(),
-                    None => continue,
-                };
+                let arr: Vec<NetBlob> =
+                    self.net_create_dynamic_objects.borrow()[i].get(&client_id).cloned().unwrap_or_default();
                 if arr.is_empty() {
                     continue;
                 }
@@ -176,14 +174,13 @@ impl DynamicWorld {
                 }
                 // removeObjectsAtIndexes on the live array
                 let mut q = self.net_create_dynamic_objects.borrow_mut();
-                if let Some(live) = q[i].get_mut(&client_id) {
-                    let mut k = 0usize;
-                    live.retain(|_| {
-                        let keep = !remove_idx.contains(&k);
-                        k += 1;
-                        keep
-                    });
-                }
+                let live = q[i].get_mut(&client_id).expect("the client's queue is only ever drained here");
+                let mut k = 0usize;
+                live.retain(|_| {
+                    let keep = !remove_idx.contains(&k);
+                    k += 1;
+                    keep
+                });
             }
             // ---- creation data updates ----
             let list: Vec<NetBlob> = self.net_update_creation_data_dynamic_objects.borrow()[i].clone();
@@ -286,12 +283,8 @@ impl DynamicWorld {
                 }
             }
             match bh {
-                None => {
-                    // an init-nil element stays queued unless a pending removal for the same id exists
-                    if pending_removal(uid) {
-                        remove_idx.insert(index);
-                    }
-                }
+                // an init-nil element stays queued (a pending removal for its id was handled above)
+                None => {}
                 Some(bh) => {
                     hooks.blockhead_set_client_id(&bh, client_id);
                     let use_id: &str = cid.as_deref().unwrap_or(client_id);
@@ -417,27 +410,40 @@ impl DynamicWorld {
     }
 }
 
+/// Tests of the ingestion queues: permission filters, per-type updates, every creation path and the per-client
+/// replication of one object.
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::dynworld::state::testutil::*;
-    use crate::dynworld::state::{DwHooks, DwServer, DwServerClient, ServerClientMap};
+    use crate::dynworld::state::{DwServer, DynamicWorldInit, ServerClientMap};
     use crate::foundation::gsdict::GsDict;
     use crate::plist::value::PlistValue;
-    use std::cell::{Cell, RefCell};
-    use std::collections::HashSet;
+    use crate::types::structs::IntPair;
+    use std::cell::RefCell;
     use std::rc::Rc;
 
-    struct Srv {
-        admins: Vec<String>,
+    fn blob(id: u64, len: usize) -> NetBlob {
+        let mut b = vec![0u8; len];
+        let n = len.min(8);
+        b[..n].copy_from_slice(&id.to_le_bytes()[..n]);
+        b
+    }
+
+    fn id_blob(id: u64) -> NetBlob {
+        id.to_le_bytes().to_vec()
+    }
+
+    /// A server whose only admin is `admin` and whose anti-cheat may have flagged one player.
+    struct Flagged {
         pending: RefCell<Option<String>>,
     }
-    impl DwServer for Srv {
-        fn player_info_for_peer_id(&self, _p: &str) -> Option<PlistValue> {
-            None
+    impl DwServer for Flagged {
+        fn player_info_for_peer_id(&self, p: &str) -> Option<PlistValue> {
+            (p == "ab1234").then(|| plist_dict(vec![("alias", PlistValue::string("Alice"))]))
         }
         fn player_is_admin_with_id(&self, c: &str) -> bool {
-            self.admins.iter().any(|a| a == c)
+            c == "admin"
         }
         fn player_update(&self) -> Option<String> {
             self.pending.borrow().clone()
@@ -445,210 +451,330 @@ mod tests {
         fn notify_players_changed(&self) {}
     }
 
-    struct Sc {
-        id: String,
-        wired_block: Cell<bool>,
-        wired: RefCell<HashSet<u64>>,
-        log: Rc<RefCell<Vec<String>>>,
-        tamed: RefCell<Vec<HashSet<u32>>>,
-    }
-    impl DwServerClient for Sc {
-        fn connected(&self) -> bool {
-            true
-        }
-        fn client_id(&self) -> String {
-            self.id.clone()
-        }
-        fn light_block_index(&self) -> i32 {
-            0
-        }
-        fn block_is_wired(&self, _m: i32) -> bool {
-            self.wired_block.get()
-        }
-        fn dynamic_object_is_wired(&self, u: u64) -> bool {
-            self.wired.borrow().contains(&u)
-        }
-        fn wire_dynamic_object(&self, u: u64) {
-            self.log.borrow_mut().push(format!("wire({u})"));
-            self.wired.borrow_mut().insert(u);
-        }
-        fn unwire_dynamic_object(&self, u: u64) {
-            self.log.borrow_mut().push(format!("unwire({u})"));
-            self.wired.borrow_mut().remove(&u);
-        }
-        fn add_creation_object_data_to_send_of_type_object_id(&self, _d: &NetBlob, t: u8, id: u64) {
-            self.log.borrow_mut().push(format!("create({t},{id})"));
-        }
-        fn add_creation_data_update_object_data_to_send_of_type(&self, _d: &NetBlob, t: u8) {
-            self.log.borrow_mut().push(format!("cdu({t})"));
-        }
-        fn add_update_object_data_to_send_of_type_reliable(&self, _d: &NetBlob, t: u8, r: bool) {
-            self.log.borrow_mut().push(format!("update({t},{r})"));
-        }
-        fn add_removal_object_data_to_send_of_type_object_id(&self, _d: &NetBlob, t: u8, id: u64) {
-            self.log.borrow_mut().push(format!("remove({t},{id})"));
-        }
-        fn send_all_object_data(&self) {
-            self.log.borrow_mut().push("sendAll".into());
-        }
-        fn world_indices_containing_tamed_animals(&self) -> &RefCell<Vec<HashSet<u32>>> {
-            &self.tamed
-        }
+    struct Fx {
+        d: Rc<DynamicWorld>,
+        sc: Rc<Sc>,
+        srv: Rc<Flagged>,
+        log: Log,
+        h: Rc<Hk>,
     }
 
-    fn setup(admins: &[&str]) -> (Rc<crate::dynworld::state::DynamicWorld>, Rc<Sc>, Rc<Srv>, Rc<RefCell<Vec<String>>>) {
-        let d = dw("net", 1);
-        let log = Rc::new(RefCell::new(vec![]));
-        let sc = Rc::new(Sc {
-            id: "c1".into(),
-            wired_block: Cell::new(true),
-            wired: RefCell::new(HashSet::new()),
-            log: log.clone(),
-            tamed: RefCell::new(vec![HashSet::new(); 65]),
+    fn fx(name: &str) -> Fx {
+        let (main, dwdb) = dbs(name);
+        let w = world(1);
+        std::mem::forget(w.clone());
+        let sc = Rc::new(Sc::new("ab1234"));
+        let map: ServerClientMap = Rc::new(RefCell::new(GsDict::new()));
+        map.borrow_mut().insert("ab1234".to_string(), sc.clone());
+        let srv = Rc::new(Flagged { pending: RefCell::new(None) });
+        let d = DynamicWorld::new(DynamicWorldInit {
+            world: w,
+            world_tile_loader: None,
+            server: Some(srv.clone()),
+            server_clients: Some(map),
+            cache: None,
+            tree_density_noise_function: None,
+            season_offset_noise_function: None,
+            app_database: None,
+            world_database: main,
+            dynamic_object_database: dwdb,
+            world_save_directory_override: Some(scratch(&format!("{name}_save"))),
         });
-        let srv = Rc::new(Srv { admins: admins.iter().map(|s| s.to_string()).collect(), pending: RefCell::new(None) });
-        let mut m: GsDict<String, Rc<dyn DwServerClient>> = GsDict::new();
-        m.insert("c1".to_string(), sc.clone());
-        let map: ServerClientMap = Rc::new(RefCell::new(m));
-        d.set_server_server_clients(Some(srv.clone()), Some(map));
-        (d, sc, srv, log)
+        let log: Log = Rc::new(RefCell::new(vec![]));
+        let h = hk(&log);
+        d.set_hooks(h.clone());
+        Fx { d, sc, srv, log, h }
     }
 
-    /// contract 8 item 10: wire before data, exactly once; flags cleared; removal unwires.
+    /// Wire before data, exactly once; flags cleared; removal unwires.
     #[test]
     fn fanout_wiring() {
-        let (d, sc, _srv, log) = setup(&[]);
-        let o = Obj::new(13, 5, log.clone());
-        let oref: ObjRef = o.clone();
-        d.send_net_data_if_needed_for_object_is_creation(&oref, true);
-        // default creation_net_data_for_client returns None: wired, no data
-        assert_eq!(&*log.borrow(), &vec!["wire(5)".to_string()]);
-        assert!(sc.wired.borrow().contains(&5));
-        // second call: already wired, nothing to send -> early out without clearing
-        o.base.borrow_mut().update_needs_to_be_sent = false;
-        d.send_net_data_if_needed_for_object_is_creation(&oref, false);
-        assert_eq!(log.borrow().len(), 1);
-        // removal
-        o.base.borrow_mut().needs_removed = true;
-        d.send_net_data_if_needed_for_object_is_creation(&oref, false);
-        assert_eq!(log.borrow()[1..].to_vec(), vec!["remove(13,5)".to_string(), "unwire(5)".to_string()]);
+        let f = fx("ns_wire");
+        f.sc.wired_block.set(true);
+        let o = tobj(13, 5, &f.log, None, None, None);
+        f.d.send_net_data_if_needed_for_object_is_creation(&o, true);
+        // no data to send: wired, nothing else
+        assert_eq!(*f.sc.events.borrow(), vec!["wire(5)".to_string()]);
+        // already wired and nothing to send: early out without clearing
+        f.d.send_net_data_if_needed_for_object_is_creation(&o, false);
+        assert_eq!(f.sc.events.borrow().len(), 1);
+        o.set_needs_removed(&o, true);
+        f.d.send_net_data_if_needed_for_object_is_creation(&o, false);
+        assert_eq!(f.sc.events.borrow()[1..].to_vec(), vec!["remove(13,5)".to_string(), "unwire(5)".to_string()]);
     }
 
-    /// not wired + block not wired: nothing, flags still cleared.
     #[test]
     fn block_not_wired_clears_flags() {
-        let (d, sc, _srv, log) = setup(&[]);
-        sc.wired_block.set(false);
-        let o = Obj::new(13, 5, log.clone());
-        o.base.borrow_mut().update_needs_to_be_sent = true;
-        let oref: ObjRef = o.clone();
-        d.send_net_data_if_needed_for_object_is_creation(&oref, false);
-        assert!(log.borrow().is_empty());
-        assert!(!o.base.borrow().update_needs_to_be_sent);
+        let f = fx("ns_nowire");
+        let o = tobj(13, 5, &f.log, None, None, None);
+        o.set_update_needs_to_be_sent(true);
+        f.d.send_net_data_if_needed_for_object_is_creation(&o, false);
+        assert!(f.sc.events.borrow().is_empty());
+        assert!(!o.update_needs_to_be_sent());
     }
 
-    /// unreliable gating: not reliable and counter != 0 returns without clearing flags.
+    /// Not reliable and the counter is not zero: returns without clearing flags.
     #[test]
     fn unreliable_gate() {
-        let (d, _sc, _srv, log) = setup(&[]);
-        let o = Obj::new(13, 5, log.clone());
-        o.base.borrow_mut().unreliable_update_needs_to_be_sent = true;
-        let oref: ObjRef = o.clone();
-        d.send_unreliable_counter.set(3);
-        d.send_net_data_if_needed_for_object_is_creation(&oref, false);
-        assert!(o.base.borrow().unreliable_update_needs_to_be_sent);
-        d.send_unreliable_counter.set(0);
-        d.send_net_data_if_needed_for_object_is_creation(&oref, false);
-        assert!(!o.base.borrow().unreliable_update_needs_to_be_sent);
+        let f = fx("ns_unrel");
+        let o = tobj(13, 5, &f.log, None, None, None);
+        o.set_unreliable_update_needs_to_be_sent(true);
+        f.d.send_unreliable_counter.set(3);
+        f.d.send_net_data_if_needed_for_object_is_creation(&o, false);
+        assert!(o.unreliable_update_needs_to_be_sent());
+        f.d.send_unreliable_counter.set(0);
+        f.d.send_net_data_if_needed_for_object_is_creation(&o, false);
+        assert!(!o.unreliable_update_needs_to_be_sent());
     }
 
-    /// contract 8 item 9a: FREE_BLOCK create is ignored on the server.
+    /// Data goes out as creation, creation-data update and update, depending on the wiring.
+    #[test]
+    fn per_client_replication() {
+        let f = fx("ns_data");
+        let sc = &f.sc;
+        sc.wired_block.set(true);
+        let o = tobj(13, 5, &f.log, Some(b"create"), Some(b"update"), None);
+        f.d.send_net_data_if_needed_for_object_is_creation(&o, true);
+        assert_eq!(
+            *sc.events.borrow(),
+            vec!["wire(5)".to_string(), "create(13,5)".to_string(), "update(13,true)".to_string()]
+        );
+        // wired: creation data changes and updates are sent separately
+        sc.events.borrow_mut().clear();
+        o.set_creation_data_needs_to_be_sent(true);
+        o.set_update_needs_to_be_sent(true);
+        f.d.send_net_data_if_needed_for_object_is_creation(&o, false);
+        assert_eq!(*sc.events.borrow(), vec!["cdu(13)".to_string(), "update(13,true)".to_string()]);
+        // the block went away from the client: the object is unwired after the update
+        sc.events.borrow_mut().clear();
+        sc.wired_block.set(false);
+        o.set_update_needs_to_be_sent(true);
+        f.d.send_net_data_if_needed_for_object_is_creation(&o, false);
+        assert_eq!(*sc.events.borrow(), vec!["update(13,true)".to_string(), "unwire(5)".to_string()]);
+        // an object without data stays wired and silent
+        let quiet = tobj(13, 6, &f.log, None, None, None);
+        sc.wired.borrow_mut().push(6);
+        sc.events.borrow_mut().clear();
+        quiet.set_creation_data_needs_to_be_sent(true);
+        quiet.set_update_needs_to_be_sent(true);
+        f.d.send_net_data_if_needed_for_object_is_creation(&quiet, false);
+        assert!(sc.events.borrow().is_empty());
+        // creation data but no update data
+        let half = tobj(13, 7, &f.log, Some(b"create"), None, None);
+        sc.wired_block.set(true);
+        f.d.send_net_data_if_needed_for_object_is_creation(&half, true);
+        assert_eq!(sc.events.borrow().len(), 2);
+        // wired, with creation data only
+        let c = tobj(13, 8, &f.log, Some(b"create"), Some(b"update"), None);
+        sc.wired.borrow_mut().push(8);
+        sc.events.borrow_mut().clear();
+        c.set_creation_data_needs_to_be_sent(true);
+        f.d.send_net_data_if_needed_for_object_is_creation(&c, false);
+        assert_eq!(*sc.events.borrow(), vec!["cdu(13)".to_string()]);
+        // clients that are not connected get nothing
+        sc.online.set(false);
+        sc.events.borrow_mut().clear();
+        f.d.send_net_data_if_needed_for_object_is_creation(&c, true);
+        assert!(sc.events.borrow().is_empty());
+        sc.online.set(true);
+        // a world tick sends everything pending
+        f.d.update_accurate_dt(0.1, 0.1);
+        assert_eq!(sc.events.borrow().last().unwrap(), "sendAll");
+        f.srv.notify_players_changed();
+    }
+
     #[test]
     fn remote_create_free_block_ignored() {
-        let (d, _sc, _srv, _log) = setup(&[]);
-        d.remote_create_for_objects_of_type_client_id(vec![vec![0; 0x18]], 14, "c1");
-        assert!(d.net_create_dynamic_objects.borrow()[14].is_empty());
-        d.remote_create_for_objects_of_type_client_id(vec![vec![0; 0x18]], 13, "c1");
-        assert_eq!(d.net_create_dynamic_objects.borrow()[13].len(), 1);
-        // out of range ignored, no panic
-        d.remote_create_for_objects_of_type_client_id(vec![vec![0; 0x18]], 200, "c1");
+        let f = fx("ns_free");
+        f.d.remote_create_for_objects_of_type_client_id(vec![vec![0; 0x18]], 14, "c1");
+        assert!(f.d.net_create_dynamic_objects.borrow()[14].is_empty());
+        f.d.remote_create_for_objects_of_type_client_id(vec![vec![0; 0x18]], 13, "c1");
+        f.d.remote_create_for_objects_of_type_client_id(vec![vec![0; 0x18]], 13, "c1");
+        assert_eq!(f.d.net_create_dynamic_objects.borrow()[13].get(&"c1".to_string()).unwrap().len(), 2);
+        f.d.remote_create_for_objects_of_type_client_id(vec![vec![0; 0x18]], 200, "c1");
     }
 
-    /// contract 8 item 9b: removal filters.
     #[test]
-    fn remote_remove_filters() {
-        let (d, _sc, _srv, log) = setup(&["admin"]);
-        let id = |n: u64| n.to_le_bytes().to_vec();
-        // NPC / window / free block are dropped for everyone
-        d.remote_remove_for_objects_of_type_from_client(vec![id(1)], 13, Some("admin"));
-        d.remote_remove_for_objects_of_type_from_client(vec![id(1)], 31, Some("admin"));
-        d.remote_remove_for_objects_of_type_from_client(vec![id(1)], 14, Some("admin"));
-        assert!(d.net_remove_dynamic_objects.borrow().iter().all(|v| v.is_empty()));
-        // a non-admin only removes ids that exist in dynamic_objects
-        let o: ObjRef = Obj::new(20, 7, log.clone());
-        d.do_set(20, 7, o);
-        d.remote_remove_for_objects_of_type_from_client(vec![id(7), id(8)], 20, Some("bob"));
-        assert_eq!(d.net_remove_dynamic_objects.borrow()[20], vec![id(7)]);
-        // admin passes everything
-        d.remote_remove_for_objects_of_type_from_client(vec![id(9)], 20, Some("admin"));
-        assert_eq!(d.net_remove_dynamic_objects.borrow()[20].len(), 2);
-        // anti-cheat flagged client is ignored for non-sign types
-        *_srv.pending.borrow_mut() = Some("bob".into());
-        d.remote_remove_for_objects_of_type_from_client(vec![id(7)], 20, Some("bob"));
-        assert_eq!(d.net_remove_dynamic_objects.borrow()[20].len(), 2);
-    }
-
-    /// contract 8 item 9c: ownership sign updates need admin.
-    #[test]
-    fn remote_update_ownership_sign() {
-        let (d, _sc, _srv, _log) = setup(&["admin"]);
-        d.remote_update_for_objects_of_type_from_client(vec![vec![1; 0x18]], 60, Some("bob"));
+    fn updates_from_clients_are_filtered() {
+        let f = fx("ns_upd");
+        let d = &f.d;
+        // out-of-range types are dropped by every entry point
+        d.remote_creation_data_update_for_objects_of_type_from_client(vec![id_blob(1)], 99, None);
+        d.remote_update_for_objects_of_type_from_client(vec![id_blob(1)], -1, None);
+        d.remote_remove_for_objects_of_type_from_client(vec![id_blob(1)], 65, None);
+        // ownership signs: only admins, and not while flagged by the anti-cheat
+        d.remote_update_for_objects_of_type_from_client(vec![id_blob(1)], 60, None);
+        d.remote_update_for_objects_of_type_from_client(vec![id_blob(1)], 60, Some("bob"));
         assert!(d.net_update_dynamic_objects.borrow()[60].is_empty());
-        d.remote_update_for_objects_of_type_from_client(vec![vec![1; 0x18]], 60, Some("admin"));
+        d.remote_update_for_objects_of_type_from_client(vec![id_blob(1)], 60, Some("admin"));
         assert_eq!(d.net_update_dynamic_objects.borrow()[60].len(), 1);
-        d.remote_update_for_objects_of_type_from_client(vec![vec![1; 0x18]], 13, Some("bob"));
+        *f.srv.pending.borrow_mut() = Some("someone else".to_string());
+        d.remote_update_for_objects_of_type_from_client(vec![id_blob(1)], 60, Some("admin"));
+        assert_eq!(d.net_update_dynamic_objects.borrow()[60].len(), 2);
+        *f.srv.pending.borrow_mut() = Some("admin".to_string());
+        d.remote_update_for_objects_of_type_from_client(vec![id_blob(1)], 60, Some("admin"));
+        assert_eq!(d.net_update_dynamic_objects.borrow()[60].len(), 2);
+        // everything else, and creation data updates, have no checks
+        d.remote_update_for_objects_of_type_from_client(vec![id_blob(1)], 13, Some("bob"));
         assert_eq!(d.net_update_dynamic_objects.borrow()[13].len(), 1);
+        d.remote_creation_data_update_for_objects_of_type_from_client(vec![id_blob(1)], 13, Some("bob"));
+        assert_eq!(d.net_update_creation_data_dynamic_objects.borrow()[13].len(), 1);
     }
 
-    struct Hk {
-        made: RefCell<Vec<(i32, Option<i32>)>>,
-        log: Rc<RefCell<Vec<String>>>,
-    }
-    impl crate::dynworld::state::DwHooksStub for Hk {
-        fn construct_from_net_data(&self, t: i32, ito: Option<i32>, net: &[u8]) -> Option<ObjRef> {
-            self.made.borrow_mut().push((t, ito));
-            let id = u64::from_le_bytes(net[0..8].try_into().unwrap());
-            let o: ObjRef = Obj::new(t, id, self.log.clone());
-            Some(o)
-        }
-    }
-
-    /// creation queue: needsRemoved / pending removal / already existing elements are consumed, others created.
     #[test]
-    fn update_net_objects_creation() {
-        let (d, _sc, _srv, log) = setup(&[]);
-        let hk = Rc::new(Hk { made: RefCell::new(vec![]), log: log.clone() });
-        d.set_hooks(hk.clone());
-        let blob = |id: u64, removed: bool| {
-            let mut b = vec![0u8; 0x18];
-            b[0..8].copy_from_slice(&id.to_le_bytes());
-            b[0x10] = removed as u8;
+    fn removals_from_clients_are_filtered() {
+        let f = fx("ns_rem");
+        let (d, log, h) = (&f.d, &f.log, &f.h);
+        // NPCs, windows and free blocks are dropped for everyone
+        for t in [13, 31, 14] {
+            d.remote_remove_for_objects_of_type_from_client(vec![id_blob(1)], t, Some("admin"));
+        }
+        assert!(d.net_remove_dynamic_objects.borrow().iter().all(|v| v.is_empty()));
+        // ownership signs: admins only, then everything they ask for is queued
+        d.remote_remove_for_objects_of_type_from_client(vec![id_blob(1)], 60, Some("bob"));
+        d.remote_remove_for_objects_of_type_from_client(vec![id_blob(1)], 60, None);
+        assert!(d.net_remove_dynamic_objects.borrow()[60].is_empty());
+        d.remote_remove_for_objects_of_type_from_client(vec![id_blob(1)], 60, Some("admin"));
+        assert_eq!(d.net_remove_dynamic_objects.borrow()[60].len(), 1);
+        // blockheads: only the ones the client owns
+        d.net_blockheads.borrow_mut().push(tobj(24, 5, log, None, None, None));
+        d.net_blockheads.borrow_mut().push(tobj(24, 6, log, None, None, None));
+        h.client_of.borrow_mut().push((5, "bob".to_string()));
+        h.client_of.borrow_mut().push((6, "eve".to_string()));
+        d.remote_remove_for_objects_of_type_from_client(vec![id_blob(5), id_blob(6), vec![1, 2]], 24, Some("bob"));
+        assert_eq!(d.net_remove_dynamic_objects.borrow()[24], vec![id_blob(5)]);
+        // owned objects can only be removed by their owner; gates never
+        let owned = tobj(46, 7, log, None, None, None);
+        owned.set_owner_id(Some("alice".to_string()));
+        d.do_set(46, 7, owned);
+        d.do_set(46, 8, tobj(46, 8, log, None, None, None));
+        d.remote_remove_for_objects_of_type_from_client(vec![id_blob(7), id_blob(8), id_blob(9)], 46, Some("bob"));
+        assert_eq!(d.net_remove_dynamic_objects.borrow()[46], vec![id_blob(8)]);
+        d.remote_remove_for_objects_of_type_from_client(vec![id_blob(7)], 46, Some("alice"));
+        assert_eq!(d.net_remove_dynamic_objects.borrow()[46].len(), 2);
+        d.do_set(20, 9, tobj(20, 9, log, None, None, None));
+        h.item.set(crate::types::item_type::ItemType::ITEM_GATE.0 as i32);
+        d.remote_remove_for_objects_of_type_from_client(vec![id_blob(9)], 20, Some("bob"));
+        assert!(d.net_remove_dynamic_objects.borrow()[20].is_empty());
+        h.item.set(0);
+        d.remote_remove_for_objects_of_type_from_client(vec![id_blob(9)], 20, Some("bob"));
+        assert_eq!(d.net_remove_dynamic_objects.borrow()[20].len(), 1);
+        // an admin passes everything, a flagged client nothing
+        d.remote_remove_for_objects_of_type_from_client(vec![id_blob(99)], 20, Some("admin"));
+        assert_eq!(d.net_remove_dynamic_objects.borrow()[20].len(), 2);
+        *f.srv.pending.borrow_mut() = Some("someone else".to_string());
+        d.remote_remove_for_objects_of_type_from_client(vec![id_blob(9)], 20, Some("bob"));
+        assert_eq!(d.net_remove_dynamic_objects.borrow()[20].len(), 3);
+        *f.srv.pending.borrow_mut() = Some("bob".to_string());
+        d.remote_remove_for_objects_of_type_from_client(vec![id_blob(9)], 20, Some("bob"));
+        assert_eq!(d.net_remove_dynamic_objects.borrow()[20].len(), 3);
+        // without a server nothing is checked
+        let plain = dw("ns_plain_rm", 1);
+        plain.remote_remove_for_objects_of_type_from_client(vec![id_blob(1)], 13, None);
+        assert_eq!(plain.net_remove_dynamic_objects.borrow()[13].len(), 1);
+    }
+
+    #[test]
+    fn queued_updates_reach_blockheads_and_objects() {
+        let f = fx("ns_queues");
+        let (d, log) = (&f.d, &f.log);
+        let bh = tobj(24, 5, log, None, None, None);
+        d.net_blockheads.borrow_mut().push(bh.clone());
+        d.do_set(19, 6, tobj(19, 6, log, None, None, None));
+        for t in [24, 19] {
+            for id in [5u64, 6, 7] {
+                d.remote_creation_data_update_for_objects_of_type_from_client(vec![blob(id, 0x18)], t, None);
+                d.remote_update_for_objects_of_type_from_client(vec![blob(id, 0x18)], t, None);
+                d.remote_remove_for_objects_of_type_from_client(vec![id_blob(id)], t, Some("admin"));
+            }
+            // blobs without an id are ignored
+            d.remote_creation_data_update_for_objects_of_type_from_client(vec![vec![1]], t, None);
+            d.remote_update_for_objects_of_type_from_client(vec![vec![1]], t, None);
+            d.net_remove_dynamic_objects.borrow_mut()[t as usize].push(vec![1]);
+        }
+        d.update_net_objects();
+        assert!(bh.needs_removed());
+        assert!(d.do_get(19, 6).unwrap().needs_removed());
+        assert!(d.net_update_dynamic_objects.borrow()[24].is_empty());
+        // nothing happens without a server
+        let plain = dw("ns_plain", 1);
+        plain.update_net_objects();
+    }
+
+    #[test]
+    fn creation_queue_paths() {
+        let f = fx("ns_create");
+        let (d, log, h) = (&f.d, &f.log, &f.h);
+        // straight into the queue: free blocks are refused by the remote entry point
+        let create = |t: i32, blobs: Vec<NetBlob>| {
+            {
+                let mut q = d.net_create_dynamic_objects.borrow_mut();
+                let key = "ab1234".to_string();
+                if q[t as usize].get(&key).is_none() {
+                    q[t as usize].insert(key.clone(), Vec::new());
+                }
+                q[t as usize].get_mut(&key).unwrap().extend(blobs);
+            }
+            d.update_net_objects();
+        };
+        // an empty queue and a client without elements are skipped
+        d.net_create_dynamic_objects.borrow_mut()[13].insert("nobody".to_string(), Vec::new());
+        d.update_net_objects();
+        // blockheads: short blob, removed flag, queued removal, already known, dupe of the local player, loaded
+        d.net_blockheads.borrow_mut().push(tobj(24, 30, log, None, None, None));
+        h.known_ids.borrow_mut().push(30);
+        let mut removed = blob(11, 0x18);
+        removed[0x10] = 1;
+        d.net_remove_dynamic_objects.borrow_mut()[24].push(id_blob(12));
+        h.client_of.borrow_mut().push((13, d.hooks().local_net_id()));
+        create(24, vec![blob(10, 4), removed, blob(12, 0x18), blob(30, 0x18), blob(13, 0x18), blob(14, 0x18)]);
+        let ids: Vec<u64> = d.net_blockheads.borrow().iter().map(|b| b.unique_id()).collect();
+        assert_eq!(ids, vec![30, 14]);
+        let l = log.borrow().clone();
+        assert!(l.contains(&"client_id(14,ab1234)".to_string()), "{l:?}");
+        // a blockhead the hooks cannot build stays queued unless it is being removed
+        h.fail_blockhead.set(true);
+        d.net_remove_dynamic_objects.borrow_mut()[24].push(id_blob(15));
+        create(24, vec![blob(15, 0x18), blob(16, 0x18)]);
+        assert_eq!(d.net_create_dynamic_objects.borrow()[24].get(&"ab1234".to_string()).unwrap().len(), 1);
+        h.fail_blockhead.set(false);
+        // a blockhead of a client with a known alias
+        h.client_of.borrow_mut().push((17, "ab1234".to_string()));
+        create(24, vec![blob(17, 0x18)]);
+        assert!(log.borrow().contains(&"client_name(17,Some(\"Alice\"))".to_string()));
+        // free blocks, plain objects with and without a static position, refused constructions
+        create(14, vec![blob(20, 0x18)]);
+        assert_eq!(d.free_blocks_by_position.borrow().len(), 1);
+        create(16, vec![blob(21, 0x18)]);
+        assert!(d.do_contains(16, 21) && d.bp_contains(16, d.world_index_key(IntPair { x: 3, y: 4 })));
+        create(13, vec![blob(22, 0x18)]);
+        assert!(d.do_contains(13, 22));
+        // an object that exists already is not created again
+        create(13, vec![blob(22, 0x18)]);
+        assert_eq!(h.net_made.borrow().iter().filter(|m| m.0 == 13).count(), 1);
+        h.net_none.set(true);
+        create(14, vec![blob(23, 0x18)]);
+        create(13, vec![blob(24, 0x18)]);
+        create(46, vec![blob(25, 0x28)]);
+        h.net_none.set(false);
+        // interaction objects: too short, workbenches of the three kinds, other interaction objects
+        let with_ito = |id: u64, ito: u16| {
+            let mut b = blob(id, 0x28);
+            b[0x20..0x22].copy_from_slice(&ito.to_le_bytes());
             b
         };
-        d.remote_create_for_objects_of_type_client_id(
-            vec![blob(1, false), blob(2, true), blob(3, false), blob(4, false)],
-            13,
-            "c1",
-        );
-        let existing: ObjRef = Obj::new(13, 4, log.clone());
-        d.do_set(13, 4, existing);
-        d.net_remove_dynamic_objects.borrow_mut()[13].push(3u64.to_le_bytes().to_vec());
-        d.update_net_objects();
-        assert!(d.do_contains(13, 1));
-        assert!(!d.do_contains(13, 2));
-        assert!(!d.do_contains(13, 3));
-        assert!(d.net_create_dynamic_objects.borrow()[13].get(&"c1".to_string()).unwrap().is_empty());
-        // the removal queue was applied and emptied
-        assert!(d.net_remove_dynamic_objects.borrow()[13].is_empty());
+        create(46, vec![blob(26, 0x20)]);
+        h.wb_type.set(1);
+        create(45, vec![with_ito(27, 1)]);
+        assert!(!d.workbench_has_been_crafted.get());
+        h.wb_type.set(0xd);
+        create(45, vec![with_ito(28, 1)]);
+        h.wb_type.set(5);
+        create(45, vec![with_ito(29, 1)]);
+        assert!(d.workbench_has_been_crafted.get());
+        create(46, vec![with_ito(31, 2)]);
+        assert!(d.portal_positions.borrow().contains_index(d.world_index_key(IntPair { x: 3, y: 4 })));
+        assert!(d.net_create_dynamic_objects.borrow()[45].get(&"ab1234".to_string()).unwrap().is_empty());
+        assert!(!h.net_made.borrow().is_empty());
     }
 }
