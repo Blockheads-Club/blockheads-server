@@ -79,7 +79,7 @@ mod tests {
     use crate::foundation::nslog::TEST_SINK_LOCK as L;
 
     fn capture(f: impl FnOnce()) -> String {
-        let _g = L.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = L.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let sink = Arc::new(Mutex::new(Vec::new()));
         set_test_sink(Some(sink.clone()));
         f();

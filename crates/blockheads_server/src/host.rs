@@ -105,7 +105,7 @@ pub struct ServerHandle {
 }
 
 fn set_status(s: &Mutex<Status>, v: Status) {
-    *s.lock().unwrap_or_else(|e| e.into_inner()) = v;
+    *s.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = v;
 }
 
 fn describe(ex: &NsException) -> String {
@@ -144,7 +144,7 @@ pub fn start(cfg: HostConfig, log: LogCallback) -> std::io::Result<ServerHandle>
         let ready_cmds = cfg.on_ready_commands.clone();
         let sink: LogCallback = Arc::new(move |line: &str| {
             if line.ends_with("World load complete.") {
-                let mut g = st_log.lock().unwrap_or_else(|e| e.into_inner());
+                let mut g = st_log.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 if *g == Status::Starting {
                     *g = Status::Running;
                     for c in &ready_cmds {
@@ -217,7 +217,7 @@ pub fn start(cfg: HostConfig, log: LogCallback) -> std::io::Result<ServerHandle>
 impl ServerHandle {
     /// Current status.
     pub fn status(&self) -> Status {
-        self.status.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.status.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
     }
 
     /// True while the server thread is alive.
@@ -235,7 +235,7 @@ impl ServerHandle {
     /// Ask the server to save and stop; does not wait.
     pub fn request_stop(&self) {
         {
-            let mut g = self.status.lock().unwrap_or_else(|e| e.into_inner());
+            let mut g = self.status.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             if matches!(*g, Status::Starting | Status::Running) {
                 *g = Status::Stopping;
             }

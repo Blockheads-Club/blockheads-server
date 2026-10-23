@@ -28,7 +28,7 @@ thread_local! { static TSTATE: std::cell::Cell<State> = const { std::cell::Cell:
 
 #[cfg(not(test))]
 fn with_state<R>(f: impl FnOnce(&mut State) -> R) -> R {
-    f(&mut STATE.lock().unwrap_or_else(|e| e.into_inner()))
+    f(&mut STATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner))
 }
 #[cfg(test)]
 fn with_state<R>(f: impl FnOnce(&mut State) -> R) -> R {
@@ -157,7 +157,7 @@ mod tests {
 
     #[test]
     fn reference_epoch_arithmetic() {
-        let _g = L.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = L.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         set_virtual(None);
         let d = reference_time() - (unix_time() - REFERENCE_EPOCH_UNIX) as f64;
         assert!((0.0..1.5).contains(&d), "{d}");
@@ -165,7 +165,7 @@ mod tests {
 
     #[test]
     fn virtual_clock() {
-        let _g = L.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = L.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         set_virtual(Some(1_700_000_000.0));
         assert!(is_virtual());
         assert_eq!(unix_time(), 1_700_000_000);
@@ -182,7 +182,7 @@ mod tests {
 
     #[test]
     fn real_clock_env_switch_and_sleep() {
-        let _g = L.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = L.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         set_virtual(None);
         let a = monotonic_seconds();
         sleep_for(0.001);

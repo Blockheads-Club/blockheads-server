@@ -6,13 +6,21 @@
 //! `BH_REFENV` at the reference-environment directory; when unset, those tests skip cleanly
 //! (the returned paths do not exist, and every consumer treats a missing file as "skip").
 
+use std::ffi::OsString;
 use std::path::PathBuf;
 
 const MISSING: &str = "/nonexistent/bh-private-material";
 
 /// Root of the optional fixtures directory (`BH_PRIVATE_DOCS`), or a path that does not exist.
 pub fn private_docs() -> PathBuf {
-    std::env::var_os("BH_PRIVATE_DOCS").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(MISSING))
+    private_docs_in(std::env::var_os("BH_PRIVATE_DOCS"))
+}
+
+fn private_docs_in(var: Option<OsString>) -> PathBuf {
+    match var {
+        Some(p) => PathBuf::from(p),
+        None => PathBuf::from(MISSING),
+    }
 }
 
 /// `<fixtures>/<rel>` as a string.
@@ -27,9 +35,30 @@ pub fn plist_golden(rel: &str) -> String {
 
 /// Reference-environment sample directory (`BH_REFENV`/samples), or a path that does not exist.
 pub fn refenv_samples() -> String {
-    std::env::var_os("BH_REFENV")
-        .map(|p| PathBuf::from(p).join("samples"))
-        .unwrap_or_else(|| PathBuf::from(MISSING))
-        .to_string_lossy()
-        .into_owned()
+    refenv_samples_in(std::env::var_os("BH_REFENV"))
+}
+
+fn refenv_samples_in(var: Option<OsString>) -> String {
+    match var {
+        Some(p) => PathBuf::from(p).join("samples"),
+        None => PathBuf::from(MISSING),
+    }
+    .to_string_lossy()
+    .into_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn paths_follow_the_variables() {
+        assert_eq!(private_docs_in(Some("/docs".into())), PathBuf::from("/docs"));
+        assert_eq!(private_docs_in(None), PathBuf::from(MISSING));
+        assert_eq!(refenv_samples_in(Some("/ref".into())), "/ref/samples");
+        assert_eq!(refenv_samples_in(None), MISSING);
+        assert_eq!(modules("a/b"), private_docs().join("a/b").to_string_lossy());
+        assert_eq!(plist_golden("x.json"), private_docs().join("plist_golden/x.json").to_string_lossy());
+        assert!(!refenv_samples().is_empty());
+    }
 }

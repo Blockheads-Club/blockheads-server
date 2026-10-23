@@ -2,11 +2,11 @@
 //!
 
 use crate::foundation::clock;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 
 pub use crate::nslog;
 
-static PROCESS_NAME: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+static PROCESS_NAME: Mutex<Option<String>> = Mutex::new(None);
 /// Serialises tests that install the process-global test sink (shared by foundation and plist tests).
 #[cfg(test)]
 pub(crate) static TEST_SINK_LOCK: Mutex<()> = Mutex::new(());
@@ -19,14 +19,12 @@ fn basename(argv0: &str) -> String {
 
 /// Store the process name (basename of argv[0]). Call once from main.
 pub fn set_process_name(argv0: &str) {
-    let m = PROCESS_NAME.get_or_init(|| Mutex::new(None));
-    *m.lock().unwrap_or_else(|e| e.into_inner()) = Some(basename(argv0));
+    *PROCESS_NAME.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(basename(argv0));
 }
 
 /// Process name used in the prefix; default is the basename of `std::env::args().next()`.
 pub fn process_name() -> String {
-    let m = PROCESS_NAME.get_or_init(|| Mutex::new(None));
-    let mut g = m.lock().unwrap_or_else(|e| e.into_inner());
+    let mut g = PROCESS_NAME.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if g.is_none() {
         *g = Some(basename(&std::env::args().next().unwrap_or_default()));
     }
@@ -44,7 +42,7 @@ pub fn encode_log_bytes(s: &str) -> Vec<u8> {
 
 /// Test seam: when `Some`, finished lines are appended here instead of written to fd 2.
 pub fn set_test_sink(sink: Option<Arc<Mutex<Vec<u8>>>>) {
-    *TEST_SINK.lock().unwrap_or_else(|e| e.into_inner()) = sink;
+    *TEST_SINK.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = sink;
 }
 
 fn prefix() -> String {
@@ -88,9 +86,9 @@ fn emit(msg: &str, newline: bool) {
         line.push(b'\n');
     }
     {
-        let g = TEST_SINK.lock().unwrap_or_else(|e| e.into_inner());
+        let g = TEST_SINK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(s) = g.as_ref() {
-            s.lock().unwrap_or_else(|e| e.into_inner()).extend_from_slice(&line);
+            s.lock().unwrap_or_else(std::sync::PoisonError::into_inner).extend_from_slice(&line);
             return;
         }
     }
@@ -120,7 +118,7 @@ mod tests {
     use super::TEST_SINK_LOCK as L;
 
     fn capture(f: impl FnOnce()) -> Vec<u8> {
-        let _g = L.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = L.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let sink = Arc::new(Mutex::new(Vec::new()));
         set_test_sink(Some(sink.clone()));
         f();
@@ -174,7 +172,7 @@ mod tests {
 
     #[test]
     fn threads_do_not_interleave() {
-        let _g = L.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = L.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let sink = Arc::new(Mutex::new(Vec::new()));
         set_test_sink(Some(sink.clone()));
         let hs: Vec<_> = (0..4)
@@ -195,5 +193,21 @@ mod tests {
     fn macro_form() {
         let out = capture(|| crate::nslog!("{}: {}", "a", 3));
         assert_eq!(strip_prefix(&out), b"a: 3\n");
+    }
+
+    #[test]
+    fn thread_sink_receives_lines_and_process_name_is_stored() {
+        let lines = Arc::new(Mutex::new(Vec::<String>::new()));
+        let l2 = lines.clone();
+        set_thread_sink(Some(Arc::new(move |s: &str| l2.lock().unwrap().push(s.to_string()))));
+        nslog("to the sink");
+        set_thread_sink(None);
+        let got = lines.lock().unwrap().clone();
+        assert_eq!(got.len(), 1);
+        assert!(got[0].ends_with("to the sink") && !got[0].ends_with('\n'));
+        let before = process_name();
+        set_process_name("/opt/bh/blockheads_server");
+        assert_eq!(process_name(), "blockheads_server");
+        set_process_name(&before);
     }
 }

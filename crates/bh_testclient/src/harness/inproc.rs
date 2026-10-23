@@ -77,7 +77,7 @@ impl HostServer {
         let log = Arc::new(Mutex::new(String::new()));
         let l2 = log.clone();
         let sink: host::LogCallback = Arc::new(move |s: &str| {
-            let mut g = l2.lock().unwrap_or_else(|e| e.into_inner());
+            let mut g = l2.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             g.push_str(s);
             g.push('\n');
         });
@@ -102,7 +102,7 @@ impl ServerHandle for HostServer {
         self.data.join("Library/ApplicationSupport/TheBlockheads/saves")
     }
     fn log(&self) -> String {
-        self.log.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.log.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
     }
     fn is_running(&mut self) -> bool {
         self.h.as_ref().is_some_and(|h| h.is_alive())

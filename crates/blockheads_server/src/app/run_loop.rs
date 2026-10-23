@@ -328,7 +328,7 @@ mod tests {
     const START: f64 = 1_000_000_000.0;
 
     fn setup() -> (std::sync::MutexGuard<'static, ()>, Rc<RunLoop>) {
-        let g = CLOCK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let g = CLOCK_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         clock::set_virtual(Some(START));
         // Fresh loop per test: the test thread is new, so the thread-local is fresh.
         (g, RunLoop::current())

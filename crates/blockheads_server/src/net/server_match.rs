@@ -914,7 +914,7 @@ mod tests {
         let mut a = args("0");
         a.cloud_salt = Some("salt".into());
         a.credit = 1.0;
-        let _cl = clock::TEST_CLOCK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _cl = clock::TEST_CLOCK_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         clock::set_virtual(Some(1_000_000.0));
         let (m, d, _) = make(a);
         m.poll_net_events();

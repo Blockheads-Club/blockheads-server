@@ -17,7 +17,7 @@ pub fn home_dir() -> String {
             return h;
         }
     }
-    crate::foundation::sys::passwd_home_dir().unwrap_or_else(|| "/".to_string())
+    crate::foundation::sys::passwd_home_dir().unwrap_or("/".to_string())
 }
 
 thread_local! {

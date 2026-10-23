@@ -405,7 +405,7 @@ pub fn load_records(save: &Path) -> Result<BTreeMap<RecordId, Vec<u8>>> {
     use heed::types::Bytes;
     // heed refuses concurrent opens of one path with differing handles inside a process: serialise open..close.
     static OPEN_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    let _guard = OPEN_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _guard = OPEN_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut out = BTreeMap::new();
     for e in ENVS {
         let p = save.join(e);

@@ -29,25 +29,20 @@ pub const NIL_FLOAT: f32 = 0.0;
 mod tests {
     use super::*;
 
+    // Each generic helper is called once from a single site with both a present and a missing value, so one
+    // instantiation covers both arms.
     #[test]
     fn defaults() {
-        assert_eq!(nil_or_default(None::<i32>, |x| x + 1), 0);
-        assert_eq!(nil_or_default(Some(1), |x| x + 1), 2);
-        assert!(!nil_or_default(None::<&str>, |s| s.is_empty()));
-        assert_eq!(nil_or(None::<i32>, 7, |x| x), 7);
-        assert_eq!(nil_count::<u8>(None), 0);
-        assert_eq!(nil_count(Some(&vec![1, 2])), 2);
-        assert_eq!(NIL_FLOAT, 0.0);
-    }
-
-    #[test]
-    fn nil_helpers() {
-        assert_eq!(nil_or(Some(2), 9, |v| v * 2), 4);
-        assert_eq!(nil_or(None::<i32>, 9, |v| v * 2), 9);
-        assert_eq!(nil_or_default(Some(2), |v| v + 1), 3);
-        assert_eq!(nil_or_default(None::<i32>, |v| v + 1), 0);
-        assert_eq!(nil_count(Some(&vec![1, 2])), 2);
-        assert_eq!(nil_count::<i32>(None), 0);
+        for (o, want) in [(None, 0), (Some(1), 2)] {
+            assert_eq!(nil_or_default(o, |x: i32| x + 1), want);
+        }
+        for (o, want) in [(None, 7), (Some(1), 1)] {
+            assert_eq!(nil_or(o, 7, |x: i32| x), want);
+        }
+        let v = vec![1, 2];
+        for (o, want) in [(None, 0), (Some(&v), 2)] {
+            assert_eq!(nil_count(o), want);
+        }
         assert_eq!(NIL_FLOAT, 0.0);
     }
 }
