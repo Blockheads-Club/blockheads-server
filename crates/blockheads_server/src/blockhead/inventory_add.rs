@@ -391,17 +391,16 @@ impl Blockhead {
             }
         }
 
-        // ---- Phase 2: first empty top-level slot (never for liquids)
-        if !is_liquid {
-            for i in 1..8i32 {
-                if force_slot_index != -1 && force_slot_index != i {
-                    continue;
-                }
-                let slot = outer_slot_at(&inv, i);
-                if slot.borrow().is_empty() {
-                    slot.borrow_mut().push(item.clone());
-                    return self.add_finish(i, -1, item, disable_warp_check);
-                }
+        // ---- Phase 2: first empty top-level slot (never for liquids; `itemTypeIsLiquid` is constant NO, so the
+        // original's `!isLiquid` guard around this loop always held)
+        for i in 1..8i32 {
+            if force_slot_index != -1 && force_slot_index != i {
+                continue;
+            }
+            let slot = outer_slot_at(&inv, i);
+            if slot.borrow().is_empty() {
+                slot.borrow_mut().push(item.clone());
+                return self.add_finish(i, -1, item, disable_warp_check);
             }
         }
 
@@ -431,22 +430,21 @@ impl Blockhead {
                     }
                     // 3b. otherwise a sub-slot that already holds the same item type and has room
                     if target.is_none() {
+                        // (no sub-slot is empty here, 3a would have taken it)
                         for sub in item_subs.iter() {
                             let sn = sub.borrow().len();
-                            if sn != 0 {
-                                let sf = slot_first(sub).expect("sn > 0");
-                                let (st, sdb) = {
-                                    let b = sf.borrow();
-                                    (b.item_type, b.data_b)
-                                };
-                                if st == ft {
-                                    if ft == ItemType::ITEM_PAINT && sdb != fdb {
-                                        continue;
-                                    }
-                                    if (sn as u64) + (slot.borrow().len() as u64) < 100 {
-                                        target = Some(sub.clone());
-                                        break;
-                                    }
+                            let sf = slot_first(sub).expect("sn > 0");
+                            let (st, sdb) = {
+                                let b = sf.borrow();
+                                (b.item_type, b.data_b)
+                            };
+                            if st == ft {
+                                if ft == ItemType::ITEM_PAINT && sdb != fdb {
+                                    continue;
+                                }
+                                if (sn as u64) + (slot.borrow().len() as u64) < 100 {
+                                    target = Some(sub.clone());
+                                    break;
                                 }
                             }
                         }

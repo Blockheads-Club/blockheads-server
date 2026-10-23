@@ -4397,6 +4397,10 @@ mod tests {
         let paint = |c: u16| -> SubSlot { Rc::new(RefCell::new(vec![mk(ItemType::ITEM_PAINT.0, 0, c)])) };
         assert_eq!(offer(Some(&[paint(2)])), -1);
         assert_eq!(offer(Some(&[paint(1)])), 1);
+        // a slot that holds a container is not poured into
+        b.inv()[2].borrow_mut().clear();
+        put(b, 2, vec![basket_with((0..4).map(|i| (i, vec![mk(STICK, 0, 0)])).collect())]);
+        assert_eq!(offer(Some(&[flints(99)])), -1);
     }
 
     fn credit_crystals(n: i32) {
@@ -4516,8 +4520,21 @@ mod tests {
         // money is reported too
         let fb3 = stub(0, true);
         *f.ih.fb.borrow_mut() = Some(fb_data(ItemType::ITEM_MONEY.0, 0, 5));
+        b.bh.borrow_mut().this_frame_pickup_requests = Some(crate::foundation::indexset::IndexSet::new());
+        b.bh.borrow_mut().unconfirmed_pickups = Some(std::collections::BTreeMap::new());
         assert!(b.pickup_freeblock_if_possible_in_tile_intentional(&fb3, None, true));
         assert!(b.bh.borrow().this_frame_pickup_requests.as_ref().unwrap().contains_index(fb3.unique_id()));
+        // an id that is already waiting for confirmation is not requested again
+        let fb4 = stub(0, true);
+        *f.ih.fb.borrow_mut() = Some(fb_data(ItemType::ITEM_MONEY.0, 0, 5));
+        b.bh.borrow_mut().this_frame_pickup_requests = Some(crate::foundation::indexset::IndexSet::new());
+        b.bh.borrow_mut().unconfirmed_pickups =
+            Some(std::collections::BTreeMap::from([(fb4.unique_id(), mk(APPLE, 0, 0))]));
+        assert!(b.pickup_freeblock_if_possible_in_tile_intentional(&fb4, None, true));
+        let fb5 = stub(0, true);
+        *f.ih.fb.borrow_mut() = Some(fb_data(APPLE, 0, 0));
+        assert!(b.pickup_freeblock_if_possible_in_tile_intentional(&fb5, None, true));
+        assert_eq!(b.bh.borrow().this_frame_pickup_requests.as_ref().unwrap().count(), 0);
     }
 
     #[test]
@@ -4535,5 +4552,103 @@ mod tests {
         assert_eq!((fbs[0].ty, fbs[0].pos), (ItemType::ITEM_MONEY.0, (5, 9)));
         // two platinum pieces that did not fit: 20_000 + 250 copper left over
         assert_eq!((fbs[0].a, fbs[0].b), (2, 250));
+    }
+
+    #[test]
+    fn add_item_into_a_fifth_sub_slot_and_other_container_oddities() {
+        let f = fx();
+        let b = f.b();
+        full_except(b, 1);
+        // a container without sub-slots at all never takes anything
+        let nosub = mk(BASKET, 0, 0);
+        nosub.borrow_mut().sub_items = None;
+        put(b, 1, vec![nosub.clone()]);
+        assert_eq!(can_pick(b, FLINT, 0, 0), -1);
+        // a loose stack in a container's fifth sub-slot: no sub-slot flag, no outer flag
+        b.inv()[1].borrow_mut().clear();
+        let bk = basket_with(vec![(0, vec![mk(APPLE, 0, 0)])]);
+        extra_slot(&bk, vec![mk(FLINT, 0, 0)]);
+        put(b, 1, vec![bk]);
+        b.bh.borrow_mut().inventory_changed_this_frame_slots = [false; 8];
+        assert_eq!(b.add_item_to_inventory(&mk(FLINT, 0, 0)), 1);
+        assert!(b.bh.borrow().inventory_changed_this_frame_slots.iter().all(|x| !x));
+        assert!(b.bh.borrow().sub_inventory_changed_this_frame_slots[1].iter().all(|x| !x));
+        // a container offered to full slots: another container in slot 1 is not poured into
+        assert_eq!(b.add_item_to_inventory(&basket_with(vec![])), 2);
+        assert_eq!(counts(b)[2], 1);
+        assert_eq!(b.inv()[2].borrow()[0].borrow().sub_items.as_ref().unwrap()[0].borrow().len(), 99);
+    }
+
+    #[test]
+    fn add_container_ignores_the_forced_slot_and_joins_matching_sub_slots() {
+        let f = fx();
+        let b = f.b();
+        put(b, 3, (0..99).map(|_| mk(30, 0, 0)).collect());
+        // forced to a full slot while others are empty: the container still finds the loose stack
+        let bk = basket_with(vec![]);
+        assert_eq!(b.add_item_to_inventory_flash_disable_warp_check_force_slot_index(&bk, false, true, 3), 3);
+        assert_eq!(types(b, 3), vec![BASKET]);
+        assert_eq!(bk.borrow().sub_items.as_ref().unwrap()[0].borrow().len(), 99);
+        // no empty sub-slot: a sub-slot of the same type with room takes the loose stack
+        let g = fx();
+        let b = g.b();
+        full_except(b, 4);
+        put(b, 4, (0..40).map(|_| mk(FLINT, 0, 0)).collect());
+        let joined = basket_with(vec![
+            (0, vec![mk(ItemType::ITEM_PAINT.0, 0, 1)]),
+            (1, (0..50).map(|_| mk(FLINT, 0, 0)).collect()),
+            (2, vec![mk(APPLE, 0, 0)]),
+            (3, vec![mk(STICK, 0, 0)]),
+        ]);
+        assert_eq!(b.add_item_to_inventory(&joined), 4);
+        assert_eq!(joined.borrow().sub_items.as_ref().unwrap()[1].borrow().len(), 90);
+        // too many for the sub-slot, and paints of another colour: nothing fits
+        let h = fx();
+        let b = h.b();
+        full_except(b, 4);
+        put(b, 4, (0..60).map(|_| mk(FLINT, 0, 0)).collect());
+        let crowded = basket_with(vec![
+            (0, vec![mk(APPLE, 0, 0)]),
+            (1, (0..50).map(|_| mk(FLINT, 0, 0)).collect()),
+            (2, vec![mk(APPLE, 0, 0)]),
+            (3, vec![mk(STICK, 0, 0)]),
+        ]);
+        assert_eq!(b.add_item_to_inventory(&crowded), -1);
+        let k = fx();
+        let b = k.b();
+        full_except(b, 4);
+        put(b, 4, (0..5).map(|_| mk(ItemType::ITEM_PAINT.0, 0, 2)).collect());
+        let paints = basket_with(vec![
+            (0, vec![mk(ItemType::ITEM_PAINT.0, 0, 1)]),
+            (1, vec![mk(APPLE, 0, 0)]),
+            (2, vec![mk(APPLE, 0, 0)]),
+            (3, vec![mk(STICK, 0, 0)]),
+        ]);
+        assert_eq!(b.add_item_to_inventory(&paints), -1);
+    }
+
+    #[test]
+    fn pickup_and_add_edge_cases_for_net_blockheads_and_clients() {
+        let f = fx();
+        let b = f.b();
+        // net blockheads do not feed the found list
+        b.base.borrow_mut().is_net = true;
+        assert_eq!(b.add_item_to_inventory(&mk(APPLE, 0, 0)), 1);
+        b.base.borrow_mut().is_net = false;
+        // dropping and meditating: refused unless the block was meant for us
+        let mut d = fb_data(APPLE, 0, 0);
+        d.priority_blockhead = Some(f.o.clone());
+        *f.ih.fb.borrow_mut() = Some(d);
+        b.bh.borrow_mut().ignoring_freeblocks_due_to_drop = true;
+        assert!(b.pickup_freeblock_if_possible_in_tile_intentional(&stub(0, true), None, false));
+        // on a client the "server" owner exception does not apply
+        f._world.set_is_admin(false);
+        f.ih.client.set(true);
+        let mut d = fb_data(ItemType::ITEM_SAFE.0, 0, 0);
+        let mut sd = crate::objects::base::new_mutable_dict();
+        sd.map.insert("ownerID".to_string(), PlistValue::string("server"));
+        d.dynamic_object_save_dict = Some(PlistValue::Dict(sd));
+        *f.ih.fb.borrow_mut() = Some(d);
+        assert!(!b.pickup_freeblock_if_possible_in_tile_intentional(&stub(0, true), None, true));
     }
 }
