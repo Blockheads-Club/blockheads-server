@@ -19,6 +19,9 @@ default = ["trace-rng", "mods"]
 # The mod host (bhmod-core with Luau, bhmod-wasm for WASM components). Without mods in the mods directory it has no
 # effect at all.
 mods = ["dep:bhmod-core", "dep:bhmod-wasm", "dep:bhmod-manifest", "dep:bhmod-proto"]
+# JVM mods (Java, Kotlin, ...; bhmod-core's JNI runtime, loads the machine's JRE at run time). Off by default, and even
+# when built in they only load with `BLOCKHEADS_JVM=1` (see `mods::jvm_settings`). Building needs a JDK (javac, jar).
+jvm = ["mods", "bhmod-core/jvm"]
 # NOTE: faithful-crashes reproduces aborts that only happen in the docker reference env (old libobjc cannot parse
 # block type encodings). Real clients hit them (e.g. 0x4c + 0x05 on join), so keep it OFF for real servers;
 # enable it explicitly for parity tests: --features faithful-crashes

@@ -445,11 +445,31 @@ pub(super) fn load(dir: &Path, save_id: Option<&str>, server: &Rc<BHServer>) -> 
     if let Ok(rt) = WasmRuntime::new(wasm) {
         opts.runtimes.push(Box::new(rt));
     }
+    // JVM mods: only when the owner turned them on (feature `jvm`, `BLOCKHEADS_JVM=1`). Logged once the bridge exists.
+    #[allow(unused_mut)]
+    let mut notes: Vec<(LogLevel, String)> = Vec::new();
+    #[cfg(feature = "jvm")]
+    if let Some(mut cfg) = super::jvm_settings(&|k| std::env::var(k).ok()) {
+        cfg.work_dir = Some(dir.join(".cache"));
+        match bhmod_core::jvm::JvmRuntime::new(cfg) {
+            Ok(rt) => {
+                opts.runtimes.push(Box::new(rt));
+                notes.push((
+                    LogLevel::Warn,
+                    "JVM mods are enabled: they run unsandboxed (permission `native`)".to_string(),
+                ));
+            }
+            Err(e) => notes.push((LogLevel::Error, format!("JVM mods are on but the JVM could not be started: {e}"))),
+        }
+    }
     // A world always has a save id on the dedicated server; `(null)` mirrors ObjC's nil formatting otherwise.
     let world_dir = PathBuf::from(crate::foundation::paths::save_dir(save_id.unwrap_or("(null)")));
     opts.storage = Box::new(LmdbStorage::new(world_dir.join("mods/storage")));
     let net = Rc::new(RefCell::new(ModNet::default()));
     let bridge = Rc::new(Bridge { srv: Rc::downgrade(server), net: net.clone() });
+    for (level, note) in &notes {
+        GameBridge::log(&*bridge, None, *level, note);
+    }
     let host = ModHost::load(opts, bridge.clone());
     let loaded: Vec<String> = host.mods().into_iter().map(|m| m.id).collect();
     let catalog = super::catalog::build(dir, &loaded, &mut |m| GameBridge::log(&*bridge, None, LogLevel::Warn, &m));
