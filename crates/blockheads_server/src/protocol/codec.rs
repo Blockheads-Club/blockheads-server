@@ -316,3 +316,36 @@ pub fn index_set_encode(ranges: &[(u32, u32)]) -> Vec<u8> {
     }
     w.finish()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cursor_reads_and_zero_fills() {
+        let mut w = Wr::new();
+        w.u8(1).u16(2).u32(3).i32(-4).u64(5).f32(1.5).zeros(2).bytes(b"xy");
+        let b = w.finish();
+        let mut r = Rd::new(&b);
+        assert_eq!(
+            (r.u8(), r.u16(), r.u32(), r.i32(), r.u64(), r.f32()),
+            (Some(1), Some(2), Some(3), Some(-4), Some(5), Some(1.5))
+        );
+        r.skip(2);
+        assert_eq!(r.rest(), b"xy");
+        assert_eq!(r.bytes(3), None);
+        assert_eq!(r.bytes(2), Some(&b"xy"[..]));
+        assert_eq!((r.remaining(), r.u8()), (0, None));
+        r.skip(10);
+        assert_eq!(r.rest(), b"");
+        // short input is zero filled and consumed
+        let mut z = Rd::new(&[1, 2]);
+        assert_eq!((z.u32_or0(), z.remaining()), (0x0201, 0));
+        let mut z = Rd::new(&[9]);
+        assert_eq!((z.u8_or0(), z.u16_or0(), z.i32_or0(), z.u64_or0(), z.f32_or0()), (9, 0, 0, 0, 0.0));
+        assert_eq!(Wr::with_type(7).finish(), vec![7]);
+        assert_eq!(split_type(&[]), None);
+        assert_eq!(split_type(&[1, 2]), Some((1, &[2u8][..])));
+        assert_eq!(frame2(1, 2, &[3]), vec![1, 2, 3]);
+    }
+}

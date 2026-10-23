@@ -487,4 +487,69 @@ mod tests {
         assert_eq!(r.len(), 2);
         assert_eq!((r[1].seq, r[1].ty, r[1].channel), (1, 0x23, 1));
     }
+
+    #[test]
+    fn hex_and_string_helpers() {
+        assert_eq!(from_hex("00FfaB"), Some(vec![0, 255, 171]));
+        assert_eq!((from_hex("abc"), from_hex("zz"), from_hex("0g")), (None, None, None));
+        assert_eq!(json_str("a\"b\\c\n\r\t\u{1}"), "\"a\\\"b\\\\c\\n\\r\\t\\u0001\"");
+        assert_eq!(Dir::Tx.as_str(), "tx");
+    }
+
+    #[test]
+    fn json_accessors_reject_other_kinds() {
+        let j = parse_json("{\"s\":\"x\",\"n\":3,\"b\":false,\"neg\":-1}").unwrap();
+        assert_eq!((j.get("s").unwrap().as_u64(), j.get("n").unwrap().as_str(), j.get("n").unwrap().as_bool()), (None, None, None));
+        assert_eq!((j.get("neg").unwrap().as_u64(), j.get("b").unwrap().as_bool(), j.get("n").unwrap().as_u64()), (None, Some(false), Some(3)));
+        assert_eq!(Json::Null.get("x"), None);
+        assert_eq!(j.get("missing"), None);
+    }
+
+    #[test]
+    fn json_parser_escapes_and_errors() {
+        let u = |hex: &str| format!("{}u{}", '\\', hex);
+        let doc = format!("\"a\\\"\\\\\\/\\b\\f\\n\\r\\t{}{}{}\"", u("0041"), u("d83d"), u("de00"));
+        assert_eq!(parse_json(&doc), Some(Json::Str("a\"\\/\u{8}\u{c}\n\r\tA\u{1f600}".into())));
+        assert_eq!(parse_json("{}"), Some(Json::Obj(vec![])));
+        assert_eq!(parse_json("[]"), Some(Json::Arr(vec![])));
+        assert_eq!(parse_json(" false "), Some(Json::Bool(false)));
+        assert_eq!(parse_json("-1.5e2"), Some(Json::Num(-150.0)));
+        let deep = format!("{}1{}", "[".repeat(70), "]".repeat(70));
+        assert_eq!(parse_json(&deep), None);
+        let ok_deep = format!("{}1{}", "[".repeat(60), "]".repeat(60));
+        assert!(parse_json(&ok_deep).is_some());
+        let bad_escape = format!("\"{}\"", u("12"));
+        for bad in ["", "{", "{\"a\"}", "{\"a\":1 \"b\":2}", "[1 2]", "[1,", "\"abc", "\"\\q\"", &bad_escape, "tru", "x", "{1:2}", "-", "1e"] {
+            assert_eq!(parse_json(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn file_sink_writes_and_reader_skips_garbage() {
+        let dir = std::env::temp_dir().join(format!("bh_trace_sink_{}", std::process::id()));
+        let path = dir.join("nested/t.jsonl");
+        let sink = TraceSink::create(&path, "lbl").unwrap();
+        sink.record(Dir::Tx, "A", 7, 1, false, &[0x23, 1]);
+        sink.mark("join", "approved");
+        assert!(sink.records().is_empty());
+        let rel = TraceSink::create(Path::new("bh-trace-relative.jsonl"), "x");
+        std::fs::remove_file("bh-trace-relative.jsonl").unwrap();
+        rel.unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.starts_with("{\"meta\":{\"label\":\"lbl\"") && text.contains("{\"mark\":\"join\",\"outcome\":\"approved\"}"));
+        let mut extra = text;
+        extra.push_str("\n   \nnot json\n{\"seq\":1}\n{\"seq\":2,\"dir\":\"sideways\",\"hex\":\"00\"}\n{\"seq\":3,\"dir\":\"rx\",\"hex\":\"zz\"}\n{\"seq\":4,\"dir\":\"rx\",\"hex\":\"05\"}\n");
+        std::fs::write(&path, extra).unwrap();
+        let back = read_trace(&path).unwrap();
+        assert_eq!(back.len(), 2);
+        assert_eq!((back[0].dir, back[0].channel, back[0].reliable, back[0].client.as_str()), (Dir::Tx, 1, false, "A"));
+        assert_eq!((back[1].seq, back[1].reliable, back[1].t_ms, back[1].ty), (4, true, 0, 5));
+        assert!(read_trace(&dir.join("missing")).is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(TraceSink::create(Path::new("/nonexistent-bh-root/x/t.jsonl"), "x").is_err());
+        assert!(TraceSink::create(Path::new("/"), "x").is_err());
+        // a full disk shows up when the meta line is written or flushed
+        assert!(TraceSink::create(Path::new("/dev/full"), &"l".repeat(20_000)).is_err());
+        assert!(TraceSink::create(Path::new("/dev/full"), "x").is_err());
+    }
 }

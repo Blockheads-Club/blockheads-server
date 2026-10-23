@@ -188,8 +188,55 @@ pub fn decode_block_not_loaded(payload: &[u8]) -> Option<(u64, u32)> {
     Some((r.u64()?, r.u32()?))
 }
 
-#[allow(unused)]
-fn _uses() {
-    let _ = codec::split_type;
-    let _ = ClientMacroBlockRequest::SIZE;
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn packet(entries: Vec<(&str, PV)>) -> Vec<u8> {
+        let mut m: GsDict<String, PV> = GsDict::new();
+        for (k, v) in entries {
+            m.insert(k.to_string(), v);
+        }
+        let mut payload = 5u32.to_le_bytes().to_vec();
+        payload.extend(plist_xml(&PV::dict(m)).unwrap());
+        payload
+    }
+
+    #[test]
+    fn extra_data_and_blobs() {
+        let with = ExtraData { hash: "h".into(), receipts: Some(vec![3]) };
+        assert!(with.to_plist().object_for_key("receipts").is_some());
+        let without = ExtraData { hash: "h".into(), receipts: None };
+        assert!(without.to_plist().object_for_key("receipts").is_none());
+        let light = [1u8; LIGHT_LEN];
+        assert_eq!(light_blob(&light, &without).unwrap().len() > LIGHT_LEN, true);
+        let blob = tiles_blob(&[2u8; TILES_LEN], 3, 0x01020304);
+        assert_eq!((blob.len(), blob[TILES_LEN], blob[TILES_LEN + 1]), (TILES_BLOB_LEN, 3, 4));
+        assert_eq!(block_removal_notification(7), vec![t::CLIENT_BLOCK_REMOVAL_NOTIFICATION, 7, 0, 0, 0]);
+        assert_eq!(decode_block_not_loaded(&[1, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0]), Some((1, 2)));
+        assert_eq!(decode_block_not_loaded(&[1, 2, 3]), None);
+    }
+
+    #[test]
+    fn bad_block_payloads_are_rejected() {
+        let good_t = gz(&tiles_blob(&[0u8; TILES_LEN], 1, 1));
+        assert_eq!(decode_server_block(&[1, 2]).map(|b| b.macro_index), None);
+        assert!(decode_server_block(&[1, 0, 0, 0, b'x']).is_none());
+        // no "t", "t" of the wrong kind, a "t" that is not gzip, a "t" of the wrong length
+        assert!(decode_server_block(&packet(vec![("x", PV::int(1))])).is_none());
+        assert!(decode_server_block(&packet(vec![("t", PV::int(1))])).is_none());
+        assert!(decode_server_block(&packet(vec![("t", PV::data(vec![1, 2, 3]))])).is_none());
+        assert!(decode_server_block(&packet(vec![("t", PV::data(gz(b"short")))])).is_none());
+        // an "r" that is not gzip, one that is too short, one of the wrong kind
+        let t = || ("t", PV::data(good_t.clone()));
+        assert!(decode_server_block(&packet(vec![t(), ("r", PV::data(vec![9, 9]))])).is_none());
+        assert!(decode_server_block(&packet(vec![t(), ("r", PV::data(gz(b"tiny")))])).is_none());
+        assert!(decode_server_block(&packet(vec![t(), ("r", PV::int(4))])).unwrap().extra.is_none());
+        // light blocks
+        assert!(decode_light_block(&[1]).is_none());
+        assert!(decode_light_block(&[1, 0, 0, 0, 1, 2, 3]).is_none());
+        let mut short = 1u32.to_le_bytes().to_vec();
+        short.extend(gz(b"too short for a light block"));
+        assert!(decode_light_block(&short).is_none());
+    }
 }

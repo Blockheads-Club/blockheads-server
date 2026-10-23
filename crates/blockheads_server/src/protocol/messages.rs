@@ -361,9 +361,8 @@ pub fn electricity_path(size: u16, path: &[ElectricityPathIndex]) -> Option<Vec<
         p.append_to(&mut raw);
     }
     let z = gz(&raw);
-    if !raw.is_empty() && z.is_empty() {
-        return None;
-    }
+    // `gzipDeflate` yields nothing only when zlib fails
+    Some(()).filter(|_| raw.is_empty() || !z.is_empty())?;
     let hdr = ElectricityHeader { size, path_count, padding: [0; 4] };
     let mut v = struct_packet(t::ELECTRICITY_PATH, &hdr);
     v.extend_from_slice(&z);
@@ -785,17 +784,6 @@ mod tests {
     use super::*;
     use crate::types::net_types::{NetDataType, ServerConnectionRejection as R};
 
-    fn vec_file(dir: &str, prefix: &str) -> Option<Vec<u8>> {
-        let d = crate::testenv::modules(&format!("protocol_vectors/{dir}"));
-        for e in std::fs::read_dir(d).ok()? {
-            let e = e.ok()?;
-            if e.file_name().to_string_lossy().starts_with(prefix) {
-                return std::fs::read(e.path()).ok();
-            }
-        }
-        None
-    }
-
     #[test]
     fn constants_match_types() {
         assert_eq!(t::WORLD_SUMMARY, NetDataType::BHNDT_WORLD_SUMMARY.as_byte());
@@ -917,9 +905,8 @@ mod tests {
         let mut p = vec![0x21];
         p.extend_from_slice(&7u64.to_le_bytes());
         p.extend_from_slice(b"xy");
-        let Some(ClientMsg::ClientBlockheadInventory { blockhead_id, data }) = decode_client_packet(&p).unwrap() else {
-            panic!()
-        };
+        let d = decode_client_packet(&p).unwrap();
+        let Some(ClientMsg::ClientBlockheadInventory { blockhead_id, data }) = d else { panic!() };
         assert_eq!((blockhead_id, data), (7, b"xy".to_vec()));
     }
 
@@ -931,10 +918,8 @@ mod tests {
         let d = decode_batch(&b).unwrap().unwrap();
         assert_eq!(d, Batch { kind: 7, object_type: 14, items: items.clone() });
         let c = encode_client_batch(ClientBatchKind::Remove, 3, &items).unwrap();
-        let Some(ClientMsg::ObjectRemove { ty: 3, items: Some(PV::Array(a)) }) = decode_client_packet(&c).unwrap()
-        else {
-            panic!()
-        };
+        let d = decode_client_packet(&c).unwrap();
+        let Some(ClientMsg::ObjectRemove { ty: 3, items: Some(PV::Array(a)) }) = d else { panic!() };
         assert_eq!(a.items.len(), 2);
         assert_eq!(blob_unique_id(&items[0]), Some(0x0807060504030201));
     }
@@ -963,102 +948,281 @@ mod tests {
         assert_eq!(block_hash("f5d1278e8109edd94e1e4197e04873b9", 0, 0, false), "1128c17e53085db291e4b0d5393d0420");
     }
 
-    #[test]
-    fn vectors_static() {
-        let Some(v) = vec_file("solo", "000_t23") else { return };
-        assert_eq!(initial_contact(None, false, "e98c5bee38be74e00ad7748a3dd42119"), v);
-        let v = vec_file("solo", "009_t27").unwrap();
-        assert_eq!(block_not_loaded(1), v);
-        let v = vec_file("solo", "012_t27").unwrap();
-        assert_eq!(block_not_loaded(100000), v);
-        let v = vec_file("solo", "006_t17").unwrap();
-        let hb: WorldHeartbeat = decode_or0(&v[1..]);
-        assert_eq!(heartbeat(&hb), v);
-        let v = vec_file("solo", "004_t1e").unwrap();
-        assert_eq!(player_list(&[]), v);
-        let v = vec_file("solo", "010_t36").unwrap();
-        assert_eq!(welcome_message(None, None), v);
-        let v = vec_file("solo", "005_t0f").unwrap();
-        let ServerMsg::UniqueId(id) = decode_server_packet(&v).unwrap() else { panic!() };
-        assert_eq!(unique_id_reply(id), v);
-        let v = vec_file("two_clients", "013_t13").unwrap();
-        let ServerMsg::PickupReply { accepted, requester, ids } = decode_server_packet(&v).unwrap() else { panic!() };
-        let mine = pickup_reply(accepted, requester, &ids);
-        assert_eq!(mine[..2], v[..2]);
-        assert_eq!(mine[8..], v[8..]);
-        // 0x3c: 1 entry
-        let v = vec_file("solo", "011_t3c").unwrap();
-        let ServerMsg::OwnershipSignPlayerList(Some(l)) = decode_server_packet(&v).unwrap() else { panic!() };
-        assert_eq!(ownership_sign_player_list(&l), v);
-        // 0x1e with entry
-        let v = vec_file("two_clients", "001_t1e").unwrap();
-        let ServerMsg::PlayerList(Some(l)) = decode_server_packet(&v).unwrap() else { panic!() };
-        assert_eq!(xml_packet(t::SERVER_PLAYER_LIST_CHANGED_NOTIFICATION, &l), v);
-        // 0x24 relay
-        let v = vec_file("two_clients", "B_003").unwrap();
-        let ServerMsg::Chat(Some(l)) = decode_server_packet(&v).unwrap() else { panic!() };
-        assert_eq!(chat_message(&l), v);
+    fn dict_of(pairs: Vec<(&str, PV)>) -> PV {
+        dict(pairs)
     }
 
     #[test]
-    fn vectors_gz() {
-        let Some(v) = vec_file("solo", "001_t01") else { return };
-        let ServerMsg::Summary(Some(d)) = decode_server_packet(&v).unwrap() else { panic!() };
-        let s = WorldSummary {
-            random_seed: 1792191220,
-            world_time: 2700.0,
-            no_rain_timer: 0.0,
-            credit: 0.0,
-            start_portal_x: 6837,
-            start_portal_y: 533,
-            highest_point_x: 14428,
-            highest_point_y: 782,
-            portal_level: 0,
-            world_width_macro: 512,
-            save_id: "e98c5bee38be74e00ad7748a3dd42119".into(),
-            world_name: "PROTO".into(),
-            expert_mode: false,
+    fn server_packets_round_trip_through_the_decoder() {
+        let sm = |p: Vec<u8>| decode_server_packet(&p).unwrap();
+        let ServerMsg::Contact { version, plist } = sm(initial_contact(Some("Owner"), true, "w1")) else { panic!() };
+        let plist = plist.unwrap();
+        assert_eq!(version, PROTOCOL_VERSION);
+        assert_eq!(plist.object_for_key("ownerName").unwrap().as_str(), Some("Owner"));
+        assert!(plist.object_for_key("requiresPassword").is_some());
+        let ServerMsg::Rejection { reason, extra } = sm(rejection(11)) else { panic!() };
+        assert_eq!((reason, extra.is_none()), (11, true));
+        let ServerMsg::Rejection { reason, extra } = sm(rejection_no_credit("w", "World")) else { panic!() };
+        assert_eq!((reason, extra.unwrap().object_for_key("worldName").unwrap().as_str()), (13, Some("World")));
+        let entries = [
+            PlayerListEntry {
+                alias: "A".into(),
+                photo: Some(vec![1, 2]),
+                player_id: "pa".into(),
+                connected: true,
+                modk: Some("owner"),
+                supermod: Some("mode1"),
+            },
+            PlayerListEntry {
+                alias: "B".into(),
+                photo: None,
+                player_id: "pb".into(),
+                connected: false,
+                modk: None,
+                supermod: None,
+            },
+        ];
+        let ServerMsg::PlayerList(Some(PV::Array(l))) = sm(player_list(&entries)) else { panic!() };
+        assert_eq!(l.items.len(), 2);
+        assert_eq!(l.items[0].object_for_key("supermod").unwrap().as_str(), Some("mode1"));
+        assert!(l.items[1].object_for_key("photo").is_none());
+        let chat = server_chat_dict("hi", "Al", "p1", 5.0);
+        let ServerMsg::Chat(Some(c)) = sm(chat_message(&chat)) else { panic!() };
+        assert_eq!(c.object_for_key("message").unwrap().as_str(), Some("hi"));
+        let ServerMsg::ChatHistory(Some(h)) = sm(chat_history(&PV::array(vec![]), &[chat.clone()])) else { panic!() };
+        assert!(h.object_for_key("messages").is_some());
+        assert!(matches!(sm(admin_or_mod_changed(1, 0)), ServerMsg::AdminOrModChanged { x: 1, y: 0 }));
+        assert!(matches!(sm(clear_chat()), ServerMsg::ClearChat));
+        assert!(matches!(sm(toggle_repair_mode(true)), ServerMsg::ToggleRepairMode(true)));
+        assert!(matches!(sm(toggle_repair_mode(false)), ServerMsg::ToggleRepairMode(false)));
+        let summary = world_summary(&WorldSummary {
+            owner: true,
+            privacy: Some(2),
+            server_password: Some("pw".into()),
+            admin: true,
+            moderator: true,
+            supermod: Some(1),
+            disable_pvp: true,
+            world_price_multipliers: Some(PV::array(vec![])),
+            welcome_message: Some("hello".into()),
+            ownership_sign_positions: Some(PV::array(vec![])),
+            custom_rules: Some(dict_of(vec![])),
             ..Default::default()
+        });
+        let ServerMsg::Summary(Some(s)) = sm(summary) else { panic!() };
+        assert!(WorldSummary::default().to_plist().object_for_key("owner").is_none());
+        let no_pw = WorldSummary { owner: true, privacy: Some(1), ..Default::default() }.to_plist();
+        assert!(no_pw.object_for_key("privacy").is_some() && no_pw.object_for_key("serverPassword").is_none());
+        for k in [
+            "owner",
+            "privacy",
+            "serverPassword",
+            "admin",
+            "mod",
+            "supermod",
+            "disablePvp",
+            "worldPriceMultipliers",
+            "welcomeMessage",
+            "ownershipSignPositions",
+            "customRules",
+        ] {
+            assert!(s.object_for_key(k).is_some(), "{k}");
+        }
+        let bare = WorldSummary { owner: true, ..Default::default() }.to_plist();
+        assert!(bare.object_for_key("privacy").is_none() && bare.object_for_key("minorVersion").is_some());
+        let mut food = [0i32; 31];
+        food[3] = 9;
+        let ServerMsg::InitialData { food_types, plist } =
+            sm(initial_data_reply(&food, Some(b"<?xml version=\"1.0\"?><plist><dict/></plist>")))
+        else {
+            panic!()
         };
-        assert_eq!(plist_xml(&d), plist_xml(&s.to_plist()));
-        assert_eq!(world_summary(&s), v);
-        // 0x28
-        let v = vec_file("solo", "002_t28").unwrap();
-        let m = decode_light_block(&v[1..]).unwrap();
-        let light: [u8; LIGHT_LEN] = m.light.clone().try_into().unwrap();
-        assert_eq!(light_block(m.macro_index as i32, &light, m.update_index), v);
-        // 0x2f empty
-        let d = PV::dict(GsDict::new());
-        let p = price_offsets(&d);
-        assert_eq!(p.len(), 163); // observed 163 bytes
-                                  // 0x04 captures
-        for (dir, pre) in
-            [("solo", "007_t04"), ("solo", "008_t04"), ("two_clients", "015_t04"), ("two_clients", "004_t04")]
-        {
-            let v = vec_file(dir, pre).unwrap();
-            let b = decode_server_block(&v[1..]).unwrap();
-            let tiles: [u8; TILES_LEN] = b.tiles.clone().try_into().unwrap();
-            let light: [u8; LIGHT_LEN] = b.light.clone().try_into().unwrap();
-            let extra = b.extra.as_ref().unwrap();
-            let receipts = match extra.object_for_key("receipts") {
-                Some(PV::Array(a)) => Some(a.items.iter().map(|x| x.unsigned_int_value()).collect()),
-                _ => None,
-            };
-            let ex = ExtraData { hash: extra.object_for_key("hash").unwrap().as_str().unwrap().to_string(), receipts };
-            let mine =
-                server_block_from_parts(b.macro_index, &tiles, b.version, b.update_index, Some((&light, &ex))).unwrap();
-            assert_eq!(mine, v, "{pre}");
+        assert_eq!((food_types[3], plist.is_some()), (9, true));
+        assert!(matches!(sm(initial_data_reply(&food, None)), ServerMsg::InitialData { plist: None, .. }));
+        assert!(matches!(sm(unique_id_reply(77)), ServerMsg::UniqueId(77)));
+        let ServerMsg::PickupReply { accepted, requester, ids } = sm(pickup_reply(true, 5, &[1, 2])) else { panic!() };
+        assert_eq!((accepted, requester, ids), (true, 5, vec![1, 2]));
+        assert!(matches!(sm(zoom_response(Some((3, 4)))), ServerMsg::ZoomResponse(Some((3, 4)))));
+        assert!(matches!(sm(zoom_response(None)), ServerMsg::ZoomResponse(None)));
+        let ServerMsg::Welcome(Some(w)) = sm(welcome_message(Some(&PV::string("hi")), Some(&dict_of(vec![])))) else {
+            panic!()
+        };
+        assert!(w.object_for_key("welcomeMessage").is_some() && w.object_for_key("customRules").is_some());
+        assert!(matches!(sm(welcome_message(None, None)), ServerMsg::Welcome(Some(_))));
+        let list = PV::array(vec![dict_of(vec![("name", PV::string("n")), ("id", PV::string("i"))])]);
+        assert!(matches!(sm(ownership_sign_player_list(&list)), ServerMsg::OwnershipSignPlayerList(Some(_))));
+        assert!(matches!(
+            sm(ownership_sign_modified(&dict_of(vec![("k", PV::int(1))]))),
+            ServerMsg::OwnershipSignModified(Some(_))
+        ));
+        assert!(matches!(sm(price_offsets(&dict_of(vec![]))), ServerMsg::PriceOffsets(Some(_))));
+        let ServerMsg::PortalChestAck { raw8, id } = sm(portal_chest_ack(0x0102)) else { panic!() };
+        assert_eq!((id, raw8[0]), (0x0102, 2));
+        let ServerMsg::PortalChestAck { id, .. } = sm(portal_chest_ack_resend(&[7, 0, 1, 2, 3, 4, 5, 6])) else {
+            panic!()
+        };
+        assert_eq!(id, 7);
+        let ServerMsg::PortalChestNotSaved { raw8, id } = sm(portal_chest_not_saved(&[9, 1, 0, 0, 0, 0, 0, 0])) else {
+            panic!()
+        };
+        assert_eq!((id, raw8[1]), (0x0109, 1));
+        let ServerMsg::PortalChestAck { id, .. } = sm(vec![t::SERVER_PORTAL_CHEST_ACK, 5]) else { panic!() };
+        assert_eq!(id, 5);
+        let ServerMsg::PaintingData { id, image } = sm(painting_data(3, &[1, 2, 3])) else { panic!() };
+        assert_eq!((id, image), (3, vec![1, 2, 3]));
+        let ServerMsg::ChestInventory { id, inventory } = sm(chest_inventory(4, Some(&[5]))) else { panic!() };
+        assert_eq!((id, inventory), (4, vec![5]));
+        let ServerMsg::ChestInventory { inventory, .. } = sm(chest_inventory(4, None)) else { panic!() };
+        assert!(inventory.is_empty());
+        let ServerMsg::Heartbeat(hb) = sm(heartbeat(&WorldHeartbeat::default())) else { panic!() };
+        assert_eq!(hb.to_vec().len(), 16);
+        assert!(matches!(sm(gather_notification(&GatherNetRequest::default())), ServerMsg::Gather(_)));
+        assert!(matches!(sm(projectile(&ProjectileNetRequest::default())), ServerMsg::Projectile(_)));
+        assert!(matches!(sm(blockhead_damage(&BlockheadDamageNetRequest::default())), ServerMsg::Damage(_)));
+        let ServerMsg::Tip(text) = sm(tip("hint")) else { panic!() };
+        assert_eq!(text, "hint");
+        // block messages
+        let tiles = [3u8; TILES_LEN];
+        let light = [4u8; LIGHT_LEN];
+        let extra = ExtraData { hash: "h".into(), receipts: Some(vec![1, 2]) };
+        let pk = server_block_from_parts(9, &tiles, 2, 5, Some((&light, &extra))).unwrap();
+        let ServerMsg::Block(b) = sm(pk) else { panic!() };
+        assert_eq!((b.macro_index, b.version, b.update_index, b.light[0]), (9, 2, 5, 4));
+        let pk = server_block_from_parts(9, &tiles, 2, 5, None).unwrap();
+        let ServerMsg::Block(b) = sm(pk) else { panic!() };
+        assert!(b.extra.is_none() && b.light.iter().all(|x| *x == 0));
+        assert!(matches!(sm(block_not_loaded(5)), ServerMsg::BlockNotLoaded { index: 5, index32: 5 }));
+        let ServerMsg::LightBlock(lb) = sm(light_block(7, &light, 3)) else { panic!() };
+        assert_eq!((lb.macro_index, lb.update_index), (7, 3));
+        let batch = encode_batch(BatchKind::Update, 4, &[vec![1; 9]]).unwrap();
+        assert!(matches!(sm(batch), ServerMsg::Batch(_)));
+        // malformed forms fall back to Unknown, empty packets are ignored, short structs are zero filled
+        assert!(matches!(sm(vec![t::SERVER_BLOCK, 1, 2]), ServerMsg::Unknown { .. }));
+        assert!(matches!(sm(vec![t::SERVER_BLOCK_NOT_LOADED, 1]), ServerMsg::Unknown { .. }));
+        assert!(matches!(sm(vec![t::SERVER_LIGHT_BLOCK, 1, 2, 3, 4, 9]), ServerMsg::Unknown { .. }));
+        assert!(matches!(sm(vec![t::SERVER_DYNAMIC_OBJECT_CREATE, 1, 2, 3]), ServerMsg::Unknown { .. }));
+        assert!(matches!(sm(vec![0xee, 1]), ServerMsg::Unknown { ty: 0xee, .. }));
+        assert!(matches!(decode_server_packet(&[]), Err(Malformed::Ignore)));
+        assert!(decode_server_packet(&[t::SERVER_DYNAMIC_OBJECT_CREATE]).is_err());
+        let ServerMsg::PickupReply { ids, .. } = sm(vec![t::SERVER_PICKUP_REPLY]) else { panic!() };
+        assert!(ids.is_empty());
+        assert!(electricity_path(1, &[ElectricityPathIndex::default()]).is_some());
+    }
+
+    #[test]
+    fn client_packets_round_trip_through_the_decoder() {
+        let cm = |p: Vec<u8>| decode_client_packet(&p).unwrap().unwrap();
+        assert!(
+            matches!(cm(block_request(ClientMacroBlockRequest { macro_index: 4, ..Default::default() })), ClientMsg::BlockRequest(r) if r.macro_index == 4)
+        );
+        assert!(matches!(cm(block_removal_notification(9)), ClientMsg::BlockRemovalNotification { macro_index: 9 }));
+        for (ty, want) in [
+            (t::CLIENT_INITIAL_DATA_REQUEST, "InitialDataRequest"),
+            (t::CLIENT_UNIQUE_ID_REQUEST, "UniqueIdRequest"),
+            (t::CLIENT_WORLD_HEARTBEAT_REQUEST, "HeartbeatRequestOld"),
+            (t::CLIENT_WELCOME_MESSAGE_GET_REQUEST, "WelcomeMessageGet"),
+            (t::CLIENT_OWNERSHIP_SIGN_PLAYER_LIST_REQUEST, "OwnershipSignPlayerListRequest"),
+        ] {
+            assert_eq!(format!("{:?}", cm(vec![ty])), want);
         }
-        // 0x07 batches
-        for (pre, ty) in [("006_t07", 14u8), ("005_t07", 45), ("008_t07", 10)] {
-            let v = vec_file("two_clients", pre).unwrap();
-            let b = decode_batch(&v).unwrap().unwrap();
-            assert_eq!(b.object_type, ty);
-            assert_eq!(encode_batch(BatchKind::Create, ty, &b.items).unwrap(), v, "{pre}");
+        for ty in [
+            t::CLIENT_DYNAMIC_OBJECT_CREATE,
+            t::CLIENT_DYNAMIC_OBJECT_UPDATE,
+            t::CLIENT_DYNAMIC_OBJECT_REMOVE,
+            t::CLIENT_DYNAMIC_OBJECT_CREATION_DATA_UPDATE,
+        ] {
+            let m = cm(client_gz_plist(ty, &PV::array(vec![]))
+                .into_iter()
+                .take(1)
+                .chain([6])
+                .chain(crate::protocol::codec::gz(b"x"))
+                .collect());
+            assert!(format!("{m:?}").contains("ty: 6"));
         }
-        // 0x01 for second client, 0x2f roundtrip
-        let v = vec_file("two_clients", "B_001_t01").unwrap();
-        let ServerMsg::Summary(Some(d)) = decode_server_packet(&v).unwrap() else { panic!() };
-        assert_eq!(gz_packet(t::WORLD_SUMMARY, &d), v);
+        for ty in [
+            t::CLIENT_FILL_REQUEST,
+            t::CLIENT_REMOVE_REQUEST,
+            t::CLIENT_REMOVE_BACK_WALL_REQUEST,
+            t::CLIENT_FREEBLOCK_CREATION_REQUEST,
+            t::CLIENT_PAINT_REQUEST,
+            t::CLIENT_BLOCKHEAD_DAMAGE_REQUEST,
+            t::CLIENT_BLOCKHEADS,
+            t::CLIENT_PLAYER_INFORMATION,
+            t::CLIENT_WORLD_HEARTBEAT_REQUEST_WITH_CUSTOM_RULES,
+            t::SERVER_WORLD_HEARTBEAT,
+            t::CLIENT_FOUND_ITEM_LIST_CHANGED_OLD,
+        ] {
+            let m = cm(vec![ty, 1, 2, 3]);
+            assert!(format!("{m:?}").contains("payload: [1, 2, 3]"), "{ty:#x}");
+        }
+        assert!(matches!(cm(vec![t::CLIENT_PLACE_WORKBENCH_REQUEST; 17]), ClientMsg::PlaceWorkbench { .. }));
+        assert!(matches!(
+            cm(vec![t::CLIENT_PLACE_INTERACTION_OBJECT_REQUEST; 9]),
+            ClientMsg::PlaceInteractionObject { .. }
+        ));
+        assert!(matches!(cm(vec![t::GATHER_NOTIFICATION, 1]), ClientMsg::Gather { .. }));
+        assert!(matches!(cm(vec![t::CLIENT_PROJECTILE_REQUEST, 1]), ClientMsg::Projectile { .. }));
+        assert!(matches!(cm(vec![t::TIP_NOTIFICATION, 1]), ClientMsg::Tip { .. }));
+        assert!(matches!(
+            cm(electricity_path(1, &[ElectricityPathIndex::default()]).unwrap()),
+            ClientMsg::ElectricityPath { .. }
+        ));
+        let ClientMsg::ZoomRequest { player_id, cycle_index } = cm(zoom_request("pid", 3)) else { panic!() };
+        assert_eq!((player_id.as_deref(), cycle_index), (Some("pid"), 3));
+        let d = dict_of(vec![("a", PV::int(1))]);
+        assert!(matches!(cm(client_chat(&d)), ClientMsg::Chat { dict: Some(_) }));
+        assert!(matches!(cm(client_player_information(&d)), ClientMsg::PlayerInformation { .. }));
+        assert!(matches!(cm(client_heartbeat(&WorldHeartbeat::default())), ClientMsg::Heartbeat { .. }));
+        assert!(
+            matches!(cm(client_xml_plist(t::CLIENT_PASSWORD_CHANGE_REQUEST, &dict_of(vec![("newServerPassword", PV::string("np"))]))), ClientMsg::PasswordChange { new_password: Some(ref p) } if p == "np")
+        );
+        assert!(matches!(
+            cm(vec![t::CLIENT_PASSWORD_CHANGE_REQUEST]),
+            ClientMsg::PasswordChange { new_password: None }
+        ));
+        assert!(matches!(
+            cm(client_xml_plist(t::CLIENT_PRIVACY_CHANGE_REQUEST, &dict_of(vec![("privacySetting", PV::string("2"))]))),
+            ClientMsg::PrivacyChange { privacy: Some(_) }
+        ));
+        assert!(matches!(cm(vec![t::CLIENT_PRIVACY_CHANGE_REQUEST]), ClientMsg::PrivacyChange { privacy: None }));
+        for (ty, want) in [
+            (t::CLIENT_TRADE_TRANSACTION, "TradeTransaction"),
+            (t::CLIENT_WELCOME_MESSAGE_SET_REQUEST, "WelcomeMessageSet"),
+            (t::CLIENT_REPORT_USER, "ReportUser"),
+            (t::CLIENT_UPDATE_CUSTOM_RULE, "UpdateCustomRule"),
+        ] {
+            assert!(format!("{:?}", cm(client_gz_plist(ty, &d))).starts_with(want), "{want}");
+        }
+        assert!(matches!(
+            cm(vec![t::CLIENT_REQUEST_PAINTING_DATA, 9, 0, 0, 0, 0, 0, 0, 0]),
+            ClientMsg::PaintingDataRequest { id: 9 }
+        ));
+        assert!(matches!(
+            cm(vec![t::CLIENT_PORTAL_CHEST_TRANSACTION, 3, 0, 0, 0, 0, 0, 0, 0]),
+            ClientMsg::PortalChestTransaction { id: 3, .. }
+        ));
+        assert!(matches!(
+            cm(vec![t::CLIENT_PORTAL_CHEST_TRANSACTION_RESEND, 4, 0, 0, 0, 0, 0, 0, 0]),
+            ClientMsg::PortalChestTransactionResend { id: 4, .. }
+        ));
+        let mut rm = vec![t::CLIENT_DYNAMIC_OBJECT_REMOVAL_REQUEST];
+        rm.extend_from_slice(&5u64.to_le_bytes());
+        rm.extend_from_slice(&6u64.to_le_bytes());
+        assert!(matches!(cm(rm), ClientMsg::DynamicObjectRemovalRequest { blockhead_id: 5, object_id: 6 }));
+        assert!(matches!(
+            cm(vec![t::CLIENT_REPAIR_TILE, 7, 0, 0, 0, 0, 0, 0, 0]),
+            ClientMsg::RepairTile { world_index: 7 }
+        ));
+        let fill = FillNetRequest::default();
+        assert!(fill_request(&fill, None).len() == 17 && fill_request(&fill, Some(&d)).len() > 17);
+        assert_eq!(client_struct(0x10, &fill).len(), 17);
+        assert!(decode_client_packet(&[]).unwrap().is_none());
+        assert_eq!(decode_strict::<FillNetRequest>(&[1]).map(|_| ()), None);
+        assert!(decode_strict::<FillNetRequest>(&[0; 16]).is_some());
+        assert!(decode_client_packet(&[t::CLIENT_PLACE_WORKBENCH_REQUEST, 1]).is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "messages_golden.rs"]
+mod golden;
