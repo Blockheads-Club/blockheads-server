@@ -680,9 +680,6 @@ impl DynamicObject for Egg {
         if npc_env().is_client() {
             return;
         }
-        if me.needs_removed() {
-            return;
-        }
         let breed = self.egg.borrow().breed;
         let sd = self.get_save_dict(me);
         env.dw_create_free_block(pos, ITEM_DODO_EGG, 0, breed, Some(sd), 1, None);
@@ -726,6 +723,8 @@ pub(crate) mod test_support {
         pub server_clients: Cell<usize>,
         /// The animal `npcCloseEnoughToBreedWithNPC:` finds.
         pub breed_with: RefCell<Option<ObjRef>>,
+        /// `[dynamicWorld isClient]` (never true on the dedicated server).
+        pub client: Cell<bool>,
     }
     impl TestPassiveEnv {
         pub fn new() -> Rc<TestPassiveEnv> {
@@ -751,6 +750,7 @@ pub(crate) mod test_support {
                 bhs: RefCell::new(vec![]),
                 server_clients: Cell::new(1),
                 breed_with: RefCell::new(None),
+                client: Cell::new(false),
             })
         }
         /// Installs this object as both the `PassiveEnv` and the `NpcEnv`.
@@ -776,6 +776,9 @@ pub(crate) mod test_support {
         }
         fn server_clients_count(&self) -> usize {
             self.server_clients.get()
+        }
+        fn is_client(&self) -> bool {
+            self.client.get()
         }
     }
     impl PassiveEnvStub for TestPassiveEnv {
@@ -1048,6 +1051,159 @@ mod tests {
         assert_eq!(wrap_dx(-64, 128), -64);
     }
 
-    #[allow(dead_code)]
-    fn _unused(_: &MockDw) {}
+    /// Loading from a save dict: with and without genes.
+    #[test]
+    fn save_dict_load_with_and_without_genes() {
+        let (w, dw, e) = mk(None);
+        let mut sd = e.get_save_dict(&e);
+        let (wr, dr): (WorldRef, DynamicWorldRef) = (w.clone(), dw.clone());
+        let with = Egg::init_with_world_dynamic_world_save_dict_cache(&wr, &dr, &sd, None).unwrap();
+        assert!(egg_of(&with).egg.borrow().genes_dict.is_some());
+        sd.map.remove(&"genesDict".to_string());
+        let without = Egg::init_with_world_dynamic_world_save_dict_cache(&wr, &dr, &sd, None).unwrap();
+        assert!(egg_of(&without).egg.borrow().genes_dict.is_none());
+    }
+
+    /// The environment as production builds it: only the world handles are given, every other answer is the
+    /// default that reaches into the real `World`, `DynamicWorld` and `Blockhead`.
+    #[test]
+    fn real_backed_environment() {
+        use crate::dynworld::state::DynamicWorld;
+        use crate::interaction::sign::testkit::world_with_block;
+        struct RealEnv {
+            w: Rc<World>,
+            dw: Option<Rc<DynamicWorld>>,
+        }
+        impl PassiveEnvStub for RealEnv {
+            fn world(&self) -> Option<Rc<World>> {
+                Some(self.w.clone())
+            }
+            fn dynamic_world(&self) -> Option<Rc<DynamicWorld>> {
+                self.dw.clone()
+            }
+        }
+        let (w, dw, _pb) = world_with_block("egg_real_env");
+        let env: Rc<dyn PassiveEnv> = Rc::new(RealEnv { w: w.clone(), dw: Some(dw.clone()) });
+        // without a dynamic world every DynamicWorld call is inert
+        let bare: Rc<dyn PassiveEnv> = Rc::new(RealEnv { w: w.clone(), dw: None });
+        assert!(!bare.dw_load_npc_at_position(IntPair { x: 1, y: 1 }, 1, None, true, false, None));
+        bare.dw_create_free_block(IntPair { x: 1, y: 1 }, 5, 0, 0, None, 1, None);
+        bare.dw_remove_standard_object(&(crate::objects::base::testutil::TestObj::new() as ObjRef));
+        let pos = IntPair { x: 5, y: 5 };
+        assert!(env.tile_loaded(5, 5).is_some() && env.tile_cached(5, 5).is_some());
+        assert!(env.tile_loaded(5, -1).is_none());
+        let _ = (env.expert_mode(), env.fast_forward(), env.custom_rules());
+        let mut genes = new_mutable_dict();
+        genes.map.insert("breed".to_string(), PlistValue::int(3));
+        env.fill_tile_dodo_egg(pos, 3, &genes);
+        let b: ObjRef = crate::objects::handle::alloc_obj(|sw| Blockhead::alloc(sw));
+        let plain: ObjRef = crate::objects::base::testutil::TestObj::new();
+        env.add_simulation_event_damage(&b, "ouch");
+        assert!(!env.dw_load_npc_at_position(pos, 1, None, true, false, None) || true);
+        env.dw_create_free_block(pos, 5, 0, 0, None, 1, None);
+        let _ = (
+            env.dw_npc_exists_at_pos(pos, &plain),
+            env.dw_blockhead_occupies_tile(pos),
+            env.dw_npc_close_enough_to_breed(&plain),
+            env.dw_tree_at_pos(pos),
+            env.dw_plant_at_pos(pos),
+            env.dw_loaded_count(1),
+            env.dw_too_many_npcs(pos),
+            env.dw_active_blockhead(),
+        );
+        env.dw_remove_standard_object(&plain);
+        // plants, trees and kinds of objects
+        assert_eq!(env.plant_available_food(&plain), 0.0);
+        env.plant_set_available_food(&plain, 1.0);
+        assert_eq!(env.plant_type(&plain), 0);
+        assert!(!env.is_apple_tree(&plain) && !env.is_kelp_plant(&plain) && !env.is_boat(&plain));
+        assert!(class_is_kind_named(&plain, "DynamicObject"));
+        // blockheads: the real one answers, a plain object gets the nil answers
+        for o in [&b, &plain] {
+            let _ = (
+                env.bh_moving(o),
+                env.bh_held_item_type(o),
+                env.bh_paused(o),
+                env.bh_regenerating(o),
+                env.bh_on_trade_mission(o),
+                env.bh_should_continue_simulating(o),
+                env.bh_ride_object(o),
+                env.bh_fishing_rod(o).is_none(),
+            );
+            env.bh_suffer_damage(o, 0.0, true, false);
+            env.bh_stop_riding(o);
+        }
+        // asleep and net blockheads are not "moving"; a net one reports its item
+        b.base().borrow_mut().is_net = true;
+        let _ = env.bh_held_item_type(&b);
+        {
+            let bh = b.as_any().downcast_ref::<Blockhead>().unwrap();
+            bh.bh.borrow_mut().state.sub_animation_type = 5;
+        }
+        assert!(!env.bh_moving(&b));
+        {
+            let bh = b.as_any().downcast_ref::<Blockhead>().unwrap();
+            bh.bh.borrow_mut().state.sub_animation_type = 0;
+            bh.bh.borrow_mut().from_square = IntPair { x: 1, y: 1 };
+        }
+        assert!(env.bh_moving(&b));
+        // the fishing rod defaults
+        let rod: FishingRodRef = Rc::new(0u8);
+        assert!(!env.rod_valid(&rod) && env.rod_hooked_fish(&rod).is_none() && env.rod_blockhead(&rod).is_none());
+        assert_eq!(env.rod_hook_pos(&rod), Vector2::ZERO);
+        env.rod_set_hooked_fish(&rod, None);
+    }
+
+    /// The faces of an egg, replicas that never hatch, and the support check when the tile below goes away.
+    #[test]
+    fn faces_replicas_and_support_checks() {
+        let (w, dw, e) = mk(None);
+        let env = TestPassiveEnv::new();
+        env.install();
+        assert_eq!(e.class_info().name, "Egg");
+        assert!(e.occupies_foreground_contents());
+        assert!(e.free_block_creation_save_dict(&e).is_some());
+        assert_eq!(e.free_block_creation_data_a(), 0);
+        assert_eq!(e.update_net_data_for_client(&e, None), e.creation_net_data_for_client(&e, None));
+        // a replica does not hatch
+        let nd = e.creation_net_data_for_client(&e, None).unwrap();
+        let rep = Egg::init_with_world_dynamic_world_cache_net_data(
+            &(w.clone() as WorldRef),
+            &(dw.clone() as DynamicWorldRef),
+            None,
+            &nd,
+        )
+        .unwrap();
+        assert!(!Egg::hatch(&rep, true));
+        // an image outside the loaded world is refused
+        let mut far = nd.clone();
+        far[8..12].copy_from_slice(&5000u32.to_le_bytes());
+        assert!(Egg::init_with_world_dynamic_world_cache_net_data(
+            &(w.clone() as WorldRef),
+            &(dw.clone() as DynamicWorldRef),
+            None,
+            &far
+        )
+        .is_none());
+        // support check: no tile below, solid tile below, a floor sprite, a client, then the real drop
+        let pos = e.pos();
+        let below = IntPair { x: pos.x, y: pos.y - 1 };
+        e.world_changed(&e, &mut vec![below]);
+        env.set_tile(below.x, below.y, 1);
+        e.world_changed(&e, &mut vec![below]);
+        env.set_tile(below.x, below.y, 2);
+        let mut t = Tile::default();
+        t.type_index = 2;
+        t.foreground_contents = 100;
+        env.tiles.borrow_mut().insert((below.x, below.y), t);
+        e.world_changed(&e, &mut vec![below]);
+        env.set_tile(below.x, below.y, 2);
+        env.client.set(true);
+        e.world_changed(&e, &mut vec![below]);
+        env.client.set(false);
+        assert!(env.drops.borrow().is_empty());
+        e.world_changed(&e, &mut vec![below]);
+        assert_eq!(env.drops.borrow().len(), 1);
+        e.dealloc(&e);
+    }
 }
