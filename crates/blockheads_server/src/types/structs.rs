@@ -226,6 +226,23 @@ mod hand_tests {
         assert_eq!(Vector::new3(0.0, 0.0, 0.0).normal().v, [0.0, 0.0, 0.0, 1.0]);
     }
     #[test]
+    fn vector_wire_and_lanes() {
+        let v2 = Vector2::new(1.5, -2.0);
+        assert_eq!(v2.to_vec(), [0, 0, 0xc0, 0x3f, 0, 0, 0, 0xc0]);
+        assert_eq!(Vector2::read_le(&v2.to_vec()), v2);
+        assert_eq!(Vector2::from_slice(&[0; 7]), None);
+        assert_eq!(Vector2::from_slice(&v2.to_vec()), Some(v2));
+        let a = Vector::new4(1.0, 2.0, 3.0, 4.0);
+        let b = Vector::new4(2.0, 2.0, 2.0, 2.0);
+        assert_eq!(a.mul_vec(b).v, [2.0, 4.0, 6.0, 8.0]);
+        assert_eq!(a.mul_f(0.5).v, [0.5, 1.0, 1.5, 2.0]);
+        assert_eq!(a.add(b).v, [3.0, 4.0, 5.0, 6.0]);
+        assert_eq!(a.sub(b).v, [-1.0, 0.0, 1.0, 2.0]);
+        assert_eq!(a.length_squared(), 14.0);
+        assert_eq!(Vector::read_le(&a.to_vec()), a);
+        assert_eq!(a.to_vec().len(), 16);
+    }
+    #[test]
     fn blockheadstate_blob() {
         let mut s = BlockheadState::default();
         s.health = 1.0;

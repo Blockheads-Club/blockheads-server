@@ -113,20 +113,8 @@ mod tests {
         assert_eq!(format!("{:?}", TileType::TILE_AIR), "TILE_AIR");
     }
 
-    /// Every `| `NAME` | value |` row of (non-ENet/MDB) must exist with same value
-    /// somewhere in the generated sources.
-    #[test]
-    fn enums_md_rows_present() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let md = crate::testenv::private_docs().join("enums.md");
-        if !md.exists() {
-            return;
-        }
-        let text = std::fs::read_to_string(md).unwrap();
-        let src: String = ["enums.rs", "item_type.rs", "net_types.rs"]
-            .iter()
-            .map(|f| std::fs::read_to_string(root.join("src/types").join(f)).unwrap())
-            .collect();
+    /// Checks every row of an enums.md-style table against the generated sources; returns (found, missing).
+    fn check_enum_rows(text: &str, src: &str) -> (usize, usize) {
         let (mut found, mut missing) = (0, 0);
         for l in text.lines() {
             let c: Vec<&str> = l.split('|').map(|s| s.trim()).collect();
@@ -144,10 +132,51 @@ mod tests {
                 missing += 1;
             }
         }
-        assert!(found > 400, "found {found} missing {missing}");
+        (found, missing)
     }
 
-    ///  s3/s4 spot values consumed by other modules.
+    #[test]
+    fn enums_md_rows_checker() {
+        let src = "    pub const TILE_AIR: TileType = TileType(2);\n";
+        let text = "| Name | Value | Note |\n|---|---|---|\n| `TILE_AIR` | 2 | x |\n| `NO_SUCH` | 7 | x |\n| `TILE_ROCK` | n/a | x |\n| short |\n";
+        assert_eq!(check_enum_rows(text, src), (1, 1));
+        let bad = std::panic::catch_unwind(|| check_enum_rows("| `TILE_AIR` | 3 | y |\n", src));
+        assert!(bad.is_err());
+    }
+
+    /// `check_enum_rows` over an enums.md file against the three generated sources.
+    fn check_enum_file(md: &std::path::Path) -> (usize, usize) {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let text = std::fs::read_to_string(md).unwrap();
+        let src: String = ["enums.rs", "item_type.rs", "net_types.rs"]
+            .iter()
+            .map(|f| std::fs::read_to_string(root.join("src/types").join(f)).unwrap())
+            .collect();
+        check_enum_rows(&text, &src)
+    }
+
+    fn assert_rows_present(md: &std::path::Path, min_found: usize) {
+        let (found, missing) = check_enum_file(md);
+        assert!(found >= min_found, "found {found} missing {missing}");
+    }
+
+    #[test]
+    fn enums_md_file_checker() {
+        let md = std::env::temp_dir().join(format!("bh-enums-{}.md", std::process::id()));
+        std::fs::write(&md, "| `TILE_AIR` | 2 | x |\n| `NO_SUCH_TILE` | 7 | x |\n").unwrap();
+        assert_eq!(check_enum_file(&md), (1, 1));
+        assert_rows_present(&md, 1);
+        std::fs::remove_file(&md).unwrap();
+    }
+
+    /// Every `| `NAME` | value |` row of (non-ENet/MDB) must exist with same value
+    /// somewhere in the generated sources (skipped without the private docs).
+    #[test]
+    fn enums_md_rows_present() {
+        let md = crate::testenv::private_docs().join("enums.md");
+        Some(md).filter(|m| m.exists()).iter().for_each(|m| assert_rows_present(m, 401));
+    }
+
     #[test]
     fn cross_module_spot_values() {
         assert_eq!(NPCType::NPC_SCORPION.raw(), 7);
@@ -201,5 +230,65 @@ mod tests {
         assert_eq!(ServerConnectionRejection::SERVER_CONNECTION_REJECTION_NO_CREDIT.as_byte(), 13);
         assert_eq!(ServerConnectionRejection::SERVER_CONNECTION_REJECTION_KICKED.as_byte(), 11);
         assert_eq!(ServerConnectionRejection::SERVER_CONNECTION_REJECTION_BANNED.as_byte(), 12);
+    }
+
+    /// Calls the generated accessors of every enum wrapper on each declared value and on one undeclared value, so the
+    /// layout tables are exercised end to end. The declared values are read back out of the generated sources.
+    fn into_raw<T: Into<R>, R>(t: T, _like: R) -> R {
+        t.into()
+    }
+
+    macro_rules! sweep {
+        ($($t:ident),* $(,)?) => {
+            &[$((stringify!($t), (|v: i64| {
+                let t = $t(v as _);
+                let raw = t.raw();
+                assert_eq!($t::from_raw(raw), t);
+                assert_eq!($t::from(raw), t);
+                assert_eq!(into_raw(t, raw), raw);
+                assert_eq!(format!("{t:?}"), t.name().map_or_else(|| format!("{}({})", stringify!($t), t.0), str::to_string));
+                t.name().is_some()
+            }) as fn(i64) -> bool)),*]
+        };
+    }
+
+    #[test]
+    fn generated_accessors_sweep() {
+        let table: &[(&str, fn(i64) -> bool)] = sweep![
+            LightDirectionType, ListType, BlockheadAnimationType, BlockheadSubAnimationType, BlockheadUnableToWorkReason,
+            ActionFoundType, CaveTrollAnimationType, CaveTrollSubAnimationType, ChestType, ColumnConfiguration,
+            DodoBreed, DonkeyBreed, DynamicObjectType, TileType, TileContents,
+            ImageType, TileTraverseType, TileTraverseKeyFrameType, SimulationEvent, HideUIType,
+            InteractionType, PathType, CustomRuleSeed, CustomRuleOceans, CustomRuleTemperature,
+            CustomRuleRainfall, CustomRulePlants, CustomRuleTrees, CustomRuleTerrain, CustomRuleCaves,
+            CustomRuleLakes, CustomRuleSkyIslands, CustomRuleOre, CustomRuleOreDistribution, CustomRuleGems,
+            CustomRuleTreasure, CustomRuleHealth, CustomRuleHunger, CustomRuleHappiness, CustomRuleTradePortal,
+            CustomRuleNpc, CustomRuleClothingDecay, CustomRuleToolDecay, CustomRuleDeath, CustomRuleDeathDrops,
+            CustomRuleDayNight, CustomRuleWorldModification, CustomRulePoleItems, CustomRuleTeleportation, CustomRuleTradePortalPrices,
+            CustomRuleTradePortalDiscovered, CustomRuleMeditation, CustomRuleCategory, InteractionObjectType, FoodType,
+            WorkbenchType, ItemCategoryType, NPCType, NetNPCTameType, SendState,
+            NetNPCInteractionType, PigmentColor, ParticleGravityType, PlantType, RailConfiguration,
+            BlockRequestType, SignConnectionType, SignOffsetType, StairsConfiguration, TipType,
+            TreeType, Vec2Axis, WireConfiguration, WireSolidConfiguration, IslandType,
+            ItemType, BhPlayerState, BhMatchSendData, BhNetPrivacy, NetDataType, ServerConnectionRejection,
+            BhNetNodeType,
+        ];
+        let mut seen = 0;
+        for src in [include_str!("enums.rs"), include_str!("net_types.rs"), include_str!("item_type.rs")] {
+            // rustfmt wraps declarations with long type names after the `=`
+            for line in src.replace(" =\n        ", " = ").lines() {
+                let Some((_, rest)) = line.trim().split_once(": ") else { continue };
+                let Some((ty, val)) = rest.split_once(" = ") else { continue };
+                let Some(arg) = val.strip_prefix(ty).and_then(|v| v.strip_prefix('(')).and_then(|v| v.strip_suffix(");")) else { continue };
+                let v: i64 = arg.parse().unwrap();
+                let (_, f) = table.iter().find(|(n, _)| *n == ty).unwrap_or_else(|| panic!("{ty} missing from the sweep"));
+                assert!(f(v), "{ty}({v}) has no name");
+                seen += 1;
+            }
+        }
+        assert!(seen > 1500);
+        for (n, f) in table {
+            assert!(!f(0x7fff_fff3), "{n} names a bogus value");
+        }
     }
 }

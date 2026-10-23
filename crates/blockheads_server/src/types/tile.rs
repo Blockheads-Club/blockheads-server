@@ -55,6 +55,16 @@ pub fn parse_block_plain(b: &[u8]) -> Option<(Vec<Tile>, u8, u32)> {
 mod hand_tests {
     use super::*;
     #[test]
+    fn block_helpers() {
+        assert_eq!(local_tile_index(5, 2), 69);
+        assert!(tiles_from_bytes(&[0; 100]).is_none());
+        assert!(parse_block_plain(&[0; 100]).is_none());
+        let blob = vec![0u8; BLOCK_BLOB_LEN];
+        let (tiles, ver, upd) = parse_block_plain(&blob).unwrap();
+        assert_eq!((tiles.len(), ver, upd), (BLOCK_TILES, 0, 0));
+        assert_eq!(tiles_to_bytes(&tiles).len(), BLOCK_TILES * TILE_SIZE);
+    }
+    #[test]
     fn tile_field_offsets_in_bytes() {
         let mut t = Tile::default();
         t.type_index = 25;
