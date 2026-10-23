@@ -156,9 +156,9 @@ impl FireObject {
         let me_obj: ObjRef = me.clone();
         let wref: WorldRef = world.clone();
         let dref: DynamicWorldRef = dw.clone();
-        if !base_init_with_world_dynamic_world_at_position_cache(&me_obj, &wref, &dref, pos, cache.clone()) {
-            return None;
-        }
+        // the base initialiser always succeeds when the position is given
+        let inited = base_init_with_world_dynamic_world_at_position_cache(&me_obj, &wref, &dref, pos, cache.clone());
+        debug_assert!(inited);
         {
             let mut st = me.st.borrow_mut();
             st.burn_timer = r01_tagged("fire::burn") * 5.0f32 + 10.0f32;
@@ -198,9 +198,9 @@ impl FireObject {
         let me_obj: ObjRef = me.clone();
         let wref: WorldRef = world.clone();
         let dref: DynamicWorldRef = dw.clone();
-        if !base_init_with_world_dynamic_world_save_dict_cache(&me_obj, &wref, &dref, save_dict, cache.clone()) {
-            return None;
-        }
+        let inited =
+            base_init_with_world_dynamic_world_save_dict_cache(&me_obj, &wref, &dref, save_dict, cache.clone());
+        debug_assert!(inited);
         let fv = |k: &str| save_dict.map.get(&k.to_string()).map_or(0.0f32, |v| v.float_value());
         {
             let mut st = me.st.borrow_mut();
@@ -539,5 +539,196 @@ mod tests {
         let o = FireObject::new(&w, &dw, IntPair { x: 30, y: 6 }, None).unwrap();
         o.remove_from_macro_block(&o);
         assert_eq!(tile(&w, 30, 6).on_fire(), 0);
+    }
+
+    use crate::objects::base::DynamicObjectBase;
+    use crate::objects::handle::alloc_obj;
+    use crate::objects::interaction_object::{InteractionObjectLike, InteractionObjectState};
+    use crate::objects::type_tables::DYNAMIC_OBJECT_TYPE_BED;
+
+    /// An interaction object of type 3 that records its removal.
+    struct BedStub {
+        base: RefCell<DynamicObjectBase>,
+        io: RefCell<InteractionObjectState>,
+        removed: std::cell::Cell<u32>,
+        destroy_item: i32,
+    }
+    impl DynamicObject for BedStub {
+        fn base(&self) -> &RefCell<DynamicObjectBase> {
+            &self.base
+        }
+        fn class_info(&self) -> &'static ClassInfo {
+            &crate::objects::class_info::INTERACTION_OBJECT_CLASS
+        }
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn object_type(&self) -> i32 {
+            DYNAMIC_OBJECT_TYPE_BED
+        }
+        fn as_interaction_object(&self) -> Option<&RefCell<InteractionObjectState>> {
+            Some(&self.io)
+        }
+        fn as_interaction_like(&self) -> Option<&dyn InteractionObjectLike> {
+            Some(self)
+        }
+    }
+    impl InteractionObjectLike for BedStub {
+        fn io_state(&self) -> &RefCell<InteractionObjectState> {
+            &self.io
+        }
+        fn interaction_object_type(&self) -> u16 {
+            3
+        }
+        fn destroy_item_type(&self) -> i32 {
+            self.destroy_item
+        }
+        fn remove(&self, _me: &ObjRef, _b: Option<&ObjRef>) {
+            self.removed.set(self.removed.get() + 1);
+        }
+    }
+    fn bed_at(dw: &Rc<DynamicWorld>, x: i32, y: i32, destroy_item: i32) -> Rc<BedStub> {
+        let b = alloc_obj(|w| BedStub {
+            base: RefCell::new(DynamicObjectBase::alloc_zeroed_with(w)),
+            io: RefCell::new(InteractionObjectState::default()),
+            removed: std::cell::Cell::new(0),
+            destroy_item,
+        });
+        b.base.borrow_mut().pos = IntPair { x, y };
+        let o: ObjRef = b.clone();
+        dw.by_pos_set(DYNAMIC_OBJECT_TYPE_BED, dw.world_index(IntPair { x, y }), &o);
+        b
+    }
+
+    /// A bed burns whatever the tile under it is, and is removed when the fire goes out on its tile.
+    #[test]
+    fn beds_burn_and_are_removed() {
+        let (w, dw, _r) = flat("fire_bed", 5);
+        let bed = bed_at(&dw, 40, 6, 169);
+        let o = FireObject::new(&w, &dw, IntPair { x: 40, y: 6 }, None).unwrap();
+        o.update_accurate_dt_is_simulation(&o, 0.01, 0.01, false);
+        assert!(!o.needs_removed(), "the bed keeps the fire alive over an air tile");
+        tile(&w, 40, 6).set_contents(CONTENTS_INTERACTION_OBJECT);
+        o.remove_from_macro_block(&o);
+        assert_eq!(bed.removed.get(), 1);
+        // a gold bed is spared
+        let gold = bed_at(&dw, 44, 6, ITEM_GOLD_BED);
+        tile(&w, 44, 6).set_contents(CONTENTS_INTERACTION_OBJECT);
+        struct GoldHooks;
+        impl crate::dynworld::state::DwHooksStub for GoldHooks {
+            fn item_type(&self, _o: &ObjRef) -> i32 {
+                ITEM_GOLD_BED
+            }
+        }
+        dw.set_hooks(Rc::new(GoldHooks));
+        let o2 = FireObject::new(&w, &dw, IntPair { x: 44, y: 6 }, None).unwrap();
+        o2.update_accurate_dt_is_simulation(&o2, 0.01, 0.01, false);
+        assert!(o2.needs_removed(), "a gold bed does not feed the fire");
+        o2.remove_from_macro_block(&o2);
+        assert_eq!(gold.removed.get(), 0);
+    }
+
+    /// Odd leftovers on the tile: other foreground contents, a flagged tile without its object, an object that
+    /// is no InteractionObject.
+    #[test]
+    fn odd_tiles_under_a_fire() {
+        let (w, dw, _r) = flat("fire_odd", 5);
+        tile(&w, 80, 6).set_foreground_contents(0x10);
+        let o = FireObject::new(&w, &dw, IntPair { x: 80, y: 6 }, None).unwrap();
+        o.remove_from_macro_block(&o);
+        // the interaction-object flag without an object behind it
+        tile(&w, 84, 6).set_contents(CONTENTS_INTERACTION_OBJECT);
+        let o2 = FireObject::new(&w, &dw, IntPair { x: 84, y: 6 }, None).unwrap();
+        o2.remove_from_macro_block(&o2);
+        // something in the bed slot that is not an interaction object
+        let odd: ObjRef = crate::objects::base::testutil::TestObj::new();
+        odd.base().borrow_mut().pos = IntPair { x: 88, y: 6 };
+        dw.by_pos_set(DYNAMIC_OBJECT_TYPE_BED, dw.world_index(IntPair { x: 88, y: 6 }), &odd);
+        tile(&w, 88, 6).set_contents(CONTENTS_INTERACTION_OBJECT);
+        let o3 = FireObject::new(&w, &dw, IntPair { x: 88, y: 6 }, None).unwrap();
+        o3.update_accurate_dt_is_simulation(&o3, 0.01, 0.01, false);
+        assert!(o3.needs_removed(), "no bed, no fuel");
+        o3.remove_from_macro_block(&o3);
+    }
+
+    /// Putting a fire out takes the ladder and the plant on its tile with it (the plant through the seam).
+    #[test]
+    fn ladders_and_plants_go_with_the_fire() {
+        let (w, dw, _r) = flat("fire_stuff", 5);
+        tile(&w, 50, 6).set_foreground_contents(CONTENTS_LADDER);
+        let o = FireObject::new(&w, &dw, IntPair { x: 50, y: 6 }, None).unwrap();
+        o.remove_from_macro_block(&o);
+        // a plant: the seam receives it
+        struct Host(RefCell<u32>);
+        impl FireHost for Host {
+            fn remove_plant_without_creating_freeblocks(&self, _plant: &ObjRef) {
+                *self.0.borrow_mut() += 1;
+            }
+        }
+        let host = Rc::new(Host(RefCell::new(0)));
+        set_fire_host(host.clone());
+        tile(&w, 54, 6).set_foreground_contents(0x43);
+        let plant: ObjRef = crate::objects::base::testutil::TestObj::new();
+        plant.base().borrow_mut().pos = IntPair { x: 54, y: 6 };
+        dw.do_set(10, 77, plant.clone());
+        let o2 = FireObject::new(&w, &dw, IntPair { x: 54, y: 6 }, None).unwrap();
+        o2.remove_from_macro_block(&o2);
+        assert_eq!(*host.0.borrow(), 1);
+        // a plant tile whose plant is gone only loses the fire
+        tile(&w, 58, 6).set_foreground_contents(0x43);
+        let o3 = FireObject::new(&w, &dw, IntPair { x: 58, y: 6 }, None).unwrap();
+        o3.remove_from_macro_block(&o3);
+        assert_eq!(*host.0.borrow(), 1);
+        set_fire_host(Rc::new(NullFireHost));
+    }
+
+    /// Expired spread timers set the neighbours alight, unless they already burn or cannot burn.
+    #[test]
+    fn spreading_to_neighbours() {
+        crate::objects::registry::install();
+        let (w, dw, _r) = flat("fire_spread", 5);
+        for x in [19, 21] {
+            tile(&w, x, 6).update(|t| t.type_index = 9);
+        }
+        tile(&w, 20, 6).update(|t| t.type_index = 9);
+        tile(&w, 20, 7).update(|t| t.type_index = 9);
+        tile(&w, 19, 6).update(|t| t.on_fire = 1);
+        let o = FireObject::new(&w, &dw, IntPair { x: 20, y: 6 }, None).unwrap();
+        fire(&o).st.borrow_mut().spread_timers = [0.01, 0.01, 0.01, 0.01];
+        o.update_accurate_dt_is_simulation(&o, 0.2, 0.2, false);
+        assert!(!o.needs_removed());
+        // the right neighbour caught fire; the burning left one and the ground below did not start another
+        assert_eq!(tile(&w, 21, 6).on_fire(), 1);
+        // a fire at the very top row looks at tiles that are not loaded
+        tile(&w, 60, 31).update(|t| t.type_index = 9);
+        let top = FireObject::new(&w, &dw, IntPair { x: 60, y: 31 }, None).unwrap();
+        fire(&top).st.borrow_mut().spread_timers = [0.01, 100.0, 100.0, 100.0];
+        top.update_accurate_dt_is_simulation(&top, 0.2, 0.2, false);
+        assert!(!top.needs_removed());
+    }
+
+    /// Faces: class, teardown with its light, light bookkeeping hooks and the net image of an unloaded tile.
+    #[test]
+    fn faces_and_teardown() {
+        let (w, dw, _r) = flat("fire_faces", 5);
+        let o = FireObject::new(&w, &dw, IntPair { x: 70, y: 6 }, None).unwrap();
+        assert_eq!(o.class_info().name, "FireObject");
+        o.world_changed(&o, &mut vec![IntPair { x: 70, y: 6 }]);
+        o.add_artificial_light_contribution_for_physical_block_loaded_at_x_pos_y_pos(&o, 2, 0);
+        o.set_needs_removed(&o, false);
+        assert!(!o.needs_removed());
+        // a save dict without a light builds a fire with a fresh (empty) light dictionary
+        let mut d = o.get_save_dict(&o);
+        d.map.remove(&"lightDict".to_string());
+        let again = FireObject::from_save_dict(&w, &dw, &d, None).unwrap();
+        assert_eq!(fire(&again).st.borrow().burn_timer, fire(&o).st.borrow().burn_timer);
+        o.dealloc(&o);
+        assert!(fire(&o).st.borrow().light.is_none());
+        o.dealloc(&o);
+        o.world_changed(&o, &mut vec![]);
+        o.add_artificial_light_contribution_for_physical_block_loaded_at_x_pos_y_pos(&o, 2, 0);
+        // an image at a tile whose block is not loaded is refused
+        let nd = crate::types::netdata::DynamicObjectNetData::new(9, 70, 400, false);
+        assert!(FireObject::from_net_data(&w, &dw, None, &nd.to_vec()).is_none());
     }
 }
