@@ -150,13 +150,13 @@ pub fn parse_command_line(argv: Vec<Vec<u8>>) -> Parsed {
                 nslog!("{}", help_text());
                 return Parsed::ExitZero;
             }
-            b'?' => {
+            // `?` (the only other value `Getopt` returns): the option error, with the per-option message.
+            _ => {
                 if let Some(t) = missing_arg_text(g.optopt()) {
                     nslog!("{}", t);
                 }
                 return Parsed::ExitZero;
             }
-            _ => {}
         }
     }
     if a.rename_from.is_some() && a.rename_to.is_none() {
@@ -278,5 +278,84 @@ mod tests {
     fn defaults() {
         let a = CliArgs::default();
         assert_eq!((a.save_delay, a.credit, a.max_players), (10, -1, 0));
+    }
+
+    fn parse(args: &[&str]) -> Parsed {
+        let mut argv = vec![b"bh".to_vec()];
+        argv.extend(args.iter().map(|a| a.as_bytes().to_vec()));
+        parse_command_line(argv)
+    }
+
+    fn run(args: &[&str]) -> CliArgs {
+        let Parsed::Run(a) = parse(args) else { panic!("expected a run for {args:?}") };
+        a
+    }
+
+    fn exits(args: &[&str]) -> bool {
+        matches!(parse(args), Parsed::ExitZero)
+    }
+
+    /// Every option fills its own field; non-numeric values parse like `intValue`.
+    #[test]
+    fn every_option_fills_its_field() {
+        let f = '\u{FFFD}';
+        let d = ns_string_from_utf8_lossy_gnustep;
+        assert_eq!(d(b"\xe0\xa0\x80\xf1\x80\x80\x80"), "\u{800}\u{40000}");
+        assert_eq!(d(b"\xe0\x80\x80"), format!("{f}{f}{f}"));
+        assert_eq!(d(b"\xf4\x8f\xbf\xbf"), "\u{10FFFF}");
+        let a = run(&[
+            "-n", "world", "-o", "old", "-p", "15152", "-m", "12", "-t", "to", "-r", "from", "-d", "gone", "-f", "-l",
+            "-e", "-N", "-V", "-s", "5", "-w", "4", "-i", "wid", "-c", "99", "-k", "salt", "-u", "Boss", "-P",
+            "Public", "-C", "{}",
+        ]);
+        assert_eq!(a.new_name.as_deref(), Some("world"));
+        assert_eq!(a.load_name.as_deref(), Some("old"));
+        assert_eq!(a.port.as_deref(), Some("15152"));
+        assert_eq!(a.max_players, 12);
+        assert_eq!((a.rename_to.as_deref(), a.rename_from.as_deref()), (Some("to"), Some("from")));
+        assert_eq!(a.delete_world_name.as_deref(), Some("gone"));
+        assert!(a.force_delete && a.list_worlds && a.expert_mode && a.no_exit && a.convert_to_custom_rules);
+        assert_eq!((a.save_delay, a.credit), (5, 99));
+        assert_eq!(a.width_multiplier_string.as_deref(), Some("4"));
+        assert_eq!(a.world_id.as_deref(), Some("wid"));
+        assert_eq!((a.cloud_salt.as_deref(), a.owner_name.as_deref()), (Some("salt"), Some("Boss")));
+        assert_eq!((a.privacy.as_deref(), a.custom_rules_json.as_deref()), (Some("Public"), Some("{}")));
+        assert_eq!(run(&[]), CliArgs::default());
+        assert_eq!(run(&["--new", "w", "--world_width", "1/16"]).width_multiplier_string.as_deref(), Some("1/16"));
+    }
+
+    #[test]
+    fn help_and_option_errors_exit_cleanly() {
+        assert!(exits(&["-h"]));
+        assert!(exits(&["--nosuch"]));
+        assert!(exits(&["-n"])); // missing argument: the per-option message
+        assert!(exits(&["-d"])); // `d` has no message
+    }
+
+    #[test]
+    fn validation_failures_exit_cleanly() {
+        assert!(exits(&["-r", "from"]));
+        assert!(exits(&["-w", "4"]));
+        assert!(exits(&["-C", "{}"]));
+        assert!(exits(&["-n", "w", "-w", "3"]));
+        assert!(exits(&["-P", "friends"]));
+        for p in ["PUBLIC", "Searchable", "private"] {
+            assert!(!exits(&["-P", p]));
+        }
+        for w in ["1/16", "116", "1/4", "104", "4", "4x", "16", "16x", "1", "1x"] {
+            assert!(!exits(&["-n", "w", "-w", w]), "{w}");
+        }
+    }
+
+    #[test]
+    fn width_multiplier_maps_names() {
+        let mut a = CliArgs::default();
+        assert_eq!(width_multiplier(&a), None);
+        for (s, m) in [("1/16", 116), ("104", 104), ("4x", 4), ("16", 16), ("1", 1)] {
+            a.width_multiplier_string = Some(s.into());
+            assert_eq!(width_multiplier(&a), Some(m));
+        }
+        a.width_multiplier_string = Some("7".into());
+        assert_eq!(width_multiplier(&a), None);
     }
 }

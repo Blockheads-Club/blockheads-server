@@ -54,5 +54,27 @@ mod tests {
         assert!(missing_arg_text(0).is_none());
         assert!(missing_arg_text(b'n' as i32).unwrap().starts_with("--new must"));
         assert!(missing_arg_text(b'C' as i32).is_some());
+        assert!(missing_arg_text(-1).is_none());
+        assert!(missing_arg_text(256).is_none());
+        // Every option with an argument except `d` has its own message naming the long option.
+        for (c, name) in [
+            (b'n', "new"),
+            (b'o', "load"),
+            (b'p', "port"),
+            (b'm', "max_players"),
+            (b'r', "rename-from"),
+            (b't', "rename-to"),
+            (b's', "save_delay"),
+            (b'w', "world_width"),
+            (b'i', "world_id"),
+            (b'u', "owner_name"),
+            (b'k', "cloud_salt"),
+            (b'c', "credit"),
+            (b'P', "privacy"),
+            (b'C', "custom-rules"),
+        ] {
+            let text = missing_arg_text(c as i32).unwrap();
+            assert!(text.starts_with(&format!("--{name} must be followed by")), "{name}");
+        }
     }
 }
