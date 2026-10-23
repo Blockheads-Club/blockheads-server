@@ -18,6 +18,15 @@ Branch `test/coverage-d` (worktree `server-wt/coverage-d`), based on origin/dev 
 - Test doubles shared by dynworld tests: `dynworld::state::testutil` (Sc, Srv, CountingOps, Hk, TObj/tobj, ModSpy,
   dw_served, plist_dict). Terrain env: `trees::tree::testenv::env(name)` (2 macro wide, dirt to y=9, air above).
 
-## Status
+## Status (update 2)
 - dynworld: all files 100 % lines (lib + other modules' lib tests; integration not counted).
-- Remaining (lib-only numbers, missed lines): see the final report of the run / rerun `python3 ~/.cache/bhcov/rep-d.py`.
+- plants: vine 3, kelp 5, normal_plant 5, tulip 14, plant.rs 33, simple_plants 3 missed (down from 290/212/113/110/123/11).
+  Remaining ones are mostly `}` of unreachable `if let` fall-throughs and unloaded-block edge cases.
+- Baseline (before this run, lib + integration, missed lines): load 344, tile_edit 303, vine 291, factories 266,
+  lookups 256, lifecycle 255, block_io 233, features 228, kelp 212, tree 190, artificial_light 178, tile_loader 164,
+  misc 159, update 157, plant 123, terrain 121, normal_plant 113, world/update 112, tulip 110, net_sync 108,
+  persistence 98, torch 90, crafting 84, gem 79, state 76, connections 73, ... total 5691 of 37141.
+- NOT started: trees/*, building/*, lighting/*, worldgen/*, world/* (the biggest: tile_edit, lifecycle, misc, update,
+  crafting, connections, state, simulation, db_convertor, loot, custom_rules, blocks).
+- Terrain helpers: `trees::tree::testenv::env(name)`; tile edits via `tile_at_world_position_loaded(x,y,&w).update(..)`;
+  unloaded blocks via `*w.macro_tiles().get(i).unwrap().physical_block.borrow_mut() = None`.
