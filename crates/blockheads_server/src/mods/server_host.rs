@@ -9,6 +9,7 @@ use std::rc::{Rc, Weak};
 use std::time::Instant;
 
 use bhmod_content::Kind;
+use bhmod_core::remote::{RemoteCall, RemoteError, RemoteTarget};
 use bhmod_core::storage::{KvBackend, StorageProvider};
 use bhmod_core::types::{
     ApiError, BreakLayer, ChannelSource, ChannelTarget, CommandSender, ContentKind, Event, EventKind, LogLevel,
@@ -18,7 +19,7 @@ use bhmod_core::{GameBridge, HostOptions, ModHost};
 use bhmod_manifest::content::SLOTS;
 use bhmod_wasm::{WasmConfig, WasmRuntime};
 
-use super::net::{pre_login_text, Link, ModNet};
+use super::net::{pre_login_text, Inbound, Link, ModNet};
 use super::{ChatVerdict, LoaderKey, ModHooks, Optional, LIMBO_GRACE};
 use crate::server::bhserver::BHServer;
 use crate::storage::lmdb::{Database, DatabaseEnvironment};
@@ -194,6 +195,12 @@ impl GameBridge for Bridge {
         let peers = one.map_or_else(|| net.approved_peers(&link), |p| vec![p]);
         net.send_channel(&link, &peers, name, data).map(|_| ())
     }
+    fn service_send(&self, call: &RemoteCall) -> Result<(), RemoteError> {
+        let (RemoteTarget::Player(peer), Some(s)) = (&call.target, self.srv.upgrade()) else {
+            return Err(RemoteError::Unavailable);
+        };
+        self.net.borrow().send_service_call(&SrvLink(&s), peer, call)
+    }
 }
 
 fn registry_kind(kind: ContentKind) -> Kind {
@@ -360,9 +367,31 @@ impl ModHooks for ServerMods {
         let Some(s) = self.srv.upgrade() else { return };
         let names = self.with(Vec::new(), |h| h.channel_names());
         let inbound = self.net.borrow_mut().packet(&SrvLink(&s), peer, data, &names);
-        if let Some((name, payload)) = inbound {
+        let from = RemoteTarget::Player(peer.to_string());
+        match inbound {
             // A full queue drops the message (the limits of bhmod-core channels apply).
-            self.with(false, |h| h.channel_receive(&name, ChannelSource::Player(peer.to_string()), payload));
+            Some(Inbound::Channel(name, payload)) => {
+                self.with(false, |h| h.channel_receive(&name, ChannelSource::Player(peer.to_string()), payload));
+            }
+            Some(Inbound::Call(c)) => {
+                // The caller must be a client mod the player runs (READY.loaded); what it may reach is decided by
+                // the provider's `remote = true` and the host's rate limit. The net state is not borrowed while
+                // the provider runs (it may send channel messages).
+                let runs = self.net.borrow().runs_mod(peer, &c.mod_id);
+                let outcome = if runs {
+                    self.with(Err(RemoteError::Busy), |h| {
+                        h.remote_call_in(&from, &c.mod_id, &c.service, &c.version_req, &c.method, &c.args)
+                    })
+                } else {
+                    Err(RemoteError::NotPermitted)
+                };
+                self.net.borrow().send_service_result(&SrvLink(&s), peer, c.id, outcome);
+            }
+            Some(Inbound::Result(r)) => {
+                let outcome = r.outcome.map_err(RemoteError::from);
+                self.with(false, |h| h.remote_result(&from, r.id, outcome));
+            }
+            None => {}
         }
     }
     fn world_loaded(&self, world_name: &str, world_id: &str) {
@@ -472,6 +501,7 @@ pub(super) fn load(dir: &Path, save_id: Option<&str>, server: &Rc<BHServer>) -> 
     opts.budgets.soft *= scale;
     opts.budgets.hard *= scale;
     opts.budgets.step *= scale;
+    opts.remote = super::remote_limits();
     // WASM components; compiled code is cached in `<mods>/.cache` (hidden, so discovery skips it).
     let wasm = WasmConfig { cache_dir: Some(dir.join(".cache")), ..WasmConfig::default() };
     opts.runtimes.extend(WasmRuntime::new(wasm).ok().map(|rt| Box::new(rt) as _));
@@ -553,6 +583,19 @@ mod tests {
         assert!(b.is_builtin_command("help") && !b.is_builtin_command("hello"));
         assert_eq!(b.channel_send("m", "m:c", &ChannelTarget::AllPlayers, b"x"), Ok(()));
         assert!(b.channel_send("m", "m:c", &ChannelTarget::Server, b"x").is_err());
+        // Service calls need a server and a player.
+        let mut call = RemoteCall {
+            id: 1,
+            target: RemoteTarget::Player("p".into()),
+            mod_id: "m".into(),
+            service: "s".into(),
+            version_req: "*".into(),
+            method: "x".into(),
+            args: vec![0x80],
+        };
+        assert_eq!(b.service_send(&call), Err(RemoteError::Unavailable));
+        call.target = RemoteTarget::Server;
+        assert_eq!(b.service_send(&call), Err(RemoteError::Unavailable));
         GameBridge::log(&b, None, LogLevel::Debug, "hidden");
         GameBridge::log(&b, None, LogLevel::Info, "host line");
         GameBridge::log(&b, Some("m"), LogLevel::Warn, "mod warning");
@@ -575,6 +618,99 @@ mod tests {
         assert!(matches!(b.set_cosmetic("p", "cape", Some(1)), Err(ApiError::InvalidArgument(_))));
         assert_eq!(b.set_cosmetic("p", "hat", Some(1)), Err(ApiError::StaleHandle));
         assert!(b.cosmetics_of("p").is_empty());
+    }
+
+    /// A link that says nobody is in the game yet (so a `HELLO` is accepted) and swallows what is sent.
+    struct Waiting;
+
+    impl Link for Waiting {
+        fn send(&self, _: &str, _: Vec<u8>) {}
+        fn reject(&self, _: &str, _: u8) {}
+        fn approved(&self, _: &str) -> bool {
+            false
+        }
+        fn alive(&self, _: &str) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn service_calls_with_a_player_in_the_game() {
+        use bhmod_proto::{Hello, Message, Ready, ServiceCall, ServiceResult};
+        // The stand-in link: nobody is approved, everybody is alive, rejections are swallowed.
+        assert!(Waiting.alive("x") && !Waiting.approved("x"));
+        Waiting.reject("x", 3);
+        let h = Harness::new("m_svc_player");
+        let mods = installed(&h, false);
+        mods.0.world_loaded("World", "w");
+        let pid = h.join("Sam");
+        let bridge = Bridge { srv: Rc::downgrade(&h.srv), net: mods.0.net.clone() };
+        let call = RemoteCall {
+            id: 1,
+            target: RemoteTarget::Player(pid.clone()),
+            mod_id: "srv".into(),
+            service: "hud".into(),
+            version_req: "*".into(),
+            method: "title".into(),
+            args: vec![0x80],
+        };
+        // A player without the mod loader cannot be asked.
+        h.m.clear();
+        assert_eq!(bridge.service_send(&call), Err(RemoteError::Unavailable));
+        assert!(h.m.packets_to(&pid).is_empty());
+        // After the protocol started (before approval, as on the wire) the call goes out as SERVICE_CALL.
+        let hello = Message::Hello(Hello {
+            proto: 1,
+            loader: "0.1.0".into(),
+            platform: "pc-linux-x86_64".into(),
+            api: "0.3.1".into(),
+            runtimes: vec!["lua".into()],
+            cached: vec![],
+        });
+        mods.0.net.borrow_mut().packet(&Waiting, &pid, &hello.encode(), &[]);
+        assert_eq!(bridge.service_send(&call), Ok(()));
+        let sent = h.m.packets_to(&pid);
+        assert!(matches!(Message::decode(&sent[0]), Ok(Message::ServiceCall(c)) if c.id == 1 && c.service == "hud"));
+        // The player calls a service: nothing is provided here (NOT_FOUND); a caller mod the player did not load
+        // is refused first (NOT_PERMITTED); an answer to a call nobody made is dropped.
+        let answered = |h: &Harness, code: u8| {
+            matches!(
+                Message::decode(h.m.packets_to(&pid).last().unwrap()),
+                Ok(Message::ServiceResult(ServiceResult { outcome: Err(f), .. })) if f.code == code
+            )
+        };
+        let wire = |mod_id: &str| {
+            Message::ServiceCall(ServiceCall {
+                id: 9,
+                mod_id: mod_id.into(),
+                service: "prices".into(),
+                version_req: "*".into(),
+                method: "price".into(),
+                args: vec![0x80],
+            })
+            .encode()
+        };
+        h.m.clear();
+        mods.0.mod_packet(&pid, &wire("demo"));
+        assert!(answered(&h, bhmod_proto::service_error::NOT_FOUND));
+        // The cosmetics seam of the same bridge, for a player in the game, without content mods.
+        assert_eq!(bridge.set_cosmetic(&pid, "hat", None), Err(ApiError::Unsupported));
+        // While a mod call is running (the host is borrowed) the answer is BUSY.
+        {
+            let _running = mods.0.host.borrow_mut();
+            h.m.clear();
+            mods.0.mod_packet(&pid, &wire("demo"));
+            assert!(answered(&h, bhmod_proto::service_error::BUSY));
+        }
+        let ready = Message::Ready(Ready { accepted_hash: [0; 32], loaded: vec![] });
+        mods.0.net.borrow_mut().packet(&Waiting, &pid, &ready.encode(), &[]);
+        h.m.clear();
+        mods.0.mod_packet(&pid, &wire("demo"));
+        assert!(answered(&h, bhmod_proto::service_error::NOT_PERMITTED));
+        h.m.clear();
+        let stray = Message::ServiceResult(ServiceResult { id: 5, outcome: Ok(vec![0xf6]) });
+        mods.0.mod_packet(&pid, &stray.encode());
+        assert!(h.m.packets_to(&pid).is_empty());
     }
 
     #[test]

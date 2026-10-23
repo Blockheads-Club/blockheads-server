@@ -8,10 +8,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
+use bhmod_core::remote::{RemoteCall, RemoteError};
 use bhmod_core::types::ApiError;
 use bhmod_proto::{
     file_error, hex, Channel, ChannelInfo, ChannelRegister, Cosmetics, FileChunk, FileError, Hash, Message, ModList,
-    RejectText, ServerHello, CHUNK_SIZE, MAX_IN_FLIGHT, PROTO, REJECT_CLIENT_TOO_OLD,
+    RejectText, ServerHello, ServiceCall, ServiceFailure, ServiceResult, CHUNK_SIZE, MAX_IN_FLIGHT, PROTO,
+    REJECT_CLIENT_TOO_OLD,
 };
 
 use super::catalog::Catalog;
@@ -48,6 +50,17 @@ pub trait Link {
     fn approved(&self, peer: &str) -> bool;
     /// True while the peer is connected (approved or waiting for approval).
     fn alive(&self, peer: &str) -> bool;
+}
+
+/// What a 0xBC packet from a player asks the mods to do.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Inbound {
+    /// A channel message `(name, data)`.
+    Channel(String, Vec<u8>),
+    /// The player's client calls a service of a server mod.
+    Call(ServiceCall),
+    /// The player's client answers a call of a server mod.
+    Result(ServiceResult),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -299,6 +312,22 @@ impl ModNet {
         Ok(n)
     }
 
+    /// Sends a service call of a server mod to a modded peer in the game (`SERVICE_CALL`). `unavailable` for a peer
+    /// without the mod loader, one that is not in the game, or one that is gone.
+    pub fn send_service_call(&self, link: &dyn Link, peer: &str, call: &RemoteCall) -> Result<(), RemoteError> {
+        if !self.is_modded(peer) || !link.approved(peer) {
+            return Err(RemoteError::Unavailable);
+        }
+        link.send(peer, Message::ServiceCall(ServiceCall::from(call)).encode());
+        Ok(())
+    }
+
+    /// Answers a service call of a peer (`SERVICE_RESULT`).
+    pub fn send_service_result(&self, link: &dyn Link, peer: &str, id: u32, outcome: Result<Vec<u8>, RemoteError>) {
+        let outcome = outcome.map_err(|e| ServiceFailure::from(&e));
+        link.send(peer, Message::ServiceResult(ServiceResult { id, outcome }).encode());
+    }
+
     fn file_error(link: &dyn Link, peer: &str, sha256: Hash, code: u64) {
         link.send(peer, Message::FileError(FileError { sha256, code }).encode());
     }
@@ -344,9 +373,9 @@ impl ModNet {
         }
     }
 
-    /// Handles one 0xBC packet. `names`: the channels open now. Returns an inbound channel message `(name, data)`
-    /// for the mods.
-    pub fn packet(&mut self, link: &dyn Link, peer: &str, data: &[u8], names: &[String]) -> Option<(String, Vec<u8>)> {
+    /// Handles one 0xBC packet. `names`: the channels open now. Returns what the mods have to handle (a channel
+    /// message, a service call or a service answer), if anything.
+    pub fn packet(&mut self, link: &dyn Link, peer: &str, data: &[u8], names: &[String]) -> Option<Inbound> {
         let msg = match Message::decode(data) {
             Ok(m) => m,
             // Unknown ops are ignored; malformed packets are dropped.
@@ -405,10 +434,12 @@ impl ModNet {
                 p.transfer = None;
             }
             Message::Channel(c) if link.approved(peer) => {
-                return self.name_of(c.channel_id).map(|n| (n.to_string(), c.payload));
+                return self.name_of(c.channel_id).map(|n| Inbound::Channel(n.to_string(), c.payload));
             }
-            // Client CHANNEL_REGISTER (the server owns the id space), server-to-client ops, channel traffic before
-            // approval: ignored.
+            Message::ServiceCall(c) if link.approved(peer) => return Some(Inbound::Call(c)),
+            Message::ServiceResult(r) if link.approved(peer) => return Some(Inbound::Result(r)),
+            // Client CHANNEL_REGISTER (the server owns the id space), server-to-client ops, channel and service
+            // traffic before approval: ignored.
             _ => {}
         }
         None
