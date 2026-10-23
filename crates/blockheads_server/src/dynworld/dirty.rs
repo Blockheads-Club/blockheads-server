@@ -114,12 +114,11 @@ impl DynamicWorld {
     }
 
     /// `-exploreLightChangedAtMacroPos:clientLightBlockIndex:`. `idx` must be -1 or 0..31; out of range
-    /// is UB in the original (`debug_assert!`, then ignored).
+    /// is UB in the original (ignored).
     pub fn explore_light_changed_at_macro_pos_client_light_block_index(&self, macro_pos: IntPair, idx: i32) {
         if idx == -1 {
             self.light_changed_at_macro_pos_send_reliably(macro_pos, false);
         } else {
-            debug_assert!((0..32).contains(&idx), "clientLightBlockIndex out of range");
             if (0..32).contains(&idx) {
                 let mut lists = self.light_changed_send_unreliably_macro_positions_single_client.borrow_mut();
                 let list = &mut lists[idx as usize];
@@ -306,5 +305,37 @@ mod tests {
         assert!(d.active_blockhead().is_none());
         d.active_blockhead_index.set(1);
         assert_eq!(d.active_blockhead().unwrap().unique_id(), 2);
+    }
+
+    /// Out-of-range object types and light indices are ignored.
+    #[test]
+    fn out_of_range_arguments_are_ignored() {
+        let d = dw("dirty_range", 1);
+        d.dynamic_world_changed_at_pos_object_type(IntPair { x: 1, y: 1 }, 99);
+        d.dynamic_world_changed_at_pos_object_type(IntPair { x: 1, y: 1 }, -1);
+        d.explore_light_changed_at_macro_pos_client_light_block_index(IntPair { x: 1, y: 1 }, 40);
+        d.explore_light_changed_at_macro_pos_client_light_block_index(IntPair { x: 1, y: 1 }, 3);
+        d.explore_light_changed_at_macro_pos_client_light_block_index(IntPair { x: 1, y: 1 }, 3);
+        assert_eq!(d.light_changed_send_unreliably_macro_positions_single_client.borrow()[3].len(), 1);
+        assert!(d.dynamic_world_changed_macro_positions.borrow().iter().all(|v| v.is_empty()));
+    }
+
+    /// Mods hear about every tile change when they ask for it; repeated unreliable changes queue the macro once.
+    #[test]
+    fn mods_hear_tile_changes() {
+        use std::rc::Rc;
+        let (_w, d) = crate::trees::tree::testenv::env("dirty_mods");
+        let spy = Rc::new(ModSpy::default());
+        spy.wants_block_changed.set(true);
+        crate::mods::install(Some(spy.clone()));
+        let guard = crate::mods::act_as("alice");
+        d.world_changed_at_pos_send_reliably(IntPair { x: 3, y: 4 }, false);
+        d.world_changed_at_pos_send_reliably(IntPair { x: 3, y: 5 }, false);
+        drop(guard);
+        d.light_changed_at_macro_pos_send_reliably_send_at_all(IntPair { x: 0, y: 0 }, false, true);
+        d.light_changed_at_macro_pos_send_reliably_send_at_all(IntPair { x: 0, y: 0 }, false, true);
+        crate::mods::install(None);
+        assert_eq!(spy.log.borrow().len(), 2);
+        assert!(spy.log.borrow()[0].ends_with("Some(\"alice\"))"), "{:?}", spy.log.borrow());
     }
 }

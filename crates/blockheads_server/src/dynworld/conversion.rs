@@ -106,4 +106,27 @@ mod tests {
         assert!(std::path::Path::new(&format!("{base}5_6/dynamicWorld")).exists());
         assert!(d.conversion_snapshot.borrow().is_none());
     }
+
+    /// The pump gives up when the list or the queue is gone; removing from a missing list is harmless.
+    #[test]
+    fn pump_gives_up_without_work() {
+        let _cl = crate::foundation::clock::TEST_CLOCK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::foundation::clock::set_virtual(Some(2000.0));
+        let d = dw("conv_idle", 1);
+        d.main_thread_remove_dir_from_conversion_list("0_0");
+        assert!(d.version_one_to_two_conversion_list.borrow().is_none());
+        // a snapshot but no list: aborted
+        *d.conversion_snapshot.borrow_mut() = Some(VecDeque::new());
+        d.conversion_next_due.set(f64::MIN);
+        d.conversion_pump();
+        assert!(d.conversion_snapshot.borrow().is_none());
+        // a list but an exhausted snapshot: finished
+        let mut list = GsDict::new();
+        list.insert("1_1".to_string(), GsDict::new());
+        *d.version_one_to_two_conversion_list.borrow_mut() = Some(list);
+        *d.conversion_snapshot.borrow_mut() = Some(VecDeque::new());
+        d.conversion_pump();
+        assert!(d.conversion_snapshot.borrow().is_none());
+        crate::foundation::clock::set_virtual(None);
+    }
 }

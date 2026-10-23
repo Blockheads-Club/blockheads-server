@@ -1075,6 +1075,10 @@ pub(crate) mod testutil {
         pub item: Cell<i32>,
         /// Ids that `blockhead_with_id_including_net` knows.
         pub known_ids: RefCell<Vec<u64>>,
+        /// `blockhead_inventory_needs_saving` answer.
+        pub needs_saving: Cell<bool>,
+        /// Last id given to a free block built by `freeblock_from_position`.
+        pub free_next: Cell<u64>,
     }
     impl crate::dynworld::state::DwHooksStub for Hk {
         fn blockhead_with_id_including_net(&self, id: u64) -> Option<ObjRef> {
@@ -1103,6 +1107,13 @@ pub(crate) mod testutil {
         }
         fn item_type(&self, _o: &ObjRef) -> i32 {
             self.item.get()
+        }
+        fn freeblock_from_position(&self, init: FreeBlockInit<'_>) -> Option<ObjRef> {
+            self.free_next.set(self.free_next.get() + 1);
+            self.log.borrow_mut().push(format!("freeblock({})", init.item_type));
+            let o = tobj(14, self.free_next.get(), &self.log, None, None, None);
+            o.base().borrow_mut().pos = init.position;
+            Some(o)
         }
         fn blockhead_from_net_data(&self, net: &[u8]) -> Option<ObjRef> {
             if self.fail_blockhead.get() {
@@ -1148,7 +1159,7 @@ pub(crate) mod testutil {
             self.log.borrow_mut().push(format!("prep({})", b.unique_id()));
         }
         fn blockhead_inventory_needs_saving(&self, _b: &ObjRef) -> bool {
-            true
+            self.needs_saving.get()
         }
         fn blockhead_set_inventory_needs_saving(&self, b: &ObjRef, v: bool) {
             self.log.borrow_mut().push(format!("needs({},{})", b.unique_id(), v));
@@ -1242,6 +1253,8 @@ pub(crate) mod testutil {
             net_made: RefCell::new(vec![]),
             item: Cell::new(0),
             known_ids: RefCell::new(vec![]),
+            needs_saving: Cell::new(true),
+            free_next: Cell::new(9000),
         })
     }
 
@@ -1386,6 +1399,70 @@ pub(crate) mod testutil {
         (d, scs)
     }
 
+    /// A mod host that records what the server tells it and cancels on request.
+    #[derive(Default)]
+    pub struct ModSpy {
+        pub log: RefCell<Vec<String>>,
+        pub cancel: Cell<bool>,
+        pub wants_block_changed: Cell<bool>,
+    }
+    impl crate::mods::ModHooks for ModSpy {
+        fn player_join(&self, p: &str) {
+            self.log.borrow_mut().push(format!("join({p})"));
+        }
+        fn player_quit(&self, p: &str, kick: bool) {
+            self.log.borrow_mut().push(format!("quit({p},{kick})"));
+        }
+        fn chat(&self, _p: &str, _t: &str) -> crate::mods::ChatVerdict {
+            crate::mods::ChatVerdict::Keep
+        }
+        fn owns_command(&self, _l: &str) -> bool {
+            false
+        }
+        fn command(&self, _i: Option<&str>, _l: &str) -> bool {
+            false
+        }
+        fn tick(&self, _dt: f32) {}
+        fn poll(&self) {}
+        fn world_loaded(&self, _n: &str, _i: &str) {}
+        fn world_save(&self, _p: bool) {}
+        fn server_stop(&self) {}
+        fn wants(&self, what: crate::mods::Optional) -> bool {
+            what == crate::mods::Optional::BlockChanged && self.wants_block_changed.get()
+        }
+        fn mod_packet(&self, _p: &str, _d: &[u8]) {}
+        fn pre_login(&self, _p: &str, _i: &str, _a: &str, _l: Option<&crate::mods::LoaderKey>) -> Option<u8> {
+            None
+        }
+        fn limbo_join(&self, _p: &str, _i: &str, _l: Option<&crate::mods::LoaderKey>) -> bool {
+            false
+        }
+        fn limbo_packet(&self, _p: &str) -> bool {
+            false
+        }
+        fn limbo_gone(&self, _p: &str) {}
+        fn block_place(&self, p: &str, pos: IntPair, item: u32, a: u16, b: u16) -> bool {
+            self.log.borrow_mut().push(format!("place({p},{},{},{item},{a},{b})", pos.x, pos.y));
+            self.cancel.get()
+        }
+        fn block_break(&self, p: &str, pos: IntPair, back_wall: bool, tile: u32) -> bool {
+            self.log.borrow_mut().push(format!("break({p},{},{},{back_wall},{tile})", pos.x, pos.y));
+            self.cancel.get()
+        }
+        fn block_changed(&self, pos: IntPair, tile: u32, p: Option<&str>) {
+            self.log.borrow_mut().push(format!("changed({},{},{tile},{p:?})", pos.x, pos.y));
+        }
+        fn object_place(&self, p: &str, pos: IntPair, workbench: bool, item: u32) -> bool {
+            self.log.borrow_mut().push(format!("object({p},{},{},{workbench},{item})", pos.x, pos.y));
+            self.cancel.get()
+        }
+        fn damage(&self, _p: Option<&str>, _b: u64, amount: f32, _a: Option<&str>) -> Option<f32> {
+            Some(amount)
+        }
+        fn death(&self, _p: Option<&str>, _b: u64) {}
+        fn player_move(&self, _p: &str, _f: IntPair, _t: IntPair) {}
+    }
+
     /// A `World` with a given width in macro tiles.
     pub fn world(width_macro: i32) -> WorldRef {
         World::alloc(width_macro)
@@ -1500,6 +1577,180 @@ mod tests {
         d.free_blocks_erase(99, &a);
         d.free_blocks_erase(99, &b);
         assert!(d.free_blocks_by_position.borrow().is_empty());
+    }
+
+    /// Every default hook answers with the neutral value.
+    #[test]
+    fn null_hooks_answer_neutrally() {
+        let h: &dyn DwHooks = &NullHooks;
+        let log: Log = Rc::new(RefCell::new(vec![]));
+        let o = tobj(24, 1, &log, None, None, None);
+        let w = world(1);
+        let mt = w.macro_tiles().get(0).unwrap();
+        let pb = w.take_physical_block();
+        let tile = TileRef::new(pb, 0);
+        let pos = IntPair { x: 1, y: 2 };
+        let PlistValue::Dict(dict) = plist_dict(vec![]) else { unreachable!() };
+        assert!(!h.save_physical_block_for_macro_tile(&mt, true, false, false));
+        h.save_light_block_for_client_light_block_index(1, Some(pb), true);
+        h.fully_load_if_needed_around_pos(pos, 0, &o);
+        h.update_physical_block_to_latest_version(pb);
+        h.place_basic_portal_workbench(pos);
+        assert!(!h.tile_is_lit_for_client(None, pos, tile));
+        h.dynamic_world_changed_at_pos_object_type(pos, 3);
+        h.light_changed_at_macro_pos_send_reliably(pos, true);
+        assert!(h.blockhead_with_id_including_net(1).is_none());
+        h.blockhead_will_be_unloaded(&o);
+        assert_eq!(h.local_net_id().len(), 32);
+        h.check_and_restore_pole_items(0.1);
+        h.load_tree_at_position(pos, 1, 2, 3, true, 1.0);
+        h.load_plant_at_position(pos, 1, 2, 3, true);
+        h.load_npc_at_position(pos, 1, true, false);
+        h.add_torch_at_pos_of_type(pos, 17);
+        h.create_treasure_chest_or_troll_at_tile(tile, pos, true, true);
+        h.load_glow_block_if_needed_at_pos_tile(pos, tile);
+        h.load_surface_block_at_pos(pos);
+        h.load_snow_surface_block_at_pos_load_snow(pos, true);
+        assert!(h.workbench_at_pos(pos).is_none() && h.interaction_object_at_pos(pos).is_none());
+        assert!(h.object_at_pos_for_item('p', pos).is_none());
+        assert!(h.remove_door_at_pos(pos).is_none() && h.remove_window_at_pos(pos).is_none());
+        assert!(h.construct_from_save_dict(SaveLoadKind::Generic, 1, &dict, None).is_none());
+        assert!(h.construct_from_net_data(1, None, &[]).is_none());
+        assert_eq!((h.workbench_type(&o), h.workbench_level(&o)), (0, 0));
+        h.workbench_set_level_silently(&o, 2);
+        h.tree_update_all_owned_tiles_to_new_id_size(&o);
+        h.update_rain_dt(&o, 0.5, 0.1);
+        assert_eq!((h.item_type(&o), h.destroy_item_type(&o), h.chest_type(&o)), (0, 0, 0));
+        assert!(h.chest_inventory_data_allowing_empty(&o).is_none());
+        assert!(h.chest_save_dict_excluding_inventory(&o).is_none());
+        assert!(!h.freight_needs_chest_save(&o) && h.freight_chest_save_dict(&o).is_none());
+        h.freight_set_needs_chest_save(&o, true);
+        h.cleanup(&o);
+        assert!(h.freeblock_from_net_data(&[], None).is_none());
+        let init = FreeBlockInit {
+            position: pos,
+            item_type: 1,
+            data_a: 0,
+            data_b: 0,
+            sub_items: None,
+            dynamic_object_save_dict: None,
+            hovers: false,
+            priority_blockhead: None,
+        };
+        assert!(h.freeblock_from_position(init).is_none());
+        h.freeblock_set_creation_sound(&o, 0.0, 1);
+        assert!(h.blockhead_from_save_dict(&dict, None, false, None, None).is_none());
+        assert!(h.blockhead_from_net_data(&[]).is_none());
+        assert!(h.blockhead_client_id(&o).is_none() && h.blockhead_client_save_dir(&o).is_none());
+        h.blockhead_set_client_id(&o, "c");
+        h.blockhead_set_client_name(&o, None);
+        assert!(matches!(
+            h.blockhead_save_dict_including_workbench_or_interaction_object(&o, false),
+            PlistValue::Dict(_)
+        ));
+        assert!(matches!(h.blockhead_save_item_slots_array(&o), PlistValue::Array(_)));
+        h.blockhead_prepare_inventory_for_saving(&o);
+        assert!(!h.blockhead_inventory_needs_saving(&o));
+        h.blockhead_set_inventory_needs_saving(&o, true);
+        h.blockhead_inventory_was_changed(&o, 0, -1, false);
+        h.blockhead_stop_interacting_if_no_interaction_object(&o);
+        h.blockhead_stop_riding(&o);
+        h.blockhead_die(&o);
+    }
+
+    /// The save directory comes from the data directory when it is not overridden; `dealloc` unloads everything.
+    #[test]
+    fn default_save_directory_and_dealloc() {
+        let root = scratch("state_home");
+        crate::foundation::paths::set_data_dir_override(Some(format!("{root}TheBlockheads")));
+        let (main, dwdb) = dbs("state_home_db");
+        let w = world(1);
+        std::mem::forget(w.clone());
+        let d = DynamicWorld::new(DynamicWorldInit {
+            world: w,
+            world_tile_loader: None,
+            server: None,
+            server_clients: None,
+            cache: None,
+            tree_density_noise_function: None,
+            season_offset_noise_function: None,
+            app_database: None,
+            world_database: main,
+            dynamic_object_database: dwdb,
+            world_save_directory_override: None,
+        });
+        crate::foundation::paths::set_data_dir_override(None);
+        assert!(d.world_save_directory.starts_with(&root) && d.world_save_directory.ends_with("/saves//"));
+        assert!(std::path::Path::new(&d.world_save_directory).is_dir());
+        let log: Log = Rc::new(RefCell::new(vec![]));
+        d.set_hooks(hk(&log));
+        d.blockheads.borrow_mut().push(tobj(24, 1, &log, None, None, None));
+        d.net_blockheads.borrow_mut().push(tobj(24, 2, &log, None, None, None));
+        d.do_set(41, 3, tobj(41, 3, &log, None, None, None));
+        d.ta_set(42, 4, tobj(42, 4, &log, None, None, None));
+        d.dealloc();
+        assert!(d.blockheads.borrow().is_empty());
+        assert_eq!(d.server_client_count(), 0);
+        let l = log.borrow().clone();
+        assert!(l.contains(&"unload(1)".to_string()) && l.contains(&"unload(2)".to_string()));
+    }
+
+    /// The to-add and by-position tables: guarded inserts, ordered iteration, conditional erase.
+    #[test]
+    fn table_primitives() {
+        let d = dw("state_tables", 1);
+        let log: Log = Rc::new(RefCell::new(vec![]));
+        let a = tobj(7, 1, &log, None, None, None);
+        let b = tobj(7, 2, &log, None, None, None);
+        assert!(d.ta_insert_new(7, 1, a.clone()));
+        assert!(!d.ta_insert_new(7, 1, b.clone()));
+        assert!(d.ta_insert_new(7, 2, b.clone()));
+        assert_eq!(d.ta_next_after(7, None).unwrap().0, 1);
+        assert_eq!(d.ta_next_after(7, Some(1)).unwrap().0, 2);
+        assert!(d.ta_next_after(7, Some(2)).is_none());
+        assert!(d.bp_insert_new(7, 10, a.clone()));
+        assert!(!d.bp_insert_new(7, 10, b.clone()));
+        assert!(d.bp_insert_new(7, 11, b.clone()));
+        assert_eq!(d.bp_next_after(7, None).unwrap().0, 10);
+        assert_eq!(d.bp_next_after(7, Some(10)).unwrap().0, 11);
+        // erase only when the entry is the very object
+        d.bp_erase_if_same(7, 10, &b);
+        assert!(d.bp_contains(7, 10));
+        d.bp_erase_if_same(7, 10, &a);
+        assert!(!d.bp_contains(7, 10));
+        d.bp_erase_if_same(7, 99, &a);
+    }
+
+    /// The mod host double records what it hears and cancels on request.
+    #[test]
+    fn mod_spy_records_and_cancels() {
+        use crate::mods::{ChatVerdict, ModHooks, Optional};
+        let spy = ModSpy::default();
+        let pos = IntPair { x: 1, y: 2 };
+        spy.player_join("a");
+        spy.player_quit("a", true);
+        assert_eq!(spy.chat("a", "hi"), ChatVerdict::Keep);
+        assert!(!spy.owns_command("/x") && !spy.command(None, "/x"));
+        spy.tick(0.2);
+        spy.poll();
+        spy.world_loaded("w", "id");
+        spy.world_save(true);
+        spy.server_stop();
+        assert!(!spy.wants(Optional::BlockChanged) && !spy.wants(Optional::PlayerMove));
+        spy.wants_block_changed.set(true);
+        assert!(spy.wants(Optional::BlockChanged));
+        spy.mod_packet("p", &[1]);
+        assert!(spy.pre_login("p", "id", "alias", None).is_none());
+        assert!(!spy.limbo_join("p", "id", None) && !spy.limbo_packet("p"));
+        spy.limbo_gone("p");
+        assert!(!spy.block_place("a", pos, 1, 2, 3) && !spy.block_break("a", pos, true, 4));
+        spy.cancel.set(true);
+        assert!(spy.object_place("a", pos, false, 5) && spy.block_break("a", pos, false, 6));
+        spy.block_changed(pos, 7, None);
+        assert_eq!(spy.damage(None, 1, 2.0, None), Some(2.0));
+        spy.death(None, 1);
+        spy.player_move("a", pos, pos);
+        assert_eq!(spy.log.borrow().len(), 7);
     }
 
     /// The fakes answer the way a quiet connected client does.

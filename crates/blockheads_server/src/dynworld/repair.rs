@@ -153,23 +153,9 @@ impl DynamicWorld {
 mod tests {
     use super::*;
     use crate::dynworld::state::testutil::*;
-    use crate::dynworld::state::{DwHooks, DwServer};
+    use crate::dynworld::state::DwHooks;
     use std::cell::RefCell;
     use std::rc::Rc;
-
-    struct Srv;
-    impl DwServer for Srv {
-        fn player_info_for_peer_id(&self, _p: &str) -> Option<PlistValue> {
-            None
-        }
-        fn player_is_admin_with_id(&self, _c: &str) -> bool {
-            false
-        }
-        fn player_update(&self) -> Option<String> {
-            None
-        }
-        fn notify_players_changed(&self) {}
-    }
 
     struct Hk;
     impl crate::dynworld::state::DwHooksStub for Hk {
@@ -188,7 +174,7 @@ mod tests {
     #[test]
     fn repair_wraps_and_skips() {
         let d = dw("rp_wrap", 1); // N = 32
-        d.set_server_server_clients(Some(Rc::new(Srv)), None);
+        d.set_server_server_clients(Some(Rc::new(Srv { admin: false })), None);
         let torch_same_row = obj(17, 1, 4, 9); // dx = 0
         let torch_other_row = obj(17, 2, 4, 10);
         let ladder_far = obj(19, 3, 5, 9);
@@ -212,7 +198,7 @@ mod tests {
     fn client_removal_checks_ownership() {
         let d = dw("rp_req", 1);
         d.set_hooks(Rc::new(Hk));
-        d.set_server_server_clients(Some(Rc::new(Srv)), None);
+        d.set_server_server_clients(Some(Rc::new(Srv { admin: false })), None);
         let torch = obj(17, 10, 2, 2);
         d.do_set(17, 10, torch.clone());
         let bh = obj(24, 20, 2, 2);
@@ -224,5 +210,181 @@ mod tests {
         d.client_blockhead_with_id_from_client_requests_dyamic_object_removal_with_id(20, "cl", 10);
         // unknown object: no-op
         d.client_blockhead_with_id_from_client_requests_dyamic_object_removal_with_id(20, "cl", 999);
+    }
+}
+
+/// Scenario tests of the removal protocol with objects that drop things and refuse to be removed.
+#[cfg(test)]
+mod scenario_tests {
+    use super::*;
+    use crate::dynworld::state::testutil::*;
+    use crate::objects::base::{DynamicObject, DynamicObjectBase};
+    use crate::objects::class_info::{ClassInfo, DYNAMIC_OBJECT_CLASS};
+    use crate::plist::value::PlistDict;
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+
+    /// An object that drops a configurable item when removed and may refuse the removal.
+    struct Droppy {
+        base: RefCell<DynamicObjectBase>,
+        ty: i32,
+        drops: i32,
+        removable: Cell<bool>,
+        owner: Option<String>,
+    }
+    fn droppy(ty: i32, id: u64, drops: i32, owner: Option<&str>) -> ObjRef {
+        let o = crate::objects::handle::alloc_obj(|w| Droppy {
+            base: RefCell::new(DynamicObjectBase::alloc_zeroed_with(w)),
+            ty,
+            drops,
+            removable: Cell::new(true),
+            owner: owner.map(str::to_string),
+        });
+        o.base.borrow_mut().unique_id = id;
+        o.base.borrow_mut().pos = IntPair { x: 2, y: 2 };
+        o
+    }
+    impl DynamicObject for Droppy {
+        fn base(&self) -> &RefCell<DynamicObjectBase> {
+            &self.base
+        }
+        fn class_info(&self) -> &'static ClassInfo {
+            &DYNAMIC_OBJECT_CLASS
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+        fn object_type(&self) -> i32 {
+            self.ty
+        }
+        fn freeblock_creation_item_type(&self) -> i32 {
+            self.drops
+        }
+        fn free_block_creation_save_dict(&self, _me: &ObjRef) -> Option<PlistDict> {
+            let PlistValue::Dict(d) = plist_dict(vec![("x", PlistValue::int(1))]) else { unreachable!() };
+            Some(d)
+        }
+        fn free_block_creation_data_a(&self) -> u16 {
+            7
+        }
+        fn free_block_creation_data_b(&self) -> u16 {
+            8
+        }
+        fn can_be_removed_by_blockhead(&self, _me: &ObjRef, _b: &ObjRef) -> bool {
+            self.removable.get()
+        }
+        fn client_id_for_saving_seperately_and_only_loading_while_player_online(&self) -> Option<String> {
+            self.owner.clone()
+        }
+    }
+
+    fn setup(name: &str) -> (Rc<DynamicWorld>, Log, Rc<Hk>) {
+        let (d, _scs) = dw_served(name, &["cl"]);
+        let log: Log = Rc::new(RefCell::new(vec![]));
+        let h = hk(&log);
+        d.set_hooks(h.clone());
+        (d, log, h)
+    }
+
+    #[test]
+    fn animals_of_a_client_are_removed_with_the_client() {
+        let (d, _log, _h) = setup("rs_owned");
+        let mine = droppy(13, 1, 0, Some("cl"));
+        assert_eq!(mine.class_info().name, DYNAMIC_OBJECT_CLASS.name);
+        let theirs = droppy(13, 2, 0, Some("other"));
+        let queued = droppy(25, 3, 0, Some("cl"));
+        let unowned = droppy(13, 4, 0, None);
+        d.do_set(13, 1, mine.clone());
+        d.do_set(13, 2, theirs.clone());
+        d.ta_set(25, 3, queued.clone());
+        d.do_set(13, 4, unowned.clone());
+        d.remove_dynamic_objects_belonging_to_client("cl");
+        assert!(mine.needs_removed() && queued.needs_removed());
+        assert!(!theirs.needs_removed() && !unowned.needs_removed());
+    }
+
+    #[test]
+    fn requested_removals_drop_their_item() {
+        let (d, log, h) = setup("rs_req");
+        let bh = tobj(24, 20, &log, None, None, None);
+        d.net_blockheads.borrow_mut().push(bh);
+        h.client_of.borrow_mut().push((20, "cl".to_string()));
+        // no server world: ignored
+        let plain = dw("rs_plain", 1);
+        plain.client_blockhead_with_id_from_client_requests_dyamic_object_removal_with_id(20, "cl", 10);
+        // an object that drops something, one that drops nothing, one that refuses, an unknown blockhead
+        let a = droppy(17, 10, 17, None);
+        let b = droppy(17, 11, 0, None);
+        let c = droppy(17, 12, 17, None);
+        c.base().borrow_mut().unique_id = 12;
+        for o in [&a, &b, &c] {
+            d.do_set(17, o.unique_id(), o.clone());
+        }
+        let c_ref = crate::objects::handle::downcast::<Droppy>(&c).unwrap();
+        c_ref.removable.set(false);
+        d.client_blockhead_with_id_from_client_requests_dyamic_object_removal_with_id(20, "cl", 10);
+        d.client_blockhead_with_id_from_client_requests_dyamic_object_removal_with_id(20, "cl", 11);
+        d.client_blockhead_with_id_from_client_requests_dyamic_object_removal_with_id(20, "cl", 12);
+        d.client_blockhead_with_id_from_client_requests_dyamic_object_removal_with_id(21, "cl", 10);
+        assert!(a.needs_removed() && b.needs_removed() && !c.needs_removed());
+        // already removed objects are left alone
+        d.client_blockhead_with_id_from_client_requests_dyamic_object_removal_with_id(20, "cl", 10);
+        assert_eq!(d.do_len(14), 1);
+        // the repair path drops items too, but not twice
+        let e = droppy(19, 30, 53, None);
+        d.do_set(19, 30, e.clone());
+        d.remove_object_due_to_repair(&e);
+        assert!(e.needs_removed());
+        assert_eq!(d.do_len(14), 2);
+    }
+
+    #[test]
+    fn interaction_objects_remove_themselves() {
+        use crate::types::item_type::ItemType;
+        crate::objects::registry::install();
+        let (d, log, h) = setup("rs_inter");
+        let bh = tobj(24, 20, &log, None, None, None);
+        d.net_blockheads.borrow_mut().push(bh);
+        h.client_of.borrow_mut().push((20, "cl".to_string()));
+        let place = |t: ItemType, x: i32| {
+            let item = crate::items::inventory_item::InventoryItem::new(t, 0, 0, None, None);
+            let r = d.interaction_object_placed_at_position_with_item_flipped_save_dict_placed_by_client_client_name(
+                IntPair { x, y: 12 },
+                &item.borrow(),
+                false,
+                None,
+                None,
+                None,
+            );
+            r.unwrap()
+        };
+        let chest = place(ItemType::ITEM_CHEST, 5);
+        // an interaction-like object that is in use is left alone; a free one is removed
+        chest.as_interaction_object().unwrap().borrow_mut().is_in_use = true;
+        d.client_blockhead_with_id_from_client_requests_dyamic_object_removal_with_id(20, "cl", chest.unique_id());
+        chest.as_interaction_object().unwrap().borrow_mut().is_in_use = false;
+        d.client_blockhead_with_id_from_client_requests_dyamic_object_removal_with_id(20, "cl", chest.unique_id());
+        d.remove_object_due_to_repair(&chest);
+        // an interaction type that is not interaction-like only gets nothing done
+        let fake = droppy(46, 99, 0, None);
+        d.remove_object_due_to_repair(&fake);
+        d.do_set(46, 99, fake.clone());
+        d.client_blockhead_with_id_from_client_requests_dyamic_object_removal_with_id(20, "cl", 99);
+        // the server-less world does nothing
+        let plain = dw("rs_inter_plain", 1);
+        plain.remove_object_due_to_repair(&fake);
+        plain.do_repair_for_tile_at_pos(IntPair { x: 1, y: 1 });
+    }
+
+    #[test]
+    fn repairs_drop_the_door() {
+        let (d, log, h) = setup("rs_door");
+        let door = droppy(20, 40, 0, None);
+        h.item.set(52);
+        d.register_with_pos(&door, 20, IntPair { x: 2, y: 2 });
+        let _ = log;
+        d.do_repair_for_tile_at_pos(IntPair { x: 2, y: 2 });
+        assert!(door.needs_removed());
+        assert_eq!(d.do_len(14), 1);
     }
 }

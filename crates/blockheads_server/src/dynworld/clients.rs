@@ -226,25 +226,11 @@ mod tests {
     use super::*;
     use crate::dynworld::lookups::{set_ops_hooks, DwOpsHooks};
     use crate::dynworld::state::testutil::*;
-    use crate::dynworld::state::{DwHooks, DwServer};
+    use crate::dynworld::state::DwHooks;
     use crate::plist::value::PlistValue;
     use crate::types::structs::IntPair;
     use std::cell::RefCell;
     use std::rc::Rc;
-
-    struct Srv;
-    impl DwServer for Srv {
-        fn player_info_for_peer_id(&self, _p: &str) -> Option<PlistValue> {
-            None
-        }
-        fn player_is_admin_with_id(&self, _c: &str) -> bool {
-            false
-        }
-        fn player_update(&self) -> Option<String> {
-            None
-        }
-        fn notify_players_changed(&self) {}
-    }
 
     struct Ops {
         sent: RefCell<Vec<(Vec<u8>, Vec<String>, bool)>>,
@@ -274,7 +260,7 @@ mod tests {
         let d = dw("cl_pickup", 2);
         let (main, dwdb) = dbs("cl_pickup2");
         let _ = (main, dwdb);
-        d.set_server_server_clients(Some(Rc::new(Srv)), None);
+        d.set_server_server_clients(Some(Rc::new(Srv { admin: false })), None);
         let h = Rc::new(Ops { sent: RefCell::new(vec![]) });
         set_ops_hooks(h.clone());
         let torch = obj(17, 41);
@@ -345,5 +331,168 @@ mod tests {
         d.net_blockheads_with_disconnected_clients.borrow_mut().push(obj(24, 31));
         d.stop_all_blockhead_actions_for_client_due_to_kick("player1");
         assert_eq!(*o.0.borrow(), vec![21, 31]);
+    }
+}
+
+/// Scenario tests of connect, kick, disconnect and the pickup protocol.
+#[cfg(test)]
+mod scenario_tests {
+    use super::*;
+    use crate::dynworld::lookups::{set_ops_hooks, DwOpsHooksStub};
+    use crate::dynworld::state::testutil::*;
+    use crate::plist::value::PlistValue;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    struct Net {
+        sent: RefCell<Vec<Vec<u8>>>,
+        log: Log,
+    }
+    impl DwOpsHooksStub for Net {
+        fn server_send_network_data_to_peers_reliable(&self, data: Vec<u8>, _p: &[String], _r: bool) {
+            self.sent.borrow_mut().push(data);
+        }
+        fn blockhead_stop_all_actions(&self, b: &ObjRef) {
+            self.log.borrow_mut().push(format!("stop({})", b.unique_id()));
+        }
+        fn blockhead_set_paused(&self, b: &ObjRef, p: bool) {
+            self.log.borrow_mut().push(format!("paused({},{p})", b.unique_id()));
+        }
+        fn train_car_set_paused(&self, c: &ObjRef, p: bool) {
+            self.log.borrow_mut().push(format!("car_paused({},{p})", c.unique_id()));
+        }
+        fn blockhead_remote_pickup_request_response(&self, b: &ObjRef, accepted: bool, ids: &[u64]) {
+            self.log.borrow_mut().push(format!("reply({},{accepted},{ids:?})", b.unique_id()));
+        }
+    }
+
+    fn setup(name: &str) -> (Rc<DynamicWorld>, Log, Rc<Hk>, Rc<Net>) {
+        let (d, _scs) = dw_served(name, &["c1"]);
+        let log: Log = Rc::new(RefCell::new(vec![]));
+        let h = hk(&log);
+        d.set_hooks(h.clone());
+        let net = Rc::new(Net { sent: RefCell::new(vec![]), log: log.clone() });
+        set_ops_hooks(net.clone());
+        (d, log, h, net)
+    }
+
+    #[test]
+    fn connecting_clients_take_over_their_disconnected_blockheads() {
+        let (d, log, h, _net) = setup("cs_conn");
+        let away = tobj(24, 5, &log, None, None, None);
+        let other = tobj(24, 6, &log, None, None, None);
+        h.client_of.borrow_mut().push((5, "c1".to_string()));
+        h.client_of.borrow_mut().push((6, "c2".to_string()));
+        d.net_blockheads_with_disconnected_clients.borrow_mut().push(away.clone());
+        d.net_blockheads_with_disconnected_clients.borrow_mut().push(other);
+        *d.disconnected_clients_save_dir_names.borrow_mut() = Some(vec!["c1".to_string(), "c2".to_string()]);
+        // a physical block that is in use is searched for the client's animals
+        let pb = d.world().take_physical_block();
+        pb.valid.set(true);
+        d.client_connected(Some("c1"));
+        assert!(away.needs_removed());
+        assert_eq!(d.net_blockheads_with_disconnected_clients.borrow().len(), 1);
+        assert_eq!(*d.disconnected_clients_save_dir_names.borrow(), Some(vec!["c2".to_string()]));
+        assert!(
+            d.world_database.get("blockhead_5_inventory").is_some() || d.world_database.get("blockheads").is_some()
+        );
+        // a client without blockheads only refreshes its animals
+        d.client_connected(Some("c9"));
+        // no list of names yet
+        let (d2, _l2, _h2, _n2) = setup("cs_conn2");
+        d2.client_connected(Some("c1"));
+    }
+
+    #[test]
+    fn kicks_and_disconnects() {
+        let (d, log, h, _net) = setup("cs_kick");
+        let a = tobj(24, 5, &log, None, None, None);
+        let b = tobj(24, 6, &log, None, None, None);
+        h.client_of.borrow_mut().push((5, "c1".to_string()));
+        h.client_of.borrow_mut().push((6, "c1".to_string()));
+        d.net_blockheads.borrow_mut().push(a.clone());
+        d.net_blockheads_with_disconnected_clients.borrow_mut().push(b.clone());
+        // an interaction object that is told about the blockheads leaving, and one that is paused
+        crate::objects::registry::install();
+        let item = crate::items::inventory_item::InventoryItem::new(
+            crate::types::item_type::ItemType::ITEM_CHEST,
+            0,
+            0,
+            None,
+            None,
+        );
+        let chest = d
+            .interaction_object_placed_at_position_with_item_flipped_save_dict_placed_by_client_client_name(
+                crate::types::structs::IntPair { x: 5, y: 12 },
+                &item.borrow(),
+                false,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        d.do_set(46, chest.unique_id(), chest);
+        d.stop_all_blockhead_actions_for_client_due_to_kick("c1");
+        d.set_paused(false);
+        assert!(log.borrow().contains(&"stop(5)".to_string()) && log.borrow().contains(&"stop(6)".to_string()));
+        // a real disconnect marks the blockheads for removal and forgets the client everywhere
+        d.live_server_client_blockhead_inventories.borrow_mut().insert("c1".into(), PlistValue::mutable_dict());
+        *d.disconnected_clients_save_dir_names.borrow_mut() = Some(vec!["c1".to_string()]);
+        let e = tobj(24, 7, &log, None, None, None);
+        h.client_of.borrow_mut().push((7, "c3".to_string()));
+        d.net_blockheads_with_disconnected_clients.borrow_mut().push(e.clone());
+        *d.disconnected_clients_save_dir_names.borrow_mut() = None;
+        d.client_disconnected_simulate(Some("c3"), false);
+        assert!(e.needs_removed());
+        *d.disconnected_clients_save_dir_names.borrow_mut() = Some(vec!["c1".to_string()]);
+        h.needs_saving.set(false);
+        d.client_disconnected_simulate(Some("c1"), false);
+        assert!(a.needs_removed() && b.needs_removed());
+        assert!(d.disconnected_clients_save_dir_names.borrow().as_ref().unwrap().is_empty());
+        assert!(d.world_database.get("blockheads").is_some());
+        assert!(d.world_database.get("_blockhead_6_inventory").is_none());
+    }
+
+    #[test]
+    fn pickups_free_blocks_objects_and_strangers() {
+        let (d, log, _h, net) = setup("cs_pick");
+        let fb = tobj(14, 50, &log, None, None, None);
+        d.do_set(14, 50, fb.clone());
+        let gone = tobj(14, 51, &log, None, None, None);
+        gone.set_needs_removed(&gone, true);
+        d.do_set(14, 51, gone);
+        d.do_set(17, 52, tobj(17, 52, &log, None, None, None));
+        d.client_pickup_request_count_client_id_blockhead_requester_unique_id(&[50, 51, 52, 53], "c1", 9);
+        assert!(fb.needs_removed());
+        let sent = net.sent.borrow().clone();
+        assert_eq!(sent.len(), 2);
+        assert_eq!(sent[0][1], 1);
+        assert_eq!(sent[1][1], 0);
+        // a request without a server answers nobody
+        let plain = dw("cs_pick_plain", 1);
+        plain.client_pickup_request_count_client_id_blockhead_requester_unique_id(&[1], "c1", 9);
+        // only rejected ids
+        net.sent.borrow_mut().clear();
+        d.client_pickup_request_count_client_id_blockhead_requester_unique_id(&[77], "c1", 9);
+        assert_eq!(net.sent.borrow().len(), 1);
+    }
+
+    #[test]
+    fn replies_pauses_and_control() {
+        let (d, log, _h, _net) = setup("cs_misc");
+        let bh = tobj(24, 5, &log, None, None, None);
+        d.blockheads.borrow_mut().push(bh);
+        let reply = pickup_reply_bytes(true, 5, &[1, 2]);
+        d.remote_pickup_request_reply(&reply);
+        d.remote_pickup_request_reply(&pickup_reply_bytes(false, 99, &[1]));
+        assert!(log.borrow().contains(&"reply(5,true,[1, 2])".to_string()));
+        d.do_set(43, 8, tobj(43, 8, &log, None, None, None));
+        d.do_set(46, 9, tobj(46, 9, &log, None, None, None));
+        d.set_paused(true);
+        assert!(log.borrow().contains(&"paused(5,true)".to_string()));
+        assert!(log.borrow().contains(&"car_paused(8,true)".to_string()));
+        assert!(!d.is_controlling_blockheads_for_client_player("c1"));
+        *d.disconnected_clients_save_dir_names.borrow_mut() = Some(vec!["c2".to_string()]);
+        assert!(!d.is_controlling_blockheads_for_client_player("c1"));
     }
 }

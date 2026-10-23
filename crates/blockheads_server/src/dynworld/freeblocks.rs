@@ -247,12 +247,11 @@ mod tests {
             avoid: Option<&mut std::collections::VecDeque<u64>>,
         ) -> Option<ObjRef> {
             let id = u64::from_le_bytes(net[0..8].try_into().unwrap());
-            if let Some(a) = avoid {
-                if a.contains(&id) {
-                    return None;
-                }
-                a.push_back(id);
+            let a = avoid.expect("packet 0x14 passes the ring");
+            if a.contains(&id) {
+                return None;
             }
+            a.push_back(id);
             Some(Obj::new(14, id, self.log.clone()))
         }
     }
@@ -303,5 +302,231 @@ mod tests {
         d.free_block_sound_delay.set(1.0);
         d.play_time_crystal_received_sound_at_pos(IntPair { x: 0, y: 0 });
         assert_eq!(d.free_block_sound_delay.get(), 1.0);
+    }
+}
+
+/// Scenario tests of the mined-tile drops.
+#[cfg(test)]
+mod scenario_tests {
+    use super::*;
+    use crate::dynworld::state::testutil::*;
+    use crate::dynworld::state::DwHooksStub;
+    use crate::trees::tree::testenv::{env, ip};
+    use crate::world::tiles::tile_at_world_position_loaded;
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+
+    struct Fh {
+        log: Log,
+        next: Cell<u64>,
+        io: RefCell<Option<ObjRef>>,
+        wb: RefCell<Option<ObjRef>>,
+        destroy: Cell<i32>,
+        lit: Cell<bool>,
+        door: RefCell<Option<ObjRef>>,
+        item: Cell<i32>,
+    }
+    impl DwHooksStub for Fh {
+        fn freeblock_from_position(&self, init: FreeBlockInit<'_>) -> Option<ObjRef> {
+            self.next.set(self.next.get() + 1);
+            self.log.borrow_mut().push(format!("drop({},{})", init.item_type, init.dynamic_object_save_dict.is_some()));
+            let o = tobj(14, self.next.get(), &self.log, None, None, None);
+            o.base().borrow_mut().pos = init.position;
+            Some(o)
+        }
+        fn interaction_object_at_pos(&self, _p: IntPair) -> Option<ObjRef> {
+            self.io.borrow().clone()
+        }
+        fn workbench_at_pos(&self, _p: IntPair) -> Option<ObjRef> {
+            self.wb.borrow().clone()
+        }
+        fn workbench_type(&self, _w: &ObjRef) -> i32 {
+            3
+        }
+        fn destroy_item_type(&self, _o: &ObjRef) -> i32 {
+            self.destroy.get()
+        }
+        fn object_at_pos_for_item(&self, which: char, _p: IntPair) -> Option<ObjRef> {
+            self.log.borrow_mut().push(format!("lookup({which})"));
+            Some(tobj(1, 1, &self.log, None, None, None))
+        }
+        fn tile_is_lit_for_client(&self, _c: Option<&str>, _p: IntPair, _t: TileRef) -> bool {
+            self.lit.get()
+        }
+        fn remove_door_at_pos(&self, _p: IntPair) -> Option<ObjRef> {
+            self.door.borrow().clone()
+        }
+        fn remove_window_at_pos(&self, _p: IntPair) -> Option<ObjRef> {
+            self.door.borrow().clone()
+        }
+        fn item_type(&self, _o: &ObjRef) -> i32 {
+            self.item.get()
+        }
+    }
+
+    fn fixture(name: &str) -> (Rc<DynamicWorld>, Rc<Fh>, Log) {
+        let (_w, d) = env(name);
+        let log: Log = Rc::new(RefCell::new(vec![]));
+        let h = Rc::new(Fh {
+            log: log.clone(),
+            next: Cell::new(100),
+            io: RefCell::new(None),
+            wb: RefCell::new(None),
+            destroy: Cell::new(0),
+            lit: Cell::new(false),
+            door: RefCell::new(None),
+            item: Cell::new(52),
+        });
+        d.set_hooks(h.clone());
+        (d, h, log)
+    }
+
+    fn drop_at(d: &Rc<DynamicWorld>, p: IntPair, fg: bool) {
+        let tile = tile_at_world_position_loaded(p.x, p.y, &d.world());
+        d.create_free_block_at_position_for_foreground_contents_for_tile_priority_blockhead(p, fg, tile, None);
+    }
+
+    #[test]
+    fn mined_tiles_drop_their_items() {
+        let (d, h, log) = fixture("fbs_mined");
+        let w = d.world();
+        let tile = |x, y| tile_at_world_position_loaded(x, y, &w).unwrap();
+        let count = |what: &str| log.borrow().iter().filter(|l| l.starts_with(what)).count();
+        // no tile, and the unmined-water guard
+        d.create_free_block_at_position_for_foreground_contents_for_tile_priority_blockhead(
+            ip(1, 1),
+            false,
+            None,
+            None,
+        );
+        tile(5, 5).update(|t| t.type_index = 0x10);
+        drop_at(&d, ip(5, 5), false);
+        assert_eq!(count("drop"), 0);
+        // ordinary blocks drop their item; a lit tile makes the sound
+        drop_at(&d, ip(6, 5), false);
+        assert_eq!(count("drop"), 1);
+        h.lit.set(true);
+        drop_at(&d, ip(6, 5), false);
+        assert_eq!(count("drop"), 2);
+        // nothing to drop and not an interaction object
+        tile(7, 12).update(|t| t.contents = 0x01);
+        tile(7, 12).update(|t| t.type_index = 2);
+        drop_at(&d, ip(7, 14), false);
+        // interaction objects drop what they are made of and go away
+        tile(8, 12).update(|t| t.contents = 0x30);
+        drop_at(&d, ip(8, 12), false);
+        let chest = tobj(46, 5, &log, None, None, None);
+        *h.io.borrow_mut() = Some(chest.clone());
+        drop_at(&d, ip(8, 12), false);
+        assert!(chest.needs_removed());
+        assert_eq!(count("drop"), 2);
+        h.destroy.set(1043);
+        let chest2 = tobj(46, 6, &log, None, None, None);
+        *h.io.borrow_mut() = Some(chest2.clone());
+        drop_at(&d, ip(8, 12), false);
+        assert_eq!(count("drop(1043,true)"), 1);
+        // workbenches drop the item of their type and level
+        tile(9, 12).update(|t| t.contents = 0x2E);
+        drop_at(&d, ip(9, 12), false);
+        let bench = tobj(45, 7, &log, None, None, None);
+        *h.wb.borrow_mut() = Some(bench.clone());
+        drop_at(&d, ip(9, 12), false);
+        assert!(bench.needs_removed());
+        // foreground contents: torches, ladders and the pieces looked up in the world
+        for (fg, which) in [(0x31u8, Some('t')), (0x42, None), (0x60, Some('w'))] {
+            tile(10, 12).update(|t| {
+                t.type_index = 2;
+                t.foreground_contents = fg;
+            });
+            drop_at(&d, ip(10, 12), true);
+            if let Some(c) = which {
+                assert!(log.borrow().contains(&format!("lookup({c})")));
+            }
+        }
+        // painting, column and stairs items found in the foreground and background
+        for fg in [0x63u8, 0x64] {
+            tile(11, 12).update(|t| t.foreground_contents = fg);
+            drop_at(&d, ip(11, 12), true);
+        }
+        let _ = (count("drop"), h.lit.get());
+    }
+
+    #[test]
+    fn background_items_come_back_as_free_blocks() {
+        let (d, h, log) = fixture("fbs_bg");
+        let w = d.world();
+        let tile = |x, y| tile_at_world_position_loaded(x, y, &w).unwrap();
+        let door = tobj(20, 8, &log, None, None, None);
+        *h.door.borrow_mut() = Some(door);
+        for (bg, light) in [(0x46u8, 0u8), (0x4B, 255), (0x45, 255), (0x5F, 0), (0x01, 0)] {
+            tile(12, 12).update(|t| {
+                t.background_contents = bg;
+                t.sun_light = light;
+            });
+            d.create_background_content_free_block_at_position_for_tile_remove_blockhead(
+                ip(12, 12),
+                tile(12, 12),
+                None,
+            );
+        }
+        let l = log.borrow().clone();
+        assert!(l.iter().filter(|s| s.starts_with("drop(")).count() >= 4, "{l:?}");
+        // without a door or window there is nothing to drop
+        *h.door.borrow_mut() = None;
+        let n = log.borrow().len();
+        for bg in [0x46u8, 0x45] {
+            tile(12, 12).update(|t| t.background_contents = bg);
+            d.create_background_content_free_block_at_position_for_tile_remove_blockhead(
+                ip(12, 12),
+                tile(12, 12),
+                None,
+            );
+        }
+        assert_eq!(log.borrow().len(), n);
+    }
+
+    #[test]
+    fn client_packets_ignore_bad_payloads() {
+        let (d, _h, _log) = fixture("fbs_pkt");
+        d.create_client_freeblocks_with_data(&[1, 2, 3]);
+        let not_array = crate::foundation::gzip::gzip_deflate(
+            &crate::plist::helpers::data_from_property_list(&plist_dict(vec![])).unwrap(),
+        );
+        d.create_client_freeblocks_with_data(&not_array);
+        let with_junk = crate::foundation::gzip::gzip_deflate(
+            &crate::plist::helpers::data_from_property_list(&PlistValue::array(vec![
+                PlistValue::int(1),
+                PlistValue::data(vec![1u8; 8]),
+            ]))
+            .unwrap(),
+        );
+        d.create_client_freeblocks_with_data(&with_junk);
+        assert_eq!(d.do_len(14), 0);
+    }
+
+    #[test]
+    fn paintings_columns_and_stairs_drop_their_item() {
+        use crate::world::helpers::testutil::{dw_obj, FakeDw};
+        let (d, _h, log) = fixture("fbs_pieces");
+        let w = d.world();
+        let fake = Rc::new(FakeDw::default());
+        *w.dynamic_world.borrow_mut() = Some(Rc::new(crate::world::state::DynamicWorld::new(Box::new(fake.clone()))));
+        let spot = (13, 12);
+        fake.painting.borrow_mut().insert(spot, dw_obj(212, 0, 0, false, true));
+        fake.column.borrow_mut().insert(spot, dw_obj(222, 0, 0, false, true));
+        fake.stairs.borrow_mut().insert(spot, dw_obj(229, 0, 0, false, true));
+        let tile = tile_at_world_position_loaded(13, 12, &w).unwrap();
+        tile.update(|t| t.type_index = 2);
+        for (fg, contents, is_fg) in [(0x63u8, 0u8, true), (0x64, 0, true), (0, 0x65, false)] {
+            tile.update(|t| {
+                t.foreground_contents = fg;
+                t.contents = contents;
+            });
+            drop_at(&d, ip(13, 12), is_fg);
+        }
+        let l = log.borrow().clone();
+        for which in ['p', 'c', 's'] {
+            assert!(l.contains(&format!("lookup({which})")), "{l:?}");
+        }
     }
 }
