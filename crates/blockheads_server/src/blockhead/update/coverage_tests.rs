@@ -2576,4 +2576,9 @@ fn last_corners() {
     }
     go(&r, vec![step(idx(5, 7), 30, tt::FALL as i64, 0)]);
     assert_eq!(r.b().st().health, 1.0);
+    // a fall into a pose other than standing hurts nothing
+    let r = u7_rig();
+    r.b().bh.borrow_mut().traverse_type = tt::FALL as i32;
+    go(&r, vec![step(idx(5, 7), 150, tt::FALL as i64, kf::FALLING as i64)]);
+    assert_eq!(r.b().st().health, 1.0);
 }

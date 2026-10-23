@@ -1467,7 +1467,10 @@ fn real_workbench_accessors() {
             f.state.interacting_square = IntPair { x: 12, y: 9 };
             f.interaction_workbench = Some(wb.clone());
         }
-        let _ = b.current_craft_is_out_of_fuel();
+        for fuel in [0.0f32, 1.0] {
+            crate::objects::handle::downcast::<Workbench>(&wb).unwrap().st.borrow_mut().fuel_fraction = fuel;
+            let _ = b.current_craft_is_out_of_fuel();
+        }
         let _ = b.get_current_craft_progress();
         assert!(b.will_be_crafting_at_workbench(&wb));
         b.bh.borrow_mut().state.interacting_square = IntPair { x: 12, y: 8 };
@@ -1478,4 +1481,94 @@ fn real_workbench_accessors() {
         let _ = b.will_be_adding_fuel_at_workbench(&wb);
     }
     let _ = h;
+}
+
+#[test]
+fn build_limit_back_wall_edges_and_host_bridges() {
+    let s = Scene::new();
+    let b = s.b();
+    // the top of the world: boats, signs and blocks are not placed above the build limit
+    let t = s.tile(10, 12);
+    t.set_type_index(3);
+    t.set_partial_content_left(0xff);
+    for item in [0x6fu32, 0xa3, 0x12d, 0x69, 1] {
+        let it_ = give(b, item, 0);
+        for y in [0x3f7, 0x3f8, 0x3f9] {
+            let mut rej = false;
+            let _ = b.interaction_type_for_tile_at_pos_item_pickup_rejected_due_to_inventory_full_include_actions_face_index_allow_protected_actions(
+                Some(&t),
+                IntPair { x: 10, y },
+                Some(&it_),
+                &mut rej,
+                false,
+                0,
+                true,
+            );
+        }
+    }
+    // a back wall at the edge of the loaded world
+    let edge = s.tile(31, 12);
+    edge.set_back_wall_type_index(1);
+    s.tile(31, 13).set_back_wall_type_index(2);
+    s.tile(30, 12).set_back_wall_type_index(2);
+    let pick = give(b, 8, 0);
+    assert!(b.can_dig_back_wallfor_tile_at_pos_with_item_include_actions(
+        Some(&edge),
+        IntPair { x: 31, y: 12 },
+        Some(&pick),
+        false
+    ));
+    s.tile(30, 12).set_back_wall_type_index(1);
+    assert!(!b.can_dig_back_wallfor_tile_at_pos_with_item_include_actions(
+        Some(&edge),
+        IntPair { x: 31, y: 12 },
+        Some(&pick),
+        false
+    ));
+    // water-bound shaft blocks that do not float
+    reset(&s.w);
+    s.tile(10, 12).set_contents(0x67);
+    s.tile(10, 11).set_type_index(1);
+    let t = s.tile(10, 12);
+    t.set_type_index(3);
+    t.set_partial_content_left(0xff);
+    for item in [0x34u32, 0xa4] {
+        let _ = s.rule(Some(item), 0, true);
+    }
+    // a free block on an open tile that cannot be picked up reports the rejection
+    let dw = real_dw(&s.w, "ir_rej");
+    reset(&s.w);
+    {
+        let f = b.bh.borrow();
+        for i in 1..8 {
+            f.inventory_items[i].borrow_mut().clear();
+            f.inventory_items[i].borrow_mut().push(InventoryItem::new(ItemType(8), 0, 0, None, None));
+        }
+    }
+    let fb = mk_fb(&s.w, &dw, IntPair { x: 10, y: 12 }, 0x19, 5);
+    *s.h.fbs.borrow_mut() = vec![fb];
+    s.h.fb_exist.set(true);
+    let t = s.tile(10, 12);
+    let mut rej = false;
+    let _ = b.interaction_type_for_tile_at_pos_item_pickup_rejected_due_to_inventory_full_include_actions_face_index_allow_protected_actions(
+        Some(&t),
+        IntPair { x: 10, y: 12 },
+        None,
+        &mut rej,
+        false,
+        0,
+        false,
+    );
+    assert!(rej);
+    // the host bridges of the test fixture
+    let a: Rc<dyn std::any::Any> = act(2, Some(InventoryItem::new(ItemType(8), 0, 0, None, None)), IntPair { x: 1, y: 2 });
+    let ih: &dyn crate::blockhead::inventory_model::InventoryHost = &*s.h;
+    assert_eq!(ih.action_goal_interaction(&a), 2);
+    assert_eq!(ih.action_craft_count_or_extra_data(&a), 0);
+    assert!(ih.action_interaction_item(&a).is_some());
+    assert_eq!(ih.action_interaction_item_index(&a), -1);
+    assert_eq!(ih.action_interaction_item_sub_index(&a), -1);
+    s.h.take();
+    crate::blockhead::blockhead::BlockheadHostStub::drop_inventory_items_at_index_sub_index_count_ignore_freeblocks(&*s.h, b, 1, 2, 3, false);
+    assert_eq!(s.h.take(), vec!["drop:1:2:3:false".to_string()]);
 }

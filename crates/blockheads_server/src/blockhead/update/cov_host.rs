@@ -168,37 +168,15 @@ impl BlockheadHostStub for CovHost {
     fn is_npc(&self, _o: &ObjRef) -> bool {
         self.is_npc.get()
     }
-    fn npc_food_item_type(&self, _o: &ObjRef) -> i32 {
-        self.food_item.get()
-    }
-    fn npc_can_be_captured_by_blockhead(&self, _o: &ObjRef, _b: &Blockhead, _t: ItemType) -> bool {
-        self.capturable.get()
-    }
-    fn npc_can_be_milked_by_blockhead(&self, _o: &ObjRef, _b: &Blockhead) -> bool {
-        self.milkable.get()
-    }
-    fn npc_can_be_shaved_by_blockhead(&self, _o: &ObjRef, _b: &Blockhead) -> bool {
-        self.shaveable.get()
-    }
     fn ridable_blockhead_can_ride_using_item(&self, _o: &ObjRef, _b: &Blockhead, _i: i32) -> bool {
         self.can_ride.get()
     }
     fn npc_belongs_to_player_with_blockhead(&self, _o: &ObjRef, _b: &Blockhead) -> bool {
         self.belongs.get()
     }
-    fn torch_at_pos(&self, _p: IntPair) -> Option<ObjRef> {
-        self.torch.borrow().clone()
-    }
-    fn can_pick_up_item_of_type_sub_items(&self, _b: &Blockhead, _t: ItemType, _s: Option<&[Vec<ItemRef>]>) -> i32 {
-        self.can_pick.get() as i32
-    }
     fn remove_object_at_pos(&self, which: Remover, pos: IntPair) -> Option<ObjRef> {
         self.rec(format!("remove:{:?}:{},{}", which, pos.x, pos.y));
         None
-    }
-    fn add_item_to_inventory_flash(&self, b: &Blockhead, item: &ItemRef, flash: bool) {
-        self.rec(format!("additem:{}:{}", item.borrow().item_type.0, flash));
-        let _ = b;
     }
     fn get_plant_at_pos(&self, _p: IntPair) -> Option<ObjRef> {
         self.plant.borrow().clone()
@@ -207,26 +185,11 @@ impl BlockheadHostStub for CovHost {
         self.rec(format!("ioid:{id}"));
         self.io_by_id.borrow().clone()
     }
-    fn blockhead_would_like_to_take_ownership_with_save_dict(&self, _o: &ObjRef, _b: &Blockhead, _d: &PlistValue) {
-        self.rec("takeownership".to_string());
-    }
-    fn is_adding_fuel_to_any_workbench(&self, _b: &Blockhead) -> bool {
-        self.adding_fuel.get()
-    }
-    fn server_client_light_block_index_for_net_id(&self, _id: Option<&str>) -> Option<i32> {
-        self.light_index.get()
-    }
     fn inventory_was_changed_sub_index_was_usage(&self, _b: &Blockhead, i: i32, s: i32, u: bool) {
         self.rec(format!("invchanged:{}:{}:{}", i, s, u));
     }
-    fn die_for_good(&self, _b: &Blockhead) {
-        self.rec("dieforgood".to_string());
-    }
     fn abort_in_progress_path_if_for_blockhead(&self, _b: &ObjRef) {
         self.rec("abortpath".to_string());
-    }
-    fn send_damage_for_net_blockhead_recoil(&self, d: f32, _b: &ObjRef, r: bool) {
-        self.rec(format!("netdamage:{}:{}", d, r));
     }
     fn increment_damage_of_armor_clothing(&self, _b: &Blockhead, d: f32) {
         self.rec(format!("armor:{}", d));
@@ -463,14 +426,8 @@ impl BlockheadHostStub for CovHost {
     fn update_jet_motion(&self, _b: &Blockhead, _dt: f32) {
         self.rec("jetmotion".to_string());
     }
-    fn jetpack_fuel_count(&self, b: &Blockhead) -> i32 {
-        if self.knobs.borrow().contains_key("jetfuel") {
-            self.kv("jetfuel") as i32
-        } else if b.is_net() {
-            10
-        } else {
-            0
-        }
+    fn jetpack_fuel_count(&self, _b: &Blockhead) -> i32 {
+        self.kv("jetfuel") as i32
     }
     fn can_fly(&self, _b: &Blockhead) -> bool {
         self.flag("canfly")

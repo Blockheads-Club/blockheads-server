@@ -2087,30 +2087,6 @@ pub(crate) mod testutil {
         fn report_achievement_with_identifier(&self, id: &str) {
             self.rec(format!("ach:{}", id));
         }
-        fn create_free_block_at_position_of_type_data_a_data_b_sub_items_dynamic_object_save_dict_hovers_play_sound_priority_blockhead(
-            &self,
-            pos: IntPair,
-            item_type: ItemType,
-            data_a: u16,
-            data_b: u16,
-            _s: Option<&[Vec<ItemRef>]>,
-            _d: Option<&PlistValue>,
-            hovers: bool,
-            play_sound: i32,
-            priority: Option<&ObjRef>,
-        ) {
-            self.rec(format!(
-                "fb:{},{}:{}:{}:{}:{}:{}:{}",
-                pos.x,
-                pos.y,
-                item_type.0,
-                data_a,
-                data_b,
-                hovers,
-                play_sound,
-                priority.is_some()
-            ));
-        }
         fn drop_inventory_items_at_index_sub_index_count_ignore_freeblocks(
             &self,
             _b: &Blockhead,
@@ -2140,9 +2116,6 @@ pub(crate) mod testutil {
         fn send_gather_notification_for_tile_at_pos(&self, _t: Option<TileRef>, pos: IntPair) {
             self.rec(format!("gather:{},{}", pos.x, pos.y));
         }
-        fn load_gather_block_at_pos(&self, pos: IntPair) {
-            self.rec(format!("gatherblock:{},{}", pos.x, pos.y));
-        }
         fn remove_tile_at_world_x_world_y_create_contents_freeblock_count_create_foreground_contents_freeblock_count_remove_blockhead_only_remove_c_ontents_only_remove_foreground_contents(
             &self,
             x: i32,
@@ -2163,9 +2136,6 @@ pub(crate) mod testutil {
         }
         fn set_door_at_pos_to_open_direction(&self, pos: IntPair, open: bool, dir: i32) {
             self.rec(format!("door:{},{}:{}:{}", pos.x, pos.y, open, dir));
-        }
-        fn fill_tile_at_pos_with_type(&self, _t: Option<TileRef>, pos: IntPair, ty: i32) {
-            self.rec(format!("fill:{},{}:{}", pos.x, pos.y, ty));
         }
         fn stop_riding(&self, _b: &Blockhead) {
             self.rec("stopriding".to_string());
@@ -2205,9 +2175,6 @@ pub(crate) mod testutil {
             self.rec(format!("additem:{}:{}", item.borrow().item_type.0, flash));
             let _ = b;
         }
-        fn get_plant_at_pos(&self, _p: IntPair) -> Option<ObjRef> {
-            self.plant.borrow().clone()
-        }
         fn interaction_object_with_id(&self, id: i64) -> Option<ObjRef> {
             self.rec(format!("ioid:{id}"));
             self.io_by_id.borrow().clone()
@@ -2217,9 +2184,6 @@ pub(crate) mod testutil {
         }
         fn is_adding_fuel_to_any_workbench(&self, _b: &Blockhead) -> bool {
             self.adding_fuel.get()
-        }
-        fn server_client_light_block_index_for_net_id(&self, _id: Option<&str>) -> Option<i32> {
-            self.light_index.get()
         }
         fn inventory_was_changed_sub_index_was_usage(&self, _b: &Blockhead, i: i32, s: i32, u: bool) {
             self.rec(format!("invchanged:{}:{}:{}", i, s, u));
@@ -2827,5 +2791,42 @@ mod tests {
         r.death(None, 1);
         r.player_move("p", at, at);
         assert_eq!(r.moves.borrow().len(), 1);
+    }
+
+    /// The ride-animation lookup knows the three train classes; the mock dynamic world answers owner names.
+    #[test]
+    fn ride_object_animation_types_by_class() {
+        struct ClassStub {
+            base: RefCell<DynamicObjectBase>,
+            class: &'static ClassInfo,
+        }
+        impl DynamicObject for ClassStub {
+            fn base(&self) -> &RefCell<DynamicObjectBase> {
+                &self.base
+            }
+            fn class_info(&self) -> &'static ClassInfo {
+                self.class
+            }
+            fn as_any(&self) -> &dyn Any {
+                self
+            }
+        }
+        let mk = |class: &'static ClassInfo| -> ObjRef {
+            crate::objects::handle::alloc_obj(|w| ClassStub {
+                base: RefCell::new(DynamicObjectBase::alloc_zeroed_with(w)),
+                class,
+            })
+        };
+        let h = NullHost;
+        for (class, expect) in [
+            (&crate::trains::hand_car::HAND_CAR_CLASS, 28),
+            (&crate::trains::steam_train::STEAM_TRAIN_CLASS, 29),
+            (&crate::trains::passenger_car::PASSENGER_CAR_CLASS, 30),
+            (&DYNAMIC_OBJECT_CLASS, 0),
+        ] {
+            assert_eq!(BlockheadHostStub::ride_object_animation_type(&h, &mk(class)), expect);
+        }
+        let (_world, dw, _dwref) = setup();
+        assert_eq!(crate::objects::base::DynamicWorldApi::get_owner_name_for_object_owner_id(&*dw, "x"), None);
     }
 }
