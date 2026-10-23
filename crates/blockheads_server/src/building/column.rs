@@ -829,13 +829,13 @@ pub(crate) mod fuzz {
     }
 
     /// Sets the 5x5 tiles around `(x, y)` that exist to random types, contents, foreground contents and back walls.
-    pub fn scramble(w: &World, r: &mut Lcg, x: i32, y: i32, contents: &[u8], fg: &[u8]) {
+    pub fn scramble(w: &World, r: &mut Lcg, x: i32, y: i32, types: &[u8], contents: &[u8], fg: &[u8]) {
         for dy in -2..=2 {
             for dx in -2..=2 {
                 if y + dy < 0 || y + dy >= 64 {
                     continue;
                 }
-                let (ty, c, f, bw) = (r.pick(&[2u8, 2, 6, 1]), r.pick(contents), r.pick(fg), r.pick(&[2u8, 6, 6]));
+                let (ty, c, f, bw) = (r.pick(types), r.pick(contents), r.pick(fg), r.pick(&[2u8, 6, 6]));
                 tile(w, x + dx, y + dy).update(|t| {
                     t.type_index = ty;
                     t.contents = c;

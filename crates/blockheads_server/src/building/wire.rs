@@ -613,3 +613,97 @@ mod tests {
         assert_eq!(wire_solid_configuration_for(false, false, true, true), WZ_LEFT_RIGHT_ONLY);
     }
 }
+
+#[cfg(test)]
+mod more_tests {
+    use super::super::column::fuzz::*;
+    use super::super::column::testkit::*;
+    use super::*;
+
+    fn mk(w: &Rc<World>, d: &Rc<DynamicWorld>, x: i32, y: i32, item: i32) -> ObjRef {
+        Wire::init_with_world_dynamic_world_at_position_cache_type_save_dict_placed_by_client(
+            w,
+            d,
+            pos(x, y),
+            None,
+            item,
+            None,
+            None,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn trait_answers_and_net_copies() {
+        let (w, d) = env();
+        let o = mk(&w, &d, 40, 20, ITEM_COPPER_WIRE);
+        let _ = o.class_info();
+        assert_eq!(o.freeblock_creation_item_type(), ITEM_COPPER_WIRE);
+        let mut net = o.update_net_data_for_client(&o, None).unwrap();
+        net[0x1a] = 3;
+        net[0x1b] = 4;
+        o.remote_update(&o, &net);
+        net[0x1b] = 5;
+        o.remote_update(&o, &net);
+        net[0x1b] = 4;
+        o.remote_update(&o, &net);
+        let wire = handle::downcast::<Wire>(&o).unwrap();
+        assert_eq!((wire.st.borrow().current_configuration, wire.st.borrow().current_solid_configuration), (3, 4));
+        let mut lost = net.clone();
+        lost[12..16].copy_from_slice(&300u32.to_le_bytes());
+        assert!(Wire::init_with_world_dynamic_world_cache_net_data(&w, &d, None, &lost).is_none());
+    }
+
+    #[test]
+    fn workbenches_next_to_a_wire_count_when_they_use_electricity() {
+        crate::objects::registry::install();
+        let (w, d) = env();
+        let wire = mk(&w, &d, 40, 20, ITEM_COPPER_WIRE);
+        tile(&w, 41, 20).set_contents(CONTENTS_WORKBENCH);
+        wire.world_changed(&wire, &mut vec![pos(41, 20)]);
+        let cfg = handle::downcast::<Wire>(&wire).unwrap().st.borrow().current_configuration;
+        // no workbench object there: the wire stays unconnected
+        assert_eq!(cfg, WIRE_NO_CONNECTIONS);
+        let bench = crate::crafting::workbench::Workbench::init_with_world_dynamic_world_at_position_cache_type_flipped_save_dict_placed_by_client_client_name(
+            &w,
+            &(d.clone() as crate::objects::base::DynamicWorldRef),
+            pos(41, 20),
+            None,
+            crate::types::enums::WorkbenchType(15),
+            false,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let bench: ObjRef = bench;
+        d.by_pos_set(45, crate::world::tiles::world_index_at_world_pos(pos(41, 20), &w), &bench);
+        let concrete = handle::downcast::<Wire>(&wire).unwrap();
+        concrete.update_wire_configuration(&wire);
+        assert_ne!(concrete.st.borrow().current_configuration, WIRE_NO_CONNECTIONS);
+    }
+
+    #[test]
+    fn wires_in_every_neighbourhood() {
+        let (w, d) = env();
+        let mut r = Lcg(9);
+        let contents =
+            [0u8, 0, CONTENTS_COPPER_WIRE, CONTENTS_ELEVATOR_MOTOR, CONTENTS_WORKBENCH, CONTENTS_WORKBENCH_SPRITE];
+        for item in [ITEM_COPPER_WIRE, ITEM_COPPER_WIRE + 1] {
+            for y in [0, 30, 63] {
+                for _ in 0..200 {
+                    scramble(&w, &mut r, 40, y, &[2, 2, 6, 1, 3], &contents, &[0]);
+                    let o = mk(&w, &d, 40, y, item);
+                    if r.next() % 5 == 0 {
+                        o.base().borrow_mut().pos = pos(40, 300);
+                    }
+                    if r.next() % 4 == 0 {
+                        o.set_needs_removed(&o, true);
+                    }
+                    let p = pos(40 + (r.next() % 5) as i32 - 2, y + (r.next() % 4) as i32 - 2);
+                    o.world_changed(&o, &mut vec![pos(40, y), p]);
+                }
+            }
+        }
+    }
+}

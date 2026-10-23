@@ -545,7 +545,7 @@ mod more_tests {
         let mut seen = std::collections::HashSet::new();
         for y in [0, 1, 30, 62, 63] {
             for _ in 0..400 {
-                scramble(&w, &mut r, 40, y, &[0, 0, CONTENTS_STAIRS], &[0]);
+                scramble(&w, &mut r, 40, y, &[2, 2, 6, 1], &[0, 0, CONTENTS_STAIRS], &[0]);
                 let s = mk(&w, &d, 40, y, 229);
                 let st = handle::downcast::<Stairs>(&s).unwrap();
                 seen.insert(st.st.borrow().current_configuration);

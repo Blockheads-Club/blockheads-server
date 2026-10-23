@@ -450,7 +450,7 @@ mod tests {
         fn set_interaction_object(&self, _o: Option<&ObjRef>) {}
         fn stop_interacting(&self) {}
     }
-    fn bh(controlled: bool, id: Option<&str>) -> ObjRef {
+    pub(super) fn bh(controlled: bool, id: Option<&str>) -> ObjRef {
         handle::alloc_obj(|w| MockBh {
             base: RefCell::new(DynamicObjectBase::alloc_zeroed_with(w)),
             controlled,
@@ -613,5 +613,113 @@ mod tests {
         assert!(door(&o).can_be_used_by_blockhead(&o, &bh(true, Some("placer"))));
         let plain = mk(&w, &d, 50, 20, ITEM_DOOR, None);
         assert!(door(&plain).can_be_used_by_blockhead(&plain, &bh(true, Some("other"))));
+    }
+}
+
+#[cfg(test)]
+mod more_tests {
+    use super::super::column::fuzz::*;
+    use super::super::column::testkit::*;
+    use super::*;
+    use crate::world::helpers::testutil::new_obj;
+
+    fn mk(w: &Rc<World>, d: &Rc<DynamicWorld>, x: i32, y: i32, item: i32, client: Option<&str>) -> ObjRef {
+        Door::init_with_world_dynamic_world_at_position_cache_type_save_dict_placed_by_client(
+            w,
+            d,
+            pos(x, y),
+            None,
+            item,
+            None,
+            client,
+        )
+        .unwrap()
+    }
+    fn door(o: &ObjRef) -> &Door {
+        handle::downcast::<Door>(o).unwrap()
+    }
+
+    #[test]
+    fn trait_answers_and_net_copies() {
+        let (w, d) = env();
+        for item in [ITEM_DOOR, ITEM_TRAPDOOR, ITEM_IRON_DOOR, ITEM_IRON_TRAPDOOR, ITEM_GATE] {
+            let o = mk(&w, &d, 40, 20, item, Some("owner"));
+            let _ = o.class_info();
+            assert_eq!(o.freeblock_creation_item_type(), item);
+            assert!(o.free_block_creation_save_dict(&o).is_some());
+            let sd = o.get_save_dict(&o);
+            assert_eq!(sd.map.get(&"ironPlaceClientID".to_string()).is_some(), is_iron(item));
+            let net = o.update_net_data_for_client(&o, None).unwrap();
+            let n = Door::init_with_world_dynamic_world_cache_net_data(&w, &d, None, &net).unwrap();
+            assert_eq!(door(&n).item_type(), item);
+            o.remote_update(&o, &net);
+            let mut lost = net.clone();
+            lost[12..16].copy_from_slice(&300u32.to_le_bytes());
+            assert!(Door::init_with_world_dynamic_world_cache_net_data(&w, &d, None, &lost).is_none());
+            // opening is idempotent
+            door(&o).set_open_direction(&o, true, 1);
+            door(&o).set_open_direction(&o, true, 1);
+            door(&o).set_open_direction(&o, false, 1);
+        }
+    }
+
+    #[test]
+    fn the_blockhead_stand_in_and_restored_doors() {
+        let m = super::tests::bh(true, Some("zed"));
+        let _ = (m.class_info(), m.base().borrow().unique_id, m.as_any().is::<i32>());
+        let b = m.as_blockhead().unwrap();
+        assert_eq!(b.client_id().as_deref(), Some("zed"));
+        assert!(!b.is_interacting_with_any_interaction_object());
+        b.set_interaction_object(None);
+        b.stop_interacting();
+        let (w, d) = env();
+        let o = mk(&w, &d, 40, 20, ITEM_DOOR, None);
+        o.set_needs_removed(&o, false);
+        assert!(!o.needs_removed());
+    }
+
+    #[test]
+    fn who_may_use_a_door() {
+        let (w, d) = env();
+        let plain = new_obj();
+        for item in [ITEM_DOOR, ITEM_IRON_DOOR] {
+            let o = mk(&w, &d, 40, 20, item, Some("owner"));
+            assert!(door(&o).can_be_used_by_blockhead(&o, &plain) != is_iron(item));
+        }
+        // an admin world opens everything for ordinary objects
+        let o = mk(&w, &d, 41, 20, ITEM_IRON_DOOR, Some("owner"));
+        w.is_admin.set(true);
+        assert!(door(&o).can_be_used_by_blockhead(&o, &plain));
+        w.is_admin.set(false);
+        // a door nobody owns is open to all
+        let free = mk(&w, &d, 42, 20, ITEM_IRON_DOOR, None);
+        assert!(door(&free).can_be_used_by_blockhead(&free, &plain));
+    }
+
+    #[test]
+    fn blocked_status_in_every_neighbourhood() {
+        let (w, d) = env();
+        let mut r = Lcg(5);
+        let types = [2u8, 2, 6, 1, 9, 0x38, 0x39];
+        for item in [ITEM_DOOR, ITEM_TRAPDOOR, ITEM_IRON_DOOR, ITEM_IRON_TRAPDOOR, ITEM_GATE] {
+            for y in [0, 30, 63] {
+                for _ in 0..150 {
+                    scramble(&w, &mut r, 40, y, &types, &[0, 0, CONTENTS_ELEVATOR_SHAFT], &[0]);
+                    let o = mk(&w, &d, 40, y, item, None);
+                    if r.next() % 4 == 0 {
+                        o.base().borrow_mut().pos = pos(40, 300);
+                    }
+                    door(&o).check_and_update_blocked_status(&o);
+                    let p = pos(40 + (r.next() % 5) as i32 - 2, y + (r.next() % 4) as i32 - 2);
+                    o.world_changed(&o, &mut vec![p, pos(40, y - 1)]);
+                    o.set_needs_removed(&o, true);
+                }
+            }
+        }
+        // a net replica ignores world changes
+        let o = mk(&w, &d, 50, 20, ITEM_DOOR, None);
+        let net = o.creation_net_data_for_client(&o, None).unwrap();
+        let n = Door::init_with_world_dynamic_world_cache_net_data(&w, &d, None, &net).unwrap();
+        n.world_changed(&n, &mut vec![pos(50, 20)]);
     }
 }
