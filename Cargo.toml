@@ -23,10 +23,10 @@ lmdb-master-sys = "=0.2.6"
 anyhow = "1"
 # The shared mod host and its WASM runtime, from Blockheads-Club/mod-sdk at a pinned commit. For local work on both
 # repositories, override them with a sibling checkout (see docs/development.md, "Developing against a local mod-sdk").
-bhmod-core = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "3651df5" }
-bhmod-wasm = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "3651df5" }
-bhmod-manifest = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "3651df5" }
-bhmod-proto = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "3651df5" }
+bhmod-core = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "26ee55e" }
+bhmod-wasm = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "26ee55e" }
+bhmod-manifest = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "26ee55e" }
+bhmod-proto = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "26ee55e" }
 
 # The original is a C/ObjC binary: unwinding is needed to emulate its exception catch sites.
 [profile.dev]
