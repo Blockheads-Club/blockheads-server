@@ -1579,13 +1579,15 @@ fn solid_items_in_flooded_shafts_and_foreign_free_blocks() {
     let b = s.b();
     // every item against a shaft tile that is full of water
     for item in 0..1200u32 {
-        reset(&s.w);
-        s.tile(10, 12).set_contents(0x67);
-        let t = s.tile(10, 12);
-        t.set_type_index(3);
-        t.set_partial_content_left(0xff);
-        s.tile(11, 12).set_type_index(1);
-        let _ = s.rule(Some(item), 0, true);
+        for (ty, pcl) in [(3u8, 0xffu8), (3, 0x10), (2, 0)] {
+            reset(&s.w);
+            s.tile(10, 12).set_contents(0x67);
+            let t = s.tile(10, 12);
+            t.set_type_index(ty);
+            t.set_partial_content_left(pcl);
+            s.tile(11, 12).set_type_index(1);
+            let _ = s.rule(Some(item), 0, true);
+        }
     }
     // a free block owned by somebody else is not picked up by a non-admin
     use crate::physics_objects::free_block::FreeBlock;

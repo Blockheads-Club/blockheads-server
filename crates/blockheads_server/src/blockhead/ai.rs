@@ -424,8 +424,9 @@ impl BlockheadAI {
                 let mut air = tile_is_air_or_snow(a);
                 if !air {
                     air = tile_is_air_or_snow(tat(pos.x - 1, pos.y));
-                } else if let Some(a) = a {
-                    let at = a.get();
+                } else {
+                    // (`air` is only true for an existing tile)
+                    let at = a.expect("an air tile exists").get();
                     if at.contents != 0 || at.foreground_contents != 0 {
                         return false;
                     }

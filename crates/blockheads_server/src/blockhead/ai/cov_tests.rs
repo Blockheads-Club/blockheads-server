@@ -285,7 +285,7 @@ fn acting_on_each_kind_of_found_tile() {
         ai.with_state(|s| {
             s.found_tile[k] = true;
             s.found_tile_pos[k] = pos;
-            s.current_search_level = 5;
+            s.current_search_level = 17;
         });
         ai.update_is_simulation(0.1, false);
     };
@@ -411,6 +411,21 @@ fn flowering_plants_without_a_tool_and_the_other_corners() {
     assert!(ai.test_tile_at_pos(pos));
     ai.with_state(|s| assert!(s.found_tile[12] && !s.found_tile[8]));
     assert!(!ai.test_tile_at_pos(pos));
+    // both slots taken: nothing left to find on a flowering plant
+    ai.with_state(|s| {
+        s.found_tile[8] = true;
+        s.found_tile[12] = true;
+    });
+    assert!(!ai.test_tile_at_pos(pos));
+    ai.with_state(|s| s.found_tile = [false; 16]);
+    // soil at the very top of the loaded block with a sowable item, but no tile above it
+    set(&w, 16, 31, |t| {
+        t.type_index = 6;
+        t.sun_light = 200;
+    });
+    ai.with_state(|s| s.sowable_item = ItemType(21));
+    let _ = ai.test_tile_at_pos(IntPair { x: 16, y: 31 });
+    ai.with_state(|s| s.sowable_item = ItemType(0));
     // every sowable item, with free and with occupied space above the soil
     for above_contents in [0u8, 0x30] {
         for item in 0..1200u32 {

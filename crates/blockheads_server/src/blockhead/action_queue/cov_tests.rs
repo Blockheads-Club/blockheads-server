@@ -57,6 +57,10 @@ fn time_crystals_are_not_counted_and_unknown_objects_destroy_nothing() {
     *h.io.borrow_mut() = Some(stub(1, true));
     assert!(queue(b, IntPair { x: 7, y: 8 }, InteractionType::INTERACTION_DIG));
     assert!(last_change(b).is_empty());
+    // contents without any object at all
+    *h.io.borrow_mut() = None;
+    assert!(queue(b, IntPair { x: 7, y: 8 }, InteractionType::INTERACTION_DIG));
+    assert!(last_change(b).is_empty());
 }
 
 #[test]
