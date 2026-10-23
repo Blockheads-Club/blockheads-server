@@ -123,13 +123,13 @@ fn get_line_from(file: &mut dyn std::io::BufRead, buf: &mut [u8]) -> i32 {
 /// C `getLine(prmpt, buff, sz)`: 0 ok, 1 EOF, 2 overlong. The prompt goes to stdout and is flushed.
 pub fn get_line(prompt: Option<&str>, buf: &mut [u8]) -> i32 {
     use std::io::Write;
-    if let Some(p) = prompt {
+    prompt.into_iter().for_each(|p| {
         let mut out = std::io::stdout().lock();
         // The C string ends at the first NUL.
         let end = p.as_bytes().iter().position(|&b| b == 0).unwrap_or(p.len());
         let _ = out.write_all(&p.as_bytes()[..end]);
         let _ = out.flush();
-    }
+    });
     get_line_from(&mut std::io::stdin().lock(), buf)
 }
 
@@ -140,6 +140,17 @@ fn answer_confirms(buf: &[u8]) -> bool {
     match std::str::from_utf8(&buf[..end]) {
         Err(_) => true,
         Ok(s) => nsstring::case_insensitive_compare(s, "yes") == 0,
+    }
+}
+
+/// World width in macro blocks for a `--world_width` multiplier (1, 4, 16, 104 = 1/4, 116 = 1/16; anything else is 1).
+fn width_macro(multiplier: i32) -> i32 {
+    match multiplier {
+        4 => 2048,
+        16 => 8192,
+        104 => 128,
+        116 => 32,
+        _ => 512,
     }
 }
 
@@ -211,13 +222,7 @@ impl CommandLineDelegate {
     fn run_init(self: &Rc<Self>, p: InitParams) -> bool {
         generate_custom_rule_world_gen_options();
         generate_custom_rule_game_options();
-        let mut world_width_macro = match p.width_multiplier {
-            4 => 2048,
-            16 => 8192,
-            104 => 128,
-            116 => 32,
-            _ => 512,
-        };
+        let mut world_width_macro = width_macro(p.width_multiplier);
         glibc_rand::srand(clock::unix_time() as u32);
         // PIXEL_SCALE = 1.0f and IS_MULTI_CORE_CPU = 1 are fixed in the rest of the port (no globals to set).
         if p.delete_world_name.is_none() {
@@ -451,11 +456,7 @@ impl CommandLineDelegate {
         if !Path::new(&saves).is_dir() {
             return result;
         }
-        let rd = match std::fs::read_dir(&saves) {
-            Ok(r) => r,
-            Err(_) => return result,
-        };
-        for e in rd.flatten() {
+        for e in std::fs::read_dir(&saves).into_iter().flatten().flatten() {
             let item = e.file_name().to_string_lossy().into_owned();
             let d = match self.load_save_dict_for_world_with_id(&item) {
                 Some(d) => d,
@@ -493,14 +494,12 @@ impl CommandLineDelegate {
             Ok(m) if m.is_dir() => {}
             _ => return None,
         }
-        let mut dict: Option<PlistValue> = None;
-        if let Some(env) = DatabaseEnvironment::new(&format!("{}/world_db/", full), 4, 1024) {
-            if let Some(db) = Database::new(&env, "main") {
-                if let Some(d) = db.data_for_key(Some("worldv2")) {
-                    dict = property_list_from_data(&d);
-                }
-            }
-        }
+        let env = DatabaseEnvironment::new(&format!("{}/world_db/", full), 4, 1024);
+        let mut dict: Option<PlistValue> = env
+            .as_ref()
+            .and_then(|e| Database::new(e, "main"))
+            .and_then(|db| db.data_for_key(Some("worldv2")))
+            .and_then(|d| property_list_from_data(&d));
         if dict.is_none() {
             let p = paths::append_path_component(&full, "worldv2");
             if Path::new(&p).exists() {
@@ -531,16 +530,9 @@ impl CommandLineDelegate {
     pub fn update_save_game_value(&self, value: PlistValue, key: &str, save_id: &str) {
         let full = paths::save_dir(save_id);
         let env = DatabaseEnvironment::new(&format!("{}/world_db/", full), 4, 1024);
-        let mut db: Option<Database> = None;
-        let mut save_dict: Option<PlistValue> = None;
-        if let Some(e) = &env {
-            db = Database::new(e, "main");
-            if let Some(db) = &db {
-                if let Some(d) = db.data_for_key(Some("worldv2")) {
-                    save_dict = property_list_from_data(&d);
-                }
-            }
-        }
+        let db: Option<Database> = env.as_ref().and_then(|e| Database::new(e, "main"));
+        let mut save_dict: Option<PlistValue> =
+            db.as_ref().and_then(|db| db.data_for_key(Some("worldv2"))).and_then(|d| property_list_from_data(&d));
         if save_dict.is_none() {
             let f = paths::append_path_component(&full, "worldv2");
             if Path::new(&f).exists() {
@@ -620,39 +612,6 @@ impl CommandLineDelegate {
         }
         lists::create_new_world_lists(Path::new(&appsup), &world_id);
         Some(world_id)
-    }
-
-    /// `-loadWorldWithSaveDict:...`.
-    #[allow(clippy::too_many_arguments)]
-    pub fn load_world_with_save_dict(
-        &self,
-        save_dict: &PlistDict,
-        save_id: &str,
-        port: &str,
-        max_players: i32,
-        save_delay: i32,
-        world_width_macro: i32,
-        credit: i32,
-        cloud_salt: Option<&str>,
-        owner_name: Option<&str>,
-        privacy: Option<&str>,
-        convert_to_custom_rules: bool,
-        no_exit: bool,
-    ) {
-        self.load_world_impl(
-            save_dict,
-            Some(save_id),
-            port,
-            max_players,
-            save_delay,
-            world_width_macro,
-            credit,
-            cloud_salt,
-            owner_name,
-            privacy,
-            convert_to_custom_rules,
-            no_exit,
-        );
     }
 
     /// Implementation with a possibly-nil save id (empty dict after a failed reload).
@@ -744,13 +703,7 @@ pub fn list_saved_worlds() -> Vec<SavedWorld> {
 /// Create a world on disk without starting it (host API; same as the creation step of `--new`).
 /// `width_multiplier` is one of 1, 4, 16, 104 (1/4 size) or 116 (1/16 size); anything else means 1.
 pub fn create_saved_world(name: &str, width_multiplier: i32, expert_mode: bool) -> Option<SavedWorld> {
-    let macro_width = match width_multiplier {
-        4 => 2048,
-        16 => 8192,
-        104 => 128,
-        116 => 32,
-        _ => 512,
-    };
+    let macro_width = width_macro(width_multiplier);
     glibc_rand::srand(clock::unix_time() as u32);
     let appsup = appsup_path();
     let _ = std::fs::create_dir_all(&appsup);
@@ -837,6 +790,32 @@ mod tests {
         assert_eq!(run_get_line(b"").0, 1);
     }
 
+    /// A reader whose every read fails.
+    struct Failing;
+    impl std::io::Read for Failing {
+        fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("read failed"))
+        }
+    }
+
+    #[test]
+    fn value_rendering_and_width_table() {
+        assert_eq!(text(Some(&PlistValue::int(5))), "5");
+        assert_eq!(opt_text(Some(&PlistValue::int(5))).as_deref(), Some("5"));
+        assert_eq!(opt_text(None), None);
+        assert_eq!(text(None), "(null)");
+        let widths: Vec<i32> = [4, 16, 104, 116, 1, -1, 0].map(width_macro).to_vec();
+        assert_eq!(widths, [2048, 8192, 128, 32, 512, 512, 512]);
+    }
+
+    #[test]
+    fn get_line_edge_cases() {
+        assert_eq!(get_line_from(&mut std::io::Cursor::new(b"abc\n".to_vec()), &mut []), 1); // no room at all
+        let mut buf = [0u8; 4];
+        assert_eq!(get_line_from(&mut std::io::BufReader::new(Failing), &mut buf), 1);
+        // a failing read is end of input
+    }
+
     /// Answer rules of the delete prompt.
     #[test]
     fn confirm_rules() {
@@ -857,5 +836,166 @@ mod tests {
         glibc_rand::srand(1792193084);
         let r = glibc_rand::rand();
         assert_eq!(compute_world_id(1792193084, 7, "IDTEST", r), "ab3921b867257e3dede515042f081520");
+    }
+
+    static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+    /// A fresh data directory for this thread (`paths::appsup()` points at it until the thread ends).
+    fn data_dir(tag: &str) -> std::path::PathBuf {
+        let base = std::env::var_os("TMPDIR").map(std::path::PathBuf::from).unwrap_or_else(std::env::temp_dir);
+        let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let d = base.join(format!("bh_delegate_{tag}_{}_{n}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        paths::set_data_dir_override(Some(d.to_str().unwrap().to_string()));
+        d
+    }
+
+    /// Write a save the way an old version stored it: a plain `worldv2` property list in `saves/<dir>/`.
+    fn plain_save(root: &Path, dir: &str, build: impl FnOnce(&mut PlistDict)) {
+        let mut d =
+            PlistDict { map: GsDict::new(), tag: ClassTag { origin: Origin::Built, mutable: true, alt: false } };
+        d.map.insert("saveID".to_string(), PlistValue::string(dir));
+        d.map.insert("worldName".to_string(), PlistValue::string(dir.to_uppercase()));
+        d.map.insert("saveVersion".to_string(), PlistValue::int(1100));
+        build(&mut d);
+        let full = root.join("saves").join(dir);
+        std::fs::create_dir_all(&full).unwrap();
+        std::fs::write(full.join("worldv2"), data_from_property_list(&PlistValue::Dict(d)).unwrap()).unwrap();
+    }
+
+    fn ids(saves: &[PlistDict]) -> Vec<String> {
+        saves.iter().map(|d| text(get(d, "saveID"))).collect()
+    }
+
+    #[test]
+    fn create_world_variants_and_failures() {
+        let root = data_dir("create");
+        let d = detached_delegate();
+        assert_eq!(d.create_new_world_with_name("ONE", 32, Some("id1"), None, false).as_deref(), Some("id1"));
+        let generated = d.create_new_world_with_name("TWO", 512, None, Some("{\"a\":1}"), true).unwrap();
+        assert_eq!(generated.len(), 32);
+        let broken = d.create_new_world_with_name("BAD", 512, Some("id3"), Some("{nope"), false).unwrap();
+        let saved = d.load_save_dict_for_world_with_id(&broken).unwrap();
+        assert!(get(&saved, "customRulesDict").is_none());
+        let custom = d.load_save_dict_for_world_with_id(&generated).unwrap();
+        assert!(get(&custom, "customRulesDict").is_some());
+        assert!(get(&custom, "expertMode").unwrap().bool_value());
+        // A directory where the world file belongs makes the final rename fail; a file where `saves` belongs the write.
+        std::fs::create_dir_all(root.join("saves/id4/worldv2")).unwrap();
+        assert_eq!(d.create_new_world_with_name("FOUR", 512, Some("id4"), None, false), None);
+        std::fs::remove_dir_all(root.join("saves")).unwrap();
+        std::fs::write(root.join("saves"), b"x").unwrap();
+        assert_eq!(d.create_new_world_with_name("FIVE", 512, Some("id5"), None, false), None);
+        assert!(!write_atomic(root.join("missing/dir/file").to_str().unwrap(), b"x"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn listing_orders_newest_first_and_raises_on_a_missing_date() {
+        let root = data_dir("order");
+        let d = detached_delegate();
+        assert!(d.game_saves().is_empty()); // no saves directory yet
+        std::fs::create_dir_all(root.join("saves")).unwrap();
+        std::fs::write(root.join("saves/stray"), b"not a save").unwrap(); // a file is not a save
+        std::fs::create_dir_all(root.join("saves/empty")).unwrap(); // nor is an empty directory
+        for (id, t) in [("a", 10.0), ("b", 30.0), ("c", 20.0)] {
+            plain_save(&root, id, |m| {
+                m.map.insert("saveDate".to_string(), PlistValue::date(t));
+            });
+        }
+        assert_eq!(ids(&d.game_saves()), ["b", "c", "a"]);
+        assert_eq!(list_saved_worlds().iter().map(|w| w.id.as_str()).collect::<Vec<_>>(), ["b", "c", "a"]);
+        // Undated saves are appended; a dated save that is not newer than everything before it reaches one and raises,
+        // which the host listing absorbs. The directory order decides when that happens, so add pairs until it has.
+        let raised = (0..40).any(|round| {
+            plain_save(&root, &format!("u{round}"), |_| ());
+            plain_save(&root, &format!("z{round}"), |m| {
+                m.map.insert("saveDate".to_string(), PlistValue::date(1.0));
+            });
+            catch_ns(|| d.game_saves()).is_err()
+        });
+        assert!(raised);
+        assert!(list_saved_worlds().is_empty());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn save_dictionary_sources_and_filters() {
+        let root = data_dir("load");
+        let d = detached_delegate();
+        assert!(d.load_save_dict_for_world_with_id("nothing").is_none());
+        plain_save(&root, "ok", |_| ());
+        plain_save(&root, "old", |m| {
+            m.map.insert("saveVersion".to_string(), PlistValue::int(399));
+        });
+        plain_save(&root, "remote", |m| {
+            m.map.insert("remoteGame".to_string(), PlistValue::boolean(true));
+        });
+        assert!(d.load_save_dict_for_world_with_id("ok").is_some());
+        assert!(d.load_save_dict_for_world_with_id("old").is_none());
+        assert!(d.load_save_dict_for_world_with_id("remote").is_none());
+        // The oldest layout: an OpenStep property list called `world`.
+        let legacy = root.join("saves/legacy");
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(legacy.join("world"), b"{saveVersion=1100; saveID=legacy; worldName=LEGACY;}").unwrap();
+        assert!(d.load_save_dict_for_world_with_id("legacy").is_some());
+        // A property list that is not a dictionary.
+        let array = root.join("saves/array");
+        std::fs::create_dir_all(&array).unwrap();
+        std::fs::write(array.join("worldv2"), b"(1, 2)").unwrap();
+        assert!(d.load_save_dict_for_world_with_id("array").is_none());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn update_save_value_writes_to_the_database() {
+        let root = data_dir("update");
+        let d = detached_delegate();
+        d.update_save_game_value(PlistValue::string("x"), "worldName", "missing"); // logs, creates nothing useful
+        plain_save(&root, "w1", |_| ());
+        d.update_save_game_value(PlistValue::string("RENAMED"), "worldName", "w1");
+        assert_eq!(text(get(&d.load_save_dict_for_world_with_id("w1").unwrap(), "worldName")), "RENAMED");
+        // A non-dictionary root cannot be updated.
+        let array = root.join("saves/array");
+        std::fs::create_dir_all(&array).unwrap();
+        std::fs::write(array.join("worldv2"), b"(1, 2)").unwrap();
+        d.update_save_game_value(PlistValue::string("x"), "worldName", "array");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn host_api_create_list_delete() {
+        let root = data_dir("host");
+        let w = create_saved_world("my world", 116, false).unwrap();
+        assert_eq!(w.name, "MY WORLD");
+        for (m, name) in [(4, "A"), (16, "B"), (104, "C"), (1, "D")] {
+            assert!(create_saved_world(name, m, true).is_some());
+        }
+        assert_eq!(list_saved_worlds().len(), 5);
+        assert!(!delete_saved_world("nope"));
+        assert!(delete_saved_world("my world"));
+        assert!(delete_saved_world(&list_saved_worlds()[0].id.clone()));
+        assert_eq!(list_saved_worlds().len(), 3);
+        // A save whose stored id differs from its directory has nothing to remove.
+        plain_save(&root, "dir", |m| {
+            m.map.insert("saveID".to_string(), PlistValue::string("other"));
+        });
+        assert!(delete_saved_world("other"));
+        // Creating needs a writable saves directory.
+        std::fs::remove_dir_all(root.join("saves")).unwrap();
+        std::fs::write(root.join("saves"), b"x").unwrap();
+        assert!(create_saved_world("blocked", 1, false).is_none());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn typed_input_without_a_world_is_ignored() {
+        let _root = data_dir("typed");
+        let d = detached_delegate();
+        d.command_typed(b"\xff\xfe");
+        d.command_typed(b"\n");
+        d.command_typed(b"hello\n"); // no game controller: the nil receiver swallows it
+        assert!(d.done());
     }
 }
