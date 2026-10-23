@@ -122,6 +122,20 @@ pub fn free_udp_port() -> u16 {
     0
 }
 
+/// First port of `n` consecutive free UDP ports (0 when none was found).
+pub fn free_udp_port_range(n: u16) -> u16 {
+    for _ in 0..200 {
+        let base = free_udp_port();
+        if base != 0
+            && base.checked_add(n).is_some()
+            && (base..base + n).all(|p| std::net::UdpSocket::bind(("0.0.0.0", p)).is_ok())
+        {
+            return base;
+        }
+    }
+    0
+}
+
 static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 /// Unique directory under `std::env::temp_dir()`, removed on drop.
 pub struct TempDir(PathBuf);
@@ -430,11 +444,21 @@ fn glob(pat: &str, text: &str, star_crosses: bool) -> bool {
 /// This is the ONE place coupled to `test_client`. `dir` receives the per-client JSONL files; the
 /// returned events are the `rx`/`tx` records of every client in file order (client alias in `TraceEvent.client`).
 pub fn run_script(script: &str, addr: std::net::SocketAddr, dir: &Path) -> Result<Vec<normalize::TraceEvent>> {
+    run_script_ports(script, addr, dir, None)
+}
+
+/// [`run_script`] with the n-th client bound to UDP port `port_base + n` (see `RunOptions::client_port_base`).
+pub fn run_script_ports(
+    script: &str,
+    addr: std::net::SocketAddr,
+    dir: &Path,
+    port_base: Option<u16>,
+) -> Result<Vec<normalize::TraceEvent>> {
     use crate::scenario::{RunOptions, Scenario};
     let mut sc = Scenario::parse(script).map_err(|e| HarnessError::Parse(e.to_string()))?;
     sc.name = "script".to_string();
     let cfg = crate::ClientConfig { addr, ..Default::default() };
-    let opts = RunOptions { trace_dir: Some(dir.to_path_buf()), ..Default::default() };
+    let opts = RunOptions { trace_dir: Some(dir.to_path_buf()), client_port_base: port_base, ..Default::default() };
     let report = sc.run(&cfg, &opts).map_err(|e| HarnessError::Parse(e.to_string()))?;
     let mut all = Vec::new();
     for (_, p) in &report.traces {
@@ -457,6 +481,14 @@ mod tests {
         assert_eq!(strip_nslog_prefix("World load complete."), "World load complete.");
         assert_eq!(strip_nslog_prefix("  continuation line"), "  continuation line");
         assert_eq!(strip_nslog_prefix("2026-10-16 20:30:41.724 x[1]nospace"), "2026-10-16 20:30:41.724 x[1]nospace");
+    }
+
+    #[test]
+    fn port_range_is_free_and_consecutive() {
+        let base = free_udp_port_range(4);
+        assert_ne!(base, 0);
+        let socks: Vec<_> = (base..base + 4).map(|p| std::net::UdpSocket::bind(("0.0.0.0", p)).unwrap()).collect();
+        assert_eq!(socks.len(), 4);
     }
 
     #[test]

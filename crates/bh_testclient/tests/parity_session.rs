@@ -21,8 +21,11 @@ const SOLO: &str = "client TESTER\ninitial-data\nwait 06\nwait 1e 6000\nuid\nhb-
 /// The second `a` is a new client (the runner forbids reusing an alias) on another device, named like the
 /// logged-in `A`: the reference rejects it with reason 2.
 const REJECTIONS: &str = "client A\nclient ABCDEFGHIJKLMNOPQ\nexpect-reject 14\nclient Server\nexpect-reject 2\nclient a\nexpect-reject 2\nuse A\ndisconnect\n";
-const MALFORMED: &str =
-    "client TCA\nsend 0301\nsleep 1000\nsend 15aa\nsleep 1000\nsend fe\nsleep 1500\nuid\nquiet 1000\n";
+/// An unknown packet type, then a request that still gets answered. Packets with a truncated payload (`0301` block
+/// request, `15aa` workbench request) are left out on purpose: the original reads their structs past the end of the
+/// packet (heap garbage), the reference then exits or stops answering and nothing that follows is comparable, while
+/// ours reads zeros.
+const MALFORMED: &str = "client TCA\nsend fe\nsleep 300\nuid\ndisconnect\n";
 
 fn server_args() -> Vec<String> {
     [
@@ -51,12 +54,14 @@ fn addr(port: u16) -> SocketAddr {
 }
 
 /// Start a server, run the script, stop it; returns the trace and the exit code and keeps the handle for save inspection.
-fn run_on(h: &mut dyn ServerHandle, script: &str) -> (Vec<TraceEvent>, Option<i32>) {
+fn run_on(h: &mut dyn ServerHandle, script: &str, ports: u16) -> (Vec<TraceEvent>, Option<i32>) {
     h.wait_for_log("World load complete.", Duration::from_secs(90)).expect("load");
     let dir = TempDir::new("trace").unwrap();
-    let ev = run_script(script, addr(h.port()), dir.path()).expect("script");
+    let ev = run_script_ports(script, addr(h.port()), dir.path(), Some(ports)).expect("script");
     let code = if h.is_running() { None } else { Some(0) };
-    (ev, code)
+    // SERVER_LIGHT_BLOCK is pushed from the server's own timer: whether it lands before the script ends depends on
+    // scheduling, on the reference as well (see mods_parity).
+    (ev.into_iter().filter(|e| e.bytes.first() != Some(&0x28)).collect(), code)
 }
 
 fn parity(tag: &str, script: &str) {
@@ -81,15 +86,17 @@ fn parity_with(tag: &str, script: &str, args: Vec<String>, mask_relayed_chat_dat
         eprintln!("SKIP: {} (BH_PARITY=1 + docker required)", tag);
         return;
     }
+    // The same client ports in every run: the server's send channel follows the hash order of the `host:port` keys.
+    let ports = free_udp_port_range(16);
     let spec = |t: &str| RunSpec { tag: format!("{}-{}", tag, t), args: args.clone(), ..Default::default() };
     let mut r1 = RefServer::start(&spec("r1")).unwrap();
-    let (t1, c1) = run_on(&mut r1, script);
+    let (t1, c1) = run_on(&mut r1, script, ports);
     drop(r1);
     let mut r2 = RefServer::start(&spec("r2")).unwrap();
-    let (t2, _) = run_on(&mut r2, script);
+    let (t2, _) = run_on(&mut r2, script, ports);
     drop(r2);
     let mut o = OurServer::start(&spec("ours")).unwrap();
-    let (t3, c3) = run_on(&mut o, script);
+    let (t3, c3) = run_on(&mut o, script, ports);
     assert_eq!(c1, c3, "{}: server liveness after the script differs (ref {:?} ours {:?})", tag, c1, c3);
     let mut opts = NormalizeOptions { mask_relayed_chat_date, ..NormalizeOptions::default() };
     let (n1, n2) = (normalize_trace(&t1, &opts), normalize_trace(&t2, &opts));
@@ -111,17 +118,13 @@ fn session_two_clients() {
     }
     parity("two", &two_clients_script());
 }
-/// Open difference: for the second `a` the reference sends 0x23 and the 0x26 rejection on channel 0, ours on
-/// channel 1.
+/// The channel of 0x23/0x26 is the rejected client's index in the connection dictionary, whose order follows the hash
+/// of the `host:port` keys: the clients use the same ports against the reference and against us.
 #[test]
-#[ignore = "open difference: 0x23/0x26 to a rejected second client go out on channel 1 (reference: 0)"]
 fn session_rejections() {
     parity("rej", REJECTIONS);
 }
-/// The reference never answers the final `uid` after the malformed packets (timeout waiting for 0x0f), probably
-/// because it drops the client; the expectation needs re-capturing.
 #[test]
-#[ignore = "stale expectation: the reference sends no 0x0f after the malformed packets"]
 fn session_malformed() {
     parity("mal", MALFORMED);
 }
@@ -139,7 +142,7 @@ fn session_save_after() {
         let spec = RunSpec { tag: "saveafter".into(), args: server_args(), ..Default::default() };
         let mut h: Box<dyn ServerHandle> =
             if ours { Box::new(OurServer::start(&spec).unwrap()) } else { Box::new(RefServer::start(&spec).unwrap()) };
-        let _ = run_on(h.as_mut(), SOLO);
+        let _ = run_on(h.as_mut(), SOLO, free_udp_port_range(16));
         h.wait_for_saves(WORLD, 2, Duration::from_secs(30)).unwrap();
         h.stop_sigint(Duration::from_secs(10)).unwrap();
         saves.push(h.save_dir(WORLD));
