@@ -31,14 +31,14 @@ repository. They skip cleanly unless these environment variables are set:
 
 Coverage: `scripts/coverage-gate.sh` (what CI runs; needs cargo-llvm-cov). The policy is 100 % line coverage. The mod
 host seam (with the 0xBC protocol) and the test client's modded mode are gated at 100 %, file by file; the rest of the
-port is gated at per-crate floors (server 80 %, test client library 72 %, measured 81.0 % and 72.8 %) that only go up.
+port is gated at per-crate floors (server 80 %, test client library 70 %, measured in CI 81.07 % and 70.6 %) that only go up.
 The probe tools and the command-line mains of the test client are not measured; the docker-only parts of the harness
 count as they are (their tests skip without the reference environment). `scripts/mods-coverage.sh` is the quick local
 check of the 100 % part.
 
 ### Developing against a local mod-sdk
 
-`bhmod-core`, `bhmod-wasm`, `bhmod-manifest` and `bhmod-proto` come from `https://github.com/Blockheads-Club/mod-sdk` at the `rev` pinned in the
+`bhmod-core`, `bhmod-wasm`, `bhmod-manifest`, `bhmod-proto` and `bhmod-content` come from `https://github.com/Blockheads-Club/mod-sdk` at the `rev` pinned in the
 workspace `Cargo.toml`. To build against a local checkout instead (for example `../mod-sdk` next to this repository),
 patch the git source on the command line; nothing in the repository changes except `Cargo.lock`, which you must not
 commit in that state:
@@ -49,12 +49,13 @@ cargo test --workspace \
   --config "$P.bhmod-core.path=\"../mod-sdk/crates/bhmod-core\"" \
   --config "$P.bhmod-wasm.path=\"../mod-sdk/crates/bhmod-wasm\"" \
   --config "$P.bhmod-manifest.path=\"../mod-sdk/crates/bhmod-manifest\"" \
-  --config "$P.bhmod-proto.path=\"../mod-sdk/crates/bhmod-proto\""
+  --config "$P.bhmod-proto.path=\"../mod-sdk/crates/bhmod-proto\"" \
+  --config "$P.bhmod-content.path=\"../mod-sdk/crates/bhmod-content\""
 git checkout Cargo.lock   # before committing
 ```
 
-When a mod-sdk change lands, bump the four `rev`s to its commit and run
-`cargo update -p bhmod-core -p bhmod-wasm -p bhmod-manifest -p bhmod-proto`.
+When a mod-sdk change lands, bump the five `rev`s to its commit and run
+`cargo update -p bhmod-core -p bhmod-wasm -p bhmod-manifest -p bhmod-proto -p bhmod-content`.
 
 ### The 0xBC mod protocol (server side)
 
