@@ -879,6 +879,8 @@ pub(crate) mod testkit {
         pub view_radius: Cell<i32>,
         pub peers: Cell<usize>,
         pub has_save: Cell<bool>,
+        /// When set, `loadLightBlock...` installs an empty per-client light block.
+        pub load_light: Cell<bool>,
     }
     impl Rec {
         pub fn take(&self) -> Vec<String> {
@@ -908,6 +910,19 @@ pub(crate) mod testkit {
         }
         fn get_weather_fraction_for_pos_at_world_time(&self, _w: &World, _p: IntPair, _t: f64) -> f32 {
             self.weather.get()
+        }
+        fn load_light_block_for_client_light_block_index_into_physical_block(
+            &self,
+            _w: &World,
+            index: i32,
+            pb: PhysicalBlockRef,
+        ) {
+            self.push(format!("loadLightBlock({index})"));
+            if self.load_light.get() {
+                if let Some(s) = pb.client_light_blocks.borrow_mut().get_mut(index as usize) {
+                    *s = Some(Box::new([0u8; 1024]));
+                }
+            }
         }
         fn decommision_block_block_to_save_physcial_block(&self, _w: &World, mt: &MacroTileRef, b: bool) {
             let _ = mt;
@@ -1247,5 +1262,84 @@ mod tests {
         assert_eq!(pen(12, 10, 10), 20); // 120/6
         assert_eq!(pen(3, 10, 10), 10);
         assert_eq!(pen(6, 10, 10), 10); // 60/6 = 10 < 11 -> w
+    }
+}
+
+#[cfg(test)]
+mod default_tests {
+    use super::*;
+    use crate::world::helpers::testutil::new_obj;
+    use crate::world::state::PhysicalBlock;
+
+    #[test]
+    fn every_inert_default_answers() {
+        let s = NullServices;
+        let w = World::alloc(32);
+        let obj = new_obj();
+        let pb: PhysicalBlockRef = Box::leak(Box::new(PhysicalBlock::new_fresh()));
+        let tile = TileRef::new(pb, 0);
+        let mt = w.macro_tiles().get(0).unwrap();
+        let _ = LightingServices::save_sunlight_changed_at_pos(&s, &w, IntPair { x: 0, y: 0 });
+        let _ = LightingServices::fill_tile_at_pos_with_type(&s, &w, tile, IntPair { x: 0, y: 0 }, 0);
+        let _ = LightingServices::get_weather_fraction_for_pos(&s, &w, IntPair { x: 0, y: 0 });
+        let _ = LightingServices::get_weather_fraction_for_pos_at_world_time(&s, &w, IntPair { x: 0, y: 0 }, 0.0);
+        let _ = LightingServices::get_day_night_fraction_for_x_at_world_time(&s, &w, 0.0, 0.0);
+        let _ = LightingServices::load_light_block_for_client_light_block_index_into_physical_block(&s, &w, 0, pb);
+        let _ = LightingServices::decommision_block_block_to_save_physcial_block(&s, &w, &mt, false);
+        let _ = LightingServices::peers_interested_in_macro_index_count(&s, &w, 0);
+        let _ = LightingServices::remove_water_tile_at_pos(&s, &w, IntPair { x: 0, y: 0 });
+        let _ = LightingServices::water_moved_from_from_tile_to_to_tile_amount(
+            &s,
+            &w,
+            IntPair { x: 0, y: 0 },
+            tile,
+            IntPair { x: 0, y: 0 },
+            tile,
+            0,
+        );
+        let _ = LightingServices::send_net_data_for_electricity_particle_path_if_required_size_ignore_client(
+            &s,
+            &w,
+            Vec::new(),
+            0.0,
+            None,
+        );
+        let _ = LightingServices::light_changed_at_macro_pos_send_reliably(&s, IntPair { x: 0, y: 0 }, false);
+        let _ = LightingServices::light_changed_at_macro_pos_send_reliably_send_at_all(
+            &s,
+            IntPair { x: 0, y: 0 },
+            false,
+            false,
+        );
+        let _ = LightingServices::explore_light_changed_at_macro_pos_client_light_block_index(
+            &s,
+            IntPair { x: 0, y: 0 },
+            0,
+        );
+        let _ = LightingServices::snow_changed_at_macro_pos(&s, IntPair { x: 0, y: 0 });
+        let _ = LightingServices::water_changed_at_pos_full_block(&s, IntPair { x: 0, y: 0 }, false);
+        let _ = LightingServices::has_dynamic_objects_to_save_in_macro_pos(&s, IntPair { x: 0, y: 0 });
+        let _ = LightingServices::blockheads(&s);
+        let _ = LightingServices::add_torch_at_pos_of_type_data_a_data_b_save_dict_placed_by_client(
+            &s,
+            IntPair { x: 0, y: 0 },
+            0,
+            0,
+            0,
+            None,
+            None,
+        );
+        let _ = LightingServices::create_treasure_chest_or_troll_at_tile_at_pos_load_troll_load_treasure(
+            &s,
+            tile,
+            IntPair { x: 0, y: 0 },
+            false,
+            false,
+        );
+        let _ = LightingServices::load_glow_block_if_needed_at_pos_tile(&s, IntPair { x: 0, y: 0 }, tile);
+        let _ = LightingServices::load_surface_block_at_pos(&s, IntPair { x: 0, y: 0 });
+        let _ = LightingServices::create_free_block_at_position_of_type_data_a_data_b_dynamic_object_save_dict_hovers_play_sound(&s, IntPair { x: 0, y: 0 }, 0, 0, 0, PlistDict { map: crate::foundation::gsdict::GsDict::new(), tag: crate::plist::value::ClassTag { origin: crate::plist::value::Origin::Built, mutable: true, alt: false } }, false, false);
+        let _ = LightingServices::remove_standard_object(&s, &obj);
+        let _ = LightingServices::blockhead_view_radius(&s, &obj);
     }
 }
