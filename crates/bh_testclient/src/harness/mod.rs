@@ -56,7 +56,7 @@ pub fn private_docs() -> PathBuf {
 }
 /// gdb symbol file: env `BH_REF_BINARY` (private).
 pub fn ref_binary() -> PathBuf {
-    std::env::var_os("BH_REF_BINARY").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(MISSING))
+    env_path("BH_REF_BINARY")
 }
 /// Reference environment directory: env `BH_REFENV` (private).
 pub fn refenv_dir() -> PathBuf {
@@ -64,21 +64,27 @@ pub fn refenv_dir() -> PathBuf {
 }
 /// `types_structs_meta.json` path (env `BH_META_JSON` overrides).
 pub fn meta_json_path() -> PathBuf {
-    if let Ok(v) = std::env::var("BH_META_JSON") {
-        return PathBuf::from(v);
-    }
-    private_docs().join("types_structs_meta.json")
+    meta_json_path_in(std::env::var("BH_META_JSON").ok(), private_docs())
+}
+
+fn meta_json_path_in(var: Option<String>, docs: PathBuf) -> PathBuf {
+    var.map_or_else(|| docs.join("types_structs_meta.json"), PathBuf::from)
 }
 /// Our server binary: env `BH_SERVER_BIN`, else newest of `<repo>/target/{release,debug}/blockheads_server`.
 pub fn our_server_bin() -> Result<PathBuf> {
-    if let Ok(v) = std::env::var("BH_SERVER_BIN") {
+    our_server_bin_in(
+        std::env::var("BH_SERVER_BIN").ok(),
+        std::env::var("CARGO_TARGET_DIR").ok(),
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."),
+    )
+}
+
+fn our_server_bin_in(bin: Option<String>, target_dir: Option<String>, ws: &Path) -> Result<PathBuf> {
+    if let Some(v) = bin {
         return Ok(PathBuf::from(v));
     }
-    let ws = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut tdirs = vec![ws.join("target")];
-    if let Ok(t) = std::env::var("CARGO_TARGET_DIR") {
-        tdirs.insert(0, PathBuf::from(t));
-    }
+    tdirs.splice(0..0, target_dir.map(PathBuf::from));
     let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
     for t in tdirs {
         for prof in ["release", "debug"] {
@@ -99,41 +105,36 @@ pub fn our_server_bin() -> Result<PathBuf> {
 }
 /// True iff `BH_PARITY=1`, docker works and image `blockheads-ref:1.7.1` exists.
 pub fn parity_enabled() -> bool {
-    std::env::var("BH_PARITY").map(|v| v == "1").unwrap_or(false)
-        && refenv::docker_available()
-        && refenv::image_present("blockheads-ref:1.7.1")
+    parity_enabled_with(std::env::var("BH_PARITY").ok().as_deref(), refenv::docker_available, refenv::image_present)
+}
+
+fn parity_enabled_with(flag: Option<&str>, docker: fn() -> bool, image: fn(&str) -> bool) -> bool {
+    flag == Some("1") && docker() && image("blockheads-ref:1.7.1")
 }
 /// `BH_PARITY_FULL=1`: also the 4x/16x widths and debug tests.
 pub fn parity_full() -> bool {
-    std::env::var("BH_PARITY_FULL").map(|v| v == "1").unwrap_or(false)
+    std::env::var("BH_PARITY_FULL").as_deref() == Ok("1")
 }
 /// Free UDP port whose TCP twin is also free.
 pub fn free_udp_port() -> u16 {
-    for _ in 0..200 {
-        if let Ok(s) = std::net::UdpSocket::bind("0.0.0.0:0") {
-            if let Ok(a) = s.local_addr() {
-                let p = a.port();
-                if std::net::TcpListener::bind(("0.0.0.0", p)).is_ok() {
-                    return p;
-                }
-            }
-        }
-    }
-    0
+    (0..200).find_map(|_| udp_port_with_free_tcp_twin()).unwrap_or(0)
+}
+
+fn udp_port_with_free_tcp_twin() -> Option<u16> {
+    let udp = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    let port = udp.local_addr().ok()?.port();
+    std::net::TcpListener::bind(("0.0.0.0", port)).ok().map(|_| port)
 }
 
 /// First port of `n` consecutive free UDP ports (0 when none was found).
 pub fn free_udp_port_range(n: u16) -> u16 {
-    for _ in 0..200 {
-        let base = free_udp_port();
-        if base != 0
-            && base.checked_add(n).is_some()
-            && (base..base + n).all(|p| std::net::UdpSocket::bind(("0.0.0.0", p)).is_ok())
-        {
-            return base;
-        }
-    }
-    0
+    (0..200).find_map(|_| range_if_free(n)).unwrap_or(0)
+}
+
+fn range_if_free(n: u16) -> Option<u16> {
+    let base = free_udp_port();
+    let end = base.checked_add(n)?;
+    (base != 0 && (base..end).all(|p| std::net::UdpSocket::bind(("0.0.0.0", p)).is_ok())).then_some(base)
 }
 
 static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -447,6 +448,10 @@ pub fn run_script(script: &str, addr: std::net::SocketAddr, dir: &Path) -> Resul
     run_script_ports(script, addr, dir, None)
 }
 
+fn parse_error(e: impl ToString) -> HarnessError {
+    HarnessError::Parse(e.to_string())
+}
+
 /// [`run_script`] with the n-th client bound to UDP port `port_base + n` (see `RunOptions::client_port_base`).
 pub fn run_script_ports(
     script: &str,
@@ -455,11 +460,11 @@ pub fn run_script_ports(
     port_base: Option<u16>,
 ) -> Result<Vec<normalize::TraceEvent>> {
     use crate::scenario::{RunOptions, Scenario};
-    let mut sc = Scenario::parse(script).map_err(|e| HarnessError::Parse(e.to_string()))?;
+    let mut sc = Scenario::parse(script).map_err(parse_error)?;
     sc.name = "script".to_string();
     let cfg = crate::ClientConfig { addr, ..Default::default() };
     let opts = RunOptions { trace_dir: Some(dir.to_path_buf()), client_port_base: port_base, ..Default::default() };
-    let report = sc.run(&cfg, &opts).map_err(|e| HarnessError::Parse(e.to_string()))?;
+    let report = sc.run(&cfg, &opts).map_err(parse_error)?;
     let mut all = Vec::new();
     for (_, p) in &report.traces {
         all.extend(normalize::read_jsonl(p)?);
@@ -519,5 +524,132 @@ mod tests {
         assert!(!p.exists());
         assert!(from_hex("0aff").unwrap() == vec![10, 255]);
         assert!(!private_docs().as_os_str().is_empty());
+    }
+    #[test]
+    fn error_texts_and_conversion() {
+        let io = HarnessError::from(std::io::Error::other("disk"));
+        assert_eq!(io.to_string(), "io error: disk");
+        for (e, want) in [
+            (HarnessError::Lmdb("a".into()), "lmdb error: a"),
+            (HarnessError::Plist("b".into()), "plist error: b"),
+            (HarnessError::Docker("c".into()), "docker error: c"),
+            (HarnessError::Timeout("d".into()), "timeout: d"),
+            (HarnessError::Parse("e".into()), "parse error: e"),
+            (HarnessError::Usage("f".into()), "usage: f"),
+        ] {
+            assert_eq!(e.to_string(), want);
+        }
+    }
+
+    #[test]
+    fn configured_paths() {
+        assert_eq!(meta_json_path_in(Some("/m.json".into()), PathBuf::from("/d")), PathBuf::from("/m.json"));
+        assert_eq!(meta_json_path_in(None, PathBuf::from("/d")), PathBuf::from("/d/types_structs_meta.json"));
+        assert!(!ref_binary().as_os_str().is_empty() && !refenv_dir().as_os_str().is_empty());
+        let _ = (meta_json_path(), parity_full());
+        let _ = parity_enabled();
+        assert!(!parity_enabled_with(None, || true, |_| true));
+        assert!(!parity_enabled_with(Some("0"), || true, |_| true));
+        assert!(!parity_enabled_with(Some("1"), || false, |_| true));
+        assert!(!parity_enabled_with(Some("1"), || true, |_| false));
+        assert!(parity_enabled_with(Some("1"), || true, |tag| tag == "blockheads-ref:1.7.1"));
+    }
+
+    #[test]
+    fn server_binary_lookup() {
+        assert_eq!(our_server_bin_in(Some("/x/bin".into()), None, Path::new("/ws")).unwrap(), PathBuf::from("/x/bin"));
+        let t = TempDir::new("bins").unwrap();
+        let err = our_server_bin_in(None, None, &t.path().join("ws")).unwrap_err();
+        assert!(err.to_string().contains("no blockheads_server binary found"));
+        let a = t.path().join("a");
+        std::fs::create_dir_all(a.join("debug")).unwrap();
+        std::fs::write(a.join("debug/blockheads_server"), "old").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let target = Some(a.display().to_string());
+        assert_eq!(
+            our_server_bin_in(None, target.clone(), &t.path().join("zz")).unwrap(),
+            a.join("debug/blockheads_server")
+        );
+        // the workspace target dir is searched too; the newer file wins
+        let ws = t.path().join("ws");
+        std::fs::create_dir_all(ws.join("target/release")).unwrap();
+        std::fs::write(ws.join("target/release/blockheads_server"), "newest").unwrap();
+        assert_eq!(our_server_bin_in(None, target, &ws).unwrap(), ws.join("target/release/blockheads_server"));
+        let _ = our_server_bin();
+    }
+
+    #[test]
+    fn ports_and_temp_dirs() {
+        assert_ne!(free_udp_port(), 0);
+        assert_eq!(free_udp_port_range(u16::MAX), 0);
+        let t = TempDir::new("keep").unwrap();
+        let kept = t.keep();
+        assert!(kept.is_dir());
+        std::fs::remove_dir_all(&kept).unwrap();
+    }
+
+    #[test]
+    fn nslog_prefix_rejections() {
+        for line in [
+            "2026-10-16 20:30:41.724 ",
+            "2026-10-16 20:30:41.724  x[1] y",
+            "2026-10-16 20:30:41.724 nobracket y",
+            "2026-10-16 20:30:41.724 [1] y",
+            "2026-10-16 20:30:41.724 x[1 y",
+            "2026-10-16 20:30:41.724 x[] y",
+            "2026-10-16 20:30:41.724 x[a1] y",
+            "2026-10-16 20:30:41.724 x[1]",
+            "2026x10-16 20:30:41.724 x[1] y",
+        ] {
+            assert_eq!(strip_nslog_prefix(line), line, "{line}");
+        }
+    }
+
+    #[test]
+    fn reading_optional_files() {
+        let t = TempDir::new("opt").unwrap();
+        std::fs::write(t.path().join("f"), b"x").unwrap();
+        assert_eq!(read_opt(&t.path().join("f")).unwrap(), Some(b"x".to_vec()));
+        assert_eq!(read_opt(&t.path().join("missing")).unwrap(), None);
+        assert!(read_opt(t.path()).is_err());
+    }
+
+    #[test]
+    fn flat_json_forms() {
+        let j = Json::Num(1.0);
+        assert_eq!((j.as_f64(), j.as_str(), j.as_bool()), (Some(1.0), None, None));
+        assert_eq!((Json::Str("s".into()).as_f64(), Json::Bool(true).as_str()), (None, None));
+        assert_eq!(Json::Null.as_bool(), None);
+        assert_eq!(Json::Bool(true).as_bool(), Some(true));
+        assert_eq!(to_hex(&[0, 255, 16]), "00ff10");
+        let lone_high = format!("{{\"k\":\"{0}ud83d{0}u0041\"}}", '\\');
+        assert_eq!(parse_flat_json_object(&lone_high).unwrap()["k"].as_str().unwrap(), "\u{fffd}A");
+        let esc =
+            format!("{{\"a\":false,\"b\":\"x{0}/{0}b{0}f{0}n{0}r{0}t{0}ud83d{0}ude00{0}ud83dZ\",\"c\":-2.5e1}}", '\\');
+        let m = parse_flat_json_object(&esc).unwrap();
+        assert_eq!(m["a"], Json::Bool(false));
+        assert_eq!(m["b"].as_str().unwrap(), "x/\u{8}\u{c}\n\r\t\u{1f600}\u{fffd}Z");
+        assert_eq!(m["c"], Json::Num(-25.0));
+        assert!(parse_flat_json_object("{}").unwrap().is_empty());
+        for bad in [
+            "[]",
+            r#"{"a" 1}"#,
+            r#"{"a":[1]}"#,
+            r#"{"a":1 "b":2}"#,
+            r#"{"a":"\q"}"#,
+            r#"{"a":"\u12"}"#,
+            r#"{"a":"\ud83d\u12"}"#,
+            r#"{a:1}"#,
+            r#"{"a":-x}"#,
+            r#"{"a":"unterminated"#,
+        ] {
+            assert!(parse_flat_json_object(bad).is_err(), "{bad}");
+        }
+        assert_eq!(json_escape("a\\b\r\t\u{1}"), "a\\\\b\\r\\t\\u0001");
+        assert_eq!(from_hex("abc"), None);
+        assert_eq!(from_hex("zz"), None);
+        assert_eq!(from_hex(" 0a "), Some(vec![10]));
+        assert!(glob_any("*", "") && glob_any("a*c", "abbbc") && !glob_any("a", "") && glob_any("", ""));
+        assert!(glob_path("a/**", "a/b/c") && !glob_path("a/*", "a/b/c"));
     }
 }

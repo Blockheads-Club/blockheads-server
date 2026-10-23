@@ -210,14 +210,15 @@ pub fn passwd_home_dir() -> Option<String> {
 
 /// Wall clock as (unix seconds, microseconds).
 pub fn wall_time() -> (i64, u32) {
-    wall_parts(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|e| e.duration()))
+    wall_parts(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH))
 }
 
 /// Seconds and microseconds of a time `Ok(after the epoch)` or `Err(before the epoch)`.
-fn wall_parts(since_epoch: Result<std::time::Duration, std::time::Duration>) -> (i64, u32) {
+fn wall_parts(since_epoch: Result<std::time::Duration, std::time::SystemTimeError>) -> (i64, u32) {
     match since_epoch {
         Ok(d) => (d.as_secs() as i64, d.subsec_micros()),
-        Err(d) => {
+        Err(e) => {
+            let d = e.duration();
             let (s, us) = (d.as_secs() as i64, d.subsec_micros());
             if us == 0 {
                 (-s, 0)
@@ -363,7 +364,8 @@ pub(crate) mod tests {
         assert_eq!(strerror(&std::io::Error::other("plain")), "plain");
         let d = std::time::Duration::new(5, 250_000_000);
         assert_eq!(wall_parts(Ok(d)), (5, 250_000));
-        assert_eq!(wall_parts(Err(d)), (-6, 750_000));
-        assert_eq!(wall_parts(Err(std::time::Duration::from_secs(3))), (-3, 0));
+        let before = |d: std::time::Duration| std::time::UNIX_EPOCH.duration_since(std::time::UNIX_EPOCH + d);
+        assert_eq!(wall_parts(before(d)), (-6, 750_000));
+        assert_eq!(wall_parts(before(std::time::Duration::from_secs(3))), (-3, 0));
     }
 }

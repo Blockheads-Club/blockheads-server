@@ -132,10 +132,8 @@ impl EnetHost {
 
     /// `enet_address_get_host_ip`: dotted quad.
     pub fn peer_ip_string(&self, peer: PeerSlot) -> Option<String> {
-        match self.host.get_peer(peer)?.address()? {
-            SocketAddr::V4(a) => Some(a.ip().to_string()),
-            SocketAddr::V6(_) => None,
-        }
+        let SocketAddr::V4(a) = self.host.get_peer(peer)?.address()? else { return None };
+        Some(a.ip().to_string())
     }
 
     /// `enet_host_destroy`.
@@ -159,6 +157,15 @@ mod tests {
         assert_eq!(enet_id_string(&"127.0.0.1:54321".parse().unwrap()), "16777343:54321");
         assert_eq!(enet_id_string(&"192.168.1.2:1".parse().unwrap()), "33663168:1");
         assert!(enet_id_string(&"1.2.3.255:9".parse().unwrap()).starts_with('-'));
+    }
+
+    #[test]
+    fn peer_addresses_are_v4_or_unspecified() {
+        assert_eq!(to_v4(Some("1.2.3.4:5".parse().unwrap())).to_string(), "1.2.3.4:5");
+        assert_eq!(to_v4(Some("[::1]:5".parse().unwrap())).to_string(), "0.0.0.0:0");
+        assert_eq!(to_v4(None).to_string(), "0.0.0.0:0");
+        let h = EnetHost::create(0).unwrap();
+        assert_eq!(h.peer_ip_string(enet::PeerID(0)), None);
     }
 
     #[test]

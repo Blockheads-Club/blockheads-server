@@ -220,7 +220,7 @@ mod tests {
     fn host_server_lifecycle() {
         let spec = |tag: &str| RunSpec {
             tag: tag.into(),
-            args: a(&["--new", "x", "--world_width", "1/16"]),
+            args: a(&["--new", "x", "--world_id", "w1", "--world_width", "1/16"]),
             ..Default::default()
         };
         let mut s = HostServer::start(&spec("inproc")).unwrap();
@@ -244,6 +244,10 @@ mod tests {
             Some(base),
         );
         assert!(ev.unwrap().iter().any(|e| e.client == "B"));
+        let ev = crate::harness::run_script("client A\nuse A\ndisconnect\n", addr, dir.path()).unwrap();
+        assert!(ev.iter().any(|e| e.client == "A"));
+        assert!(matches!(crate::harness::run_script("not a verb\n", addr, dir.path()), Err(HarnessError::Parse(_))));
+        s.wait_for_saves("w1", 1, Duration::from_secs(60)).unwrap();
         assert!(s.is_running());
         assert_eq!(s.stop_sigint(Duration::from_secs(1)).unwrap(), Some(0));
         assert_eq!(s.stop_sigint(Duration::from_secs(1)).unwrap(), Some(0), "already stopped");
@@ -254,8 +258,11 @@ mod tests {
         drop(s);
         assert!(kept.exists());
         std::fs::remove_dir_all(kept.parent().unwrap()).unwrap();
-        // dropped while running: stopped by Drop
-        let mut s = HostServer::start(&spec("inproc-drop")).unwrap();
+        // dropped while running: stopped by Drop; a given data directory is reused as is
+        let data = TempDir::new("given-data").unwrap();
+        let mut given = spec("inproc-drop");
+        given.data_dir = Some(data.path().join("data"));
+        let mut s = HostServer::start(&given).unwrap();
         s.wait_for_log("World load complete.", Duration::from_secs(120)).unwrap();
         drop(s);
     }

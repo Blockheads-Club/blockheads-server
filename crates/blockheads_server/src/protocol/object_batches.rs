@@ -77,3 +77,25 @@ pub fn decode_batch(packet: &[u8]) -> WireResult<Option<Batch>> {
 pub fn blob_unique_id(blob: &[u8]) -> Option<u64> {
     Some(u64::from_le_bytes(blob.get(..8)?.try_into().unwrap()))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn non_data_items_are_dropped_on_decode() {
+        let mixed = PV::array(vec![PV::data(vec![1, 2]), PV::string("not data"), PV::data(vec![3])]);
+        let mut packet = vec![BatchKind::Update as u8, 5];
+        packet.extend(plist_gz(&mixed).unwrap());
+        let b = decode_batch(&packet).unwrap().unwrap();
+        assert_eq!((b.kind, b.object_type, b.items), (0x08, 5, vec![vec![1, 2], vec![3]]));
+        assert!(decode_batch(&[1]).is_err());
+        assert_eq!(decode_batch(&[1, 2, 3]).unwrap(), None);
+        let srv = encode_batch(BatchKind::Create, 1, &[vec![5]]).unwrap();
+        assert_eq!(decode_batch(&srv).unwrap().unwrap().kind, 0x07);
+        let enc = encode_client_batch(ClientBatchKind::Remove, 9, &[vec![7]]).unwrap();
+        assert_eq!(decode_batch(&enc).unwrap().unwrap().items, vec![vec![7]]);
+        assert_eq!(blob_unique_id(&[1, 0, 0, 0, 0, 0, 0, 0, 9]), Some(1));
+        assert_eq!(blob_unique_id(&[1]), None);
+    }
+}

@@ -133,6 +133,8 @@ mod tests {
     #[test]
     fn md5_and_modify() {
         let m = CrystalManager::new_uninstanced();
+        m.load_from_save();
+        m.commit_save_if_needed();
         assert_eq!(m.i_cloud_id(), "unspported");
         assert_eq!(m.i_cloud_server_rejoin_id(), "e0512522237df73051c70deabaccbe34");
         assert_eq!(m.amount(), 0);
