@@ -474,9 +474,7 @@ pub(super) fn load(dir: &Path, save_id: Option<&str>, server: &Rc<BHServer>) -> 
     opts.budgets.step *= scale;
     // WASM components; compiled code is cached in `<mods>/.cache` (hidden, so discovery skips it).
     let wasm = WasmConfig { cache_dir: Some(dir.join(".cache")), ..WasmConfig::default() };
-    if let Ok(rt) = WasmRuntime::new(wasm) {
-        opts.runtimes.push(Box::new(rt));
-    }
+    opts.runtimes.extend(WasmRuntime::new(wasm).ok().map(|rt| Box::new(rt) as _));
     // JVM mods: only when the owner turned them on (feature `jvm`, `BLOCKHEADS_JVM=1`). Logged once the bridge exists.
     #[cfg(feature = "jvm")]
     let mut notes: Vec<(LogLevel, String)> = Vec::new();
@@ -684,6 +682,21 @@ mod tests {
         assert!(h.m.packets_to(&pid).is_empty());
         assert_eq!(*h.m.removed.borrow(), vec![pid.clone()]);
         assert_eq!(*h.m.disconnected.borrow(), vec![pid]);
+        assert!(h.srv.connected_client_ids().is_empty());
+    }
+
+    #[test]
+    fn limbo_peer_is_dropped_even_without_a_match() {
+        let h = Harness::new("m_limbo_no_match");
+        let mods = installed(&h, true);
+        let pid = limbo_join(&h, "Vic");
+        // the server's match is gone (cleanup): nothing to disconnect the peer on, but the drop still completes
+        h.srv.node.cleanup();
+        assert!(h.srv.match_().is_none());
+        h.m.clear();
+        mods.0.drop_expired_limbo(Instant::now() + LIMBO_GRACE + std::time::Duration::from_secs(1));
+        assert!(h.m.removed.borrow().is_empty() && h.m.disconnected.borrow().is_empty());
+        assert!(!mods.0.limbo_packet(&pid));
         assert!(h.srv.connected_client_ids().is_empty());
     }
 
