@@ -415,7 +415,7 @@ pub fn load_records(save: &Path) -> Result<BTreeMap<RecordId, Vec<u8>>> {
         let env = open_env_readonly(&p)?;
         {
             let rtxn = env.read_txn().map_err(lm)?;
-            if let Some(root) = env.open_database::<Bytes, Bytes>(&rtxn, None).map_err(lm)? {
+            for root in env.open_database::<Bytes, Bytes>(&rtxn, None).map_err(lm)? {
                 let mut names: Vec<Vec<u8>> = Vec::new();
                 for kv in root.iter(&rtxn).map_err(lm)? {
                     let (k, _) = kv.map_err(lm)?;
@@ -423,10 +423,7 @@ pub fn load_records(save: &Path) -> Result<BTreeMap<RecordId, Vec<u8>>> {
                 }
                 for name in names {
                     let nm = String::from_utf8_lossy(&name).to_string();
-                    let db = match env.open_database::<Bytes, Bytes>(&rtxn, Some(&nm)).map_err(lm)? {
-                        Some(d) => d,
-                        None => continue,
-                    };
+                    let Some(db) = env.open_database::<Bytes, Bytes>(&rtxn, Some(&nm)).map_err(lm)? else { continue };
                     for kv in db.iter(&rtxn).map_err(lm)? {
                         let (k, v) = kv.map_err(lm)?;
                         out.insert(RecordId { env: e.to_string(), db: nm.clone(), key: k.to_vec() }, v.to_vec());
@@ -662,9 +659,12 @@ fn compare_plist(id: &RecordId, a: &[u8], b: &[u8], m: &Masks) -> (Vec<PlistDiff
             (Some(x), None) => {
                 diffs.push(PlistDiff { path: disp, kind: PlistDiffKind::OnlyInA, a: x.show(), b: String::new() })
             }
-            (None, Some(y)) => {
-                diffs.push(PlistDiff { path: disp, kind: PlistDiffKind::OnlyInB, a: String::new(), b: y.show() })
-            }
+            (None, y) => diffs.extend(y.map(|y| PlistDiff {
+                path: disp,
+                kind: PlistDiffKind::OnlyInB,
+                a: String::new(),
+                b: y.show(),
+            })),
             (Some(Node::Date(_)), Some(Node::Date(_))) if m.all_dates => {
                 if fa.get(k) != fb.get(k) {
                     masked_hit = true;
@@ -698,7 +698,6 @@ fn compare_plist(id: &RecordId, a: &[u8], b: &[u8], m: &Masks) -> (Vec<PlistDiff
                     }
                 }
             }
-            (None, None) => {}
         }
     }
     (diffs, masked_hit)
@@ -942,13 +941,15 @@ pub fn diff_record_sets(
             continue;
         }
         match (ra.get(id), rb.get(id)) {
-            (Some(_), None) => rep.diffs.push(RecordDiff::OnlyInA(id.clone())),
-            (None, Some(_)) => rep.diffs.push(RecordDiff::OnlyInB(id.clone())),
             (Some(x), Some(y)) => match compare_record(id, x, y, &m, o) {
                 None => rep.identical += 1,
                 Some(d) => rep.diffs.push(d),
             },
-            (None, None) => {}
+            (only_a, _) => rep.diffs.push(if only_a.is_some() {
+                RecordDiff::OnlyInA(id.clone())
+            } else {
+                RecordDiff::OnlyInB(id.clone())
+            }),
         }
     }
     rep
@@ -1079,27 +1080,6 @@ pub fn dump(save: &Path, out: &Path) -> Result<()> {
 mod tests {
     use super::*;
 
-    fn sample(rel: &str) -> Option<PathBuf> {
-        let p = super::super::refenv_dir().join("samples").join(rel);
-        if p.exists() {
-            Some(p)
-        } else {
-            eprintln!("SKIP: sample {} missing", rel);
-            None
-        }
-    }
-    fn only_child(p: &Path) -> PathBuf {
-        resolve_save(p).unwrap_or_else(|_| {
-            let mut v: Vec<PathBuf> =
-                std::fs::read_dir(p).unwrap().map(|e| e.unwrap().path()).filter(|x| x.is_dir()).collect();
-            v.sort();
-            v.remove(0)
-        })
-    }
-    fn save_of(rel: &str) -> Option<PathBuf> {
-        sample(rel).map(|p| only_child(&p))
-    }
-
     #[test]
     fn tile_fields_cover_64() {
         let mut n = 0;
@@ -1134,10 +1114,8 @@ mod tests {
         let mk = |body: &str| format!("{}<dict>\n    {}\n</dict>\n</plist>", hdr, body).into_bytes();
         let a = mk("<key>x</key>\n    <integer>255</integer>");
         let b = mk("<key>x</key>\n    <real>255</real>");
-        match compare_record(&id, &a, &b, &masks, &o) {
-            Some(RecordDiff::Plist { diffs, .. }) => assert_eq!(diffs[0].kind, PlistDiffKind::TypeMismatch),
-            other => panic!("{:?}", other),
-        }
+        let Some(RecordDiff::Plist { diffs, .. }) = compare_record(&id, &a, &b, &masks, &o) else { panic!() };
+        assert_eq!(diffs[0].kind, PlistDiffKind::TypeMismatch);
         let c = mk("<key>x</key>\n        <integer>255</integer>");
         assert!(matches!(compare_record(&id, &a, &c, &masks, &o), Some(RecordDiff::PlistRawOnly { .. })));
         assert!(compare_record(&id, &a, &a, &masks, &o).is_none());
@@ -1155,152 +1133,482 @@ mod tests {
         ba[t * 64] = 25;
         bb[t * 64] = 6;
         let (ga, gb) = (gzip_deflate(&ba), gzip_deflate(&bb));
-        match compare_record(&bid, &ga, &gb, &masks, &o) {
-            Some(RecordDiff::Block { differing_tiles: 1, sample, .. }) => {
-                let t = &sample[0];
-                assert_eq!(
-                    (t.local_x, t.local_y, t.world_x, t.world_y, t.field, t.a, t.b),
-                    (14, 2, 6350, 578, "typeIndex", 25, 6)
-                );
-            }
-            other => panic!("{:?}", other),
-        }
+        let d = compare_record(&bid, &ga, &gb, &masks, &o);
+        let Some(RecordDiff::Block { differing_tiles: 1, sample, .. }) = d else { panic!() };
+        let t = &sample[0];
+        assert_eq!(
+            (t.local_x, t.local_y, t.world_x, t.world_y, t.field, t.a, t.b),
+            (14, 2, 6350, 578, "typeIndex", 25, 6)
+        );
         // level-9 gzip -> GzipRawOnly, ignored when not strict
         let mut f = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
         std::io::Write::write_all(&mut f, &ba).unwrap();
         let g9 = f.finish().unwrap();
-        if g9 != ga {
-            assert!(matches!(compare_record(&bid, &ga, &g9, &masks, &o), Some(RecordDiff::GzipRawOnly { .. })));
-            let lax = SaveDiffOptions { strict_gzip: false, ..Default::default() };
-            assert!(compare_record(&bid, &ga, &g9, &masks, &lax).is_none());
-        }
+        assert_ne!(g9, ga);
+        assert!(matches!(compare_record(&bid, &ga, &g9, &masks, &o), Some(RecordDiff::GzipRawOnly { .. })));
+        let lax = SaveDiffOptions { strict_gzip: false, ..Default::default() };
+        assert!(compare_record(&bid, &ga, &g9, &masks, &lax).is_none());
         // tile mask
         let tmask = [Mask::TileBytes(vec![0])];
         let tm = Masks::new(&tmask);
-        assert!(
-            compare_record(&bid, &ga, &gb, &tm, &o).is_none()
-                || matches!(compare_record(&bid, &ga, &gb, &tm, &o), Some(RecordDiff::GzipRawOnly { .. }))
-        );
+        assert!(compare_record(&bid, &ga, &gb, &tm, &o).is_none());
         // text
         let tid = RecordId { env: "file".into(), db: String::new(), key: b"adminlist.txt".to_vec() };
-        match compare_record(&tid, b"hdr\n", b"HDR\n", &masks, &o) {
-            Some(RecordDiff::Text { first_diff_line: 1, .. }) => {}
-            other => panic!("{:?}", other),
-        }
+        assert!(matches!(
+            compare_record(&tid, b"hdr\n", b"HDR\n", &masks, &o),
+            Some(RecordDiff::Text { first_diff_line: 1, .. })
+        ));
         // empty sets are never "clean"
         let rep = diff_record_sets(&BTreeMap::new(), &BTreeMap::new(), &o);
         assert!(!rep.is_clean());
     }
+}
 
-    /// S1.
-    #[test]
-    fn s1_rep1_rep2() {
-        let (Some(a), Some(b)) = (save_of("rep1"), save_of("rep2")) else { return };
-        let r = diff_saves(&a, &b, &SaveDiffOptions::default()).unwrap();
-        assert!(r.compared_records > 0);
-        assert_eq!(r.diffs.len(), 1, "{}", r.render(50));
-        match &r.diffs[0] {
-            RecordDiff::Plist { id, diffs } => {
-                assert_eq!(id.to_string(), "world_db/main/worldv2");
-                for d in diffs {
-                    assert!(["/creationDate", "/saveDate", "/hostPort"].contains(&d.path.as_str()), "{}", d.path);
-                }
-            }
-            o => panic!("{:?}", o),
-        }
-        assert_eq!(r.identical, 416);
-        let c = diff_saves(&a, &b, &SaveDiffOptions::parity_default()).unwrap();
-        assert!(c.is_clean(), "{}", c.render(50));
-    }
+#[cfg(test)]
+#[path = "save_diff_golden.rs"]
+mod golden;
 
-    /// S2/S3.
-    #[test]
-    fn s2_s3_seeds() {
-        let (Some(a), Some(b)) = (save_of("seedA"), save_of("seedB")) else { return };
-        let r = diff_saves(&a, &b, &SaveDiffOptions::default()).unwrap();
-        let ids: Vec<String> = r.diffs.iter().map(|d| d.id().to_string()).collect();
-        assert_eq!(ids, vec!["file//worldv2".to_string(), "world_db/main/worldv2".to_string()], "{}", r.render(50));
-        assert_eq!(r.identical, 326);
-        assert!(diff_saves(&a, &b, &SaveDiffOptions::parity_default()).unwrap().is_clean());
-        if let Some(c) = save_of("seedC") {
-            let r = diff_saves(&a, &c, &SaveDiffOptions::default()).unwrap();
-            for d in &r.diffs {
-                let id = d.id().to_string();
-                assert!(id == "file//worldv2" || id == "world_db/main/worldv2", "{}", id);
-            }
-            assert!(r.identical >= 320, "{}", r.render(20));
-        }
-    }
+#[cfg(test)]
+mod unit {
+    use super::*;
+    use blockheads_server::foundation::gsdict::GsDict;
+    use blockheads_server::plist::xml_write::write_xml;
+    use heed::types::Bytes;
 
-    /// S4 + S5 + S7.
-    #[test]
-    fn s4_s5_s7() {
-        let (Some(a), Some(b)) = (save_of("w1"), save_of("expert")) else { return };
-        let r = diff_saves(&a, &b, &SaveDiffOptions::parity_default()).unwrap();
-        assert!(!r.is_clean());
-        assert!(r.diffs.iter().any(|d| matches!(d, RecordDiff::Block { differing_tiles, .. } if *differing_tiles > 0)));
-        let (ok, bad) = regzip_check(&a).unwrap();
-        assert_eq!((ok, bad.len()), (398, 0));
-        // S7: read-only open leaves lock.mdb alone
-        let lock = a.join("world_db/lock.mdb");
-        let before = (std::fs::metadata(&lock).unwrap().modified().unwrap(), std::fs::read(&lock).unwrap());
-        let _ = load_records(&a).unwrap();
-        let after = (std::fs::metadata(&lock).unwrap().modified().unwrap(), std::fs::read(&lock).unwrap());
-        assert!(before == after);
-        let s = render_block_grid(&a, 198, 18, "typeIndex").unwrap();
-        assert!(s.lines().count() == 33, "{}", s);
-        assert!(summary(&a).unwrap().contains("db \"blocks\""));
-    }
+    type Rows<'a> = &'a [(&'a [u8], &'a [u8])];
 
-    /// S6. Mutation tests on a copy of w1.
-    #[test]
-    fn s6_mutations() {
-        use heed::types::Bytes;
-        let Some(w1) = save_of("w1") else { return };
-        let tmp = super::super::TempDir::new("s6").unwrap();
-        let copy = tmp.path().join("save");
-        fn cp(a: &Path, b: &Path) {
-            std::fs::create_dir_all(b).unwrap();
-            for e in std::fs::read_dir(a).unwrap() {
-                let e = e.unwrap();
-                let t = b.join(e.file_name());
-                if e.file_type().unwrap().is_dir() {
-                    cp(&e.path(), &t);
-                } else {
-                    std::fs::copy(e.path(), t).unwrap();
-                }
+    /// Writes an LMDB env with the given named databases.
+    fn put_env(dir: &Path, dbs: &[(&str, Rows)]) {
+        std::fs::create_dir_all(dir).unwrap();
+        // SAFETY: private temp directory, nothing else opens it.
+        let env = unsafe { heed::EnvOpenOptions::new().max_dbs(16).map_size(1 << 26).open(dir) }.unwrap();
+        let mut w = env.write_txn().unwrap();
+        for (name, rows) in dbs {
+            let d = env.create_database::<Bytes, Bytes>(&mut w, Some(name)).unwrap();
+            for (k, v) in rows.iter() {
+                d.put(&mut w, k, v).unwrap();
             }
         }
-        cp(&w1, &copy);
-        let o = SaveDiffOptions::default();
-        let put = |db: &str, key: &str, f: &dyn Fn(Vec<u8>) -> Option<Vec<u8>>| {
-            // SAFETY: private temp copy, no other process uses it.
-            let env = unsafe { heed::EnvOpenOptions::new().max_dbs(16).map_size(1 << 30).open(copy.join("world_db")) }
-                .unwrap();
-            let mut w = env.write_txn().unwrap();
-            let d = env.create_database::<Bytes, Bytes>(&mut w, Some(db)).unwrap();
-            let old = d.get(&w, key.as_bytes()).unwrap().unwrap().to_vec();
-            match f(old) {
-                Some(n) => d.put(&mut w, key.as_bytes(), &n).unwrap(),
-                None => {
-                    d.delete(&mut w, key.as_bytes()).unwrap();
-                }
+        w.commit().unwrap();
+        env.prepare_for_closing().wait();
+    }
+
+    fn dict(pairs: Vec<(&str, PlistValue)>) -> PlistValue {
+        let mut m = GsDict::new();
+        for (k, v) in pairs {
+            m.insert(k.to_string(), v);
+        }
+        PlistValue::dict(m)
+    }
+    fn xml(v: PlistValue) -> Vec<u8> {
+        write_xml(&v)
+    }
+    fn block(first_type: u8, ver: u8, upd: u32) -> Vec<u8> {
+        let mut b = vec![0u8; BLOCK_BYTES];
+        b[0] = first_type;
+        b[TILES_BYTES] = ver;
+        b[TILES_BYTES + 1..].copy_from_slice(&upd.to_le_bytes());
+        b
+    }
+    fn id(env: &str, db: &str, key: &str) -> RecordId {
+        RecordId { env: env.into(), db: db.into(), key: key.as_bytes().to_vec() }
+    }
+
+    #[test]
+    fn ids_masks_and_options() {
+        let bad = RecordId { env: "e".into(), db: "d".into(), key: vec![b'a', 0xff, b'b', 0xc3] };
+        assert_eq!(bad.key_string(), "a\\xffb\\xc3");
+        assert_eq!(bad.to_string(), "e/d/a\\xffb\\xc3");
+        assert_eq!(tile_field_at(0), "typeIndex");
+        assert_eq!(tile_field_at(64), "?");
+        for s in ["tile:", "plist:a#b", "record:x"] {
+            assert_eq!(Mask::parse(s).unwrap().to_string(), s);
+        }
+        for bad in ["plist:nohash", "tile:x", "tile:64", "nope"] {
+            assert!(matches!(Mask::parse(bad), Err(HarnessError::Usage(_))), "{bad}");
+        }
+        let p = SaveDiffOptions::parity_default();
+        assert!(p.strict_gzip && p.masks.len() == 2 && p.max_tile_diffs_per_block == 8 && p.max_detail == 200);
+    }
+
+    #[test]
+    fn diff_lines_and_reports() {
+        let i = id("world_db", "blocks", "1_2");
+        let diffs = vec![
+            RecordDiff::OnlyInA(id("e", "d", "a")),
+            RecordDiff::OnlyInB(id("e", "d", "b")),
+            RecordDiff::KindMismatch { id: i.clone(), a: "raw", b: "gzip" },
+            RecordDiff::Block {
+                id: i.clone(),
+                trailer_a: (1, 2),
+                trailer_b: (3, 4),
+                differing_tiles: 1,
+                differing_bytes: 2,
+                sample: vec![TileDiff {
+                    tile_index: 1,
+                    local_x: 1,
+                    local_y: 0,
+                    world_x: 33,
+                    world_y: 64,
+                    field: "light",
+                    a: 5,
+                    b: 6,
+                }],
+            },
+            RecordDiff::Plist {
+                id: i.clone(),
+                diffs: vec![PlistDiff {
+                    path: "/x".into(),
+                    kind: PlistDiffKind::OnlyInA,
+                    a: "1".into(),
+                    b: String::new(),
+                }],
+            },
+            RecordDiff::PlistRawOnly { id: i.clone(), first_diff_offset: 9, len_a: 10, len_b: 11 },
+            RecordDiff::GzipRawOnly { id: i.clone(), len_a: 1, len_b: 2 },
+            RecordDiff::Bytes { id: i.clone(), len_a: 1, len_b: 2, differing_bytes: 1, first_diff_offset: 0 },
+            RecordDiff::Text { id: i.clone(), first_diff_line: 3, a: "x".into(), b: "y".into() },
+        ];
+        for d in &diffs {
+            assert_eq!(d.id().env.is_empty(), false);
+            assert!(d.lines()[0].contains("e/d/") || d.lines()[0].contains("world_db/blocks/1_2"));
+        }
+        assert!(diffs[3].lines()[1].contains("blocks 1_2 tile(1,0) world(33,64) light a=5 b=6"));
+        let mut per_db = BTreeMap::new();
+        per_db.insert("world_db/blocks".to_string(), (2, 3));
+        per_db.insert("file".to_string(), (1, 1));
+        let rep = SaveDiffReport { compared_records: 5, identical: 3, masked: 1, per_db, diffs };
+        assert!(!rep.is_clean());
+        let text = rep.render(1000);
+        assert!(text.contains("only in A: e/d/a") && text.ends_with("identical records: 3  masked: 1  differing: 9\n"));
+        let short = rep.render(2);
+        assert!(short.contains("... output truncated at 2 lines"));
+        let json = rep.render_json();
+        assert!(json.starts_with("{\"compared_records\":5,\"identical\":3,\"masked\":1,\"differing\":9,\"clean\":false,\"per_db\":{\"file\":[1,1],\"world_db/blocks\":[2,3]},\"diffs\":[{\"record\":\"e/d/a\""));
+        let empty =
+            SaveDiffReport { compared_records: 0, identical: 0, masked: 0, per_db: BTreeMap::new(), diffs: vec![] };
+        assert!(!empty.is_clean() && empty.render_json().contains("\"per_db\":{}"));
+        let clean = SaveDiffReport { compared_records: 1, ..empty };
+        assert!(clean.is_clean());
+    }
+
+    #[test]
+    fn plist_comparison_covers_every_node_kind() {
+        let m = [Mask::AllDates, Mask::Plist { record: "e/d/k".into(), path: "/masked".into() }];
+        let masks = Masks::new(&m);
+        let rec = id("e", "d", "k");
+        let full = |n: i64, d: f64, extra: bool| {
+            let mut pairs = vec![
+                ("s", PlistValue::string("a")),
+                ("i", PlistValue::int(n)),
+                ("u", PlistValue::UInt(u64::MAX)),
+                ("r", PlistValue::real_f64(1.5)),
+                ("b", PlistValue::Bool(true)),
+                ("d", PlistValue::date(d)),
+                ("x", PlistValue::data((0..20).collect::<Vec<u8>>())),
+                ("l", PlistValue::array(vec![PlistValue::int(1)])),
+                ("masked", PlistValue::int(n)),
+                ("o", dict(vec![])),
+            ];
+            if extra {
+                pairs.push(("only", PlistValue::string("v")));
             }
-            w.commit().unwrap();
+            xml(dict(pairs))
         };
-        // block tile byte
-        put("blocks", "198_18", &|v| {
-            let mut raw = gzip_inflate(&v).unwrap();
-            raw[(2 * 32 + 14) * 64] = raw[(2 * 32 + 14) * 64].wrapping_add(1);
-            Some(gzip_deflate(&raw))
-        });
-        let r = diff_saves(&w1, &copy, &o).unwrap();
-        assert_eq!(r.diffs.len(), 1);
-        let txt = r.render(20);
-        assert!(txt.contains("blocks 198_18 tile(14,2) world(6350,578) typeIndex"), "{}", txt);
-        // delete record
-        put("blocks", "198_18", &|_| None);
-        let r = diff_saves(&w1, &copy, &o).unwrap();
-        assert!(r.diffs.iter().any(|d| matches!(d, RecordDiff::OnlyInA(_))));
+        let (diffs, hit) = compare_plist(&rec, &full(1, 0.0, false), &full(1, 0.0, false), &masks);
+        assert!(diffs.is_empty() && !hit);
+        let (diffs, hit) = compare_plist(&rec, &full(1, 0.0, false), &full(2, 9.0, false), &masks);
+        assert_eq!(diffs.len(), 1);
+        assert_eq!((diffs[0].path.as_str(), diffs[0].kind), ("/i", PlistDiffKind::ValueMismatch));
+        assert!(hit);
+        let (diffs, _) = compare_plist(&rec, &full(1, 0.0, true), &full(1, 0.0, false), &masks);
+        assert_eq!((diffs[0].kind, diffs[0].a.as_str()), (PlistDiffKind::OnlyInA, "string:\"v\""));
+        let (diffs, _) = compare_plist(&rec, &full(1, 0.0, false), &full(1, 0.0, true), &masks);
+        assert_eq!(diffs[0].kind, PlistDiffKind::OnlyInB);
+        // type and array length mismatches, reals compared bit for bit
+        let a = xml(dict(vec![
+            ("v", PlistValue::int(1)),
+            ("l", PlistValue::array(vec![])),
+            ("r", PlistValue::real_f64(0.0)),
+        ]));
+        let b = xml(dict(vec![
+            ("v", PlistValue::string("1")),
+            ("l", PlistValue::array(vec![PlistValue::Null])),
+            ("r", PlistValue::real_f64(-0.0)),
+        ]));
+        let (diffs, _) = compare_plist(&rec, &a, &b, &masks);
+        let kinds: Vec<_> = diffs.iter().map(|d| (d.path.as_str(), d.kind)).collect();
+        assert!(
+            kinds.contains(&("/v", PlistDiffKind::TypeMismatch))
+                && kinds.contains(&("/l", PlistDiffKind::LengthMismatch))
+        );
+        assert!(
+            kinds.contains(&("/r", PlistDiffKind::ValueMismatch))
+                && kinds.contains(&("/l/[0]", PlistDiffKind::OnlyInB))
+        );
+        // a root that does not parse
+        let (diffs, _) = compare_plist(&rec, b"<?xml junk", &a, &masks);
+        assert_eq!((diffs[0].a.as_str(), diffs[0].b.as_str()), ("PARSE FAILURE", "parsed"));
+        let (diffs, _) = compare_plist(&rec, &a, b"<?xml junk", &masks);
+        assert_eq!((diffs[0].a.as_str(), diffs[0].b.as_str()), ("parsed", "PARSE FAILURE"));
+        // every node can be shown and named
+        let mut flat = BTreeMap::new();
+        flatten(
+            &PlistValue::array(vec![
+                PlistValue::UInt(7),
+                PlistValue::real_f64(0.5),
+                PlistValue::data(vec![1; 20]),
+                PlistValue::Null,
+            ]),
+            "",
+            &mut flat,
+        );
+        let shown: Vec<String> = flat.values().map(Node::show).collect();
+        assert!(shown.contains(&"unsigned:7".to_string()) && shown.contains(&"real:0.5".to_string()));
+        assert!(
+            shown.iter().any(|s| s.starts_with("data:20B:0101") && s.ends_with("..."))
+                && shown.contains(&"array[4]".to_string())
+        );
+        let types: Vec<&str> = flat.values().map(Node::type_name).collect();
+        assert!(
+            types.contains(&"unsigned")
+                && types.contains(&"real")
+                && types.contains(&"data")
+                && types.contains(&"null")
+        );
+        assert_eq!((Node::Dict.show(), Node::Dict.type_name()), ("dict".to_string(), "dict"));
+        assert_eq!(Node::Int(1).show(), "integer:1");
+        assert_eq!(Node::Str("s".into()).show(), "string:\"s\"");
+        assert_eq!(
+            (Node::Bool(true).type_name(), Node::Date(1.0).type_name(), Node::Str(String::new()).type_name()),
+            ("bool", "date", "string")
+        );
+        assert_eq!(Node::Date(2.0).show(), "date:2");
+        assert_eq!(Node::Bool(false).show(), "bool:false");
+        assert_eq!(Node::UInt(1).type_name(), "unsigned");
+        assert_eq!(Node::Int(1).type_name(), "integer");
+    }
+
+    #[test]
+    fn record_comparison_by_kind() {
+        let masks = Masks::new(&[]);
+        let o = SaveDiffOptions::default();
+        let k = id("world_db", "main", "worldv2");
+        let gz = |b: &[u8]| gzip_deflate(b);
+        let plist_a = xml(dict(vec![("a", PlistValue::int(1))]));
+        let plist_b = xml(dict(vec![("a", PlistValue::int(2))]));
+        // gzip against raw, with and without a recognisable inner kind
+        let m = compare_record(&k, &gz(&plist_a), b"raw bytes", &masks, &o).unwrap();
+        assert!(matches!(m, RecordDiff::KindMismatch { a: "gzip+xml-plist", b: "raw", .. }));
+        let m = compare_record(&k, b"bplist00x", &gz(b"\x00\x01plain"), &masks, &o).unwrap();
+        assert!(matches!(m, RecordDiff::KindMismatch { a: "bplist", b: "gzip+raw", .. }));
+        let m = compare_record(&k, b"<?xml a", &gz(b"bplist00xx"), &masks, &o).unwrap();
+        assert!(matches!(m, RecordDiff::KindMismatch { a: "xml-plist", b: "gzip+bplist", .. }));
+        // corrupt gzip on one side
+        let mut corrupt = gz(&plist_a);
+        let n = corrupt.len();
+        corrupt[n - 6] ^= 0xff;
+        assert!(matches!(compare_record(&k, &gz(&plist_a), &corrupt, &masks, &o), Some(RecordDiff::Bytes { .. })));
+        // inner kinds that differ, plist diffs through gzip, equal content under lax gzip
+        assert!(matches!(
+            compare_record(&k, &gz(&plist_a), &gz(b"bplist00zz"), &masks, &o),
+            Some(RecordDiff::KindMismatch { .. })
+        ));
+        assert!(matches!(compare_record(&k, &gz(&plist_a), &gz(&plist_b), &masks, &o), Some(RecordDiff::Plist { .. })));
+        assert!(compare_record(&k, &gz(&plist_a), &gz(&plist_a), &masks, &o).is_none());
+        // same content, different compression: only reported when the compressed bytes must match too
+        let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
+        std::io::Write::write_all(&mut enc, &[7u8; 4000]).unwrap();
+        let (best, normal) = (enc.finish().unwrap(), gz(&[7u8; 4000]));
+        assert_ne!(best, normal);
+        assert!(matches!(compare_record(&k, &best, &normal, &masks, &o), Some(RecordDiff::GzipRawOnly { .. })));
+        let lax = SaveDiffOptions { strict_gzip: false, ..Default::default() };
+        assert!(compare_record(&k, &best, &normal, &masks, &lax).is_none());
+        // raw values: bytes, and text files by line
+        let r = compare_record(&id("e", "d", "raw"), b"abcd", b"abXdY", &masks, &o).unwrap();
+        assert!(matches!(r, RecordDiff::Bytes { differing_bytes: 2, first_diff_offset: 2, .. }));
+        let t = id("file", "", "admin.txt");
+        let d = compare_record(&t, b"one\ntwo\nthree", b"one\ntwo", &masks, &o).unwrap();
+        let RecordDiff::Text { first_diff_line, a, b, .. } = d else { panic!() };
+        assert_eq!((first_diff_line, a.as_str(), b.as_str()), (3, "three", "<missing>"));
+        let RecordDiff::Text { a, .. } = compare_record(&t, b"one", b"one\ntwo", &masks, &o).unwrap() else { panic!() };
+        assert_eq!(a, "<missing>");
+        // different bytes that read as the same text
+        assert!(matches!(compare_record(&t, &[0xff, b'x'], &[0xfe, b'x'], &masks, &o), Some(RecordDiff::Bytes { .. })));
+        assert_eq!((first_diff(b"abc", b"abc"), count_diff(b"ab", b"abcd")), (3, 2));
+        assert_eq!(parse_block_key("12_-3"), Some((12, -3)));
+        assert_eq!((parse_block_key("12"), parse_block_key("a_1")), (None, None));
+        assert_eq!(le_value(&[1, 2]), 0x0201);
+    }
+
+    #[test]
+    fn block_comparison() {
+        let o = SaveDiffOptions { max_tile_diffs_per_block: 1, ..Default::default() };
+        let bid = id("world_db", "blocks", "bad-key");
+        let mut a = block(1, 1, 1);
+        let mut b = block(1, 1, 1);
+        a[64 * 5] = 9;
+        a[64 * 5 + 1] = 9;
+        a[64 * 6 + 20] = 4;
+        let gm = Masks::new(&[]);
+        let d = compare_block(&bid, &a, &b, &gm, &o).unwrap();
+        let RecordDiff::Block { differing_tiles, differing_bytes, sample, .. } = d else { panic!() };
+        assert_eq!((differing_tiles, differing_bytes, sample.len()), (2, 3, 1));
+        assert_eq!((sample[0].world_x, sample[0].world_y), (5, 0));
+        let tm = [Mask::TileBytes(vec![0, 1, 20, 21])];
+        assert!(compare_block(&bid, &a, &b, &Masks::new(&tm), &o).is_none());
+        b[TILES_BYTES + 3] = 5;
+        assert!(matches!(
+            compare_block(&bid, &a, &b, &Masks::new(&tm), &o),
+            Some(RecordDiff::Block { differing_tiles: 0, .. })
+        ));
+        // whole-record path: raw blocks of the right size are compared tile by tile
+        let r = compare_record(&id("world_db", "other", "1_1"), &a, &block(7, 1, 1), &gm, &o).unwrap();
+        assert!(matches!(r, RecordDiff::Bytes { .. }), "outside world_db/blocks: plain bytes");
+        let real = id("world_db", "blocks", "198_18");
+        assert!(matches!(compare_record(&real, &a, &block(7, 1, 1), &gm, &o), Some(RecordDiff::Block { .. })));
+        let same_under_mask = Masks::new(&tm);
+        assert!(compare_record(&real, &a, &block(1, 1, 1), &same_under_mask, &o).is_none());
+    }
+
+    fn two_saves() -> (super::super::TempDir, PathBuf, PathBuf) {
+        let tmp = super::super::TempDir::new("savediff").unwrap();
+        let mk = |name: &str, tweak: u8, extra: bool| {
+            let dir = tmp.path().join(name).join("save1");
+            std::fs::create_dir_all(&dir).unwrap();
+            let world = xml(dict(vec![
+                ("hostPort", PlistValue::int(tweak as i64)),
+                ("saveDate", PlistValue::date(tweak as f64)),
+            ]));
+            std::fs::write(dir.join("worldv2"), &world).unwrap();
+            std::fs::write(dir.join("adminlist.txt"), format!("hdr\nbob{tweak}\n")).unwrap();
+            std::fs::write(dir.join("lock.mdb"), b"skip").unwrap();
+            let blk = gzip_deflate(&block(tweak, 1, tweak as u32));
+            let mut blocks: Vec<(&[u8], Vec<u8>)> = vec![(b"198_18", blk)];
+            if extra {
+                blocks.push((b"1_1", gzip_deflate(&block(0, 1, 0))));
+            }
+            let rows: Vec<(&[u8], &[u8])> = blocks.iter().map(|(k, v)| (*k, v.as_slice())).collect();
+            put_env(&dir.join("world_db"), &[("blocks", &rows), ("main", &[(b"worldv2", &world)])]);
+            put_env(&dir.join("server_db"), &[("misc", &[(b"k", b"v")])]);
+            dir
+        };
+        let a = mk("a", 1, false);
+        let b = mk("b", 2, true);
+        (tmp, a, b)
+    }
+
+    #[test]
+    fn whole_saves_load_diff_and_render() {
+        let (tmp, a, b) = two_saves();
+        let recs = load_records(&a).unwrap();
+        assert!(
+            recs.contains_key(&id("world_db", "blocks", "198_18")) && recs.contains_key(&id("server_db", "misc", "k"))
+        );
+        assert!(recs.contains_key(&id("file", "", "worldv2")) && !recs.contains_key(&id("file", "", "lock.mdb")));
+        // a saves dir with one child resolves to it; anything else is rejected
+        let rep = diff_saves(a.parent().unwrap(), b.parent().unwrap(), &SaveDiffOptions::parity_default()).unwrap();
+        assert!(!rep.is_clean());
+        let ids: Vec<String> = rep.diffs.iter().map(|d| d.id().to_string()).collect();
+        assert!(
+            ids.contains(&"world_db/blocks/1_1".to_string()) && ids.contains(&"file//adminlist.txt".to_string()),
+            "{ids:?}"
+        );
+        assert!(rep.per_db.contains_key("file") && rep.per_db.contains_key("world_db/blocks"));
+        let masked = SaveDiffOptions {
+            masks: vec![Mask::Record("world_db/blocks/*".into()), Mask::AllDates],
+            ..SaveDiffOptions::default()
+        };
+        assert!(diff_saves(&a, &b, &masked).unwrap().masked >= 2);
+        assert!(diff_saves(&a, &a, &SaveDiffOptions::default()).unwrap().is_clean());
+        let empty = tmp.path().join("empty");
+        std::fs::create_dir_all(empty.join("x")).unwrap();
+        std::fs::create_dir_all(empty.join("y")).unwrap();
+        assert!(matches!(resolve_save(&empty), Err(HarnessError::Usage(_))));
+        assert!(resolve_save(&tmp.path().join("missing")).is_err());
+        assert!(open_env_readonly(&tmp.path().join("missing")).is_err());
+        // an env directory that is not an LMDB env makes the load fail
+        let broken = tmp.path().join("broken");
+        std::fs::create_dir_all(broken.join("world_db")).unwrap();
+        std::fs::write(broken.join("worldv2"), b"x").unwrap();
+        assert!(matches!(load_records(&broken), Err(HarnessError::Lmdb(_))));
+    }
+
+    #[test]
+    fn record_sets_and_odd_lmdb_content() {
+        let o = SaveDiffOptions::default();
+        let mut a = BTreeMap::new();
+        let mut b = BTreeMap::new();
+        a.insert(id("e", "d", "only-a"), vec![1]);
+        b.insert(id("e", "d", "only-b"), vec![1]);
+        a.insert(id("e", "d", "same"), vec![2]);
+        b.insert(id("e", "d", "same"), vec![2]);
+        let rep = diff_record_sets(&a, &b, &o);
+        assert_eq!((rep.compared_records, rep.identical, rep.diffs.len()), (3, 1, 2));
+        assert!(matches!(rep.diffs[0], RecordDiff::OnlyInA(_)) && matches!(rep.diffs[1], RecordDiff::OnlyInB(_)));
+        // a plain key in the unnamed database is not a sub-database: the load fails
+        let tmp = super::super::TempDir::new("odd-lmdb").unwrap();
+        let save = tmp.path().join("save");
+        std::fs::create_dir_all(&save).unwrap();
+        std::fs::write(save.join("worldv2"), b"w").unwrap();
+        std::fs::create_dir_all(save.join("world_db")).unwrap();
+        // SAFETY: private temp directory.
+        let env =
+            unsafe { heed::EnvOpenOptions::new().max_dbs(4).map_size(1 << 24).open(save.join("world_db")) }.unwrap();
+        let mut w = env.write_txn().unwrap();
+        let main = env.create_database::<Bytes, Bytes>(&mut w, None).unwrap();
+        main.put(&mut w, b"plain", b"value").unwrap();
+        w.commit().unwrap();
+        env.prepare_for_closing().wait();
+        assert!(matches!(load_records(&save), Err(HarnessError::Lmdb(_))));
+        // summary with an unreadable worldv2 only lists the file
+        std::fs::remove_dir_all(save.join("world_db")).unwrap();
+        std::fs::write(save.join("worldv2"), b"<?xml junk").unwrap();
+        assert!(summary(&save).unwrap().contains("file worldv2: 10 bytes\n"));
+    }
+
+    #[test]
+    fn inspection_commands() {
+        let (tmp, a, _b) = two_saves();
+        let (ok, bad) = regzip_check(&a).unwrap();
+        assert_eq!((ok, bad.len()), (1, 0));
+        // a block that recompresses differently, and one that is not gzip at all
+        let raw = block(3, 1, 1);
+        let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
+        std::io::Write::write_all(&mut enc, &raw).unwrap();
+        let best = enc.finish().unwrap();
+        let other = tmp.path().join("other/save1");
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(other.join("worldv2"), b"w").unwrap();
+        put_env(
+            &other.join("world_db"),
+            &[("blocks", &[(b"1_1", &best), (b"2_2", b"not gzip"), (b"3_3", &gzip_deflate(b"short"))])],
+        );
+        let (ok, bad) = regzip_check(&other).unwrap();
+        assert_eq!(ok + bad.len(), 3);
+        assert!(bad.iter().any(|i| i.key_string() == "2_2"));
+        // grid
+        let grid = render_block_grid(&a, 198, 18, "typeIndex").unwrap();
+        assert_eq!(grid.lines().count(), 33);
+        assert!(grid.starts_with("block 198_18: version=1 updateIndex=1 field=typeIndex"));
+        assert_eq!(render_block_grid(&a, 5, 5, "typeIndex").unwrap(), "no such block\n");
+        assert!(matches!(render_block_grid(&a, 198, 18, "nope"), Err(HarnessError::Usage(_))));
+        assert!(matches!(render_block_grid(&other, 2, 2, "light"), Err(HarnessError::Parse(_))));
+        assert!(matches!(render_block_grid(&other, 3, 3, "light"), Err(HarnessError::Parse(_))));
+        // summary and dump
+        let s = summary(&a).unwrap();
+        assert!(
+            s.contains("file worldv2:") && s.contains("/hostPort = integer:1") && s.contains("file adminlist.txt:")
+        );
+        assert!(
+            s.contains("env world_db: data.mdb=") && s.contains("db \"blocks\": 1 entries") && s.contains("198_18:")
+        );
+        let out = tmp.path().join("dump");
+        dump(&a, &out).unwrap();
+        assert!(out.join("world_db/blocks/198_18.bin").exists() && out.join("world_db/main/worldv2.plist").exists());
+        assert!(out.join("server_db/misc/k").exists());
+        let other_dump = tmp.path().join("dump2");
+        dump(&other, &other_dump).unwrap();
+        assert!(other_dump.join("world_db/blocks/2_2").exists());
     }
 }
