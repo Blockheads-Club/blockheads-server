@@ -140,6 +140,21 @@ mod tests {
     }
 
     #[test]
+    fn chests_and_baskets_without_slots() {
+        let w = world();
+        w.send_updated_found_items_list_to_server();
+        let a = InventoryItem::new(ItemType::ITEM_FLINT, 0, 0, None, None);
+        let b = InventoryItem::new(ItemType::ITEM_FLINT_AXE, 0, 0, None, None);
+        let own = |i: crate::items::inventory_item::ItemRef| std::rc::Rc::try_unwrap(i).ok().unwrap().into_inner();
+        w.add_chest_items_to_found_list(&[vec![own(a)], vec![own(b)]]);
+        assert!(w.found_items_list.borrow().as_ref().unwrap().contains_index(ItemType::ITEM_FLINT_AXE.0 as u64));
+        // a basket whose slots are gone adds only itself
+        let basket = InventoryItem::new(ItemType::ITEM_BASKET, 0, 0, None, None);
+        basket.borrow_mut().sub_items = None;
+        assert!(w.private_add_item_to_found_list_add_basket_contents(&basket.borrow(), true));
+    }
+
+    #[test]
     fn union_and_nil_set() {
         let w = world();
         let mut inc = IndexSet::new();
