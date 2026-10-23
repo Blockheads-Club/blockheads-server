@@ -261,7 +261,7 @@ fn channels_both_ways() {
     n.rekey("e", "p");
     n.rekey("p", "p");
     l.approved.borrow_mut().push("p".into());
-    assert_eq!(n.packet(&l, "p", &ch(1, b"x"), &[]), Some(("m:a".to_string(), b"x".to_vec())));
+    assert_eq!(n.packet(&l, "p", &ch(1, b"x"), &[]), Some(Inbound::Channel("m:a".to_string(), b"x".to_vec())));
     assert_eq!(n.packet(&l, "p", &ch(9, b"x"), &[]), None);
     // A client CHANNEL_REGISTER is ignored.
     let reg = Message::ChannelRegister(ChannelRegister { name: "m:z".into(), id: 5 }).encode();
@@ -286,6 +286,71 @@ fn channels_both_ways() {
     n.prune(&l);
     assert!(!n.has_peers());
     n.announce_to(&l, "gone", &names);
+}
+
+fn call(id: u32) -> ServiceCall {
+    ServiceCall {
+        id,
+        mod_id: "shop-ui".into(),
+        service: "economy".into(),
+        version_req: "^1".into(),
+        method: "balance".into(),
+        args: vec![0x80],
+    }
+}
+
+#[test]
+fn service_calls_both_ways() {
+    let l = Fake::default();
+    let mut n = net();
+    n.packet(&l, "e", &hello(1), &[]);
+    l.take();
+    let wire_call = Message::ServiceCall(call(7)).encode();
+    let wire_result = Message::ServiceResult(ServiceResult { id: 7, outcome: Ok(vec![0xf6]) }).encode();
+    // Not in the game yet: dropped. A peer that never sent HELLO is dropped too.
+    assert_eq!(n.packet(&l, "e", &wire_call, &[]), None);
+    assert_eq!(n.packet(&l, "e", &wire_result, &[]), None);
+    assert_eq!(n.packet(&l, "vanilla", &wire_call, &[]), None);
+    n.rekey("e", "p");
+    l.approved.borrow_mut().push("p".into());
+    assert_eq!(n.packet(&l, "p", &wire_call, &[]), Some(Inbound::Call(call(7))));
+    assert!(matches!(n.packet(&l, "p", &wire_result, &[]), Some(Inbound::Result(r)) if r.id == 7));
+    assert!(l.take().is_empty());
+    // A server mod's call goes to modded peers in the game only.
+    let rc = RemoteCall {
+        id: 3,
+        target: bhmod_core::remote::RemoteTarget::Player("p".into()),
+        mod_id: "srv".into(),
+        service: "hud".into(),
+        version_req: "*".into(),
+        method: "title".into(),
+        args: vec![0x80],
+    };
+    assert_eq!(n.send_service_call(&l, "p", &rc), Ok(()));
+    assert_eq!(n.send_service_call(&l, "vanilla", &rc), Err(RemoteError::Unavailable));
+    l.approved.borrow_mut().push("vanilla".into());
+    assert_eq!(n.send_service_call(&l, "vanilla", &rc), Err(RemoteError::Unavailable), "approved but no HELLO");
+    l.approved.borrow_mut().retain(|p| p != "p");
+    assert_eq!(n.send_service_call(&l, "p", &rc), Err(RemoteError::Unavailable), "modded but gone");
+    let sent = l.take();
+    assert_eq!(sent.len(), 1);
+    assert!(matches!(&sent[0], Message::ServiceCall(c) if c.id == 3 && c.mod_id == "srv" && c.service == "hud"));
+    // Answers: a value and a failure.
+    n.send_service_result(&l, "p", 7, Ok(vec![0x18, 0xfa]));
+    n.send_service_result(&l, "p", 8, Err(RemoteError::NotPermitted));
+    assert_eq!(
+        l.take(),
+        vec![
+            Message::ServiceResult(ServiceResult { id: 7, outcome: Ok(vec![0x18, 0xfa]) }),
+            Message::ServiceResult(ServiceResult {
+                id: 8,
+                outcome: Err(ServiceFailure {
+                    code: bhmod_proto::service_error::NOT_PERMITTED,
+                    message: String::new()
+                })
+            }),
+        ]
+    );
 }
 
 #[test]

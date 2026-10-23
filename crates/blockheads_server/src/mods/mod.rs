@@ -221,6 +221,29 @@ fn parse_scale(v: Option<&str>) -> u32 {
     v.and_then(|s| s.trim().parse::<u32>().ok()).filter(|n| *n > 0).unwrap_or(1)
 }
 
+/// Limits of service calls that clients make into server mods, from `BLOCKHEADS_MODS_REMOTE_BURST` (calls a player
+/// may make in a burst, default 20) and `BLOCKHEADS_MODS_REMOTE_RATE` (calls per second a player may keep up,
+/// default 10). Unset, empty, unparsable or zero values use the defaults. Which services clients may call at all is
+/// the providing mod's decision (`remote = true` in its `mod.toml`).
+#[cfg(feature = "mods")]
+pub fn remote_limits() -> bhmod_core::remote::RemoteLimits {
+    parse_limits(
+        std::env::var("BLOCKHEADS_MODS_REMOTE_BURST").ok().as_deref(),
+        std::env::var("BLOCKHEADS_MODS_REMOTE_RATE").ok().as_deref(),
+    )
+}
+
+#[cfg(feature = "mods")]
+fn parse_limits(burst: Option<&str>, rate: Option<&str>) -> bhmod_core::remote::RemoteLimits {
+    let default = bhmod_core::remote::RemoteLimits::default();
+    let num = |v: Option<&str>, d: u32| v.and_then(|s| s.trim().parse::<u32>().ok()).filter(|n| *n > 0).unwrap_or(d);
+    bhmod_core::remote::RemoteLimits {
+        burst: num(burst, default.burst),
+        per_second: num(rate, default.per_second),
+        ..default
+    }
+}
+
 /// JVM mods are unsandboxed code, so they are off unless the owner asks: `BLOCKHEADS_JVM` set to `1`, `true`, `yes` or
 /// `on` (feature `jvm` only). `BLOCKHEADS_JAVA_HOME` picks the JRE (default: `JAVA_HOME`, then `java` on the `PATH`)
 /// and `BLOCKHEADS_JVM_HEAP_MB` the heap limit of the JVM (default 256).
@@ -286,6 +309,24 @@ mod tests {
         assert!(mods_dir().ends_with("TheBlockheads/mods"), "{:?}", mods_dir());
         std::env::remove_var("BLOCKHEADS_MODS_DIR");
         assert!(mods_dir().ends_with("mods"));
+    }
+
+    #[cfg(feature = "mods")]
+    #[test]
+    fn remote_limit_parsing() {
+        let d = bhmod_core::remote::RemoteLimits::default();
+        assert_eq!(parse_limits(None, None), d);
+        assert_eq!(parse_limits(Some(""), Some("x")), d);
+        assert_eq!(parse_limits(Some("0"), Some("0")), d);
+        let l = parse_limits(Some(" 5 "), Some("2"));
+        assert_eq!((l.burst, l.per_second, l.max_pending), (5, 2, d.max_pending));
+        // Tests run single-threaded (.cargo/config.toml); the variables are unset outside this test.
+        std::env::set_var("BLOCKHEADS_MODS_REMOTE_BURST", "7");
+        std::env::set_var("BLOCKHEADS_MODS_REMOTE_RATE", "3");
+        assert_eq!((remote_limits().burst, remote_limits().per_second), (7, 3));
+        std::env::remove_var("BLOCKHEADS_MODS_REMOTE_BURST");
+        std::env::remove_var("BLOCKHEADS_MODS_REMOTE_RATE");
+        assert_eq!(remote_limits(), d);
     }
 
     #[cfg(feature = "jvm")]
