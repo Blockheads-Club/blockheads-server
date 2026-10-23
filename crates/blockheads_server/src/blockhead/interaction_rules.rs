@@ -1999,6 +1999,8 @@ pub(crate) mod testhost {
         /// `workbench_type` / `ridable_blockhead_can_ride_using_item` answers for stub objects.
         pub wb_type: Cell<i32>,
         pub can_ride: Cell<bool>,
+        /// `has_blockhead_ai` answer.
+        pub has_ai: Cell<bool>,
     }
     impl AHost {
         pub fn misc_obj(&self, k: &str) -> Option<ObjRef> {
@@ -2019,6 +2021,9 @@ pub(crate) mod testhost {
         }
     }
     impl crate::blockhead::inventory_model::InventoryHostStub for AHost {
+        fn has_blockhead_ai(&self, _b: &Blockhead) -> bool {
+            self.has_ai.get()
+        }
         fn action_goal_interaction(&self, a: &Rc<dyn std::any::Any>) -> i32 {
             ActionBridge.action_goal_interaction(a)
         }

@@ -1572,3 +1572,31 @@ fn build_limit_back_wall_edges_and_host_bridges() {
     crate::blockhead::blockhead::BlockheadHostStub::drop_inventory_items_at_index_sub_index_count_ignore_freeblocks(&*s.h, b, 1, 2, 3, false);
     assert_eq!(s.h.take(), vec!["drop:1:2:3:false".to_string()]);
 }
+
+#[test]
+fn solid_items_in_flooded_shafts_and_foreign_free_blocks() {
+    let s = Scene::new();
+    let b = s.b();
+    // every item against a shaft tile that is full of water
+    for item in 0..1200u32 {
+        reset(&s.w);
+        s.tile(10, 12).set_contents(0x67);
+        let t = s.tile(10, 12);
+        t.set_type_index(3);
+        t.set_partial_content_left(0xff);
+        s.tile(11, 12).set_type_index(1);
+        let _ = s.rule(Some(item), 0, true);
+    }
+    // a free block owned by somebody else is not picked up by a non-admin
+    use crate::physics_objects::free_block::FreeBlock;
+    let dw = real_dw(&s.w, "ir_foreign");
+    reset(&s.w);
+    s.w.set_is_admin(false);
+    let mut d = crate::objects::base::new_mutable_dict();
+    d.map.insert("ownerID".to_string(), PlistValue::string("someone"));
+    let fb = FreeBlock::new(&s.w, &dw, IntPair { x: 10, y: 12 }, 164, 0, 0, None, Some(d), None, true, None).unwrap();
+    *s.h.fbs.borrow_mut() = vec![fb];
+    s.h.fb_exist.set(true);
+    assert_ne!(s.rule(None, 0, false), InteractionType::INTERACTION_PICKUP_FREEBLOCK);
+    let _ = b;
+}

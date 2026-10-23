@@ -564,9 +564,6 @@ impl BlockheadHostStub for CovHost {
     fn add_item_to_inventory_flash(&self, _b: &Blockhead, item: &ItemRef, flash: bool) {
         self.rec(format!("additem:{}:{}", item.borrow().item_type.0, flash));
     }
-    fn die_for_good(&self, _b: &Blockhead) {
-        self.rec("dieforgood".to_string());
-    }
     fn current_interaction_requires_human_input(&self, _b: &Blockhead) -> bool {
         self.flag("human")
     }

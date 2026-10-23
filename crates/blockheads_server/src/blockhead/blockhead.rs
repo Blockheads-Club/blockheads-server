@@ -2824,7 +2824,10 @@ mod tests {
             (&crate::trains::passenger_car::PASSENGER_CAR_CLASS, 30),
             (&DYNAMIC_OBJECT_CLASS, 0),
         ] {
-            assert_eq!(BlockheadHostStub::ride_object_animation_type(&h, &mk(class)), expect);
+            let o = mk(class);
+            assert_eq!(BlockheadHostStub::ride_object_animation_type(&h, &o), expect);
+            assert_eq!(o.base().borrow().pos, IntPair { x: 0, y: 0 });
+            assert!(o.as_any().is::<ClassStub>());
         }
         let (_world, dw, _dwref) = setup();
         assert_eq!(crate::objects::base::DynamicWorldApi::get_owner_name_for_object_owner_id(&*dw, "x"), None);

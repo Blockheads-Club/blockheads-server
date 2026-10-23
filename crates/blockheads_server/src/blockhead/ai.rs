@@ -1267,7 +1267,7 @@ mod tests {
         let _ = drop_type;
         let hit = ai.test_tile_at_pos(pos);
         if hit {
-            ai.with_state(|s| assert!(s.found_tile[8] || s.found_tile[12]));
+            ai.with_state(|s| assert!(s.found_tile[8]));
         }
         // gems behind the back wall
         reset(&ai);
@@ -1453,3 +1453,6 @@ mod tests {
         ai.update_is_simulation(0.1, false);
     }
 }
+
+#[cfg(test)]
+mod cov_tests;
