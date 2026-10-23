@@ -610,3 +610,152 @@ mod tests {
         crate::foundation::clock::set_virtual(None);
     }
 }
+
+#[cfg(test)]
+mod more_tests {
+    use super::*;
+    use crate::world::lifecycle::testkit::*;
+
+    fn bh(f: &Fixture, id: u64, edit: impl FnOnce(&mut Bh)) -> ObjRef {
+        let o = crate::world::helpers::testutil::new_obj();
+        o.base().borrow_mut().unique_id = id;
+        let mut b = Bh {
+            client_id: Some("p".into()),
+            name: Some(format!("B{id}")),
+            should_continue: true,
+            ..Default::default()
+        };
+        edit(&mut b);
+        f.rec.bh.borrow_mut().insert(id, b);
+        f.rec.blockheads.borrow_mut().push(o.clone());
+        o
+    }
+
+    #[test]
+    fn events_without_their_extra_data_and_local_events() {
+        let f = fixture(32);
+        let w = &f.world;
+        let local = bh(&f, 1, |_| {});
+        with_simulation_events(|s| *s = Some(GsDict::new()));
+        for (ty, extra) in [
+            (SE_CRAFT, SimulationEventExtra::None),
+            (SE_GOT, SimulationEventExtra::None),
+            (SE_PLACE, SimulationEventExtra::None),
+            (SE_DAMAGE, SimulationEventExtra::None),
+            (SE_DAMAGE, SimulationEventExtra::Text("FIRE")),
+            (SE_SLEEP, SimulationEventExtra::None),
+        ] {
+            w.add_simulation_event_of_type_for_blockhead_extra_data(ty, Some(&local), extra);
+        }
+        let sowable = (0..400u32).find(|&i| item_type_is_sowable(ItemType(i)) && !item_type_is_solid(ItemType(i)));
+        if let Some(i) = sowable {
+            w.add_simulation_event_of_type_for_blockhead_extra_data(
+                SE_PLACE,
+                Some(&local),
+                SimulationEventExtra::ItemType(i as i32),
+            );
+        }
+        with_simulation_events(|s| {
+            let ev = &s.as_ref().unwrap().get(&1).unwrap().events;
+            assert!(ev.get(&SE_CRAFT).is_some() && ev.get(&SE_DAMAGE).is_some());
+            *s = None;
+        });
+        assert_eq!(event_string_key_hash("a"), nsstring::gs_hash("a"));
+    }
+
+    #[test]
+    fn counting_actions_and_nothing_to_simulate() {
+        let f = fixture(32);
+        let w = &f.world;
+        with_dw(w);
+        *w.server.borrow_mut() = None;
+        let _cl = crate::foundation::clock::TEST_CLOCK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::foundation::clock::set_virtual(Some(1_800_000_000.0));
+        let now = crate::foundation::clock::reference_time();
+        w.set_last_update_time(now - 50.0);
+        let _ = bh(&f, 1, |b| {
+            b.should_continue = false;
+            b.asleep = true;
+            b.regenerating = true;
+            b.actions = 3;
+        });
+        // somebody sleeps but nobody continues: counted and refused
+        assert!(!w.start_simulating_if_needed());
+        assert_eq!(w.total_number_of_actions_to_simulate(), 5);
+        // already simulating, a server, or recently updated
+        w.set_last_update_time(now - 0.5);
+        assert!(!w.start_simulating_if_needed());
+        w.set_is_simulating(true);
+        assert!(!w.start_simulating_if_needed());
+        w.set_is_simulating(false);
+        crate::foundation::clock::set_virtual(None);
+    }
+
+    #[test]
+    fn the_catch_up_loop_tracks_progress_and_fast_forward() {
+        let f = fixture(32);
+        let w = &f.world;
+        with_dw(w);
+        let _cl = crate::foundation::clock::TEST_CLOCK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::foundation::clock::set_virtual(Some(1_800_000_000.0));
+        // sleepers, meditators, regenerators, collapsed and busy blockheads
+        let _ = bh(&f, 1, |b| b.asleep = true);
+        let _ = bh(&f, 2, |b| b.meditating = true);
+        let _ = bh(&f, 3, |b| b.regenerating = true);
+        let _ = bh(&f, 4, |b| b.on_trade_mission = true);
+        let _ = bh(&f, 5, |b| {
+            b.collapse = true;
+            b.asleep = true;
+        });
+        let _ = bh(&f, 6, |b| {
+            b.actions = 4;
+            b.needs_human = true;
+            b.asleep = true;
+        });
+        let _ = bh(&f, 7, |b| {
+            b.actions = 4;
+            b.regenerating = true;
+        });
+        w.set_is_simulating(true);
+        w.set_time_left_to_simulate(5000.0);
+        w.set_total_time_to_simulate(5000.0);
+        w.set_total_number_of_actions_to_simulate(10);
+        assert!(w.continue_simulate());
+        assert!(w.fast_forward(), "everybody is asleep, meditating or regenerating");
+        // somebody awake switches it off again, and short totals use the action fraction
+        let _ = bh(&f, 8, |b| b.actions = 1);
+        w.set_total_time_to_simulate(0.5);
+        assert!(w.continue_simulate());
+        assert!(!w.fast_forward());
+        // a long run uses the time fraction; custom day lengths scale the clock
+        let mut rules = w.custom_rules();
+        rules.custom_rules_enabled = 1;
+        for cycle in [0, 2] {
+            rules.day_night_cycle = cycle;
+            w.set_custom_rules(rules);
+            w.set_total_time_to_simulate(5000.0);
+            w.set_time_left_to_simulate(4000.0);
+            assert!(w.continue_simulate());
+        }
+        w.set_total_time_to_simulate(5000.0);
+        w.set_time_left_to_simulate(60.0);
+        assert!(w.continue_simulate());
+        // many blocks in use: saved and decommissioned
+        while w.used_physical_blocks_len() <= 0x80 {
+            w.take_physical_block();
+        }
+        w.set_time_left_to_simulate(4000.0);
+        assert!(w.continue_simulate());
+        // a world without blockheads is finished at once
+        f.rec.blockheads.borrow_mut().clear();
+        w.set_time_left_to_simulate(4000.0);
+        assert!(!w.continue_simulate());
+        w.set_is_simulating(true);
+        // nobody continues: finished
+        let _ = bh(&f, 9, |b| b.should_continue = false);
+        w.set_time_left_to_simulate(4000.0);
+        assert!(!w.continue_simulate());
+        assert!(!w.is_simulating());
+        crate::foundation::clock::set_virtual(None);
+    }
+}

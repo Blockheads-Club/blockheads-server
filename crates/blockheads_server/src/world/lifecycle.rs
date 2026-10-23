@@ -1435,6 +1435,13 @@ pub(crate) mod testkit {
         pub controlled_by_server: bool,
         pub should_continue: bool,
         pub damage_log: Vec<(f32, bool, bool)>,
+        pub asleep: bool,
+        pub regenerating: bool,
+        pub meditating: bool,
+        pub on_trade_mission: bool,
+        pub actions: i32,
+        pub collapse: bool,
+        pub needs_human: bool,
     }
 
     #[derive(Default)]
@@ -1695,6 +1702,30 @@ pub(crate) mod testkit {
         }
         fn blockhead_should_continue_simulating(&self, b: &ObjRef) -> bool {
             self.bh_of(b).should_continue
+        }
+        fn blockhead_asleep(&self, b: &ObjRef) -> bool {
+            self.bh_of(b).asleep
+        }
+        fn blockhead_regenerating(&self, b: &ObjRef) -> bool {
+            self.bh_of(b).regenerating
+        }
+        fn blockhead_meditating(&self, b: &ObjRef) -> bool {
+            self.bh_of(b).meditating
+        }
+        fn blockhead_on_trade_mission(&self, b: &ObjRef) -> bool {
+            self.bh_of(b).on_trade_mission
+        }
+        fn blockhead_has_actions(&self, b: &ObjRef) -> bool {
+            self.bh_of(b).actions > 0
+        }
+        fn blockhead_action_count(&self, b: &ObjRef) -> i32 {
+            self.bh_of(b).actions
+        }
+        fn blockhead_cancel_simulate_due_to_collapse(&self, b: &ObjRef) -> bool {
+            self.bh_of(b).collapse
+        }
+        fn blockhead_current_interaction_requires_human_input(&self, b: &ObjRef) -> bool {
+            self.bh_of(b).needs_human
         }
         fn blockhead_suffer_damage_is_simulation_recoil(&self, b: &ObjRef, d: f32, sim: bool, recoil: bool) {
             if let Some(x) = self.bh.borrow_mut().get_mut(&b.base().borrow().unique_id) {
