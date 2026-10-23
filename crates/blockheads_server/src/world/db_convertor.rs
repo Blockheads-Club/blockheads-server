@@ -554,20 +554,13 @@ fn clean_dynamic_objects_17(data: &[u8]) -> Option<Vec<u8>> {
             new_objs.push(obj);
         } else {
             changed = true;
-            let ld = match light {
-                Some(PlistValue::Dict(d)) => d,
-                _ => unreachable!(),
-            };
+            // `has_grid` was derived from a dictionary `lightDict`, found in an object that is a dictionary
+            let Some(PlistValue::Dict(ld)) = light else { unreachable!() };
             let mut m = mutable_copy_of_dict(ld);
             m.map.remove(&"contributionGridData".to_string());
             m.map.remove(&"addedToTiles".to_string());
-            let mut o: PlistDict = match &obj {
-                PlistValue::Dict(d) => mutable_copy_of_dict(d),
-                _ => PlistDict {
-                    map: crate::foundation::gsdict::GsDict::new(),
-                    tag: ClassTag { origin: Origin::Built, mutable: true, alt: false },
-                },
-            };
+            let PlistValue::Dict(od) = &obj else { unreachable!() };
+            let mut o: PlistDict = mutable_copy_of_dict(od);
             o.map.insert("lightDict".to_string(), PlistValue::Dict(m));
             new_objs.push(PlistValue::Dict(o));
         }
@@ -575,10 +568,9 @@ fn clean_dynamic_objects_17(data: &[u8]) -> Option<Vec<u8>> {
     if !changed {
         return None;
     }
-    let mut s: PlistDict = match &save_data {
-        PlistValue::Dict(d) => mutable_copy_of_dict(d),
-        _ => return None,
-    };
+    // `object_for_key` only answers for dictionaries
+    let PlistValue::Dict(sd) = &save_data else { unreachable!() };
+    let mut s: PlistDict = mutable_copy_of_dict(sd);
     s.map.insert("dynamicObjects".to_string(), new_mutable_array(new_objs));
     data_from_property_list(&PlistValue::Dict(s))
 }
@@ -692,10 +684,8 @@ mod tests {
         assert!(!dw.has_key(Some("10_20/21")));
         let seventeen = dw.data_for_key(Some("10_20/17")).unwrap();
         let v = property_list_from_data(&seventeen).unwrap();
-        let ld = match v.object_for_key("dynamicObjects") {
-            Some(PlistValue::Array(a)) => a.items[0].object_for_key("lightDict").unwrap().clone(),
-            _ => panic!("no array"),
-        };
+        let Some(PlistValue::Array(a)) = v.object_for_key("dynamicObjects") else { panic!("no array") };
+        let ld = a.items[0].object_for_key("lightDict").unwrap().clone();
         assert!(ld.object_for_key("contributionGridData").is_none());
         assert!(ld.object_for_key("addedToTiles").is_none());
         assert_eq!(ld.object_for_key("keep").and_then(|k| k.as_str()), Some("x"));
@@ -729,13 +719,9 @@ mod tests {
         assert_eq!(r.remove, vec![pdir]);
         assert_eq!(gzip_inflate(&r.archive.unwrap()).unwrap(), vec![7u8; 1024]);
         let idx = property_list_from_data(&gzip_inflate(&r.index.unwrap()).unwrap()).unwrap();
-        match idx {
-            PlistValue::Array(a) => {
-                assert_eq!(a.items.len(), 1);
-                assert_eq!(a.items[0].as_str(), Some("3_4"));
-            }
-            _ => panic!("array expected"),
-        }
+        let PlistValue::Array(a) = idx else { panic!("array expected") };
+        assert_eq!(a.items.len(), 1);
+        assert_eq!(a.items[0].as_str(), Some("3_4"));
     }
 
     #[test]
@@ -813,5 +799,220 @@ mod tests {
             "{}",
             err
         );
+    }
+}
+
+#[cfg(test)]
+mod more_tests {
+    use super::*;
+    use crate::storage::lmdb::DatabaseEnvironment;
+
+    type Setup = (Rc<World>, String, Vec<Rc<Database>>, (Rc<DatabaseEnvironment>, std::sync::MutexGuard<'static, ()>));
+
+    fn setup(tag: &str) -> Setup {
+        let guard = crate::world::lifecycle::testkit::HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let home = format!("{}/bhwc_conv2_{}_{}", std::env::temp_dir().display(), tag, std::process::id());
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).unwrap();
+        crate::foundation::paths::set_home_for_test(&home);
+        let world = World::alloc(32);
+        *world.save_id.borrow_mut() = Some("sv".to_string());
+        let wd = format!("{}/saves/sv", paths::appsup());
+        std::fs::create_dir_all(&wd).unwrap();
+        let env = DatabaseEnvironment::new(&format!("{}/dbs", home), 8, 64).unwrap();
+        let dbs: Vec<Rc<Database>> =
+            ["main", "blocks", "dw", "lb", "srv"].iter().map(|n| Rc::new(Database::new(&env, n).unwrap())).collect();
+        (world, wd, dbs, (env, guard))
+    }
+
+    fn write(path: &str, bytes: &[u8]) {
+        std::fs::create_dir_all(std::path::Path::new(path).parent().unwrap()).unwrap();
+        std::fs::write(path, bytes).unwrap();
+    }
+
+    #[test]
+    fn helpers_on_odd_input() {
+        assert!(safe_data_with_contents_of_file("/definitely/not/here").is_none());
+        assert!(safe_data_with_contents_of_file("/").is_none());
+        assert!(scan_int_whole("7 \n"));
+        assert!(!scan_int_whole("-"));
+        assert!(!scan_int_whole("1 2"));
+        remove_item("/definitely/not/here");
+    }
+
+    #[test]
+    fn nothing_to_migrate_without_the_databases() {
+        let (world, _wd, dbs, _env) = setup("nodbs");
+        let c = DatabaseConvertor::new(&world, dbs[0].clone(), dbs[2].clone(), dbs[1].clone(), None, None);
+        c.get_new_light_block_files();
+        c.get_new_server_files();
+        c.convert_light_blocks();
+        c.convert_world();
+        c.remove_world_files();
+        c.remove_light_block_files();
+        assert!(!c.migration_complete() && !c.server_migration_complete() && !c.light_block_migration_complete());
+    }
+
+    #[test]
+    fn missing_player_folders_complete_both_migrations() {
+        let (world, wd, dbs, _env) = setup("noplayers");
+        let c = DatabaseConvertor::new(
+            &world,
+            dbs[0].clone(),
+            dbs[2].clone(),
+            dbs[1].clone(),
+            Some(dbs[3].clone()),
+            Some(dbs[4].clone()),
+        );
+        assert!(c.world_migration_complete() && c.light_block_migration_complete() && c.server_migration_complete());
+        assert!(c.migration_complete());
+        c.convert_light_blocks();
+        // already complete: refills do nothing
+        c.get_new_light_block_files();
+        c.get_new_server_files();
+        c.remove_world_files();
+        let _ = wd;
+    }
+
+    #[test]
+    fn big_player_trees_are_read_in_batches() {
+        let (world, wd, dbs, _env) = setup("big");
+        for i in 0..45 {
+            write(&format!("{wd}/blocks/playerLightBlocks/a/b/p{i:02}/1_2_lightBlock"), b"x");
+        }
+        for i in 0..1005 {
+            write(&format!("{wd}/players/s/t/uvw/f{i:04}"), b"x");
+        }
+        let c = DatabaseConvertor::new(
+            &world,
+            dbs[0].clone(),
+            dbs[2].clone(),
+            dbs[1].clone(),
+            Some(dbs[3].clone()),
+            Some(dbs[4].clone()),
+        );
+        assert_eq!(c.pending_light_block_jobs(), 40);
+        assert_eq!(c.server_files.borrow().len(), 1000);
+    }
+
+    #[test]
+    fn empty_player_folders_are_queued_for_removal() {
+        let (world, wd, dbs, _env) = setup("emptyfolders");
+        write(&format!("{wd}/blocks/playerLightBlocks/c/d/e/1_2_lightBlock"), b"x");
+        std::fs::create_dir_all(format!("{wd}/blocks/playerLightBlocks/f")).unwrap();
+        std::fs::create_dir_all(format!("{wd}/blocks/playerLightBlocks/g/h")).unwrap();
+        write(&format!("{wd}/players/s/t/uvw/info"), b"x");
+        std::fs::create_dir_all(format!("{wd}/players/s/t/empty")).unwrap();
+        std::fs::create_dir_all(format!("{wd}/players/q")).unwrap();
+        std::fs::create_dir_all(format!("{wd}/players/r/z")).unwrap();
+        let c = DatabaseConvertor::new(
+            &world,
+            dbs[0].clone(),
+            dbs[2].clone(),
+            dbs[1].clone(),
+            Some(dbs[3].clone()),
+            Some(dbs[4].clone()),
+        );
+        assert_eq!(c.light_block_files_to_remove.borrow().len(), 2);
+        assert_eq!(c.files_to_remove.borrow().len(), 3);
+        c.remove_world_files();
+        c.remove_light_block_files();
+        assert!(!std::path::Path::new(&format!("{wd}/players/q")).exists());
+    }
+
+    #[test]
+    fn a_player_file_that_is_a_folder_is_not_stored() {
+        let (world, wd, dbs, _env) = setup("folderfile");
+        std::fs::create_dir_all(format!("{wd}/players/a/b/cdef/inventory")).unwrap();
+        write(&format!("{wd}/players/a/b/cdef/stats"), b"NEW");
+        dbs[0].set_data(Some(b"OLD"), Some("abcdef_stats"));
+        let c =
+            DatabaseConvertor::new(&world, dbs[0].clone(), dbs[2].clone(), dbs[1].clone(), None, Some(dbs[4].clone()));
+        c.light_block_migration_complete.set(true);
+        c.convert_world();
+        assert!(!dbs[0].has_key(Some("abcdef_inventory")));
+        assert_eq!(dbs[0].data_for_key(Some("abcdef_stats")).unwrap(), b"OLD");
+    }
+
+    #[test]
+    fn light_block_jobs_skip_everything_that_is_not_a_light_block() {
+        let (world, wd, dbs, _env) = setup("lbskip");
+        let c =
+            DatabaseConvertor::new(&world, dbs[0].clone(), dbs[2].clone(), dbs[1].clone(), Some(dbs[3].clone()), None);
+        let pdir = format!("{wd}/blocks/playerLightBlocks/a/b/cdefgh");
+        // wrong number of name parts, a directory with a light block name, a file that is not gzip
+        write(&format!("{pdir}/1_lightBlock"), b"x");
+        std::fs::create_dir_all(format!("{pdir}/1_2_lightBlock")).unwrap();
+        write(&format!("{pdir}/3_4_lightBlock"), b"not gzip");
+        let job = LightBlockJob { player: "abcdefgh".into(), path: pdir.clone() };
+        let r = c.light_block_job(&job);
+        assert!(r.archive.is_none() && r.index.is_none());
+        assert_eq!(r.remove, vec![pdir]);
+        // an empty or missing folder
+        let r = c.light_block_job(&LightBlockJob { player: "x".into(), path: format!("{wd}/nowhere") });
+        assert!(r.archive.is_none());
+    }
+
+    #[test]
+    fn odd_world_directory_entries() {
+        let (world, wd, dbs, _env) = setup("oddworld");
+        let (main, blocks, dw) = (&dbs[0], &dbs[1], &dbs[2]);
+        // dynamic object folders: a 17 file that needs no cleaning, a folder name that is not numeric
+        write(
+            &format!("{wd}/10_20/17"),
+            b"<plist version=\"0.9\"><dict><key>dynamicObjects</key><array><dict/></array></dict></plist>",
+        );
+        write(&format!("{wd}/10_20/5"), b"FIVE");
+        write(&format!("{wd}/a_b/5"), b"NOPE");
+        write(&format!("{wd}/just_one_too_many"), b"x");
+        // a trainchest that is a folder, and one that exists already
+        std::fs::create_dir_all(format!("{wd}/trainchest_1")).unwrap();
+        write(&format!("{wd}/trainchest_2"), b"T2");
+        dw.set_data(Some(b"OLD"), Some("trainchest_2"));
+        dw.set_data(Some(b"OLD"), Some("10_20/5"));
+        // block files: a third part that means nothing, one that exists already, a folder
+        write(&format!("{wd}/blocks/1_2_other"), b"x");
+        write(&format!("{wd}/blocks/3_4_physicalBlock"), b"x");
+        blocks.set_data(Some(b"OLD"), Some("3_4"));
+        std::fs::create_dir_all(format!("{wd}/blocks/5_6_compressedBlock")).unwrap();
+        write(&format!("{wd}/blocks/7_8_9_10"), b"x");
+        let c = DatabaseConvertor::new(&world, main.clone(), dw.clone(), blocks.clone(), None, None);
+        // the light block migration is "complete" only with a light block database
+        c.light_block_migration_complete.set(true);
+        for _ in 0..10 {
+            c.convert_world();
+        }
+        assert_eq!(dw.data_for_key(Some("trainchest_2")).unwrap(), b"OLD");
+        assert_eq!(dw.data_for_key(Some("10_20/5")).unwrap(), b"OLD");
+        assert!(dw.has_key(Some("10_20/17")));
+        assert_eq!(blocks.data_for_key(Some("3_4")).unwrap(), b"OLD");
+        assert!(!blocks.has_key(Some("1_2")));
+        assert!(!blocks.has_key(Some("5_6")));
+    }
+
+    #[test]
+    fn cleaning_the_17_files() {
+        // no dynamic objects at all, objects without a grid, and nothing to change
+        assert!(clean_dynamic_objects_17(b"garbage").is_none());
+        let head = r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//GNUstep//DTD plist 0.9//EN" "http://www.gnustep.org/plist-0_9.xml">
+"#;
+        let plain =
+            format!("{head}{}", r#"<plist version="0.9"><dict><key>other</key><string>x</string></dict></plist>"#);
+        assert!(clean_dynamic_objects_17(plain.as_bytes()).is_none());
+        let no_grid = format!(
+            "{head}{}",
+            r#"<plist version="0.9"><dict><key>dynamicObjects</key><array><dict><key>lightDict</key><dict/></dict><dict/></array></dict></plist>"#
+        );
+        assert!(clean_dynamic_objects_17(no_grid.as_bytes()).is_none());
+        // a mix: the object with a grid is rewritten, the other kept
+        let mix = format!(
+            "{head}{}",
+            r#"<plist version="0.9"><dict><key>dynamicObjects</key><array><dict/><dict><key>lightDict</key><dict><key>contributionGridData</key><data>AAAA</data></dict></dict></array></dict></plist>"#
+        );
+        let out = clean_dynamic_objects_17(mix.as_bytes()).unwrap();
+        let v = property_list_from_data(&out).unwrap();
+        let Some(PlistValue::Array(a)) = v.object_for_key("dynamicObjects") else { panic!("array") };
+        assert_eq!(a.items.len(), 2);
     }
 }
