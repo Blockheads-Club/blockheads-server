@@ -2796,7 +2796,12 @@ mod more_tests {
         let (w, _) = server_world(&rec);
         let place = |t: WorkbenchType, x: i32, y: i32| {
             w.place_workbench_of_type_at_pos_save_dict_placed_by_client_placed_by_blockhead_placed_by_client_name(
-                t, ip(x, y), None, None, None, None,
+                t,
+                ip(x, y),
+                None,
+                None,
+                None,
+                None,
             );
         };
         // the placed portal needs a free base
@@ -2804,9 +2809,6 @@ mod more_tests {
         place(WorkbenchType::WORKBENCH_PLACED_PORTAL, 40, 40);
         at(&w, 41, 40).set_type_index(6);
         place(WorkbenchType::WORKBENCH_PLACED_PORTAL, 41, 40);
-        // an interaction object on the spot
-        let (_, fake) = (0, ());
-        let _ = fake;
         // a double height bench with an occupied tile above
         at(&w, 50, 41).set_contents(3);
         place(WorkbenchType::WORKBENCH_BASIC_PORTAL, 50, 40);
@@ -2845,7 +2847,10 @@ mod more_tests {
         assert_eq!(at(&w, 40, 40).contents(), 0x30);
         // nothing in the plist: an empty item
         w.remote_place_interaction_object_request_from_peer(&io_request(41, 40, None, vec![]), None);
-        w.remote_place_interaction_object_request_from_peer(&io_request(42, 40, None, vec![("a", PlistValue::int(1))]), None);
+        w.remote_place_interaction_object_request_from_peer(
+            &io_request(42, 40, None, vec![("a", PlistValue::int(1))]),
+            None,
+        );
         // an ownership sign needs an admin
         w.remote_place_interaction_object_request_from_peer(
             &io_request(43, 40, Some(ItemType::ITEM_OWNERSHIP_SIGN), vec![]),
@@ -2938,7 +2943,8 @@ mod more_tests {
     }
 
     fn scramble(w: &World, r: &mut Lcg, cx: i32, cy: i32) {
-        const TYPES: [u8; 22] = [2, 2, 2, 3, 4, 6, 6, 1, 0x1f, 0x10, 0x39, 0x45, 0x44, 0x19, 0x1b, 0x1c, 0x31, 0x32, 0x30, 0x20, 0x33, 9];
+        const TYPES: [u8; 22] =
+            [2, 2, 2, 3, 4, 6, 6, 1, 0x1f, 0x10, 0x39, 0x45, 0x44, 0x19, 0x1b, 0x1c, 0x31, 0x32, 0x30, 0x20, 0x33, 9];
         const CONTENTS: [u8; 8] = [0, 0, 0, 0x30, 0x65, 0x67, 0x03, 0x07];
         const FG: [u8; 8] = [0, 0, 0, 0x64, 0x30, 0x42, 0x43, 0x62];
         const BG: [u8; 5] = [0, 0, 0, 0x45, 0x5f];
@@ -3183,12 +3189,18 @@ mod more_tests {
         assert_eq!(at(&w, 40, 40).back_wall_type_index(), 6);
         let place = |t: WorkbenchType, x: i32, y: i32| {
             w.place_workbench_of_type_at_pos_save_dict_placed_by_client_placed_by_blockhead_placed_by_client_name(
-                t, ip(x, y), None, None, None, None,
+                t,
+                ip(x, y),
+                None,
+                None,
+                None,
+                None,
             );
         };
         // placed portal at the bottom edge: no base tile; a workbench off the loaded world; a double height one at the top
         place(WorkbenchType::WORKBENCH_PLACED_PORTAL, 40, -1);
         place(WorkbenchType(3), 40, 5000);
+        at(&w, 50, 1023).set_type_index(TILE_AIR);
         place(WorkbenchType::WORKBENCH_BASIC_PORTAL, 50, 1023);
         // an interaction object on the workbench spot
         fake.io.borrow_mut().insert((60, 40), dw_obj(1043, 2, 0, false, true));
@@ -3331,8 +3343,6 @@ mod more_tests {
     fn gather_payload_edge_cases() {
         let rec = testkit::install();
         let (w, _) = server_world(&rec);
-        let spy = fill_payload(40, 40, 1048, 0, 0, 0);
-        let _ = spy;
         // the same item on a workbench tile that is a basic portal conflicts
         let t = at(&w, 40, 40);
         t.update(|v| {
