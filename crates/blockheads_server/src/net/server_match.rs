@@ -52,7 +52,7 @@ pub struct BhNetServerMatch {
     weak_self: Weak<BhNetServerMatch>,
     base: BhMatchBase,
     timers: Rc<dyn TimerScheduler>,
-    main_thread: ThreadId,
+    main_thread: Cell<ThreadId>,
     host: RefCell<Option<EnetHost>>,
     /// ENet id -> peer. `None` after `disconnect` (ObjC nil).
     connections: RefCell<Option<GsDict<String, PeerSlot>>>,
@@ -84,14 +84,7 @@ impl BhNetServerMatch {
         // gethostname() fallback is only reached when userName_ is nil (unreachable on the dedicated server).
         let user_name = match args.user_name {
             Some(u) => u,
-            None => {
-                let h = crate::foundation::paths::host_name();
-                if h.is_empty() {
-                    crate::foundation::paths::host_name()
-                } else {
-                    h
-                }
-            }
+            None => crate::foundation::paths::host_name(),
         };
         // Truncating cast of intValue to 16 bits ("0" -> ephemeral port, "70000" -> 4464).
         let port_to_use: u16 = match &args.port {
@@ -102,7 +95,7 @@ impl BhNetServerMatch {
             weak_self: w.clone(),
             base: BhMatchBase::default(),
             timers,
-            main_thread: std::thread::current().id(),
+            main_thread: Cell::new(std::thread::current().id()),
             host: RefCell::new(None),
             connections: RefCell::new(Some(GsDict::new())),
             persistent_ids_to_enet_ids: RefCell::new(Some(GsDict::new())),
@@ -351,10 +344,9 @@ impl BhMatch for BhNetServerMatch {
         let enet_id = self.persistent_ids_to_enet_ids.borrow().as_ref().and_then(|m| m.get(&id.to_string()).cloned());
         let Some(enet_id) = enet_id else { return };
         let peer = self.connections.borrow().as_ref().and_then(|c| c.get(&enet_id).copied());
-        if let Some(peer) = peer {
-            if let Some(h) = self.host.borrow_mut().as_mut() {
-                h.peer_disconnect(peer, 0);
-            }
+        // A connected id always has a host.
+        for (peer, h) in peer.into_iter().zip(self.host.borrow_mut().as_mut()) {
+            h.peer_disconnect(peer, 0);
         }
     }
 
@@ -380,18 +372,12 @@ impl BhMatch for BhNetServerMatch {
             if n == 0 {
                 break;
             }
-            let ev = match self.host.borrow_mut().as_mut() {
-                Some(h) => h.service_wait(3000),
-                None => None,
-            };
-            match ev {
-                Some(OwnedEvent::Disconnect { addr, .. }) => {
-                    if let Some(c) = self.connections.borrow_mut().as_mut() {
-                        c.remove(&enet_id_string(&addr));
-                    }
-                }
-                Some(OwnedEvent::Receive { .. }) | Some(OwnedEvent::Connect { .. }) => {}
-                None => break,
+            let ev = self.host.borrow_mut().as_mut().and_then(|h| h.service_wait(3000));
+            // Nothing within 3 s ends the wait; only a disconnect shortens the list of connections.
+            let Some(ev) = ev else { break };
+            let OwnedEvent::Disconnect { addr, .. } = ev else { continue };
+            for c in self.connections.borrow_mut().as_mut() {
+                c.remove(&enet_id_string(&addr));
             }
         }
         {
@@ -424,12 +410,12 @@ impl BhMatch for BhNetServerMatch {
         players: &[String],
         _mode: SendDataMode,
     ) -> bool {
-        if std::thread::current().id() != self.main_thread {
+        if std::thread::current().id() != self.main_thread.get() {
             // Note: exact GNUstep `-[NSThread description]` text of the two `%@` arguments is unknown
             // (unreachable: the port is single-threaded).
             nslog(&format!(
                 "Whoops, Trying to send data off the main thread {:?} {:?}",
-                self.main_thread,
+                self.main_thread.get(),
                 std::thread::current().id()
             ));
             ns_raise("Background thread network send", "Attempting to send data from a background thread.");
@@ -447,11 +433,10 @@ impl BhMatch for BhNetServerMatch {
                 .and_then(|m| m.get(&key).cloned())
                 .unwrap_or_else(|| key.clone());
             if players.contains(&pid) {
+                // Every key of `connections` has a peer, and the host lives as long as `connections` does.
                 let peer = self.connections.borrow().as_ref().and_then(|c| c.get(&key).copied());
-                if let Some(peer) = peer {
-                    if let Some(h) = self.host.borrow_mut().as_mut() {
-                        h.send_reliable(peer, channel as u8, data.unwrap_or(&[]));
-                    }
+                for (peer, h) in peer.into_iter().zip(self.host.borrow_mut().as_mut()) {
+                    h.send_reliable(peer, channel as u8, data.unwrap_or(&[]));
                 }
             }
             channel += 1;
@@ -500,13 +485,14 @@ impl BhMatch for BhNetServerMatch {
                     let old_peer = self.connections.borrow().as_ref().and_then(|c| c.get(&stored).copied());
                     if let Some(old_peer) = old_peer {
                         nslog("attempt to reconnect from same device");
-                        if let Some(d) = self.delegate() {
+                        for d in self.delegate() {
                             d.match_player_did_change_state(self, &persistent_id, PlayerConnectionState::Disconnected);
                         }
-                        if let Some(c) = self.connections.borrow_mut().as_mut() {
+                        // `old_peer` came from `connections`, which only exists together with the host.
+                        for c in self.connections.borrow_mut().as_mut() {
                             c.remove(&stored);
                         }
-                        if let Some(h) = self.host.borrow_mut().as_mut() {
+                        for h in self.host.borrow_mut().as_mut() {
                             h.peer_reset(old_peer);
                         }
                         found_same_device = true;
@@ -623,9 +609,14 @@ mod tests {
     struct Del {
         log: RefCell<Vec<String>>,
         boots: Cell<u32>,
+        /// Raise an exception on every state change.
+        raise: Cell<bool>,
     }
     impl MatchDelegate for Del {
         fn match_player_did_change_state(&self, _m: &dyn BhMatch, p: &str, s: PlayerConnectionState) {
+            if self.raise.get() {
+                ns_raise("NSRangeException", "boom");
+            }
             self.log.borrow_mut().push(format!("state {p} {}", s as i64));
         }
         fn match_did_receive_data_from_player(&self, _m: &dyn BhMatch, d: &[u8], p: &str) {
@@ -855,6 +846,24 @@ mod tests {
     }
 
     #[test]
+    fn data_goes_only_to_the_players_asked_for() {
+        let (m, d, _) = make(args("0"));
+        let port = m.local_port().unwrap();
+        let mut cs: Vec<_> = (0..2).map(|_| client(8)).collect();
+        for c in cs.iter_mut() {
+            c.connect(SocketAddr::from(([127, 0, 0, 1], port)), 8, 0).unwrap();
+        }
+        {
+            let mut refs: Vec<&mut enet::Host<UdpSocket>> = cs.iter_mut().collect();
+            pump(&m, &mut refs, || d.log.borrow().len() >= 2);
+        }
+        let order = m.connections.borrow().as_ref().unwrap().keys_in_order();
+        m.send_data_to_players_with_data_mode_error(Some(b"x"), &order[..1], SendDataMode::Reliable);
+        let mut refs: Vec<&mut enet::Host<UdpSocket>> = cs.iter_mut().collect();
+        assert_eq!(pump(&m, &mut refs, || false).len(), 1);
+    }
+
+    #[test]
     fn disconnect_flow() {
         let (m, d, _) = make(args("0"));
         let port = m.local_port().unwrap();
@@ -970,5 +979,186 @@ mod tests {
         cd.insert("alias".into(), PlistValue::string(""));
         let i = m.client_player_information_recieved_from_peer(Some(&cd), "1:1").unwrap();
         assert_eq!(dget(&i.borrow(), "playerID").and_then(|v| v.as_str()), Some("d41d8cd98f00b204e9800998ecf8427e"));
+    }
+
+    #[test]
+    fn defaults_restarts_and_a_taken_port() {
+        // No user name: the host name; no port: the default one (which may be taken here: either way the lines run).
+        let mut a = args("0");
+        a.user_name = None;
+        let (m, _, _) = make(a);
+        assert!(!m.local_player_name().is_empty());
+        let mut b = args("0");
+        b.port = None;
+        let t = Rc::new(Timers { created: Cell::new(0), invalid: Cell::new(0) });
+        let _ = BhNetServerMatch::init_with_port_user_name_photo_has_local_player_world_name_credit_cloud_salt_owner_name_privacy(
+            b, t,
+        );
+        // A running server cannot be started again; a taken port tells the delegate.
+        assert!(!m.start_server());
+        let free = UdpSocket::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let (m2, d2, _) = make(args(&free.to_string()));
+        m2.disconnect();
+        let blocker = UdpSocket::bind(("0.0.0.0", free)).unwrap();
+        assert!(!m2.start_server());
+        drop(blocker);
+        assert!(d2.log.borrow().is_empty());
+        let _ = (Del::default().boots.get(),);
+    }
+
+    /// Timers that keep the poll callback so the test can run it.
+    struct Kept(RefCell<Option<Box<dyn FnMut()>>>);
+    impl TimerScheduler for Kept {
+        fn schedule_repeating(&self, _interval: f64, cb: Box<dyn FnMut()>) -> TimerId {
+            *self.0.borrow_mut() = Some(cb);
+            1
+        }
+        fn invalidate(&self, _id: TimerId) {}
+    }
+
+    #[test]
+    fn the_poll_timer_polls_while_the_match_lives() {
+        let kept = Rc::new(Kept(RefCell::new(None)));
+        let m = BhNetServerMatch::init_with_port_user_name_photo_has_local_player_world_name_credit_cloud_salt_owner_name_privacy(
+            args("0"),
+            kept.clone(),
+        )
+        .unwrap();
+        let mut cb = kept.0.borrow_mut().take().unwrap();
+        cb();
+        m.disconnect();
+        drop(m);
+        cb(); // the match is gone: nothing to poll
+    }
+
+    #[test]
+    fn poll_clamps_a_clock_that_went_backwards_and_survives_a_missing_host() {
+        let (m, _, _) = make(args("0"));
+        m.poll_timer_last_time.set(reference_time() + 1000.0);
+        m.poll_net_events();
+        m.disconnect();
+        m.poll_net_events(); // no host any more
+    }
+
+    #[test]
+    fn unauthenticated_peers_disconnect_under_their_transport_name() {
+        let (m, d, _) = make(args("0"));
+        let port = m.local_port().unwrap();
+        let mut c = client(8);
+        c.connect(SocketAddr::from(([127, 0, 0, 1], port)), 8, 0).unwrap();
+        pump(&m, &mut [&mut c], || d.log.borrow().len() == 1);
+        let enet_id = d.log.borrow()[0].split(' ').nth(1).unwrap().to_string();
+        c.connected_peers_mut().next().unwrap().disconnect(0);
+        c.flush();
+        pump(&m, &mut [&mut c], || d.log.borrow().iter().any(|l| l.ends_with(" 2")));
+        assert!(d.log.borrow().contains(&format!("state {enet_id} 2")));
+    }
+
+    #[test]
+    fn shutdown_gives_up_on_a_client_that_never_answers() {
+        let (m, d, _) = make(args("0"));
+        let port = m.local_port().unwrap();
+        let mut c = client(8);
+        c.connect(SocketAddr::from(([127, 0, 0, 1], port)), 8, 0).unwrap();
+        pump(&m, &mut [&mut c], || d.log.borrow().len() == 1);
+        // The client is not serviced during the shutdown, so the wait times out and the connection is reset.
+        m.disconnect();
+        assert!(m.connections.borrow().is_none());
+    }
+
+    #[test]
+    fn sending_from_another_thread_is_refused() {
+        let (m, _, _) = make(args("0"));
+        let other = std::thread::spawn(|| std::thread::current().id()).join().unwrap();
+        m.main_thread.set(other);
+        let e =
+            catch_ns(|| m.send_data_to_players_with_data_mode_error(Some(b"x"), &["a".into()], SendDataMode::Reliable))
+                .unwrap_err();
+        assert_eq!(e.name, "Background thread network send");
+    }
+
+    #[test]
+    fn reconnect_attempts_that_do_not_prove_the_same_device() {
+        let (m, _, _) = make(args("0"));
+        let pid = string_from_md5("carl");
+        let join = |udid: Option<&str>, from: &str| {
+            let mut cd = new_info_dict();
+            cd.insert("alias".into(), PlistValue::string("Carl"));
+            cd.insert("photo".into(), PlistValue::data(vec![1, 2]));
+            cd.insert("cloudKey".into(), PlistValue::string("key"));
+            if let Some(u) = udid {
+                cd.insert("udidNew".into(), PlistValue::string(u));
+            }
+            m.client_player_information_recieved_from_peer(Some(&cd), from)
+        };
+        // Another approved player in the list is skipped while looking for the same device.
+        let other = {
+            let mut cd = new_info_dict();
+            cd.insert("alias".into(), PlistValue::string("Dora"));
+            m.client_player_information_recieved_from_peer(Some(&cd), "0:0").unwrap()
+        };
+        m.client_approved_with_info(&other);
+        let first = join(Some("U1"), "1:1").unwrap();
+        assert!(join(Some("U1"), "1:1").is_some()); // the same connection saying hello twice
+        assert!(dget(&first.borrow(), "photo").is_some() && dget(&first.borrow(), "cloudKey").is_some());
+        m.client_approved_with_info(&first);
+        m.client_approved_with_info(&first); // already known: not added twice
+        assert_eq!(m.player_ids().unwrap().len(), 2);
+        // The old connection is gone (no peer), so even the same device cannot take over.
+        assert!(join(Some("U1"), "2:2").is_none());
+        // A stored record without a device id never matches.
+        first.borrow_mut().map.remove(&"udidNew".to_string());
+        assert!(join(Some("U1"), "3:3").is_none());
+        let _ = pid;
+    }
+
+    #[test]
+    fn exceptions_in_the_poll_end_the_process() {
+        if let Ok(port) = std::env::var("BH_NET_CHILD_PORT") {
+            let t = Rc::new(Timers { created: Cell::new(0), invalid: Cell::new(0) });
+            let m = BhNetServerMatch::init_with_port_user_name_photo_has_local_player_world_name_credit_cloud_salt_owner_name_privacy(
+                args(&port),
+                t,
+            )
+            .unwrap();
+            let raising = Rc::new(Del::default());
+            raising.raise.set(true);
+            let d: Rc<dyn MatchDelegate> = raising;
+            m.set_delegate(Some(Rc::downgrade(&d)));
+            let mut c = client(8);
+            c.connect(SocketAddr::from(([127, 0, 0, 1], m.local_port().unwrap())), 8, 0).unwrap();
+            pump(&m, &mut [&mut c], || false);
+            std::process::exit(3);
+        }
+        let free = UdpSocket::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "net::server_match::tests::exceptions_in_the_poll_end_the_process",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env("BH_NET_CHILD_PORT", free.to_string())
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(0));
+        assert!(String::from_utf8_lossy(&out.stderr)
+            .contains("Exiting due to exception in pollNetEvents 'NSRangeException'"));
+    }
+
+    #[test]
+    fn the_test_delegate_stubs_answer() {
+        let d = Del::default();
+        let (m, _, _) = make(args("0"));
+        d.match_did_fail_with_error(&*m);
+        d.match_connection_with_player_failed_with_error(&*m, "p");
+        // The accessors a cloud match answers.
+        m.set_cloud_salt(Some("salt"));
+        assert_eq!(m.cloud_salt().as_deref(), Some("salt"));
+        // The mod host is polled after every network poll.
+        let hooks = crate::server::bhserver::test_support::StubHooks::install();
+        m.poll_net_events();
+        assert!(hooks.saw("poll"));
+        crate::server::bhserver::test_support::StubHooks::uninstall();
     }
 }

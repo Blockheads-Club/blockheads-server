@@ -28,6 +28,7 @@ fn run_typing(data: &Path, args: &[&str], stop_on: Option<&str>, input: &[u8], t
     let mut child = Command::new(env!("CARGO_BIN_EXE_blockheads_server"))
         .args(args)
         .env("BLOCKHEADS_DATA_DIR", data)
+        .env("HOME", data) // never the real home: saves live under ~/GNUstep
         .env_remove("BH_VIRTUAL_CLOCK")
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
