@@ -10,6 +10,10 @@ license.workspace = true
 name = "bh_testclient"
 path = "src/lib.rs"
 
+[features]
+# JVM mods on a live server (needs a JDK to build the fixture mod and a JRE to run it).
+jvm = ["blockheads_server/jvm"]
+
 [dependencies]
 blockheads_server = { path = "../blockheads_server", features = ["trace-rng"] }
 rusty_enet = { workspace = true }

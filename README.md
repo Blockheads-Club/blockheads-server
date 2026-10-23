@@ -79,6 +79,11 @@ let in: they get the world summary with a welcome text ("This server uses Blockh
 with Patcher ...", shown by the game as its welcome popup) and are dropped 20 seconds later (or with their next packet)
 by a plain disconnect (no rejection text, so the popup stays the only message). The server never offers a client mod that needs `native`.
 
+**JVM mods** (Java, Kotlin, ...) are unsandboxed code, so they are off twice over: build with `--features jvm` (needs a
+JDK for the Java SDK that is compiled in) and start the server with `BLOCKHEADS_JVM=1`, which loads the machine's JRE
+(8 or newer; `BLOCKHEADS_JAVA_HOME` picks one, `BLOCKHEADS_JVM_HEAP_MB` sets the heap, default 256). The mod then needs
+`native` in its `mods.toml` grant. How to write one: [mod-sdk `docs/jvm.md`](https://github.com/Blockheads-Club/mod-sdk/blob/dev/docs/jvm.md).
+
 ---
 
 ## 🛠️ Requirements

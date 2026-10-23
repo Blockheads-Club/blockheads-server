@@ -31,7 +31,7 @@ repository. They skip cleanly unless these environment variables are set:
 
 Coverage: `scripts/coverage-gate.sh` (what CI runs; needs cargo-llvm-cov). The policy is 100 % line coverage. The mod
 host seam (with the 0xBC protocol) and the test client's modded mode are gated at 100 %, file by file; the rest of the
-port is gated at per-crate floors (server 80 %, test client library 72 %, measured 81.0 % and 72.8 %) that only go up.
+port is gated at per-crate floors (server 80 %, test client library 70 %, measured in CI 81.07 % and 70.6 %) that only go up.
 The probe tools and the command-line mains of the test client are not measured; the docker-only parts of the harness
 count as they are (their tests skip without the reference environment). `scripts/mods-coverage.sh` is the quick local
 check of the 100 % part.

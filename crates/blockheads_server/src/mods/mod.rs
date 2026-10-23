@@ -221,6 +221,32 @@ fn parse_scale(v: Option<&str>) -> u32 {
     v.and_then(|s| s.trim().parse::<u32>().ok()).filter(|n| *n > 0).unwrap_or(1)
 }
 
+/// JVM mods are unsandboxed code, so they are off unless the owner asks: `BLOCKHEADS_JVM` set to `1`, `true`, `yes` or
+/// `on` (feature `jvm` only). `BLOCKHEADS_JAVA_HOME` picks the JRE (default: `JAVA_HOME`, then `java` on the `PATH`)
+/// and `BLOCKHEADS_JVM_HEAP_MB` the heap limit of the JVM (default 256).
+#[cfg(feature = "jvm")]
+pub fn jvm_settings(var: &dyn Fn(&str) -> Option<String>) -> Option<bhmod_core::jvm::JvmConfig> {
+    let on = var("BLOCKHEADS_JVM")
+        .is_some_and(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"));
+    on.then(|| {
+        let mut cfg = bhmod_core::jvm::JvmConfig::default();
+        cfg.java_home = var("BLOCKHEADS_JAVA_HOME").filter(|v| !v.is_empty()).map(PathBuf::from);
+        cfg.max_heap_mb = var("BLOCKHEADS_JVM_HEAP_MB")
+            .and_then(|v| v.trim().parse().ok())
+            .filter(|n| *n > 0)
+            .unwrap_or(cfg.max_heap_mb);
+        // The grace periods scale with the budgets (slow test machines).
+        let scale = budget_scale();
+        cfg.grace *= scale;
+        cfg.enable_grace *= scale;
+        cfg
+    })
+}
+
+/// The SDK jar of the JVM runtime (`blockheads-mod-sdk.jar`): what mods compile against.
+#[cfg(feature = "jvm")]
+pub use bhmod_core::jvm::SDK_JAR as JVM_SDK_JAR;
+
 /// Loads the mods for the world `save_id` and installs the host if any mod loaded. Without the `mods` feature,
 /// with `ModsConfig.disabled`, or without a mods directory this does nothing at all.
 pub fn start(save_id: Option<&str>, server: &Rc<BHServer>) {
@@ -260,6 +286,42 @@ mod tests {
         assert!(mods_dir().ends_with("TheBlockheads/mods"), "{:?}", mods_dir());
         std::env::remove_var("BLOCKHEADS_MODS_DIR");
         assert!(mods_dir().ends_with("mods"));
+    }
+
+    #[cfg(feature = "jvm")]
+    #[test]
+    fn jvm_is_opt_in() {
+        let env =
+            |pairs: &'static [(&str, &str)]| move |k: &str| pairs.iter().find(|p| p.0 == k).map(|p| p.1.to_string());
+        assert!(jvm_settings(&env(&[])).is_none());
+        assert!(jvm_settings(&env(&[("BLOCKHEADS_JVM", "0")])).is_none());
+        assert!(jvm_settings(&env(&[("BLOCKHEADS_JVM", "maybe")])).is_none());
+        for on in ["1", "true", " Yes ", "ON"] {
+            let cfg = jvm_settings(&|k| (k == "BLOCKHEADS_JVM").then(|| on.to_string())).expect(on);
+            assert_eq!(cfg.java_home, None);
+            assert_eq!(cfg.max_heap_mb, 256);
+        }
+        let cfg = jvm_settings(&env(&[
+            ("BLOCKHEADS_JVM", "1"),
+            ("BLOCKHEADS_JAVA_HOME", "/opt/jre"),
+            ("BLOCKHEADS_JVM_HEAP_MB", "512"),
+        ]))
+        .unwrap();
+        assert_eq!(cfg.java_home, Some(PathBuf::from("/opt/jre")));
+        assert_eq!(cfg.max_heap_mb, 512);
+        // Empty or unusable values fall back to the defaults.
+        let cfg = jvm_settings(&env(&[
+            ("BLOCKHEADS_JVM", "1"),
+            ("BLOCKHEADS_JAVA_HOME", ""),
+            ("BLOCKHEADS_JVM_HEAP_MB", "0"),
+        ]))
+        .unwrap();
+        assert_eq!((cfg.java_home, cfg.max_heap_mb), (None, 256));
+        assert_eq!(
+            jvm_settings(&env(&[("BLOCKHEADS_JVM", "1"), ("BLOCKHEADS_JVM_HEAP_MB", "x")])).unwrap().max_heap_mb,
+            256
+        );
+        assert!(!JVM_SDK_JAR.is_empty());
     }
 
     #[test]
