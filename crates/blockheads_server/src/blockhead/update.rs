@@ -1527,12 +1527,11 @@ fn u6_dig(c: &Ctx, coffee_dt: f32) {
                             false,
                         );
                         // CLIENT bonus-particle loop: executed (2 rand() per particle)
-                        if fbc.bonus_multiplier != 0 {
-                            let n = fbc.count / fbc.bonus_multiplier;
-                            for _ in 0..n.max(0) {
-                                let _ = rand_tagged("blockhead/update/dig_bonus_particle");
-                                let _ = rand_tagged("blockhead/update/dig_bonus_particle");
-                            }
+                        // (`bonusMultiplier` is never 0; a zero divisor would count nothing)
+                        let n = fbc.count.checked_div(fbc.bonus_multiplier).unwrap_or(0);
+                        for _ in 0..n.max(0) {
+                            let _ = rand_tagged("blockhead/update/dig_bonus_particle");
+                            let _ = rand_tagged("blockhead/update/dig_bonus_particle");
                         }
                     }
                     if matches!(cit, 1 | 23 | 24) {
@@ -3167,6 +3166,9 @@ mod tests {
             (1.0, 0.3, 0.5, 0x8d, true),
             (0.1, 0.26, 0.9, 0x8d, false),
             (0.6, 0.5, 0.3, 0, true),
+            // zero health, and (0.55) a low environment
+            (1.0, 1.2, 0.0, 0, false),
+            (0.55, 1.2, 1.0, 0, false),
         ] {
             world.set_expert_mode(expert);
             {
@@ -3178,7 +3180,7 @@ mod tests {
                 f.state.environment_temperature = 1.0;
                 f.state.environment_exposure = 1.0;
                 f.state.environment_light = 1.0;
-                f.state.environment = 1.0;
+                f.state.environment = if full == 0.55 { 0.1 } else { 1.0 };
                 f.pants_item_type = pants;
             }
             tick(&o);

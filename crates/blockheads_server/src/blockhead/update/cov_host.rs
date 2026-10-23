@@ -6,7 +6,7 @@ use crate::items::inventory_item::ItemRef;
 use crate::objects::handle::ObjRef;
 use crate::plist::value::PlistValue;
 use crate::types::item_type::ItemType;
-use crate::types::structs::{InteractionTestResult, IntPair, Vector2};
+use crate::types::structs::{IntPair, InteractionTestResult, Vector2};
 use crate::world::state::TileRef;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;

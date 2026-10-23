@@ -6,8 +6,8 @@ use super::super::blockhead::testutil::{bh_of, new_bh, setup, stub, tile, MockDw
 use super::cov_host::CovHost as TestHost;
 use super::*;
 use crate::items::inventory_item::InventoryItem;
-use crate::rng::glibc_rand::srand;
 use crate::rng::glibc_rand::rand;
+use crate::rng::glibc_rand::srand;
 use crate::types::structs::CustomRules;
 use std::cell::RefCell;
 
@@ -202,29 +202,45 @@ fn damage_apply_branches() {
     assert!(h.take().iter().any(|l| l.starts_with("drop:")));
 }
 
+struct Protect;
+impl crate::world::state::WorldOpsHooks for Protect {
+    fn load_physical_block_for_macro_tile_at_x_y_load_surrounding_blocks_create_if_not_created(
+        &self,
+        _world: &World,
+        _mt: &crate::world::state::MacroTileRef,
+        _mx: i32,
+        _my: i32,
+        _surrounding: bool,
+        _create: bool,
+    ) -> bool {
+        false
+    }
+    fn load_dynamic_objects_if_not_already_loaded_for_macro_tile_include_surface_blocks(
+        &self,
+        _world: &World,
+        _mt: &crate::world::state::MacroTileRef,
+        _include: bool,
+    ) {
+    }
+    fn tile_is_protected_at_pos_against_blockhead(&self, _w: &World, _p: IntPair, _b: &ObjRef) -> bool {
+        true
+    }
+}
+
 #[test]
 fn interaction_type_checked_rechecks_protected_tiles() {
     let (world, _d, _dw, o, h) = mk();
     let b = bh_of(&o);
-    let c = Ctx {
-        b,
-        me: &o,
-        h: host(),
-        world: Some(world.clone()),
-        rules: CustomRules::default(),
-        dt: DT,
-        adt: DT,
-        sim: false,
-        ctl: false,
-        sim_or_ctl: false,
-        is_net: false,
-        expert: false,
-    };
-    // DIG is disallowed on protected tiles; the tile is not protected in the bare world: no recheck
+    let c = ctx(b, &o, &world);
+    // DIG is disallowed on protected tiles: unprotected, no recheck
     h.cit.set(it::DIG);
-    assert_eq!(c.interaction_type_checked(None, IntPair { x: 6, y: 7 }, None, 0), it::DIG);
-    // the protection check is answered by the world; exercise the call
     assert!(!c.tile_protected(IntPair { x: 6, y: 7 }));
+    assert_eq!(c.interaction_type_checked(None, IntPair { x: 6, y: 7 }, None, 0), it::DIG);
+    // protected: the question is asked again with protected actions disallowed
+    world.set_ops_hooks(Some(Rc::new(Protect)));
+    assert!(c.tile_protected(IntPair { x: 6, y: 7 }));
+    assert_eq!(c.interaction_type_checked(None, IntPair { x: 6, y: 7 }, None, 0), it::DIG);
+    world.set_ops_hooks(None);
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -334,9 +350,12 @@ fn u3_rules_override_health_and_death() {
 
 #[test]
 fn u3_starvation_under_each_health_rule_and_the_sim_event() {
-    for (rule, dec) in
-        [(0i8, 99999.9f32), (1, (DT / 900.0f32) * 0.5f32 * 10.0f32), (3, (DT / 900.0f32) * 0.5f32 * 0.1f32)]
-    {
+    for (rule, dec) in [
+        (2i8, (DT / 900.0f32) * 0.5f32),
+        (0, 99999.9f32),
+        (1, (DT / 900.0f32) * 0.5f32 * 10.0f32),
+        (3, (DT / 900.0f32) * 0.5f32 * 0.1f32),
+    ] {
         let (world, _d, _dw, o, h) = mk();
         let b = bh_of(&o);
         steady(b);
@@ -448,6 +467,10 @@ fn u3_fire_and_heat_damage_with_simulation_events() {
     assert!(log.contains(&"sim:4:Text(\"burned by fire\")".to_string()), "{log:?}");
     // the capped amount is 0.1
     assert!(log.contains(&"armor:0.1".to_string()), "{log:?}");
+    // hot but the cooldown has not run out
+    b.bh.borrow_mut().damage_delay_timer = 100.0;
+    tick_sim(&o);
+    assert!(!h.take().contains(&"sim:4:Text(\"burned by fire\")".to_string()));
 }
 
 #[test]
@@ -558,6 +581,11 @@ fn breathing_underwater_drowns_and_recovers() {
     b.bh.borrow_mut().state.drown_fraction = 1.5;
     tick_sim(&o);
     assert_eq!(b.st().drown_fraction, 1.0);
+    // shallow water below the mouth: not underwater
+    water(&world, 5, 9, 10);
+    tick_sim(&o);
+    assert!(!b.bh.borrow().underwater);
+    water(&world, 5, 9, 200);
     // invulnerable rule: recovers even underwater
     water(&world, 5, 9, 200);
     rules(&world, |r| r.health = 4);
@@ -1593,6 +1621,7 @@ fn capture_cages_and_shears() {
         let r = rig(it::CAPTURE, 0x12e);
         r.world.set_pvp_enabled(pvp);
         r.h.set_obj("harm", Some(n.clone()));
+        r.h.set("capture_ok", 1);
         u6_fill_bucket(&r.c(), it::CAPTURE, 0.0, 0.2);
         let log = r.h.take();
         assert!(log.contains(&format!("harmcheck:{}", !pvp)), "{log:?}");
@@ -1741,7 +1770,15 @@ fn place_sign_starts_the_text_dialog_and_events() {
 
 #[test]
 fn u6b_dispatches_buckets_and_ranged_weapons() {
-    for ty in [it::FILL_BUCKET, it::CAPTURE, it::HARVEST_NPC, it::PLACE_ITEM, it::PLACE_SOLID_BLOCK, it::FIRE_RANGED_WEAPON, it::DIG_FOREGROUND] {
+    for ty in [
+        it::FILL_BUCKET,
+        it::CAPTURE,
+        it::HARVEST_NPC,
+        it::PLACE_ITEM,
+        it::PLACE_SOLID_BLOCK,
+        it::FIRE_RANGED_WEAPON,
+        it::DIG_FOREGROUND,
+    ] {
         let r = rig(ty, 0x66);
         r.h.cit.set(ty);
         fire(&r);
@@ -1914,7 +1951,9 @@ fn u7_doors_close_behind_and_open_ahead() {
         assert!(r.h.take().contains(&"door:5,8:false:0".to_string()), "setup {setup}");
     }
     // ahead: door / gate lean right, trap door and a door above do not
-    for (setup, expect) in [(0, "door:7,8:true:1"), (1, "door:7,8:true:-1"), (2, "door:7,8:true:1"), (3, "door:7,8:true:-1")] {
+    for (setup, expect) in
+        [(0, "door:7,8:true:1"), (1, "door:7,8:true:-1"), (2, "door:7,8:true:1"), (3, "door:7,8:true:-1")]
+    {
         let r = u7_rig();
         let w = &r.world;
         place_between(r.b(), w, IntPair { x: 5, y: 8 }, IntPair { x: 6, y: 8 });
@@ -2040,9 +2079,10 @@ fn u7_final_steps_interact_or_stay() {
     {
         let mut f = r.b().bh.borrow_mut();
         f.state.goal_interaction_type_while_walking = it::DIG;
-        f.traverse_from_key_frame = kf::STAND_ELEVATOR as i32;
+        f.traverse_to_key_frame = kf::STAND_ELEVATOR as i32;
     }
     go(&r, vec![step(idx(6, 8), 10, 1, kf::STAND_ELEVATOR as i64)]);
+    assert_eq!(r.b().bh.borrow().traverse_to_key_frame, 3);
     // an inaccessible pose is reset on arrival
     let r = u7_rig();
     go(&r, vec![step(idx(5, 8), 10, 1, kf::INACCESSIBLE as i64)]);
@@ -2181,7 +2221,8 @@ fn queue_replica(r: &Rig) {
     f.next_action_delay = 1.0;
     f.travel_fraction = 1.0;
     f.current_net_queue_size = 2;
-    f.net_next_to_square = [IntPair { x: 6, y: 8 }, IntPair { x: 7, y: 8 }, IntPair { x: 8, y: 8 }, IntPair { x: 9, y: 8 }];
+    f.net_next_to_square =
+        [IntPair { x: 6, y: 8 }, IntPair { x: 7, y: 8 }, IntPair { x: 8, y: 8 }, IntPair { x: 9, y: 8 }];
     f.next_terrain_difficulty = [10; 4];
     f.next_traverse_type = [1; 4];
 }
@@ -2310,7 +2351,9 @@ fn u7_chasing_an_npc() {
     go(&r, vec![step(idx(6, 8), 10, 1, 0)]);
     assert!(!r.b().bh.borrow().path_needs_recalculated);
     // an archer in range with a clear line shoots; blocked or out of range it keeps walking
-    for (tx, ty, crouch, shoot) in [(9, 8, false, true), (3, 8, true, true), (9, 30, false, false), (9, 8, false, false)] {
+    for (tx, ty, crouch, shoot) in
+        [(9, 8, false, true), (3, 8, true, true), (9, 30, false, false), (9, 8, false, false)]
+    {
         let r = u7_rig();
         if !shoot && ty == 8 {
             tile(&r.world, 7, 9).set_type_index(1);
@@ -2382,4 +2425,155 @@ fn u7_chasing_a_ride_object() {
         go(&r, vec![step(idx(6, 8), 10, 1, 0)]);
         assert!(!r.b().bh.borrow().path_needs_recalculated);
     }
+}
+
+// ---------------------------------------------------------------------------------------------------
+// remaining corners
+// ---------------------------------------------------------------------------------------------------
+
+#[test]
+fn u5_without_a_world_does_nothing() {
+    let (_w, _d, _dw, o, _h) = mk();
+    let b = bh_of(&o);
+    let w = b.world_rc().unwrap();
+    u5(&Ctx { world: None, ..ctx(b, &o, &w) });
+    assert!(!b.bh.borrow().being_controlled_by_d_pad);
+}
+
+#[test]
+fn dig_corners_without_action_world_or_tile() {
+    // no action queued
+    let r = dig_rig(8, 6, 0, 0, it::DIG, 0);
+    r.b().bh.borrow_mut().action_queue.clear();
+    dig(&r);
+    // the crafting / interactive cit values also count as digging
+    for cit in [4u32, 5] {
+        let r = dig_rig(8, 6, 0, 0, cit, 250);
+        dig(&r);
+        let _ = r.h.take();
+    }
+    // no world: no bonus type
+    let r = dig_rig(0x59, 1, 0, 0, it::DIG, 0);
+    seed_first(|v| r01(v) < 0.0625);
+    u6_dig(&Ctx { sim: true, sim_or_ctl: true, world: None, ..r.c() }, DT);
+    // an action naming a missing interaction object
+    let r = dig_rig(8, 6, 0, 0, it::DIG, 250);
+    r.h.set("aoid", 5);
+    dig(&r);
+    // no tile at all
+    let r = dig_rig(8, 6, 0, 0, it::DIG, 250);
+    r.b().bh.borrow_mut().interacting_tile = None;
+    r.b().bh.borrow_mut().local_gather_progress = 250;
+    dig(&r);
+    let r = dig_rig(8, 6, 0, 0, it::DIG, 0);
+    r.b().bh.borrow_mut().interacting_tile = None;
+    dig(&r);
+    // the other half of a door outside the loaded world
+    let r = dig_rig(8, 6, 0, 0, it::DIG, 0);
+    tile(&r.world, 6, 7).set_background_contents(0x46);
+    r.h.set("doorx", 500);
+    r.h.set("doory", 8);
+    dig(&r);
+}
+
+#[test]
+fn dig_cactus_harvest_yields_at_least_one() {
+    let r = dig_rig(0x31, 2, 0x2b, 0x43, it::DIG, 0);
+    *r.h.plant.borrow_mut() = Some(stub(1, true));
+    r.h.set("plantprog", 250);
+    seed_first(|v| r01(v) < 0.7);
+    dig(&r);
+    assert!(r.h.take().contains(&"plantharvest:1".to_string()));
+}
+
+#[test]
+fn place_without_a_queued_action() {
+    let r = rig(it::PLACE_ITEM, 8);
+    r.h.cit.set(it::PLACE_ITEM);
+    r.b().bh.borrow_mut().action_queue.clear();
+    u6_place(&r.c(), it::PLACE_ITEM, 0.0, 0.2);
+    assert!(r.h.take().contains(&"removeitem:false".to_string()));
+}
+
+#[test]
+fn u7_drop_ignore_window_is_kept_near_the_drop() {
+    for (near, kept) in [(true, true), (false, false)] {
+        let r = u7_rig();
+        place_between(r.b(), &r.world, IntPair { x: 5, y: 8 }, IntPair { x: 6, y: 8 });
+        {
+            let mut f = r.b().bh.borrow_mut();
+            f.ignoring_freeblocks_due_to_drop = true;
+            f.ignoring_freeblocks_due_to_drop_location =
+                if near { IntPair { x: 6, y: 8 } } else { IntPair { x: 100, y: 8 } };
+        }
+        go(&r, vec![step(idx(7, 8), 10, 1, 0)]);
+        assert_eq!(r.b().bh.borrow().ignoring_freeblocks_due_to_drop, kept);
+    }
+}
+
+#[test]
+fn u7_steps_without_a_world_or_target_tile() {
+    // no world
+    let r = u7_rig();
+    place_between(r.b(), &r.world, IntPair { x: 5, y: 8 }, IntPair { x: 6, y: 8 });
+    r.b().bh.borrow_mut().path = Some(vec![step(idx(7, 8), 10, 1, 0), step(idx(6, 9), 10, 1, 0)]);
+    run_u7(&r, &Ctx { world: None, ..r.c() });
+    // the target tile is unloaded
+    let r = u7_rig();
+    {
+        let mut f = r.b().bh.borrow_mut();
+        f.from_square = IntPair { x: 5, y: 8 };
+        f.from_tile = tile_at(&r.world, IntPair { x: 5, y: 8 });
+        f.to_square = IntPair { x: 500, y: 8 };
+        f.to_tile = None;
+    }
+    go(&r, vec![step(idx(7, 8), 10, 1, 0)]);
+}
+
+#[test]
+fn u7_fall_damage_without_simulation() {
+    let r = u7_rig();
+    {
+        let mut f = r.b().bh.borrow_mut();
+        f.traverse_type = tt::FALL as i32;
+        f.terrain_difficulty = 100;
+    }
+    go(&r, vec![step(idx(5, 7), 120, tt::FALL as i64, 0)]);
+    assert!(r.b().st().health < 1.0);
+}
+
+#[test]
+fn u7_replica_boarding_an_elevator() {
+    let r = u7_rig();
+    queue_replica(&r);
+    r.b().bh.borrow_mut().next_traverse_to_key_frame = [kf::STAND_ELEVATOR as i32; 4];
+    r.b().bh.borrow_mut().traverse_to_key_frame = kf::STAND as i32;
+    place_between(r.b(), &r.world, IntPair { x: 5, y: 8 }, IntPair { x: 5, y: 8 });
+    run_u7(&r, &netc(&r));
+    assert!(r.h.take().iter().any(|l| l.starts_with("openelevator:")));
+}
+
+#[test]
+fn last_corners() {
+    // a door tile without another half
+    let r = dig_rig(8, 6, 0, 0, it::DIG, 0);
+    tile(&r.world, 6, 7).set_background_contents(0x46);
+    dig(&r);
+    // a cage with nothing to capture
+    let r = rig(it::CAPTURE, 0x12e);
+    u6_fill_bucket(&r.c(), it::CAPTURE, 0.0, 0.2);
+    // a replica leaving a tile (the cactus rule is for the server)
+    let r = u7_rig();
+    queue_replica(&r);
+    place_between(r.b(), &r.world, IntPair { x: 5, y: 8 }, IntPair { x: 6, y: 8 });
+    run_u7(&r, &netc(&r));
+    // a gentle fall costs nothing
+    let r = u7_rig();
+    {
+        let mut f = r.b().bh.borrow_mut();
+        f.traverse_type = tt::FALL as i32;
+        f.terrain_difficulty = 10;
+    }
+    go(&r, vec![step(idx(5, 7), 30, tt::FALL as i64, 0)]);
+    assert_eq!(r.b().st().health, 1.0);
 }
