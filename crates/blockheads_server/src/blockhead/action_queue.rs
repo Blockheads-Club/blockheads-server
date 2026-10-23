@@ -2311,3 +2311,6 @@ mod tests {
         assert!(!b.can_fly());
     }
 }
+
+#[cfg(test)]
+mod cov_tests;

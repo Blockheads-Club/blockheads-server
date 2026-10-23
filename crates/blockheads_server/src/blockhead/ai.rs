@@ -1265,10 +1265,8 @@ mod tests {
         give(b, 25, 0);
         let drop_type = crate::plants::plant::as_plant(&plant).unwrap().dropped_item_type();
         let _ = drop_type;
-        let hit = ai.test_tile_at_pos(pos);
-        if hit {
-            ai.with_state(|s| assert!(s.found_tile[8]));
-        }
+        assert!(ai.test_tile_at_pos(pos));
+        ai.with_state(|s| assert!(s.found_tile[8]));
         // gems behind the back wall
         reset(&ai);
         set(&w, 15, 12, |t| {

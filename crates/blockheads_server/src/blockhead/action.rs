@@ -884,3 +884,6 @@ mod tests {
         std::mem::forget((dw, dwref));
     }
 }
+
+#[cfg(test)]
+mod cov_tests;

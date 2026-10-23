@@ -1,6 +1,7 @@
 //! Coverage tests for `ai.rs`: a deterministic fuzz of the tile tester and scripted runs of the update loop.
 
 use super::super::blockhead::testutil::{bh_of, tile};
+use super::super::interaction_rules::testhost::real_dw;
 use super::super::interaction_rules::testhost::*;
 use super::*;
 use crate::rng::glibc_rand::srand;
@@ -279,6 +280,7 @@ fn acting_on_each_kind_of_found_tile() {
     let b = bh_of(&o);
     let pos = IntPair { x: 6, y: 8 };
     let act = |k: usize| {
+        b.bh.borrow_mut().action_queue.clear();
         quiet(&ai);
         ai.with_state(|s| {
             s.found_tile[k] = true;
@@ -381,4 +383,75 @@ fn no_path_corners() {
     });
     ai.no_path_to_action();
     ai.with_state(|s| assert_eq!(s.goal_dig_tile, IntPair { x: 20, y: 12 }));
+}
+
+#[test]
+fn flowering_plants_without_a_tool_and_the_other_corners() {
+    use crate::plants::plant::{new_plant_for_type, PlantLike};
+    let (w, o, h, ai) = mk();
+    let b = bh_of(&o);
+    let rdw = real_dw(&w, "ai_cov_plant");
+    let pos = IntPair { x: 14, y: 12 };
+    set(&w, 14, 12, |t| {
+        t.type_index = 2;
+        t.contents = 0;
+        t.foreground_contents = 0x43;
+        t.sun_light = 200;
+    });
+    let plant = new_plant_for_type(1, &w, &rdw, pos, None, 5, 5, None, None, true).unwrap();
+    crate::plants::plant::as_plant(&plant).unwrap().set_flowering(&plant, true);
+    *h.plant.borrow_mut() = Some(plant);
+    // no tool: slot 12, then nothing more
+    {
+        let f = b.bh.borrow();
+        for i in 1..8 {
+            f.inventory_items[i].borrow_mut().clear();
+        }
+    }
+    assert!(ai.test_tile_at_pos(pos));
+    ai.with_state(|s| assert!(s.found_tile[12] && !s.found_tile[8]));
+    assert!(!ai.test_tile_at_pos(pos));
+    // every sowable item, with free and with occupied space above the soil
+    for above_contents in [0u8, 0x30] {
+        for item in 0..1200u32 {
+            set(&w, 16, 12, |t| {
+                t.type_index = 6;
+                t.sun_light = 200;
+            });
+            set(&w, 16, 13, |t| {
+                t.type_index = 2;
+                t.back_wall_type_index = 2;
+                t.contents = above_contents;
+                t.foreground_contents = above_contents;
+            });
+            ai.with_state(|s| {
+                s.found_tile = [false; 16];
+                s.sowable_item = ItemType(item);
+            });
+            let _ = ai.test_tile_at_pos(IntPair { x: 16, y: 12 });
+        }
+    }
+    // ore at the very top of the loaded block has no tile above
+    ai.with_state(|s| {
+        s.found_tile = [false; 16];
+        s.sowable_item = ItemType(0);
+    });
+    set(&w, 10, 31, |t| {
+        t.type_index = 1;
+        t.contents = 0x3d;
+        t.sun_light = 200;
+    });
+    set(&w, 9, 31, |t| {
+        t.type_index = 2;
+        t.sun_light = 200;
+    });
+    let _ = ai.test_tile_at_pos(IntPair { x: 10, y: 31 });
+    // a search that skips ahead inside the vertical sides
+    quiet(&ai);
+    ai.with_state(|s| {
+        s.current_search_level = 2;
+        s.current_search_level_count = 4;
+    });
+    b.bh.borrow_mut().action_queue.clear();
+    ai.update_is_simulation(0.1, false);
 }

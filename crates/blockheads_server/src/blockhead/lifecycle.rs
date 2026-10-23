@@ -961,12 +961,15 @@ impl Blockhead {
                     PlistValue::int(f.controlled_by_server_crystal_discrepency as i64),
                 );
             }
-            let mut acts = PlistValue::mutable_array();
-            if let PlistValue::Array(a) = &mut acts {
-                for act in &f.action_queue {
-                    a.items.push(h.action_get_save_dict(act));
-                }
-            }
+            // `[NSMutableArray array]` filled with the action dictionaries
+            let acts = PlistValue::Array(crate::plist::value::PlistArray {
+                items: f.action_queue.iter().map(|act| h.action_get_save_dict(act)).collect(),
+                tag: crate::plist::value::ClassTag {
+                    origin: crate::plist::value::Origin::Built,
+                    mutable: true,
+                    alt: false,
+                },
+            });
             set(&mut d, "actions", acts);
             // client-only block (`dynamicWorld isClient`): expectedMaximumCrystalDiscrepency (dead on server)
 
@@ -1889,3 +1892,6 @@ mod tests {
             .contains_key(&"interactionObjectDict".to_string()));
     }
 }
+
+#[cfg(test)]
+mod cov_tests;
