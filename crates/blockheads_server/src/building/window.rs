@@ -243,3 +243,29 @@ mod tests {
         assert!(!o.needs_removed());
     }
 }
+
+#[cfg(test)]
+mod more_tests {
+    use super::super::column::testkit::*;
+    use super::*;
+
+    #[test]
+    fn trait_answers_and_lost_net_windows() {
+        let (w, d) = env();
+        let o = Window::init_with_world_dynamic_world_at_position_cache_type_save_dict_placed_by_client(
+            &w,
+            &d,
+            pos(40, 20),
+            None,
+            58,
+            None,
+            None,
+        )
+        .unwrap();
+        let _ = o.class_info();
+        let net = o.update_net_data_for_client(&o, None).unwrap();
+        let mut lost = net.clone();
+        lost[12..16].copy_from_slice(&300u32.to_le_bytes());
+        assert!(Window::init_with_world_dynamic_world_cache_net_data(&w, &d, None, &lost).is_none());
+    }
+}

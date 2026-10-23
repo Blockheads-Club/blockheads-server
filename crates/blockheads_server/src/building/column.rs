@@ -810,3 +810,39 @@ mod more_tests {
         assert!(!far.needs_removed());
     }
 }
+
+/// Random neighbourhoods for the building tests.
+#[cfg(test)]
+pub(crate) mod fuzz {
+    use super::testkit::*;
+    use super::*;
+
+    pub struct Lcg(pub u64);
+    impl Lcg {
+        pub fn next(&mut self) -> u64 {
+            self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            self.0 >> 33
+        }
+        pub fn pick<T: Copy>(&mut self, v: &[T]) -> T {
+            v[(self.next() % v.len() as u64) as usize]
+        }
+    }
+
+    /// Sets the 5x5 tiles around `(x, y)` that exist to random types, contents, foreground contents and back walls.
+    pub fn scramble(w: &World, r: &mut Lcg, x: i32, y: i32, contents: &[u8], fg: &[u8]) {
+        for dy in -2..=2 {
+            for dx in -2..=2 {
+                if y + dy < 0 || y + dy >= 64 {
+                    continue;
+                }
+                let (ty, c, f, bw) = (r.pick(&[2u8, 2, 6, 1]), r.pick(contents), r.pick(fg), r.pick(&[2u8, 6, 6]));
+                tile(w, x + dx, y + dy).update(|t| {
+                    t.type_index = ty;
+                    t.contents = c;
+                    t.foreground_contents = f;
+                    t.back_wall_type_index = bw;
+                });
+            }
+        }
+    }
+}
