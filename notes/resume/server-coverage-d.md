@@ -30,3 +30,6 @@ Branch `test/coverage-d` (worktree `server-wt/coverage-d`), based on origin/dev 
   crafting, connections, state, simulation, db_convertor, loot, custom_rules, blocks).
 - Terrain helpers: `trees::tree::testenv::env(name)`; tile edits via `tile_at_world_position_loaded(x,y,&w).update(..)`;
   unloaded blocks via `*w.macro_tiles().get(i).unwrap().physical_block.borrow_mut() = None`.
+- Round-1 agent, after its first report: trees/* scenario tests (every species through growth, fruit, save/reload, old
+  age, dead-tile removal, pine food, unloaded ground; commits e2a6793 + 1830812). 1830812 also swept in round-2's
+  then-uncommitted world/* edits by mistake. Its unverified building/column.rs scenario test was discarded; it then stopped.
