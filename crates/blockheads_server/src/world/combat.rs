@@ -366,8 +366,7 @@ mod tests {
         assert_eq!(f.rec.bh.borrow()[&2].damage_log, vec![(3.0, false, true)]);
         assert!(
             strip_log(&log)
-                .contains(&"Blockhead named BH2 owned by player N-c3 was harmed by player attacker.".to_string())
-                || strip_log(&log).iter().any(|l| l.starts_with("Blockhead named BH2 owned by player N-c")),
+                .contains(&"Blockhead named BH2 owned by player N-c3 was harmed by player attacker.".to_string()),
             "{}",
             log
         );
@@ -498,5 +497,55 @@ mod tests {
         assert_eq!(f.rec.sends.borrow().len(), 3);
         w.remote_tip_notification(b"hello");
         assert_eq!(f.rec.tips.borrow().last().unwrap(), "hello");
+    }
+}
+
+#[cfg(test)]
+mod more_tests {
+    use super::*;
+    use crate::world::lifecycle::testkit::*;
+
+    fn damage(id: u64) -> Vec<u8> {
+        let mut v = id.to_le_bytes().to_vec();
+        v.extend_from_slice(&3.0f32.to_le_bytes());
+        v.extend_from_slice(&[0, 0, 0, 0]);
+        v
+    }
+
+    #[test]
+    fn damage_needs_a_dynamic_world_and_logs_only_on_servers() {
+        let f = fixture(32);
+        let w = &f.world;
+        // no dynamic world: nobody to hurt
+        w.set_pvp_enabled(true);
+        w.remote_blockhead_damage_request_requested_by_client_name(&damage(1), Some("x"));
+        // a world without a server hurts silently
+        with_dw(w);
+        let o = crate::world::helpers::testutil::new_obj();
+        o.base().borrow_mut().unique_id = 1;
+        f.rec.bh.borrow_mut().insert(1, Bh { name: Some("B".into()), ..Default::default() });
+        f.rec.blockheads.borrow_mut().push(o);
+        *w.server.borrow_mut() = None;
+        let log = capture_log(|| w.remote_blockhead_damage_request_requested_by_client_name(&damage(1), Some("x")));
+        assert!(!log.contains("harmed"));
+        assert_eq!(f.rec.bh.borrow()[&1].damage_log.len(), 1);
+    }
+
+    #[test]
+    fn electricity_goes_to_clients_wired_at_either_end_only() {
+        let f = fixture(32);
+        let w = &f.world;
+        assert!(w.client_connected("a"));
+        let path: Vec<ElectrictyParticlePathIndex> = [0u32, 1, 160]
+            .iter()
+            .map(|&index| ElectrictyParticlePathIndex { index, solid: 0, padding: [0; 3] })
+            .collect();
+        // wired at neither end
+        w.send_net_data_for_electricity_particle_path_if_required_size_ignore_client(path.clone(), 1.0, None);
+        assert!(f.rec.sends.borrow().is_empty());
+        // wired at the far end only
+        f.rec.clients.borrow_mut().get_mut("a").unwrap().wired.insert(5);
+        w.send_net_data_for_electricity_particle_path_if_required_size_ignore_client(path, 1.0, None);
+        assert_eq!(f.rec.sends.borrow().len(), 1);
     }
 }
