@@ -1946,6 +1946,7 @@ pub(crate) mod testutil {
         pub next_id: Cell<u64>,
         pub server: Cell<bool>,
         pub changed: RefCell<Vec<(IntPair, i32)>>,
+        pub bhs: RefCell<Vec<ObjRef>>,
     }
     impl DynamicWorldApi for MockDw {
         fn get_next_dynamic_object_id(&self) -> u64 {
@@ -1960,7 +1961,7 @@ pub(crate) mod testutil {
             self.server.get()
         }
         fn blockheads(&self) -> Vec<ObjRef> {
-            Vec::new()
+            self.bhs.borrow().clone()
         }
         fn get_owner_name_for_object_owner_id(&self, _owner_id: &str) -> Option<String> {
             None
@@ -1982,8 +1983,12 @@ pub(crate) mod testutil {
         *mt.dynamic_objects.borrow_mut() = Some(Vec::new());
         world.set_is_admin(true);
         *world.distance_ordered_food_types.borrow_mut() = (0..31).collect();
-        let dw =
-            Rc::new(MockDw { next_id: Cell::new(100), server: Cell::new(true), changed: RefCell::new(Vec::new()) });
+        let dw = Rc::new(MockDw {
+            next_id: Cell::new(100),
+            server: Cell::new(true),
+            changed: RefCell::new(Vec::new()),
+            bhs: RefCell::new(Vec::new()),
+        });
         let dwref: DynamicWorldRef = dw.clone();
         (world, dw, dwref)
     }

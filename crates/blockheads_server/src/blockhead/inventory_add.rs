@@ -115,30 +115,29 @@ impl Blockhead {
             }
             if try_container_branch {
                 // ---- (B) the slot holds a container whose sub-slots might accept the item
-                if n != 0 {
-                    let first = slot_first(&slot).expect("n > 0");
+                let carried = slot_first(&slot)
+                    .filter(|f| item_type_sub_items_can_be_modified_while_carried(f.borrow().item_type));
+                if let Some(first) = carried {
                     let ft = first.borrow().item_type;
-                    if item_type_sub_items_can_be_modified_while_carried(ft) {
-                        let subs = sub_slots_of(&first);
-                        if !subs.is_empty() && item_type_carries_liquids(ft) == is_liquid {
-                            for sub in subs.iter() {
-                                let sn = sub.borrow().len();
-                                if sn == 0 {
-                                    return 1;
-                                }
-                                if sn < 99 {
-                                    let sf = slot_first(sub).expect("sn > 0");
-                                    let (st, sdb) = {
-                                        let b = sf.borrow();
-                                        (b.item_type, b.data_b)
-                                    };
-                                    if same_kind(t, st) && item_type_is_stackable(t, sdb, data_b) {
-                                        if t != ItemType::ITEM_MONEY {
-                                            return 1;
-                                        }
-                                        if money_rule_accepts(st, data_a, data_b) {
-                                            return 1;
-                                        }
+                    let subs = sub_slots_of(&first);
+                    if !subs.is_empty() && item_type_carries_liquids(ft) == is_liquid {
+                        for sub in subs.iter() {
+                            let sn = sub.borrow().len();
+                            if sn == 0 {
+                                return 1;
+                            }
+                            if sn < 99 {
+                                let sf = slot_first(sub).expect("sn > 0");
+                                let (st, sdb) = {
+                                    let b = sf.borrow();
+                                    (b.item_type, b.data_b)
+                                };
+                                if same_kind(t, st) && item_type_is_stackable(t, sdb, data_b) {
+                                    if t != ItemType::ITEM_MONEY {
+                                        return 1;
+                                    }
+                                    if money_rule_accepts(st, data_a, data_b) {
+                                        return 1;
                                     }
                                 }
                             }
@@ -168,21 +167,20 @@ impl Blockhead {
                             return 1;
                         }
                     }
+                    // every sub-slot holds something here: an empty one returned above
                     for sub in subs.iter() {
                         let sn = sub.borrow().len();
-                        if sn != 0 {
-                            let sf = slot_first(sub).expect("sn > 0");
-                            let (st, sdb) = {
-                                let b = sf.borrow();
-                                (b.item_type, b.data_b)
-                            };
-                            if st == ft {
-                                if ft == ItemType::ITEM_PAINT && sdb != fdb {
-                                    continue;
-                                }
-                                if (sn as u64) + (n as u64) < 100 {
-                                    return 1;
-                                }
+                        let sf = slot_first(sub).expect("sn > 0");
+                        let (st, sdb) = {
+                            let b = sf.borrow();
+                            (b.item_type, b.data_b)
+                        };
+                        if st == ft {
+                            if ft == ItemType::ITEM_PAINT && sdb != fdb {
+                                continue;
+                            }
+                            if (sn as u64) + (n as u64) < 100 {
+                                return 1;
                             }
                         }
                     }
@@ -590,9 +588,8 @@ impl Blockhead {
             if world.is_simulating() || self.is_client_blockhead_being_controlled_by_server() {
                 ih.add_simulation_event_got(&me, fb);
             }
-            if ty == ItemType::ITEM_TIME_CRYSTAL {
-                fb.set_needs_removed(fb, true);
-            }
+            // (the original also flagged a picked-up time crystal for removal here; `canPickUp...` above refuses
+            // `ITEM_TIME_CRYSTAL` as no valid inventory item, so that could never run)
             let unique_id = fb.unique_id();
             if ty == ItemType::ITEM_MONEY {
                 let p = fbd.data_a as i32;

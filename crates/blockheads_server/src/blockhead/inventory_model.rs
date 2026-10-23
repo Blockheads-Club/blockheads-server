@@ -24,8 +24,8 @@ use crate::items::food::{food_type_for_item_type, nourishment_fraction_for_food_
 use crate::items::inventory_item::{ItemRef, SubSlot};
 use crate::items::predicates::{
     interaction_type_disallowed_on_protected_tiles, inventory_sub_items_count_for_item_type, item_type_can_be_worn,
-    item_type_can_be_worn_on_feet, item_type_can_be_worn_on_head, item_type_can_be_worn_on_legs,
-    item_type_can_be_worn_on_torso, item_type_is_stackable, item_type_sub_items_can_be_modified_while_carried,
+    item_type_can_be_worn_on_head, item_type_can_be_worn_on_legs, item_type_can_be_worn_on_torso,
+    item_type_is_stackable, item_type_sub_items_can_be_modified_while_carried,
 };
 use crate::objects::handle::ObjRef;
 use crate::plist::value::PlistValue;
@@ -509,10 +509,7 @@ impl Blockhead {
         let h = host();
         let pos = self.pos();
         for _ in 0..n {
-            let last = match slot_last(&item_slot) {
-                Some(l) => l,
-                None => break,
-            };
+            let Some(last) = slot_last(&item_slot) else { break };
             let (item_type, data_a, data_b, subs, mut save_dict) = {
                 let l = last.borrow();
                 (l.item_type, l.data_a, l.data_b, l.sub_items.clone(), l.dynamic_object_save_dict.clone())
@@ -648,10 +645,7 @@ impl Blockhead {
                     let mut found = false;
                     // 1st pass: join an existing partial stack
                     for s in 0..n_sub {
-                        let cand = match sub_slot_at(&first, s as i64) {
-                            Some(c) => c,
-                            None => break,
-                        };
+                        let Some(cand) = sub_slot_at(&first, s as i64) else { break };
                         chosen = cand.clone();
                         let ok = {
                             let c = cand.borrow();
@@ -667,10 +661,7 @@ impl Blockhead {
                         chosen = outer.clone();
                         // 2nd pass: first empty sub-slot
                         for s in 0..n_sub {
-                            let cand = match sub_slot_at(&first, s as i64) {
-                                Some(c) => c,
-                                None => break,
-                            };
+                            let Some(cand) = sub_slot_at(&first, s as i64) else { break };
                             if cand.borrow().is_empty() {
                                 result_sub = s;
                                 chosen = cand;
@@ -804,10 +795,8 @@ impl Blockhead {
             cur = Some(c.clone());
             if Self::top_is_modifiable_container(&c) {
                 let idx = c.borrow().selected_sub_item_index as i64;
-                if let Some(sub) = sub_slot_at(&c, idx) {
-                    if !sub.borrow().is_empty() {
-                        cur = slot_last(&sub);
-                    }
+                if let Some(sub) = sub_slot_at(&c, idx).filter(|s| !s.borrow().is_empty()) {
+                    cur = slot_last(&sub);
                 }
             }
         }
@@ -909,28 +898,23 @@ impl Blockhead {
         let mut cur = slot_last(&slot).expect("non-empty");
         if Self::top_is_modifiable_container(&cur) {
             let sub_idx = cur.borrow().selected_sub_item_index as u32;
-            let sub = sub_slot_at(&cur, sub_idx as i64);
-            if let Some(sub) = sub {
-                if !sub.borrow().is_empty() {
-                    cur = slot_last(&sub).expect("non-empty");
-                    if (0..8).contains(&sel) {
-                        let mut f = self.bh.borrow_mut();
-                        if sub_idx == 0xffff_ffff || sub_idx > 3 {
-                            f.inventory_changed_this_frame_slots[sel as usize] = true;
-                        } else {
-                            f.sub_inventory_changed_this_frame_slots[sel as usize][sub_idx as usize] = true;
-                        }
-                    }
-                    self.item_will_be_removed_from_inventory(&cur);
-                    slot_remove_object(&sub, &cur);
-                    removed_sub = true;
+            if let Some(sub) = sub_slot_at(&cur, sub_idx as i64).filter(|s| !s.borrow().is_empty()) {
+                cur = slot_last(&sub).expect("non-empty");
+                // `sel` is within 1..8 here: `outer_slot_at` above raises for anything else
+                let mut f = self.bh.borrow_mut();
+                if sub_idx > 3 {
+                    f.inventory_changed_this_frame_slots[sel as usize] = true;
+                } else {
+                    f.sub_inventory_changed_this_frame_slots[sel as usize][sub_idx as usize] = true;
                 }
+                drop(f);
+                self.item_will_be_removed_from_inventory(&cur);
+                slot_remove_object(&sub, &cur);
+                removed_sub = true;
             }
         }
         if !removed_sub {
-            if (0..8).contains(&sel) {
-                self.bh.borrow_mut().inventory_changed_this_frame_slots[sel as usize] = true;
-            }
+            self.bh.borrow_mut().inventory_changed_this_frame_slots[sel as usize] = true;
             self.item_will_be_removed_from_inventory(&cur);
             slot_remove_object(&slot, &cur);
         }
@@ -1332,17 +1316,13 @@ impl Blockhead {
                                 let alt = self.inventory_location_of_first_instance_of_item_type(item_type);
                                 let mut ok2 = false;
                                 if alt.x != -1 {
-                                    let items = self.inv();
-                                    let outer = outer_slot_at(&items, alt.x);
-                                    if !outer.borrow().is_empty() {
-                                        let held2 = self.resolve_held(alt.x, alt.y);
-                                        ok2 = held2.is_some();
-                                        if ok2 {
-                                            ih.action_set_interaction_item(&action, held2.as_ref());
-                                            ih.action_set_interaction_item_index(&action, alt.x as i16 as i32);
-                                            ih.action_set_interaction_item_sub_index(&action, alt.y as i16 as i32);
-                                        }
-                                    }
+                                    // `alt` names a slot with an item in it, so the outer slot is never empty and
+                                    // `resolve_held` always finds something
+                                    let held2 = self.resolve_held(alt.x, alt.y);
+                                    ih.action_set_interaction_item(&action, held2.as_ref());
+                                    ih.action_set_interaction_item_index(&action, alt.x as i16 as i32);
+                                    ih.action_set_interaction_item_sub_index(&action, alt.y as i16 as i32);
+                                    ok2 = true;
                                 }
                                 ok = ok2;
                             }
@@ -1541,24 +1521,22 @@ impl Blockhead {
                 // all other items: nothing
             } else {
                 let sub = self.current_item_sub_index();
+                // `itemTypeCanBeWorn` held, so the item is wearable on exactly one of head, torso, legs, feet; feet is
+                // what is left when the other three tests fail (the original's final `else if` could never miss).
                 let slot_sub = if item_type_can_be_worn_on_head(t) {
-                    Some(3)
+                    3
                 } else if item_type_can_be_worn_on_torso(t) {
-                    Some(2)
+                    2
                 } else if item_type_can_be_worn_on_legs(t) {
-                    Some(1)
-                } else if item_type_can_be_worn_on_feet(t) {
-                    Some(0)
+                    1
                 } else {
-                    None
+                    0
                 };
-                if let Some(slot_sub) = slot_sub {
-                    self.drop_inventory_items_at_index_sub_index_count_ignore_freeblocks(0, slot_sub, 1, false);
-                    let sel = self.bh.borrow().selected_tool_index;
-                    self.move_inventory_items_from_index_from_sub_index_to_index_to_sub_index_count(
-                        sel, sub, 0, slot_sub, 1,
-                    );
-                }
+                self.drop_inventory_items_at_index_sub_index_count_ignore_freeblocks(0, slot_sub, 1, false);
+                let sel = self.bh.borrow().selected_tool_index;
+                self.move_inventory_items_from_index_from_sub_index_to_index_to_sub_index_count(
+                    sel, sub, 0, slot_sub, 1,
+                );
             }
         } else {
             let n = nourishment_fraction_for_food_type(food);
@@ -1569,9 +1547,9 @@ impl Blockhead {
             {
                 let mut f = self.bh.borrow_mut();
                 let s = &mut f.state;
-                if n > 0.0 {
-                    s.fullness = if s.fullness <= 0.0 { 0.0 } else { s.fullness };
-                }
+                // (every food has a nourishment above zero, so the original's `n > 0` guards around this update and
+                // the `death` reset below always held)
+                s.fullness = if s.fullness <= 0.0 { 0.0 } else { s.fullness };
                 if s.fullness + n < 1.0f32 {
                     s.fullness += n;
                 } else {
@@ -1581,10 +1559,9 @@ impl Blockhead {
                 {
                     let fct = if expert { 0.1f32 } else { 0.2f32 };
                     s.energy = fmax(s.energy, 0.25f32);
+                    // (the original then capped the energy at 1.1999f when it reached 1.2f; with energy < 1.0 here and
+                    // fct * n <= 0.2 * 0.8 that cap can never fire)
                     s.energy += fct * n;
-                    if s.energy >= 1.2f32 {
-                        s.energy = f32::from_bits(0x3f99_9653); // 1.1999f
-                    }
                 }
                 if food == FoodType::FOOD_COFFEE_CHERRY {
                     let fct = if expert { 0.05f32 } else { 0.1f32 };
@@ -1624,9 +1601,7 @@ impl Blockhead {
                 } else if food == FoodType::FOOD_MILK {
                     create = Some(ItemType::ITEM_TIN_BUCKET);
                 }
-                if n > 0.0 {
-                    s.death = 0.0;
-                }
+                s.death = 0.0;
                 let sum = s.health as f64 + (n as f64) * 0.5f64;
                 s.health = (if 1.0f64 <= sum { 1.0f64 } else { sum }) as f32;
             }
@@ -1898,8 +1873,99 @@ mod tests {
     struct Rec {
         fbs: RefCell<Vec<Fb>>,
         sims: RefCell<Vec<i32>>,
+        goal_pos: std::cell::Cell<(i32, i32)>,
+        in_progress: std::cell::Cell<bool>,
+        set_in_progress: std::cell::Cell<u32>,
+        gob: std::cell::Cell<i32>,
+        expected: std::cell::Cell<(i32, u32)>,
+        obj_id: std::cell::Cell<i64>,
+        io: RefCell<Option<ObjRef>>,
+        itype: std::cell::Cell<u32>,
+        itype_prot: std::cell::Cell<u32>,
+        stops: std::cell::Cell<u32>,
+        fish_stops: std::cell::Cell<u32>,
+        aborts: std::cell::Cell<u32>,
+        io_type: std::cell::Cell<i32>,
+        obj_item: std::cell::Cell<i32>,
+        inv_change: std::cell::Cell<Option<i32>>,
+        wb_current: RefCell<Option<ObjRef>>,
     }
     impl crate::blockhead::blockhead::BlockheadHostStub for Rec {
+        fn action_inventory_change_int_for_key(&self, _a: &ActionRef, _key: &str) -> Option<i32> {
+            self.inv_change.get()
+        }
+        fn workbench_current_blockhead(&self, _wb: &ObjRef) -> Option<ObjRef> {
+            self.wb_current.borrow().clone()
+        }
+        fn action_goal_tile_pos(&self, _a: &ActionRef) -> IntPair {
+            let (x, y) = self.goal_pos.get();
+            IntPair { x, y }
+        }
+        fn action_in_progress(&self, _a: &ActionRef) -> bool {
+            self.in_progress.get()
+        }
+        fn action_set_in_progress(&self, _a: &ActionRef, _v: bool) {
+            self.set_in_progress.set(self.set_in_progress.get() + 1);
+        }
+        fn good_or_bad_interaction_for_action(
+            &self,
+            _b: &Blockhead,
+            _a: Option<&ActionRef>,
+        ) -> crate::types::structs::InteractionTestResult {
+            crate::types::structs::InteractionTestResult {
+                good_or_bad: self.gob.get(),
+                render_item_type: 0,
+                render_item_data_a: 0,
+                render_item_data_b: 0,
+            }
+        }
+        fn action_interaction_test_result(&self, _a: &ActionRef) -> crate::types::structs::InteractionTestResult {
+            let (g, r) = self.expected.get();
+            crate::types::structs::InteractionTestResult {
+                good_or_bad: g,
+                render_item_type: r,
+                render_item_data_a: 0,
+                render_item_data_b: 0,
+            }
+        }
+        fn action_interaction_object_id(&self, _a: &ActionRef) -> i64 {
+            self.obj_id.get()
+        }
+        fn interaction_object_with_id(&self, _id: i64) -> Option<ObjRef> {
+            self.io.borrow().clone()
+        }
+        fn interaction_type_for_tile_at_pos_item_pickup_rejected_due_to_inventory_full_include_actions_face_index_allow_protected_actions(
+            &self,
+            _b: &Blockhead,
+            _t: Option<TileRef>,
+            _p: IntPair,
+            _i: Option<&ItemRef>,
+            _r: &mut bool,
+            _ia: bool,
+            _f: i32,
+            allow_protected: bool,
+        ) -> u32 {
+            if allow_protected {
+                self.itype.get()
+            } else {
+                self.itype_prot.get()
+            }
+        }
+        fn stop_riding(&self, _b: &Blockhead) {
+            self.stops.set(self.stops.get() + 1);
+        }
+        fn stop_fishing(&self, _b: &Blockhead) {
+            self.fish_stops.set(self.fish_stops.get() + 1);
+        }
+        fn abort_in_progress_path_if_for_blockhead(&self, _b: &ObjRef) {
+            self.aborts.set(self.aborts.get() + 1);
+        }
+        fn interaction_object_type(&self, _o: &ObjRef) -> i32 {
+            self.io_type.get()
+        }
+        fn object_item_type(&self, _o: &ObjRef) -> i32 {
+            self.obj_item.get()
+        }
         fn create_free_block_at_position_of_type_data_a_data_b_sub_items_dynamic_object_save_dict_hovers_play_sound_priority_blockhead(
             &self,
             pos: IntPair,
@@ -1936,8 +2002,80 @@ mod tests {
     struct Ih {
         fb: RefCell<Option<FreeBlockData>>,
         cannot_pickup: std::cell::Cell<u32>,
+        client: std::cell::Cell<bool>,
+        action_item: RefCell<Option<ItemRef>>,
+        action_index: std::cell::Cell<i32>,
+        action_sub_index: std::cell::Cell<i32>,
+        has_ai: std::cell::Cell<bool>,
+        ai_calls: std::cell::Cell<u32>,
+        goal_interaction: std::cell::Cell<i32>,
+        path_type: std::cell::Cell<i32>,
+        craft_count: std::cell::Cell<i32>,
+        craftable: RefCell<Option<Rc<dyn Any>>>,
+        harmable: RefCell<Option<ObjRef>>,
+        boat: RefCell<Option<ObjRef>>,
+        train: RefCell<Option<ObjRef>>,
+        can_fish: std::cell::Cell<bool>,
+        crafting_type: std::cell::Cell<i32>,
+        items_left: std::cell::Cell<i32>,
+        item_sets: std::cell::Cell<u32>,
+        item_index_sets: RefCell<Vec<i32>>,
     }
     impl InventoryHostStub for Ih {
+        fn action_interaction_item_sub_index(&self, _a: &ActionRef) -> i32 {
+            self.action_sub_index.get()
+        }
+        fn has_blockhead_ai(&self, _b: &Blockhead) -> bool {
+            self.has_ai.get()
+        }
+        fn blockhead_ai_no_path_to_action(&self, _b: &Blockhead) {
+            self.ai_calls.set(self.ai_calls.get() + 1);
+        }
+        fn action_goal_interaction(&self, _a: &ActionRef) -> i32 {
+            self.goal_interaction.get()
+        }
+        fn action_path_type(&self, _a: &ActionRef) -> i32 {
+            self.path_type.get()
+        }
+        fn action_craft_count_or_extra_data(&self, _a: &ActionRef) -> i32 {
+            self.craft_count.get()
+        }
+        fn action_craftable_item_object(&self, _a: &ActionRef) -> Option<Rc<dyn Any>> {
+            self.craftable.borrow().clone()
+        }
+        fn harmable_dynamic_object_with_id(&self, _id: u64) -> Option<ObjRef> {
+            self.harmable.borrow().clone()
+        }
+        fn boat_with_id(&self, _id: u64) -> Option<ObjRef> {
+            self.boat.borrow().clone()
+        }
+        fn train_car_with_id(&self, _id: u64) -> Option<ObjRef> {
+            self.train.borrow().clone()
+        }
+        fn can_fish(&self, _b: &Blockhead) -> bool {
+            self.can_fish.get()
+        }
+        fn workbench_currently_crafting_item_type(&self, _wb: &ObjRef) -> i32 {
+            self.crafting_type.get()
+        }
+        fn workbench_total_items_left_to_craft(&self, _wb: &ObjRef) -> i32 {
+            self.items_left.get()
+        }
+        fn action_set_interaction_item(&self, _a: &ActionRef, _item: Option<&ItemRef>) {
+            self.item_sets.set(self.item_sets.get() + 1);
+        }
+        fn action_set_interaction_item_index(&self, _a: &ActionRef, v: i32) {
+            self.item_index_sets.borrow_mut().push(v);
+        }
+        fn dynamic_world_is_client(&self) -> bool {
+            self.client.get()
+        }
+        fn action_interaction_item(&self, _a: &ActionRef) -> Option<ItemRef> {
+            self.action_item.borrow().clone()
+        }
+        fn action_interaction_item_index(&self, _a: &ActionRef) -> i32 {
+            self.action_index.get()
+        }
         fn free_block_data(&self, _fb: &ObjRef) -> Option<FreeBlockData> {
             self.fb.borrow().clone()
         }
@@ -2832,5 +2970,1570 @@ mod tests {
         b.bh.borrow_mut().interaction_workbench = Some(stub(0, true));
         b.craft_item_finished_at_workbench(true, None);
         assert!(b.bh.borrow().interaction_workbench.is_none());
+    }
+
+    /// A host that keeps every default of the inventory seam.
+    struct BareInv;
+    impl InventoryHostStub for BareInv {}
+
+    /// Every default body of the inventory host seam runs once and is inert.
+    #[test]
+    fn inventory_host_defaults_are_inert() {
+        let f = fx();
+        let b = f.b();
+        let ob = stub(1, true);
+        let h = BareInv;
+        let act: ActionRef = Rc::new(());
+        let item = mk(APPLE, 0, 0);
+        assert!(InventoryHostStub::free_block_data(&h, &ob).is_none());
+        InventoryHostStub::free_block_priority_blockhead_cannot_pickup(&h, &ob);
+        assert!(!InventoryHostStub::dynamic_world_is_client(&h));
+        InventoryHostStub::world_start_using_camera(&h);
+        assert!(InventoryHostStub::harmable_dynamic_object_with_id(&h, 1).is_none());
+        assert!(InventoryHostStub::boat_with_id(&h, 1).is_none());
+        assert!(InventoryHostStub::train_car_with_id(&h, 1).is_none());
+        assert!(InventoryHostStub::dynamic_world_active_blockhead(&h).is_none());
+        assert!(!InventoryHostStub::can_fish(&h, b));
+        let _rod = InventoryHostStub::fishing_rod_new(&h, b);
+        InventoryHostStub::ride_object_set_target_velocity_zero(&h, &ob);
+        assert!(!InventoryHostStub::has_blockhead_ai(&h, b));
+        InventoryHostStub::blockhead_ai_no_path_to_action(&h, b);
+        InventoryHostStub::npc_blockhead_is_coming_to_inspect(&h, &ob, b);
+        assert_eq!(InventoryHostStub::action_goal_interaction(&h, &act), 0);
+        assert!(InventoryHostStub::action_interaction_item(&h, &act).is_none());
+        assert_eq!(InventoryHostStub::action_interaction_item_index(&h, &act), 0);
+        assert_eq!(InventoryHostStub::action_interaction_item_sub_index(&h, &act), 0);
+        InventoryHostStub::action_set_interaction_item(&h, &act, Some(&item));
+        InventoryHostStub::action_set_interaction_item_index(&h, &act, 1);
+        InventoryHostStub::action_set_interaction_item_sub_index(&h, &act, 1);
+        assert_eq!(InventoryHostStub::action_craft_count_or_extra_data(&h, &act), 0);
+        assert_eq!(InventoryHostStub::action_path_type(&h, &act), 0);
+        assert!(InventoryHostStub::action_craftable_item_object(&h, &act).is_none());
+        assert_eq!(InventoryHostStub::workbench_currently_crafting_item_type(&h, &ob), 0);
+        assert_eq!(InventoryHostStub::workbench_total_items_left_to_craft(&h, &ob), 0);
+    }
+
+    fn extra_slot(basket: &ItemRef, items: Vec<ItemRef>) {
+        basket.borrow_mut().sub_items.as_mut().unwrap().push(Rc::new(RefCell::new(items)));
+    }
+
+    #[test]
+    fn slot_helpers_flags_and_save_edges() {
+        let f = fx();
+        let b = f.b();
+        let basket = basket_with(vec![]);
+        assert!(crate::foundation::exception::catch_ns(|| sub_slot_at(&basket, 9)).is_err());
+        assert_eq!(fmax(0.1, 0.25), 0.25);
+        assert_eq!(fmax(0.5, 0.25), 0.5);
+        b.mark_changed(9, 0);
+        b.mark_changed(-1, 0);
+        b.mark_changed(2, 7);
+        b.mark_changed(3, 1);
+        let fl = b.bh.borrow();
+        assert!(fl.inventory_changed_this_frame_slots[2] && !fl.inventory_changed_this_frame_slots[3]);
+        assert!(fl.sub_inventory_changed_this_frame_slots[3][1]);
+        drop(fl);
+        b.bh.borrow_mut().inventory_needs_saving = false;
+        b.inventory_was_changed_sub_index_was_usage(-1, 0, true);
+        assert!(!b.bh.borrow().inventory_needs_saving);
+        b.bh.borrow_mut().save_item_slots_array.clear();
+        let r = crate::foundation::exception::catch_ns(|| b.inventory_was_changed_sub_index_was_usage(1, -1, true));
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn clothing_removal_resets_the_piece() {
+        let f = fx();
+        let b = f.b();
+        let hat = mk(117, 0, 7);
+        let sub3 = b.bh.borrow().inventory_items[0].borrow()[0].borrow().sub_items.as_ref().unwrap()[3].clone();
+        sub3.borrow_mut().push(hat);
+        b.inventory_was_changed_sub_index_was_usage(0, -1, true);
+        assert_eq!(b.bh.borrow().hat_item_type, 117);
+        sub3.borrow_mut().clear();
+        b.base.borrow_mut().creation_data_needs_to_be_sent = false;
+        b.inventory_was_changed_sub_index_was_usage(0, -1, true);
+        assert_eq!(b.bh.borrow().hat_item_type, 0);
+        assert!(b.base.borrow().creation_data_needs_to_be_sent);
+    }
+
+    #[test]
+    fn client_save_cache_resets_on_clear() {
+        let f = fx();
+        let b = f.b();
+        b.bh.borrow_mut().save_item_slots_array = vec![vec![vec![1u8]]; 8];
+        b.set_inventory_needs_saving(false);
+        assert_eq!(b.bh.borrow().save_item_slots_array[1].len(), 1);
+        f.ih.client.set(true);
+        b.set_inventory_needs_saving(true);
+        assert_eq!(b.bh.borrow().save_item_slots_array[1].len(), 1);
+        b.set_inventory_needs_saving(false);
+        assert!(b.bh.borrow().save_item_slots_array.iter().all(|s| s.is_empty()));
+    }
+
+    #[test]
+    fn drop_from_sub_slots_and_overdrop() {
+        let f = fx();
+        let b = f.b();
+        // drop more than present: clamps
+        put(b, 2, vec![mk(APPLE, 0, 0), mk(APPLE, 0, 0)]);
+        b.drop_inventory_items_at_index_sub_index_count_ignore_freeblocks(2, -1, 5, false);
+        assert_eq!(counts(b)[2], 0);
+        assert_eq!(f.rec.fbs.borrow().len(), 2);
+        // empty slot, count 0
+        b.drop_inventory_items_at_index_sub_index_count_ignore_freeblocks(2, -1, 1, false);
+        put(b, 3, vec![mk(APPLE, 0, 0)]);
+        b.drop_inventory_items_at_index_sub_index_count_ignore_freeblocks(3, -1, 0, false);
+        assert_eq!(counts(b)[3], 1);
+        // a sub-slot of a container
+        put(b, 4, vec![basket_with(vec![(1, vec![mk(FLINT, 0, 0)])])]);
+        b.drop_inventory_items_at_index_sub_index_count_ignore_freeblocks(4, 1, -1, false);
+        assert_eq!(f.rec.fbs.borrow().len(), 3);
+        assert!(b.bh.borrow().sub_inventory_changed_this_frame_slots[4][1]);
+        // a sub-index on an item without sub-slots does nothing
+        b.drop_inventory_items_at_index_sub_index_count_ignore_freeblocks(3, 1, 1, false);
+        assert_eq!(counts(b)[3], 1);
+        // a sub-slot that is empty
+        b.drop_inventory_items_at_index_sub_index_count_ignore_freeblocks(4, 2, -1, false);
+        assert_eq!(f.rec.fbs.borrow().len(), 3);
+    }
+
+    #[test]
+    fn move_between_sub_slots_and_refusals() {
+        let f = fx();
+        let b = f.b();
+        // out of range / empty source
+        assert_eq!(b.move_inventory_items_from_index_from_sub_index_to_index_to_sub_index_count(9, -1, 1, -1, 1), -1);
+        assert_eq!(b.move_inventory_items_from_index_from_sub_index_to_index_to_sub_index_count(1, -1, 9, -1, 1), -1);
+        assert_eq!(b.move_inventory_items_from_index_from_sub_index_to_index_to_sub_index_count(2, -1, 3, -1, 1), -1);
+        // from a sub-slot: out of range, then valid
+        put(b, 2, vec![basket_with(vec![(1, vec![mk(APPLE, 0, 0), mk(APPLE, 0, 0)])])]);
+        assert_eq!(b.move_inventory_items_from_index_from_sub_index_to_index_to_sub_index_count(2, 7, 3, -1, 1), -1);
+        assert_eq!(b.move_inventory_items_from_index_from_sub_index_to_index_to_sub_index_count(2, 1, 3, -1, 1), -1);
+        assert_eq!(counts(b)[3], 1);
+        // from an item without sub-slots with a sub-index
+        put(b, 4, vec![mk(APPLE, 0, 0)]);
+        assert_eq!(b.move_inventory_items_from_index_from_sub_index_to_index_to_sub_index_count(4, 0, 3, -1, 1), -1);
+        // count zero, explicit destination sub-slot cases
+        let from = b.inv()[4].clone();
+        let mv = |to, to_sub, count, moved: Option<&mut Vec<ItemRef>>| {
+            b.move_inventory_items_from_array_from_index_from_sub_index_to_index_to_sub_index_count_moved_items(
+                &from, 4, -1, to, to_sub, count, moved,
+            )
+        };
+        assert_eq!(mv(5, -1, 0, None), -1);
+        assert_eq!(mv(5, 2, 1, None), -1); // empty destination slot
+        put(b, 5, vec![mk(FLINT, 0, 0)]);
+        assert_eq!(mv(5, 2, 1, None), -1); // destination item has no sub-slots
+        put(b, 6, vec![basket_with(vec![(2, vec![mk(FLINT, 0, 0)]), (3, vec![mk(ItemType::ITEM_PAINT.0, 0, 1)])])]);
+        assert_eq!(mv(6, 2, 1, None), -1); // type mismatch
+        let pick = b.inv()[7].clone();
+        pick.borrow_mut().push(mk(ItemType::ITEM_PAINT.0, 0, 2));
+        let mv2 = |to_sub| {
+            b.move_inventory_items_from_array_from_index_from_sub_index_to_index_to_sub_index_count_moved_items(
+                &pick, 7, -1, 6, to_sub, 1, None,
+            )
+        };
+        assert_eq!(mv2(3), -1); // same type, paints of different colours do not stack
+                                // an explicit empty sub-slot, recording the moved items
+        let mut moved = Vec::new();
+        assert_eq!(mv(6, 1, 1, Some(&mut moved)), 1);
+        assert_eq!(moved.len(), 1);
+        assert!(b.inv()[4].borrow().is_empty());
+        // a destination without sub_items at all
+        let nosub = mk(BASKET, 0, 0);
+        nosub.borrow_mut().sub_items = None;
+        b.inv()[3].borrow_mut().clear();
+        put(b, 3, vec![nosub]);
+        b.inv()[4].borrow_mut().push(mk(APPLE, 0, 0));
+        assert_eq!(mv(3, -1, 1, None), -1);
+        assert_eq!(counts(b)[4], 1);
+    }
+
+    #[test]
+    fn move_into_container_joins_partial_stack() {
+        let f = fx();
+        let b = f.b();
+        put(b, 2, vec![basket_with(vec![(2, vec![mk(APPLE, 0, 0)])])]);
+        put(b, 3, vec![mk(APPLE, 0, 0)]);
+        assert_eq!(b.move_inventory_items_from_index_from_sub_index_to_index_to_sub_index_count(3, -1, 2, -1, 1), 2);
+        // full sub-slots and a non-matching type fall back to the first empty one
+        put(b, 4, vec![mk(FLINT, 0, 0)]);
+        assert_eq!(b.move_inventory_items_from_index_from_sub_index_to_index_to_sub_index_count(4, -1, 2, -1, 1), 0);
+    }
+
+    #[test]
+    fn remove_items_edge_cases() {
+        let f = fx();
+        let b = f.b();
+        b.remove_inventory_items_from_index_from_sub_index_count(2, -1, 0);
+        b.remove_inventory_items_from_index_from_sub_index_count(-1, -1, 1);
+        b.remove_inventory_items_from_index_from_sub_index_count(2, -1, 1); // empty slot
+        put(b, 3, vec![mk(APPLE, 0, 0)]);
+        b.remove_inventory_items_from_index_from_sub_index_count(3, 1, 1); // no sub-slots
+        assert_eq!(counts(b)[3], 1);
+        put(b, 4, vec![basket_with(vec![(1, vec![mk(APPLE, 0, 0), mk(APPLE, 0, 0), mk(APPLE, 0, 0)])])]);
+        b.remove_inventory_items_from_index_from_sub_index_count(4, 1, 99);
+        assert!(b.bh.borrow().sub_inventory_changed_this_frame_slots[4][1]);
+    }
+
+    #[test]
+    fn remove_item_in_sub_slots_and_interaction_item() {
+        let f = fx();
+        let b = f.b();
+        // an item in a fifth (flagged as the outer slot) sub-slot of a container
+        let inner = mk(FLINT, 0, 0);
+        let bk = basket_with(vec![]);
+        extra_slot(&bk, vec![inner.clone()]);
+        put(b, 2, vec![bk]);
+        b.remove_item_index_was_used_up(&inner, 2, false);
+        assert!(b.bh.borrow().inventory_changed_this_frame_slots[2]);
+        assert!(b.inv()[2].borrow()[0].borrow().sub_items.as_ref().unwrap()[4].borrow().is_empty());
+        // not found, nil item vs a set interaction item keeps it
+        b.bh.borrow_mut().interaction_item = Some(mk(FLINT, 0, 0));
+        b.remove_item_opt(None, 1, false);
+        assert!(b.bh.borrow().interaction_item.is_some());
+        b.bh.borrow_mut().interaction_item = None;
+        b.remove_item_opt(None, 1, false);
+        assert_eq!(b.bh.borrow().interaction_item_index, -1);
+        // remove_interaction_item takes the queued action's item
+        let a = mk(APPLE, 0, 0);
+        put(b, 3, vec![a.clone()]);
+        *f.ih.action_item.borrow_mut() = Some(a.clone());
+        f.ih.action_index.set(3);
+        b.bh.borrow_mut().action_queue.push(Rc::new(()));
+        b.remove_interaction_item(true);
+        assert_eq!(counts(b)[3], 0);
+    }
+
+    #[test]
+    fn remove_current_item_edge_cases() {
+        let f = fx();
+        let b = f.b();
+        b.remove_current_item(); // nothing selected
+        b.set_selected_tool_index(2);
+        b.remove_current_item(); // empty slot
+        let inner = mk(FLINT, 0, 0);
+        let bk = basket_with(vec![]);
+        extra_slot(&bk, vec![inner]);
+        put(b, 2, vec![bk]);
+        b.set_current_item_to_item_at_index(IntPair { x: 2, y: 4 });
+        b.remove_current_item();
+        assert!(b.bh.borrow().inventory_changed_this_frame_slots[2]);
+        assert!(b.inv()[2].borrow()[0].borrow().sub_items.as_ref().unwrap()[4].borrow().is_empty());
+    }
+
+    #[test]
+    fn interaction_item_availability_in_slots() {
+        let f = fx();
+        let b = f.b();
+        let a = mk(APPLE, 0, 0);
+        put(b, 2, vec![a.clone()]);
+        b.bh.borrow_mut().interaction_item = Some(a);
+        assert!(b.has_interaction_inventory_item_available());
+        let g = mk(FLINT, 0, 0);
+        put(b, 3, vec![basket_with(vec![(1, vec![g.clone()])])]);
+        b.bh.borrow_mut().interaction_item = Some(g);
+        assert!(b.has_interaction_inventory_item_available());
+    }
+
+    fn queue_action(b: &Blockhead) {
+        b.bh.borrow_mut().action_queue.push(Rc::new(()));
+    }
+
+    fn recalc(f: &Fx) -> Option<PathRecalcInfo> {
+        f.b().bh.borrow_mut().path_needs_recalculated = true;
+        f.b().info_for_path_recalculation()
+    }
+
+    fn protect_everything(f: &Fx) {
+        let mut r = f._world.custom_rules();
+        r.custom_rules_enabled = 1;
+        r.world_modifcation = 2;
+        f._world.set_custom_rules(r);
+    }
+
+    #[test]
+    fn recalc_skips_chases_and_riding() {
+        let f = fx();
+        let b = f.b();
+        queue_action(b);
+        b.bh.borrow_mut().state.sub_animation_type = 6;
+        assert_eq!(recalc(&f).unwrap().path_type, pt::FALL);
+        b.bh.borrow_mut().state.sub_animation_type = 0;
+        // the goal tile is not loaded: no answer, the flag stays
+        f.rec.goal_pos.set((5000, 5000));
+        assert!(recalc(&f).is_none());
+        assert!(b.bh.borrow().path_needs_recalculated);
+        f.rec.goal_pos.set((5, 8));
+        // in progress but not chasing: falls
+        f.rec.in_progress.set(true);
+        assert_eq!(recalc(&f).unwrap().path_type, pt::FALL);
+        f.ih.craft_count.set(7);
+        {
+            let mut fl = b.bh.borrow_mut();
+            fl.chasing_npc = true;
+            fl.last_known_npc_position = IntPair { x: 3, y: 4 };
+        }
+        let i = recalc(&f).unwrap();
+        assert_eq!((i.path_type, i.goal), (pt::NPC_CHASE, IntPair { x: 3, y: 4 }));
+        assert_eq!(i.extra.unwrap().int_for_key("craftCountOrExtraData"), 7);
+        {
+            let mut fl = b.bh.borrow_mut();
+            fl.chasing_npc = false;
+            fl.chasing_ride_object = true;
+            fl.last_known_ride_object_position = IntPair { x: 6, y: 2 };
+        }
+        let i = recalc(&f).unwrap();
+        assert_eq!((i.path_type, i.goal), (pt::RIDE_OBJECT_CHASE, IntPair { x: 6, y: 2 }));
+        // not in progress while riding: stops riding and falls
+        b.bh.borrow_mut().chasing_ride_object = false;
+        f.rec.in_progress.set(false);
+        b.bh.borrow_mut().ride_object = Some(stub(1, true));
+        assert_eq!(recalc(&f).unwrap().path_type, pt::FALL);
+        assert_eq!(f.rec.stops.get(), 1);
+        // a ranged weapon keeps going while riding (no NPC to shoot at: no path)
+        f.ih.goal_interaction.set(it::FIRE_RANGED_WEAPON as i32);
+        assert!(recalc(&f).is_none());
+        assert_eq!(f.rec.stops.get(), 1);
+        assert!(!b.bh.borrow().chasing_npc);
+    }
+
+    #[test]
+    fn recalc_item_resolution_before_the_action_starts() {
+        let f = fx();
+        let b = f.b();
+        queue_action(b);
+        f.ih.goal_interaction.set(it::DIG as i32);
+        f.rec.itype.set(it::DIG);
+        f.rec.expected.set((0, 5));
+        let wanted = mk(PICKAXE, 0, 0);
+        *f.ih.action_item.borrow_mut() = Some(wanted.clone());
+        f.ih.action_index.set(2);
+        f.ih.action_sub_index.set(-1);
+        // the good/bad result changed: no path
+        f.rec.gob.set(1);
+        assert!(recalc(&f).is_none());
+        assert!(!b.bh.borrow().path_needs_recalculated);
+        f.rec.gob.set(0);
+        // the item is nowhere: no path
+        assert!(recalc(&f).is_none());
+        // the same item is held: fine
+        put(b, 2, vec![wanted.clone()]);
+        assert_eq!(recalc(&f).unwrap().path_type, 0);
+        assert_eq!(f.ih.item_sets.get(), 0);
+        // another item of the same type is held: the action takes it
+        b.inv()[2].borrow_mut().clear();
+        put(b, 2, vec![mk(PICKAXE, 0, 0)]);
+        assert!(recalc(&f).is_some());
+        assert_eq!(f.ih.item_sets.get(), 1);
+        // the item lives at another index: the action is re-pointed
+        b.inv()[2].borrow_mut().clear();
+        put(b, 5, vec![mk(PICKAXE, 0, 0)]);
+        assert!(recalc(&f).is_some());
+        assert_eq!(f.ih.item_sets.get(), 2);
+        assert_eq!(*f.ih.item_index_sets.borrow(), vec![5]);
+        // the held item is a container whose sub-slot holds it
+        b.inv()[5].borrow_mut().clear();
+        put(b, 4, vec![basket_with(vec![(1, vec![mk(PICKAXE, 0, 0)])])]);
+        f.ih.action_index.set(4);
+        f.ih.action_sub_index.set(1);
+        assert!(recalc(&f).is_some());
+        // an empty sub-slot, and an out-of-range sub-index, resolve to the container itself; the pickaxe
+        // is then found by type inside the container
+        f.ih.action_sub_index.set(2);
+        assert!(recalc(&f).is_some());
+        f.ih.action_sub_index.set(9);
+        assert!(recalc(&f).is_some());
+        // goals that never need the item are not checked
+        f.ih.goal_interaction.set(it::PICKUP as i32);
+        f.rec.itype.set(it::PICKUP);
+        assert!(recalc(&f).is_some());
+        f.ih.goal_interaction.set(it::DIG as i32);
+        f.rec.expected.set((0, 1));
+        f.rec.itype.set(it::DIG);
+        assert!(recalc(&f).is_some());
+        // a missing action item skips the check, as does an item of type zero
+        *f.ih.action_item.borrow_mut() = None;
+        f.rec.expected.set((0, 5));
+        assert!(recalc(&f).is_some());
+    }
+
+    #[test]
+    fn recalc_npc_boat_and_train_branches() {
+        let f = fx();
+        let b = f.b();
+        queue_action(b);
+        f.rec.obj_id.set(9);
+        f.ih.goal_interaction.set(it::STAB as i32);
+        // no such NPC
+        b.bh.borrow_mut().chasing_npc = true;
+        assert!(recalc(&f).is_none());
+        assert!(!b.bh.borrow().chasing_npc);
+        // an NPC that is already being removed
+        let npc = stub(1, true);
+        npc.set_needs_removed(&npc, true);
+        *f.ih.harmable.borrow_mut() = Some(npc.clone());
+        assert!(recalc(&f).is_none());
+        // a live NPC
+        let live = stub(1, true);
+        live.base().borrow_mut().pos = IntPair { x: 11, y: 12 };
+        *f.ih.harmable.borrow_mut() = Some(live.clone());
+        let i = recalc(&f).unwrap();
+        assert_eq!(
+            (i.path_type, i.goal, i.goal_interaction),
+            (pt::NPC_CHASE, IntPair { x: 11, y: 12 }, it::STAB as i32)
+        );
+        assert!(b.bh.borrow().chasing_npc);
+        b.bh.borrow_mut().chasing_npc = false;
+        f.ih.goal_interaction.set(it::INSPECT_NPC as i32);
+        assert!(recalc(&f).is_some());
+        // boats
+        f.ih.goal_interaction.set(it::RIDE_BOAT as i32);
+        f.ih.craft_count.set(3);
+        assert!(recalc(&f).is_none());
+        assert!(!b.bh.borrow().chasing_ride_object);
+        let gone = stub(2, true);
+        gone.set_needs_removed(&gone, true);
+        *f.ih.boat.borrow_mut() = Some(gone);
+        assert!(recalc(&f).is_none());
+        assert!(b.bh.borrow().tapped_ride_object.is_some());
+        let boat = stub(2, true);
+        boat.base().borrow_mut().pos = IntPair { x: 20, y: 21 };
+        *f.ih.boat.borrow_mut() = Some(boat);
+        let i = recalc(&f).unwrap();
+        assert_eq!((i.path_type, i.goal), (pt::RIDE_OBJECT_CHASE, IntPair { x: 20, y: 21 }));
+        assert_eq!(i.extra.unwrap().int_for_key("craftCountOrExtraData"), 3);
+        // train cars
+        f.ih.goal_interaction.set(it::REMOVE_TRAIN_CAR as i32);
+        assert!(recalc(&f).is_none());
+        let car = stub(3, true);
+        car.base().borrow_mut().pos = IntPair { x: 30, y: 31 };
+        *f.ih.train.borrow_mut() = Some(car);
+        assert_eq!(recalc(&f).unwrap().goal, IntPair { x: 30, y: 31 });
+    }
+
+    #[test]
+    fn recalc_plain_branch_acceptance_rules() {
+        let f = fx();
+        let b = f.b();
+        queue_action(b);
+        f.rec.goal_pos.set((6, 9));
+        f.ih.path_type.set(4);
+        f.ih.craft_count.set(2);
+        // NONE skips the interaction check (RIDE never reaches this branch: it chases an NPC)
+        f.ih.goal_interaction.set(it::NONE as i32);
+        let i = recalc(&f).unwrap();
+        assert_eq!((i.goal, i.path_type, i.goal_interaction), (IntPair { x: 6, y: 9 }, 4, it::NONE as i32));
+        // the interaction still matches
+        f.ih.goal_interaction.set(it::DIG as i32);
+        f.rec.itype.set(it::DIG);
+        assert!(recalc(&f).is_some());
+        // the tile now offers something else
+        f.rec.itype.set(it::PICKUP);
+        assert!(recalc(&f).is_none());
+        // accepted substitutions
+        f.rec.itype.set(it::CRAFT);
+        for g in [it::ADD_FUEL, it::DIG, it::DIG_FOREGROUND, it::DIG_BACK_WALL] {
+            f.ih.goal_interaction.set(g as i32);
+            assert!(recalc(&f).is_some(), "craft for {}", g);
+        }
+        f.ih.goal_interaction.set(it::SOW as i32);
+        assert!(recalc(&f).is_none());
+        f.rec.itype.set(it::USE_INTERACTIVE_OBJECT);
+        for g in [it::DIG, it::DIG_FOREGROUND, it::DIG_BACK_WALL] {
+            f.ih.goal_interaction.set(g as i32);
+            assert!(recalc(&f).is_some(), "use for {}", g);
+        }
+        f.ih.goal_interaction.set(it::ADD_FUEL as i32);
+        assert!(recalc(&f).is_none());
+        // CRAFT and RIDE_TRAIN_CAR look at face index zero
+        f.ih.goal_interaction.set(it::CRAFT as i32);
+        f.rec.itype.set(it::CRAFT);
+        assert!(recalc(&f).is_some());
+        f.ih.goal_interaction.set(it::RIDE_TRAIN_CAR as i32);
+        *f.ih.train.borrow_mut() = Some(stub(3, true));
+        assert!(recalc(&f).is_some());
+    }
+
+    #[test]
+    fn recalc_protected_tiles_retry_without_protected_actions() {
+        let f = fx();
+        let b = f.b();
+        queue_action(b);
+        f.ih.goal_interaction.set(it::DIG as i32);
+        f.rec.itype.set(it::DIG);
+        f.rec.itype_prot.set(it::NONE);
+        // nothing protected: the first answer stands
+        assert!(recalc(&f).is_some());
+        protect_everything(&f);
+        // protected: the interaction is asked again with protected actions disallowed
+        assert!(recalc(&f).is_none());
+        f.rec.itype_prot.set(it::DIG);
+        assert!(recalc(&f).is_some());
+        // an interaction that protection does not affect is not asked again
+        f.ih.goal_interaction.set(it::CRAFT as i32);
+        f.rec.itype.set(it::CRAFT);
+        f.rec.itype_prot.set(it::NONE);
+        assert!(recalc(&f).is_some());
+    }
+
+    #[test]
+    fn recalc_extra_data_entries() {
+        let f = fx();
+        let b = f.b();
+        queue_action(b);
+        f.ih.goal_interaction.set(it::USE_INTERACTIVE_OBJECT as i32);
+        f.rec.itype.set(it::USE_INTERACTIVE_OBJECT);
+        f.ih.craft_count.set(4);
+        // no interaction object id: nothing but the count
+        let i = recalc(&f).unwrap();
+        let ex = i.extra.unwrap();
+        assert!(ex.object_for_key("interactionObject").is_none() && ex.object_for_key("workbench").is_none());
+        // an id that resolves to nothing
+        f.rec.obj_id.set(8);
+        assert!(recalc(&f).unwrap().extra.unwrap().object_for_key("interactionObject").is_none());
+        // an id that resolves: interaction object, or workbench when adding fuel
+        let wb = stub(4, true);
+        *f.rec.io.borrow_mut() = Some(wb.clone());
+        let ex = recalc(&f).unwrap().extra.unwrap();
+        assert!(crate::objects::handle::ptr_eq(&ex.object_for_key("interactionObject").unwrap(), &wb));
+        f.ih.goal_interaction.set(it::ADD_FUEL as i32);
+        f.rec.itype.set(it::ADD_FUEL);
+        let ex = recalc(&f).unwrap().extra.unwrap();
+        assert!(crate::objects::handle::ptr_eq(&ex.object_for_key("workbench").unwrap(), &wb));
+        // a craftable item object adds the workbench and the count
+        let c: Rc<dyn Any> = Rc::new(5u8);
+        *f.ih.craftable.borrow_mut() = Some(c);
+        let ex = recalc(&f).unwrap().extra.unwrap();
+        assert!(ex.any_for_key("craftableItemObject").is_some());
+        assert_eq!(ex.int_for_key("count"), 4);
+        // ... but only when the workbench resolves
+        *f.rec.io.borrow_mut() = None;
+        let ex = recalc(&f).unwrap().extra.unwrap();
+        assert!(ex.any_for_key("craftableItemObject").is_none());
+    }
+
+    fn eat(f: &Fx, ty: ItemType, setup: impl Fn(&mut crate::types::structs::BlockheadState)) {
+        let b = f.b();
+        for s in 1..8 {
+            b.inv()[s].borrow_mut().clear();
+        }
+        put(b, 2, vec![mk(ty.0, 0, 0)]);
+        b.set_selected_tool_index(2);
+        setup(&mut b.bh.borrow_mut().state);
+        assert!(!b.use_current_item_if_possible());
+        assert!(b.inv()[2].borrow().is_empty());
+    }
+
+    #[test]
+    fn food_effects_per_kind() {
+        use crate::types::structs::BlockheadState;
+        let f = fx();
+        let b = f.b();
+        let st = |b: &Blockhead| b.bh.borrow().state.clone();
+        let base = |s: &mut BlockheadState| {
+            s.energy = 0.5;
+            s.fullness = 0.1;
+            s.coffee_energy_timer = 0.0;
+        };
+        // coffee cherry: energy +0.1, timer at least 10
+        eat(&f, ItemType::ITEM_COFFEE_CHERRY, base);
+        assert_eq!(st(b).energy, 0.6f32);
+        assert_eq!(st(b).coffee_energy_timer, 10.0);
+        // an already running longer timer stays, and the energy is capped at 2
+        eat(&f, ItemType::ITEM_COFFEE_CHERRY, |s| {
+            base(s);
+            s.energy = 1.95;
+            s.coffee_energy_timer = 20.0;
+        });
+        assert_eq!(st(b).energy, 2.0);
+        assert_eq!(st(b).coffee_energy_timer, 20.0);
+        // chilli heats, kelp lowers the drowning fraction down to its floor
+        eat(&f, ItemType::ITEM_CHILLI, |s| {
+            base(s);
+            s.heat = 1.0;
+        });
+        assert_eq!(st(b).heat, 21.0);
+        eat(&f, ItemType::ITEM_KELP, |s| {
+            base(s);
+            s.drown_fraction = 0.0;
+        });
+        assert_eq!(st(b).drown_fraction, -0.2f32);
+        eat(&f, ItemType::ITEM_KELP, |s| {
+            base(s);
+            s.drown_fraction = 0.9;
+        });
+        assert_eq!(st(b).drown_fraction, 0.9f32 - 0.5f32);
+        // meals that leave their dish behind
+        f.rec.fbs.borrow_mut().clear();
+        eat(&f, ItemType::ITEM_FISH_CURRY, base);
+        assert_eq!(st(b).food_pause_timer, 300.0);
+        eat(&f, ItemType::ITEM_DODO_STEW, base);
+        eat(&f, ItemType::ITEM_COOKED_FISH, base);
+        eat(&f, ItemType::ITEM_MILK_BUCKET, base);
+        let left: Vec<u32> = f.rec.fbs.borrow().iter().map(|x| x.ty).collect();
+        assert_eq!(
+            left,
+            vec![ItemType::ITEM_POT.0, ItemType::ITEM_POT.0, ItemType::ITEM_TIN_FOIL.0, ItemType::ITEM_TIN_BUCKET.0]
+        );
+        // a full stomach saturates at 1.2; an empty-or-negative one starts from zero
+        eat(&f, ItemType::ITEM_APPLE, |s| {
+            base(s);
+            s.fullness = 0.99;
+        });
+        assert_eq!(st(b).fullness, 1.2f32);
+        eat(&f, ItemType::ITEM_APPLE, |s| {
+            base(s);
+            s.fullness = -1.0;
+        });
+        assert!(st(b).fullness > 0.0 && st(b).fullness < 0.5);
+        // an energetic blockhead gets no energy from food
+        eat(&f, ItemType::ITEM_APPLE, |s| {
+            base(s);
+            s.energy = 1.5;
+        });
+        assert_eq!(st(b).energy, 1.5);
+    }
+
+    #[test]
+    fn coffee_in_expert_mode_and_normal_mode() {
+        let f = fx();
+        let b = f.b();
+        let st = |b: &Blockhead| b.bh.borrow().state.clone();
+        eat(&f, ItemType::ITEM_COFFEE_CUP, |s| {
+            s.energy = 0.5;
+            s.heat = 1.0;
+        });
+        assert_eq!((st(b).energy, st(b).heat, st(b).coffee_energy_timer), (2.0, 6.0, 60.0));
+        f._world.set_expert_mode(true);
+        eat(&f, ItemType::ITEM_COFFEE_CUP, |s| {
+            s.energy = 0.5;
+        });
+        assert_eq!(st(b).energy, 1.5);
+        eat(&f, ItemType::ITEM_COFFEE_CUP, |s| {
+            s.energy = 1.8;
+        });
+        assert_eq!(st(b).energy, 2.0);
+        // expert cherries are weaker
+        eat(&f, ItemType::ITEM_COFFEE_CHERRY, |s| {
+            s.energy = 0.5;
+            s.coffee_energy_timer = 0.0;
+        });
+        assert_eq!(st(b).energy, 0.55f32);
+        // and food gives half the energy
+        eat(&f, ItemType::ITEM_APPLE, |s| {
+            s.energy = 0.5;
+        });
+        let n = nourishment_fraction_for_food_type(FoodType::FOOD_APPLE);
+        assert_eq!(st(b).energy, 0.5f32 + 0.1f32 * n);
+    }
+
+    #[test]
+    fn using_cameras_rods_and_clothes() {
+        let f = fx();
+        let b = f.b();
+        // an item that does nothing
+        put(b, 2, vec![mk(FLINT, 0, 0)]);
+        b.set_selected_tool_index(2);
+        assert!(!b.use_current_item_if_possible());
+        assert_eq!(counts(b)[2], 1);
+        // a camera
+        b.inv()[2].borrow_mut().clear();
+        put(b, 2, vec![mk(ItemType::ITEM_CAMERA.0, 0, 0)]);
+        assert!(!b.use_current_item_if_possible());
+        // a fishing rod: only when the host says it can fish
+        b.inv()[2].borrow_mut().clear();
+        put(b, 2, vec![mk(ItemType::ITEM_FISHING_ROD.0, 0, 0)]);
+        assert!(!b.use_current_item_if_possible());
+        assert!(b.bh.borrow().fishing_rod.is_none());
+        f.ih.can_fish.set(true);
+        let ride = stub(1, true);
+        b.set_riding_object(Some(&ride));
+        assert!(!b.use_current_item_if_possible());
+        assert!(b.bh.borrow().fishing_rod.is_some());
+        assert_eq!(b.bh.borrow().interaction_item_index, 2);
+        // already fishing: the cast is stopped through the host and the rod stays
+        assert!(!b.use_current_item_if_possible());
+        assert_eq!(f.rec.fish_stops.get(), 1);
+        // shirt, pants and shoes go to their own groups
+        for (ty, group) in [
+            (ItemType::ITEM_LINEN_SHIRT.0, 2usize),
+            (ItemType::ITEM_LINEN_PANTS.0, 1),
+            (ItemType::ITEM_LEATHER_BOOTS.0, 0),
+        ] {
+            b.inv()[2].borrow_mut().clear();
+            put(b, 2, vec![mk(ty, 0, 0)]);
+            b.set_selected_tool_index(2);
+            b.use_current_item_if_possible();
+            let g = b.bh.borrow().inventory_items[0].borrow()[0].borrow().sub_items.as_ref().unwrap()[group].clone();
+            assert_eq!(g.borrow().len(), 1);
+            assert_eq!(g.borrow()[0].borrow().item_type.0, ty);
+        }
+        b.inventory_was_changed_sub_index_was_usage(0, -1, true);
+        let fl = b.bh.borrow();
+        assert_eq!(
+            (fl.shirt_item_type, fl.pants_item_type, fl.shoes_item_type),
+            (
+                ItemType::ITEM_LINEN_SHIRT.0 as u16,
+                ItemType::ITEM_LINEN_PANTS.0 as u16,
+                ItemType::ITEM_LEATHER_BOOTS.0 as u16
+            )
+        );
+    }
+
+    #[test]
+    fn beds_actions_and_interaction_queries() {
+        let f = fx();
+        let b = f.b();
+        // sleep: no bed, a bed of the wrong object type, soft and gold beds
+        b.sleep_rushed();
+        assert_eq!(b.st().energy, 1.0);
+        let bed = stub(3, true);
+        b.bh.borrow_mut().interaction_object = Some(bed.clone());
+        f.rec.io_type.set(2);
+        b.sleep_rushed();
+        assert_eq!(b.st().energy, 1.0);
+        f.rec.io_type.set(3);
+        f.rec.obj_item.set(ItemType::ITEM_SOFT_BED.0 as i32);
+        b.sleep_rushed();
+        assert_eq!(b.st().energy, 1.5);
+        f.rec.obj_item.set(ItemType::ITEM_GOLD_BED.0 as i32);
+        b.sleep_rushed();
+        assert_eq!(b.st().energy, 2.0);
+        // fishing rod cast: net blockheads ignore it
+        b.fishing_rod_cast(Vector2 { x: 1.0, y: 2.0 });
+        // stopping interaction when the workbench / object is gone
+        {
+            let mut fl = b.bh.borrow_mut();
+            fl.state.interaction_type = it::CRAFT;
+            fl.state.interacting = 1;
+            fl.interaction_workbench = None;
+        }
+        b.stop_interacting_with_interaction_objects_if_no_interaction_object();
+        assert_eq!(b.st().interacting, 0);
+        {
+            let mut fl = b.bh.borrow_mut();
+            fl.state.interaction_type = it::USE_INTERACTIVE_OBJECT;
+            fl.state.interacting = 1;
+            fl.interaction_object = None;
+        }
+        b.stop_interacting_with_interaction_objects_if_no_interaction_object();
+        assert_eq!(b.st().interacting, 0);
+    }
+
+    #[test]
+    fn cancelling_queued_actions() {
+        let f = fx();
+        let b = f.b();
+        queue_action(b);
+        queue_action(b);
+        queue_action(b);
+        f.rec.goal_pos.set((4, 4));
+        let cancel = |pos: IntPair, id: u64, gi: i32, extra: i16| {
+            b.cancel_any_action_at_goal_pos_or_with_interaction_object_id_goal_interaction_craft_count_or_extra_data(
+                pos, id, gi, extra,
+            )
+        };
+        let has = |pos: IntPair, id: u64, gi: i32, extra: i16| {
+            b.has_cancelable_action_at_goal_pos_or_with_interaction_object_id_goal_interaction_craft_count_or_extra_data(
+                pos, id, gi, extra,
+            )
+        };
+        let miss = IntPair { x: 1, y: 1 };
+        let hit = IntPair { x: 4, y: 4 };
+        assert!(!cancel(miss, 0, 0, 0));
+        assert!(!has(miss, 0, 0, 0));
+        // matched by object id
+        f.rec.obj_id.set(7);
+        assert!(has(miss, 7, 0, 0));
+        assert!(!has(miss, 0, 0, 0));
+        // paint requests also need the same count
+        f.ih.craft_count.set(2);
+        assert!(has(hit, 0, it::PAINT as i32, 2));
+        assert!(!has(hit, 0, it::PAINT as i32, 3));
+        assert!(has(hit, 0, it::STRIP_PAINT as i32, 2));
+        assert!(!cancel(hit, 0, it::PAINT as i32, 3));
+        assert_eq!(b.bh.borrow().action_queue.len(), 3);
+        // an action in progress stops the interaction and aborts the path
+        f.rec.in_progress.set(true);
+        {
+            let mut fl = b.bh.borrow_mut();
+            fl.waiting_for_path = true;
+            fl.chasing_npc = true;
+            fl.chasing_ride_object = true;
+        }
+        assert!(cancel(hit, 0, 0, 0));
+        assert!(b.bh.borrow().action_queue.is_empty());
+        assert_eq!(f.rec.aborts.get(), 3);
+        assert!(!b.bh.borrow().waiting_for_path && !b.bh.borrow().chasing_npc);
+    }
+
+    #[test]
+    fn current_item_without_a_container_on_top() {
+        let f = fx();
+        let b = f.b();
+        // selected, but the slot is empty
+        b.set_selected_tool_index(2);
+        assert!(b.current_item().is_none());
+        assert!(b.current_item_slot().unwrap().borrow().is_empty());
+        assert_eq!(b.current_item_sub_index(), -1);
+        b.set_current_item_to_item_at_index(IntPair { x: 3, y: 1 });
+        assert_eq!(b.selected_tool_index(), 3);
+        // a plain item on top: a sub-index changes nothing
+        put(b, 3, vec![mk(APPLE, 0, 0)]);
+        b.set_current_item_to_item_at_index(IntPair { x: 3, y: 1 });
+        assert_eq!(b.current_item_slot().unwrap().borrow().len(), 1);
+        assert_eq!(b.current_item_sub_index(), -1);
+        assert_eq!(b.current_item().unwrap().borrow().item_type.0, APPLE);
+        // a container whose selected sub-slot is empty: the container itself
+        put(b, 4, vec![basket_with(vec![])]);
+        b.set_current_item_to_item_at_index(IntPair { x: 4, y: 3 });
+        assert_eq!(b.current_item().unwrap().borrow().item_type.0, BASKET);
+        b.remove_current_item();
+        assert!(b.inv()[4].borrow().is_empty());
+        // removing from a sub-slot index above three flags the outer slot
+        let bk = basket_with(vec![]);
+        extra_slot(&bk, vec![mk(FLINT, 0, 0)]);
+        put(b, 5, vec![bk]);
+        b.set_current_item_to_item_at_index(IntPair { x: 5, y: 4 });
+        b.remove_current_item();
+        assert!(b.bh.borrow().inventory_changed_this_frame_slots[5]);
+    }
+
+    #[test]
+    fn remove_identical_and_remote_pickup_receipts() {
+        let f = fx();
+        let b = f.b();
+        // directly in an outer slot
+        let a = mk(APPLE, 0, 0);
+        put(b, 2, vec![mk(APPLE, 0, 0), a.clone()]);
+        b.remove_inventory_item_identical_to(&a);
+        assert_eq!(counts(b)[2], 1);
+        assert!(b.bh.borrow().inventory_changed_this_frame_slots[2]);
+        // in the first four entries of a sub-slot of a lone container
+        let g = mk(FLINT, 0, 0);
+        put(b, 3, vec![basket_with(vec![(2, vec![mk(FLINT, 0, 0), g.clone()])])]);
+        b.remove_inventory_item_identical_to(&g);
+        assert!(b.bh.borrow().sub_inventory_changed_this_frame_slots[3][1]);
+        // not found anywhere
+        b.remove_inventory_item_identical_to(&mk(APPLE, 0, 0));
+        // receipts: a rejected pickup removes the item again, an accepted one just forgets it
+        let p = mk(APPLE, 0, 0);
+        put(b, 4, vec![p.clone()]);
+        b.bh.borrow_mut().unconfirmed_pickups = Some(std::collections::BTreeMap::from([(7u64, p.clone())]));
+        b.remote_pickup_request_response(true, &[7]);
+        assert_eq!(counts(b)[4], 1);
+        assert!(b.bh.borrow().unconfirmed_pickups.as_ref().unwrap().is_empty());
+        b.bh.borrow_mut().unconfirmed_pickups = Some(std::collections::BTreeMap::from([(8u64, p.clone())]));
+        b.remote_pickup_request_response(false, &[8, 9]);
+        assert_eq!(counts(b)[4], 0);
+        b.bh.borrow_mut().unconfirmed_pickups = None;
+        b.remote_pickup_request_response(false, &[1]);
+    }
+
+    #[test]
+    fn set_path_without_a_world_ai_and_interacting() {
+        let f = fx();
+        let b = f.b();
+        let goal = 9 + 3 * (f._world.world_width_macro() * 32);
+        // empty WORLD_TAPPED path of an AI blockhead tells the AI
+        f.ih.has_ai.set(true);
+        b.set_path_type_goal_interaction_extra_data(Some(vec![]), 0, 0, None);
+        assert_eq!(f.ih.ai_calls.get(), 1);
+        // an empty chase path stops the interaction
+        b.bh.borrow_mut().state.interacting = 1;
+        b.set_path_type_goal_interaction_extra_data(Some(vec![]), pt::NPC_CHASE, 0, None);
+        assert_eq!(b.st().interacting, 0);
+        // a non-empty tapped path while interacting refreshes the gather animation
+        b.bh.borrow_mut().state.interacting = 1;
+        b.set_path_type_goal_interaction_extra_data(Some(vec![node(goal, 0)]), 0, 1, None);
+        assert_eq!(b.st().interacting, 1);
+        // a blockhead whose world is gone has its goal at the origin
+        let (w2, _dw2, dwref2) = setup();
+        let o2 = new_bh(&w2, &dwref2, 1);
+        drop(w2);
+        let b2 = bh_of(&o2);
+        b2.set_path_type_goal_interaction_extra_data(Some(vec![node(goal, 0)]), 0, 0, None);
+        assert_eq!(b2.bh.borrow().final_goal_square, IntPair { x: 0, y: 0 });
+    }
+
+    #[test]
+    fn waiting_for_path_on_protected_tiles() {
+        let f = fx();
+        let b = f.b();
+        f.rec.itype.set(it::DIG);
+        f.rec.itype_prot.set(it::NONE);
+        b.set_waiting_for_path_to_pos(IntPair { x: 5, y: 8 });
+        assert_eq!(b.bh.borrow().waiting_for_path_interaction_type, it::DIG);
+        protect_everything(&f);
+        b.set_waiting_for_path_to_pos(IntPair { x: 5, y: 8 });
+        assert_eq!(b.bh.borrow().waiting_for_path_interaction_type, it::NONE);
+    }
+
+    #[test]
+    fn idle_wake_cast_and_beds() {
+        let f = fx();
+        let b = f.b();
+        b.bh.borrow_mut().state.sub_animation_type = 7;
+        assert!(b.idle());
+        b.bh.borrow_mut().state.sub_animation_type = 0;
+        b.bh.borrow_mut().state.interacting = 1;
+        b.wake_up();
+        assert_eq!(b.st().interacting, 0);
+        // the clamp works on both ends
+        b.fishing_rod_cast(Vector2 { x: -99999.0, y: 0.0 });
+        assert_eq!(b.bh.borrow().fishing_rod_cast_x, -8000);
+        // net blockheads ignore the cast
+        b.base.borrow_mut().is_net = true;
+        b.fishing_rod_cast(Vector2 { x: 5.0, y: 5.0 });
+        assert_eq!(b.bh.borrow().fishing_rod_cast_x, -8000);
+        // a bed can be used only when tired; anything else always
+        let world: crate::objects::base::WorldRef = f._world.clone();
+        let bed = crate::objects::registry::PlainInteractionObject::init_with_world_dynamic_world_at_position_cache(
+            &world,
+            &f._dwref,
+            IntPair { x: 5, y: 8 },
+            None,
+        )
+        .unwrap();
+        assert!(b.can_use_dynamic_object(&bed));
+        f.rec.io_type.set(3);
+        b.bh.borrow_mut().state.energy = 0.5;
+        assert!(b.can_use_dynamic_object(&bed));
+        b.bh.borrow_mut().state.energy = 0.9;
+        assert!(!b.can_use_dynamic_object(&bed));
+    }
+
+    #[test]
+    fn move_refusals_with_full_containers_and_out_of_range_flags() {
+        let f = fx();
+        let b = f.b();
+        // nothing to move
+        let empty = b.inv()[4].clone();
+        assert_eq!(
+            b.move_inventory_items_from_array_from_index_from_sub_index_to_index_to_sub_index_count_moved_items(
+                &empty, 4, -1, 5, -1, 1, None
+            ),
+            -1
+        );
+        // every sub-slot is taken by another type: no home, and the container itself is not stackable
+        let full: Vec<(usize, Vec<ItemRef>)> = (0..4).map(|i| (i, vec![mk(FLINT, 0, 0)])).collect();
+        put(b, 2, vec![basket_with(full)]);
+        put(b, 3, vec![mk(APPLE, 0, 0)]);
+        assert_eq!(b.move_inventory_items_from_index_from_sub_index_to_index_to_sub_index_count(3, -1, 2, -1, 1), -1);
+        assert_eq!(counts(b)[3], 1);
+        // flags for an out-of-range index are skipped, the item still goes
+        let in_outer = mk(APPLE, 0, 0);
+        put(b, 5, vec![in_outer.clone()]);
+        b.remove_item_index_was_used_up(&in_outer, 9, false);
+        assert_eq!(counts(b)[5], 0);
+        let in_sub = mk(FLINT, 0, 0);
+        put(b, 6, vec![basket_with(vec![(1, vec![in_sub.clone()])])]);
+        b.remove_item_index_was_used_up(&in_sub, 9, false);
+        assert!(b.inv()[6].borrow()[0].borrow().sub_items.as_ref().unwrap()[1].borrow().is_empty());
+    }
+
+    fn bh_without_world() -> (ObjRef, Rc<MockDw>, crate::objects::base::DynamicWorldRef) {
+        let (w, dw, dwref) = setup();
+        let o = new_bh(&w, &dwref, 1);
+        drop(w);
+        (o, dw, dwref)
+    }
+
+    #[test]
+    fn wear_without_a_world_uses_the_default_rules() {
+        let (o2, _dw, _dwref) = bh_without_world();
+        let b2 = bh_of(&o2);
+        let pick = mk(PICKAXE, 0, 0);
+        put(b2, 3, vec![pick.clone()]);
+        b2.increment_usage_of_item_index_to_use_was_attack(&pick, 3, false);
+        assert_eq!(pick.borrow().data_a as i32, usage_increment_per_use(ItemType(PICKAXE), 2, false, false));
+        let hat = mk(117, 0, 0);
+        b2.bh.borrow().inventory_items[0].borrow()[0].borrow().sub_items.as_ref().unwrap()[3]
+            .borrow_mut()
+            .push(hat.clone());
+        b2.increment_usage_of_clothing();
+        assert_eq!(hat.borrow().data_a, 200);
+        assert_eq!(b2.inventory_items().len(), 8);
+    }
+
+    #[test]
+    fn custom_rules_scale_clothing_and_tools() {
+        let f = fx();
+        let b = f.b();
+        let mut r = f._world.custom_rules();
+        r.custom_rules_enabled = 1;
+        r.tool_decay = 3;
+        r.clothing_decay = 3;
+        r.pole_items = 1;
+        f._world.set_custom_rules(r);
+        let pick = mk(PICKAXE, 0, 0);
+        put(b, 3, vec![pick.clone()]);
+        b.increment_usage_of_item_index_to_use_was_attack(&pick, 3, false);
+        assert_eq!(pick.borrow().data_a as i32, usage_increment_per_use(ItemType(PICKAXE), 3, false, false));
+        let hat = mk(117, 0, 0);
+        b.bh.borrow().inventory_items[0].borrow()[0].borrow().sub_items.as_ref().unwrap()[3]
+            .borrow_mut()
+            .push(hat.clone());
+        b.increment_usage_of_clothing();
+        assert_eq!(hat.borrow().data_a, 800);
+    }
+
+    #[test]
+    fn counting_with_queued_actions() {
+        let f = fx();
+        let b = f.b();
+        put(b, 2, vec![mk(APPLE, 0, 0), mk(APPLE, 0, 0)]);
+        put(
+            b,
+            3,
+            vec![basket_with(vec![(1, vec![mk(APPLE, 0, 0); 0]), (2, (0..3).map(|_| mk(APPLE, 0, 0)).collect())])],
+        );
+        put(b, 4, vec![basket_with(vec![(0, vec![mk(FLINT, 0, 0)])])]);
+        let count = |inc| b.count_of_inventory_items_of_type_include_actions(ItemType(APPLE), inc);
+        assert_eq!(count(false), 5);
+        assert_eq!(
+            b.count_of_inventory_items_with_specific_data_b_of_type_data_b_include_actions(ItemType(APPLE), 7, false),
+            0
+        );
+        // pigments: the generic pigment matches every colour
+        put(b, 5, vec![mk(ItemType::ITEM_PIGMENT_GENERIC.0 + 1, 0, 0)]);
+        let _ = b.count_of_inventory_items_of_type_include_actions(ItemType::ITEM_PIGMENT_GENERIC, false);
+        // queued actions add their pending inventory change
+        queue_action(b);
+        f.rec.inv_change.set(Some(4));
+        assert_eq!(count(true), 9);
+        // an action that is running while interacting is already reflected in the inventory ...
+        f.rec.in_progress.set(true);
+        b.bh.borrow_mut().state.interacting = 1;
+        f.rec.inv_change.set(Some(-2));
+        assert_eq!(count(true), 5);
+        // ... unless it adds items
+        f.rec.inv_change.set(Some(4));
+        assert_eq!(count(true), 9);
+        // a craft at a workbench used by this blockhead counts what is left to craft
+        f.ih.goal_interaction.set(it::CRAFT as i32);
+        let wb = stub(4, true);
+        b.bh.borrow_mut().interaction_workbench = Some(wb);
+        f.ih.crafting_type.set(APPLE as i32);
+        f.ih.items_left.set(6);
+        f.rec.inv_change.set(Some(-2));
+        assert_eq!(count(true), 5, "someone else's workbench");
+        *f.rec.wb_current.borrow_mut() = Some(f.o.clone());
+        assert_eq!(count(true), 11);
+        f.ih.crafting_type.set(FLINT as i32);
+        assert_eq!(count(true), 5, "crafting another item");
+        // waiting for the fill response counts like interacting
+        b.bh.borrow_mut().state.interacting = 0;
+        b.bh.borrow_mut().waiting_for_fill_response = true;
+        assert_eq!(count(true), 5);
+        b.bh.borrow_mut().interaction_workbench = None;
+        assert_eq!(count(true), 5);
+    }
+
+    #[test]
+    fn queries_look_into_container_sub_slots() {
+        let f = fx();
+        let b = f.b();
+        // usage multiplier: another stack on top, then a container's sub-slot of the wanted type
+        let worn = mk(PICKAXE, 4096, 0);
+        put(b, 2, vec![mk(FLINT, 0, 0)]);
+        put(b, 3, vec![basket_with(vec![(1, vec![worn.clone()]), (2, vec![mk(FLINT, 0, 0)])])]);
+        assert_eq!(b.usage_multiplier_for_first_item_of_type(ItemType(PICKAXE)), 1.0 - 4096.0 / 16384.0);
+        assert_eq!(b.usage_multiplier_for_first_item_of_type(ItemType(APPLE)), 1.0);
+        assert_eq!(b.inventory_location_of_first_instance_of_item_type(ItemType(PICKAXE)), IntPair { x: 3, y: 1 });
+        assert_eq!(b.inventory_location_of_first_instance_of_item_type(ItemType(APPLE)), IntPair { x: -1, y: -1 });
+        assert_eq!(
+            b.inventory_location_of_first_instance_of_item_type(ItemType::ITEM_PIGMENT_GENERIC),
+            IntPair { x: -1, y: -1 }
+        );
+        // cash in sub-slots
+        put(
+            b,
+            4,
+            vec![basket_with(vec![
+                (0, vec![mk(ItemType::ITEM_GOLD_COIN.0, 0, 0); 0]),
+                (3, vec![mk(ItemType::ITEM_COPPER_COIN.0, 0, 0), mk(ItemType::ITEM_COPPER_COIN.0, 0, 0)]),
+            ])],
+        );
+        assert_eq!(b.total_cash(), 2);
+        // sowables
+        put(b, 5, vec![basket_with(vec![(2, (0..12).map(|_| mk(ItemType::ITEM_FLAX_SEED.0, 0, 0)).collect())])]);
+        assert_eq!(b.sowable_item_for_ai_item_index(), IntPair { x: 5, y: 2 });
+        assert_eq!(b.sowable_item_for_ai_item_type(), ItemType::ITEM_FLAX_SEED);
+        // lights
+        put(b, 6, vec![basket_with(vec![(1, vec![mk(17, 0, 0)])])]);
+        assert_eq!(b.placable_light_for_ai_item_index(), IntPair { x: 6, y: 1 });
+        // food
+        let g = fx();
+        put(g.b(), 7, vec![basket_with(vec![(3, (0..3).map(|_| mk(21, 0, 0)).collect())])]);
+        assert_eq!(g.b().most_common_food_type_index(), IntPair { x: 7, y: 3 });
+    }
+
+    #[test]
+    fn subtract_cash_from_sub_slots() {
+        let f = fx();
+        let b = f.b();
+        let coin = |t: ItemType| mk(t.0, 0, 0);
+        put(
+            b,
+            3,
+            vec![basket_with(vec![
+                (0, vec![coin(ItemType::ITEM_PLATINUM_COIN)]),
+                (1, vec![coin(ItemType::ITEM_COPPER_COIN), coin(ItemType::ITEM_COPPER_COIN)]),
+                (2, vec![coin(ItemType::ITEM_GOLD_COIN)]),
+                (3, vec![mk(FLINT, 0, 0)]),
+            ])],
+        );
+        assert_eq!(b.total_cash(), 10000 + 2 + 100);
+        // 10050 copper: the platinum goes first and 50 copper... are made up from the rest, overpaying
+        assert!(b.subtract_cash(10001));
+        assert!(b.bh.borrow().sub_inventory_changed_this_frame_slots[3][0]);
+        assert_eq!(b.total_cash(), 101);
+        assert!(f.rec.fbs.borrow().is_empty());
+        // paying with the gold coin overpays and gets change back
+        assert!(b.subtract_cash(50));
+        assert_eq!(b.total_cash(), 0);
+        let fbs = f.rec.fbs.borrow().clone();
+        assert_eq!(fbs.len(), 1);
+        assert_eq!(fbs[0].ty, ItemType::ITEM_MONEY.0);
+    }
+
+    fn chest_with(ty: u32, items: &[ItemRef], nested_under_chest: bool) -> ItemRef {
+        let slot = PlistValue::array(items.iter().map(|i| PlistValue::data(i.borrow().save_data())).collect());
+        let slots = PlistValue::array(vec![slot, PlistValue::int(1)]);
+        let mut d = crate::objects::base::new_mutable_dict();
+        if nested_under_chest {
+            let mut inner = crate::objects::base::new_mutable_dict();
+            inner.map.insert("saveItemSlots".to_string(), slots);
+            d.map.insert("chest".to_string(), PlistValue::Dict(inner));
+        } else {
+            d.map.insert("saveItemSlots".to_string(), slots);
+        }
+        InventoryItem::new(ItemType(ty), 0, 0, None, Some(PlistValue::Dict(d)))
+    }
+
+    #[test]
+    fn subtract_items_spills_stored_contents() {
+        let f = fx();
+        let b = f.b();
+        // an item in a container's sub-slot is found there
+        let nested = mk(APPLE, 0, 0);
+        put(b, 2, vec![basket_with(vec![(1, vec![nested])])]);
+        assert_eq!(b.subtract_items_from_inventory_of_type_count(ItemType(APPLE), 1).len(), 1);
+        // chests spill what they hold (time crystals vanish), plain safes too
+        let stored = [mk(FLINT, 0, 0), mk(11, 0, 0)];
+        put(b, 3, vec![chest_with(206, &stored, true)]);
+        put(b, 4, vec![chest_with(207, &stored, false)]);
+        put(b, 5, vec![InventoryItem::new(ItemType(161), 0, 0, None, None)]);
+        for t in [206u32, 207, 161] {
+            let r = b.subtract_items_from_inventory_of_type_count(ItemType(t), 1);
+            assert_eq!(r.len(), 1, "type {}", t);
+        }
+        let spilled: Vec<u32> = f.rec.fbs.borrow().iter().map(|x| x.ty).collect();
+        assert_eq!(spilled, vec![FLINT, FLINT]);
+        // a chest whose save dict has no slots
+        let empty = InventoryItem::new(ItemType(206), 0, 0, None, Some(PlistValue::mutable_dict()));
+        put(b, 6, vec![empty]);
+        assert_eq!(b.subtract_items_from_inventory_of_type_count(ItemType(206), 1).len(), 1);
+        assert_eq!(f.rec.fbs.borrow().len(), 2);
+    }
+
+    #[test]
+    fn tool_wear_special_cases() {
+        let f = fx();
+        let b = f.b();
+        // a fishing rod that is not out: no wear
+        let rod = mk(ItemType::ITEM_FISHING_ROD.0, 0, 0);
+        put(b, 2, vec![rod.clone()]);
+        b.increment_usage_of_item_index_to_use_was_attack(&rod, 2, false);
+        assert_eq!(rod.borrow().data_a, 0);
+        // decay rule 0: no wear
+        let mut r = f._world.custom_rules();
+        r.custom_rules_enabled = 1;
+        r.tool_decay = 0;
+        f._world.set_custom_rules(r);
+        let pick = mk(PICKAXE, 0, 0);
+        put(b, 3, vec![pick.clone()]);
+        b.increment_usage_of_item_index_to_use_was_attack(&pick, 3, false);
+        assert_eq!(pick.borrow().data_a, 0);
+        r.custom_rules_enabled = 0;
+        f._world.set_custom_rules(r);
+        // an index outside the flag arrays still wears the tool
+        b.increment_usage_of_item_index_to_use_was_attack(&pick, 9, false);
+        assert!(pick.borrow().data_a > 0);
+        // the interaction item and index come from the first queued action
+        queue_action(b);
+        *f.ih.action_item.borrow_mut() = Some(pick.clone());
+        f.ih.action_index.set(3);
+        let before = pick.borrow().data_a;
+        b.increment_usage_of_interaction_item(true);
+        assert!(pick.borrow().data_a > before);
+        b.increment_passive_item_usage();
+        *f.ih.action_item.borrow_mut() = None;
+        let now = pick.borrow().data_a;
+        b.increment_usage_of_interaction_item(false);
+        assert_eq!(pick.borrow().data_a, now);
+    }
+
+    #[test]
+    fn used_up_paint_leaves_a_bucket_and_hands_over_to_the_next_stack() {
+        let f = fx();
+        let b = f.b();
+        let paint = |a: u16| mk(ItemType::ITEM_PAINT.0, a, 3);
+        // no queued action: the interaction just stops
+        let p1 = paint(0x3fff);
+        put(b, 2, vec![p1.clone()]);
+        b.bh.borrow_mut().interaction_item = Some(p1.clone());
+        b.bh.borrow_mut().state.interacting = 1;
+        b.bh.borrow_mut().state.interacting_square = IntPair { x: 7, y: 7 };
+        b.increment_usage_of_item_index_to_use_was_attack(&p1, 2, false);
+        assert_eq!(b.st().interacting, 0);
+        assert_eq!(f.rec.fbs.borrow().last().unwrap().ty, ItemType::ITEM_TIN_BUCKET.0);
+        assert_eq!(f.rec.fbs.borrow().last().unwrap().pos, (7, 7));
+        // a queued action whose item slot is empty: stop
+        queue_action(b);
+        let p2 = paint(0x3fff);
+        put(b, 3, vec![p2.clone()]);
+        *f.ih.action_item.borrow_mut() = Some(p2.clone());
+        f.ih.action_index.set(3);
+        b.bh.borrow_mut().state.interacting = 1;
+        f.ih.action_sub_index.set(0);
+        let slot4 = b.inv()[4].clone();
+        assert!(slot4.borrow().is_empty());
+        f.ih.action_index.set(3);
+        // the used-up paint leaves slot 3 empty, so the action has nothing to continue with
+        b.increment_usage_of_item_index_to_use_was_attack(&p2, 3, false);
+        assert_eq!(b.st().interacting, 0);
+        // the same type is waiting in another stack: the action continues with it
+        let p3 = paint(0x3fff);
+        let spare = paint(5);
+        put(b, 3, vec![spare.clone(), p3.clone()]);
+        *f.ih.action_item.borrow_mut() = Some(p3.clone());
+        b.bh.borrow_mut().interaction_item = Some(p3.clone());
+        b.bh.borrow_mut().state.interacting = 1;
+        *f.ih.action_item.borrow_mut() = Some(p3.clone());
+        b.increment_usage_of_item_index_to_use_was_attack(&p3, 3, false);
+        assert_eq!(f.ih.item_sets.get(), 1);
+        assert_eq!(b.st().interacting, 1);
+        // the same type found inside a container's sub-slot
+        let p4 = paint(0x3fff);
+        let inner = paint(7);
+        put(b, 5, vec![basket_with(vec![(2, vec![inner.clone()])])]);
+        put(b, 6, vec![p4.clone()]);
+        *f.ih.action_item.borrow_mut() = Some(p4.clone());
+        b.bh.borrow_mut().interaction_item = Some(p4.clone());
+        f.ih.action_index.set(5);
+        f.ih.action_sub_index.set(2);
+        b.increment_usage_of_item_index_to_use_was_attack(&p4, 6, false);
+        assert_eq!(f.ih.item_sets.get(), 2);
+        // a paint stripper also leaves a bucket; other tools do not
+        let strip = mk(ItemType::ITEM_PAINT_STRIPPER.0, 0x3fff, 0);
+        put(b, 7, vec![strip.clone()]);
+        b.bh.borrow_mut().interaction_item = Some(strip.clone());
+        *f.ih.action_item.borrow_mut() = Some(strip.clone());
+        f.ih.action_index.set(7);
+        let buckets = f.rec.fbs.borrow().len();
+        b.increment_usage_of_item_index_to_use_was_attack(&strip, 7, false);
+        assert_eq!(f.rec.fbs.borrow().len(), buckets + 1);
+    }
+
+    #[test]
+    fn clothing_wear_edge_cases() {
+        let f = fx();
+        let b = f.b();
+        let cont = b.inv()[0].borrow()[0].clone();
+        // a fifth clothing group is flagged on the outer slot
+        extra_slot(&cont, vec![mk(117, 0, 0)]);
+        extra_slot(&cont, vec![]);
+        let subs = cont.borrow().sub_items.clone().unwrap();
+        b.increment_usage_of_clothing();
+        assert!(b.bh.borrow().inventory_usage_changed_this_frame_slots[0]);
+        subs[4].borrow()[0].borrow_mut().data_a = 0x3f80;
+        b.increment_usage_of_clothing();
+        assert!(subs[4].borrow().is_empty());
+        // ice gear and armour that wear out
+        subs[0].borrow_mut().push(mk(198, 0x3fff, 0));
+        b.bh.borrow_mut().current_temperature = 60.0;
+        b.increment_usage_of_ice_clothing();
+        assert!(subs[0].borrow().is_empty());
+        subs[1].borrow_mut().push(mk(ItemType::ITEM_IRON_PANTS.0, 0x3fff, 0));
+        b.increment_damage_of_armor_clothing(1.0);
+        assert!(subs[1].borrow().is_empty());
+        // jetpack fuel in the fifth group flags the outer slot
+        subs[4].borrow_mut().push(mk(ItemType::ITEM_JETPACK.0, 0, 0));
+        b.bh.borrow_mut().inventory_changed_this_frame_slots = [false; 8];
+        b.increment_fuel_usage();
+        assert!(b.bh.borrow().inventory_changed_this_frame_slots[0]);
+        // no clothing container at all: nothing happens
+        b.inv()[0].borrow_mut().clear();
+        b.increment_usage_of_clothing();
+        b.increment_usage_of_ice_clothing();
+        b.increment_damage_of_armor_clothing(1.0);
+        b.increment_fuel_usage();
+        // no inventory
+        b.bh.borrow_mut().inventory_items.clear();
+        b.increment_usage_of_clothing();
+    }
+
+    #[test]
+    fn location_scans_skip_multi_item_stacks_and_find_tools_in_containers() {
+        let f = fx();
+        let b = f.b();
+        b.set_current_item_to_item_at_index(IntPair { x: -1, y: 2 });
+        assert_eq!(b.selected_tool_index(), 0);
+        // a stack of two other items is passed over
+        put(b, 1, vec![mk(FLINT, 0, 0), mk(FLINT, 0, 0)]);
+        assert_eq!(b.inventory_location_of_first_instance_of_item_type(ItemType(APPLE)), IntPair { x: -1, y: -1 });
+        // a good tool for glass inside a container, behind a plain item
+        let world = f._world.clone();
+        let tile = tile_at_world_position_loaded(5, 8, &world).unwrap();
+        tile.set_type_index(24);
+        put(b, 2, vec![mk(APPLE, 0, 0)]);
+        assert_eq!(b.item_index_with_good_interaction_type_for_tile(&tile), IntPair { x: -1, y: -1 });
+        put(b, 3, vec![basket_with(vec![(1, vec![mk(FLINT, 0, 0)]), (2, vec![mk(PICKAXE, 0, 0)])])]);
+        assert_eq!(b.item_index_with_good_interaction_type_for_tile(&tile), IntPair { x: 3, y: 2 });
+        put(b, 4, vec![mk(PICKAXE, 0, 0)]);
+        assert_eq!(b.item_index_with_good_interaction_type_for_tile(&tile), IntPair { x: 3, y: 2 });
+        b.inv()[3].borrow_mut().clear();
+        assert_eq!(b.item_index_with_good_interaction_type_for_tile(&tile), IntPair { x: 4, y: -1 });
+    }
+
+    #[test]
+    fn wear_out_of_other_tools_and_warm_ice_gear() {
+        let f = fx();
+        let b = f.b();
+        // a tool that is used up but is not the interaction item just disappears
+        let pick = mk(PICKAXE, 0x3fff, 0);
+        put(b, 2, vec![pick.clone()]);
+        b.increment_usage_of_item_index_to_use_was_attack(&pick, 2, false);
+        assert!(b.inv()[2].borrow().is_empty());
+        // ice gear does not wear in the cold-free case
+        let boots = mk(198, 7, 0);
+        let subs = b.inv()[0].borrow()[0].borrow().sub_items.clone().unwrap();
+        subs[0].borrow_mut().push(boots.clone());
+        b.bh.borrow_mut().current_temperature = 0.0;
+        b.increment_usage_of_ice_clothing();
+        assert_eq!(boots.borrow().data_a, 7);
+        // the container of a used-up interaction item holds an empty sub-slot: stop
+        queue_action(b);
+        let paint = mk(ItemType::ITEM_PAINT.0, 0x3fff, 0);
+        put(b, 3, vec![paint.clone()]);
+        put(b, 4, vec![basket_with(vec![])]);
+        *f.ih.action_item.borrow_mut() = Some(paint.clone());
+        f.ih.action_index.set(4);
+        f.ih.action_sub_index.set(1);
+        b.bh.borrow_mut().state.interacting = 1;
+        b.increment_usage_of_item_index_to_use_was_attack(&paint, 3, false);
+        assert_eq!(b.st().interacting, 0);
+    }
+
+    fn full_except(b: &Blockhead, slot: usize) {
+        fill_all_other_slots(b, slot, 30);
+    }
+
+    fn can_pick(b: &Blockhead, t: u32, a: u16, db: u16) -> i32 {
+        b.can_pick_up_item_of_type_sub_items_data_a_data_b(ItemType(t), None, a, db)
+    }
+
+    #[test]
+    fn money_only_stacks_onto_matching_coins() {
+        let f = fx();
+        let b = f.b();
+        let money = ItemType::ITEM_MONEY.0;
+        full_except(b, 2);
+        for (coin, accepts, rejects) in [
+            (ItemType::ITEM_PLATINUM_COIN, (1u16, 0u16), (0u16, 50u16)),
+            (ItemType::ITEM_GOLD_COIN, (0, 100), (0, 99)),
+            (ItemType::ITEM_COPPER_COIN, (0, 1), (0, 0)),
+        ] {
+            b.inv()[2].borrow_mut().clear();
+            put(b, 2, (0..5).map(|_| mk(coin.0, 0, 0)).collect());
+            assert_eq!(can_pick(b, money, accepts.0, accepts.1), 1, "{:?} accepts", coin);
+            assert_eq!(can_pick(b, money, rejects.0, rejects.1), -1, "{:?} rejects", coin);
+        }
+        // a stack of money piles, or of a different non-coin, never takes more money
+        b.inv()[2].borrow_mut().clear();
+        put(b, 2, vec![mk(money, 1, 1)]);
+        assert_eq!(can_pick(b, money, 1, 1), -1);
+        // the same inside a carried container
+        b.inv()[2].borrow_mut().clear();
+        let subs: Vec<(usize, Vec<ItemRef>)> = vec![
+            (0, vec![mk(FLINT, 0, 0)]),
+            (1, vec![mk(ItemType::ITEM_GOLD_COIN.0, 0, 0)]),
+            (2, (0..99).map(|_| mk(STICK, 0, 0)).collect()),
+            (3, vec![mk(money, 0, 0)]),
+        ];
+        put(b, 2, vec![basket_with(subs)]);
+        assert_eq!(can_pick(b, money, 0, 100), 1);
+        assert_eq!(can_pick(b, money, 0, 5), -1);
+        // plain items stack inside the container too, but not onto a full sub-slot
+        assert_eq!(can_pick(b, FLINT, 0, 0), 1);
+        assert_eq!(can_pick(b, STICK, 0, 0), -1);
+    }
+
+    #[test]
+    fn carried_containers_pick_up_over_loose_stacks() {
+        let f = fx();
+        let b = f.b();
+        full_except(b, 2);
+        put(b, 2, (0..5).map(|_| mk(FLINT, 0, 0)).collect());
+        let offer = |subs: Option<&[SubSlot]>| b.can_pick_up_item_of_type_sub_items(ItemType(BASKET), subs);
+        // no contents known, or no sub-slots, or an empty one
+        assert_eq!(offer(None), 1);
+        assert_eq!(offer(Some(&[])), 1);
+        let empty: SubSlot = Rc::new(RefCell::new(Vec::new()));
+        assert_eq!(offer(Some(&[empty.clone()])), 1);
+        // a sub-slot of the same item that has room for the loose stack
+        let flints = |n: usize| -> SubSlot { Rc::new(RefCell::new((0..n).map(|_| mk(FLINT, 0, 0)).collect())) };
+        assert_eq!(offer(Some(&[flints(3)])), 1);
+        assert_eq!(offer(Some(&[flints(94)])), 1);
+        assert_eq!(offer(Some(&[flints(95)])), -1);
+        assert_eq!(offer(Some(&[flints(99), Rc::new(RefCell::new(vec![mk(STICK, 0, 0)]))])), -1);
+        // paints of different colours do not join
+        b.inv()[2].borrow_mut().clear();
+        put(b, 2, vec![mk(ItemType::ITEM_PAINT.0, 0, 1)]);
+        let paint = |c: u16| -> SubSlot { Rc::new(RefCell::new(vec![mk(ItemType::ITEM_PAINT.0, 0, c)])) };
+        assert_eq!(offer(Some(&[paint(2)])), -1);
+        assert_eq!(offer(Some(&[paint(1)])), 1);
+    }
+
+    fn credit_crystals(n: i32) {
+        use crate::foundation::md5::string_from_md5;
+        let cm = crate::env::crystal_manager::CrystalManager::instance();
+        let total = cm.amount() + n;
+        cm.modify_modify_string(-n, &string_from_md5(&format!("7acfe93afc08c{}65ae2c54ecaf07f", total + 0x49)));
+    }
+
+    #[test]
+    fn warp_check_world_caps_and_required_food() {
+        let f = fx();
+        let b = f.b();
+        // no world
+        let (o2, _dw2, _dwref2) = bh_without_world();
+        assert!(!bh_of(&o2).check_if_can_warp_in_second_blockhead_after_item_added_data_b(ItemType(APPLE), 0));
+        *f._world.distance_ordered_food_types.borrow_mut() = vec![0; 5];
+        put(b, 1, (0..5).map(|_| mk(APPLE, 0, 0)).collect());
+        let mut r = f._world.custom_rules();
+        // a cap of zero allows no further blockhead
+        r.custom_rules_enabled = 1;
+        r.max_blockheads = 0;
+        f._world.set_custom_rules(r);
+        assert!(!b.check_if_can_warp_in_second_blockhead_after_item_added_data_b(ItemType(APPLE), 0));
+        // caps above five count as five, lower caps as given
+        r.max_blockheads = 9;
+        f._world.set_custom_rules(r);
+        assert!(!b.check_if_can_warp_in_second_blockhead_after_item_added_data_b(ItemType(APPLE), 0));
+        r.max_blockheads = 3;
+        f._world.set_custom_rules(r);
+        // not the food that is asked for
+        assert!(!b.check_if_can_warp_in_second_blockhead_after_item_added_data_b(ItemType::ITEM_MANGO, 0));
+        // right food but too few crystals
+        assert!(!b.check_if_can_warp_in_second_blockhead_after_item_added_data_b(ItemType(APPLE), 0));
+        credit_crystals(50);
+        assert!(b.check_if_can_warp_in_second_blockhead_after_item_added_data_b(ItemType(APPLE), 0));
+    }
+
+    #[test]
+    fn warp_check_crystal_price_grows_with_blockheads() {
+        let f = fx();
+        let b = f.b();
+        *f._world.distance_ordered_food_types.borrow_mut() = vec![0; 5];
+        put(b, 1, (0..5).map(|_| mk(APPLE, 0, 0)).collect());
+        credit_crystals(100);
+        // two blockheads cost 100, three and four cost 200
+        f._dw.bhs.borrow_mut().extend([stub(1, true), stub(1, true)]);
+        assert!(b.check_if_can_warp_in_second_blockhead_after_item_added_data_b(ItemType(APPLE), 0));
+        f._dw.bhs.borrow_mut().push(stub(1, true));
+        assert!(!b.check_if_can_warp_in_second_blockhead_after_item_added_data_b(ItemType(APPLE), 0));
+        f._dw.bhs.borrow_mut().push(stub(1, true));
+        assert!(!b.check_if_can_warp_in_second_blockhead_after_item_added_data_b(ItemType(APPLE), 0));
+        credit_crystals(100);
+        assert!(b.check_if_can_warp_in_second_blockhead_after_item_added_data_b(ItemType(APPLE), 0));
+    }
+
+    #[test]
+    fn pickup_ownership_fallback_keys_and_priority() {
+        let f = fx();
+        let b = f.b();
+        let owned = |ty: u32, key: &str| {
+            let mut d = fb_data(ty, 0, 0);
+            let mut sd = crate::objects::base::new_mutable_dict();
+            sd.map.insert(key.to_string(), PlistValue::string("someone"));
+            d.dynamic_object_save_dict = Some(PlistValue::Dict(sd));
+            d.priority_blockhead = Some(f.o.clone());
+            d
+        };
+        // another player's trading post, safe and display cabinet stay where they are (admins excepted)
+        f._world.set_is_admin(false);
+        for (ty, key) in [
+            (ItemType::ITEM_TRADING_POST.0, "sellerClientID"),
+            (ItemType::ITEM_SAFE.0, "safeClientID"),
+            (ItemType::ITEM_DISPLAY_CABINET.0, "safeClientID"),
+        ] {
+            let before = f.ih.cannot_pickup.get();
+            *f.ih.fb.borrow_mut() = Some(owned(ty, key));
+            assert!(!b.pickup_freeblock_if_possible_in_tile_intentional(&stub(0, true), None, false), "{}", ty);
+            assert_eq!(f.ih.cannot_pickup.get(), before + 1);
+        }
+        // a key the item does not use is no owner at all
+        *f.ih.fb.borrow_mut() = Some(owned(ItemType::ITEM_SAFE.0, "sellerClientID"));
+        assert!(b.pickup_freeblock_if_possible_in_tile_intentional(&stub(0, true), None, false));
+        // no world
+        let (o2, _dw2, _dwref2) = bh_without_world();
+        assert!(!bh_of(&o2).pickup_freeblock_if_possible_in_tile_intentional(&stub(0, true), None, true));
+        // a full inventory leaves the item and tells the free block
+        full_except(b, 0);
+        let before = f.ih.cannot_pickup.get();
+        let mut d = fb_data(FLINT + 100, 0, 0);
+        d.priority_blockhead = Some(f.o.clone());
+        *f.ih.fb.borrow_mut() = Some(d);
+        assert!(!b.pickup_freeblock_if_possible_in_tile_intentional(&stub(0, true), None, true));
+        assert_eq!(f.ih.cannot_pickup.get(), before + 1);
+    }
+
+    #[test]
+    fn pickup_events_requests_and_unconfirmed_items() {
+        let f = fx();
+        let b = f.b();
+        // a blockhead controlled by the server reports a "got" simulation event
+        b.bh.borrow_mut().is_client_blockhead_being_controlled_by_server = true;
+        b.bh.borrow_mut().this_frame_pickup_requests = Some(crate::foundation::indexset::IndexSet::new());
+        b.bh.borrow_mut().unconfirmed_pickups = Some(std::collections::BTreeMap::new());
+        let fb = stub(0, true);
+        *f.ih.fb.borrow_mut() = Some(fb_data(APPLE, 0, 0));
+        assert!(b.pickup_freeblock_if_possible_in_tile_intentional(&fb, None, true));
+        assert_eq!(*f.rec.sims.borrow(), vec![2]);
+        let id = fb.unique_id();
+        assert!(b.bh.borrow().this_frame_pickup_requests.as_ref().unwrap().contains_index(id));
+        assert!(b.bh.borrow().unconfirmed_pickups.as_ref().unwrap().contains_key(&id));
+        // a time crystal is not an inventory item and stays on the ground
+        let fb2 = stub(0, true);
+        *f.ih.fb.borrow_mut() = Some(fb_data(11, 0, 0));
+        assert!(!b.pickup_freeblock_if_possible_in_tile_intentional(&fb2, None, true));
+        assert!(!fb2.needs_removed());
+        // money is reported too
+        let fb3 = stub(0, true);
+        *f.ih.fb.borrow_mut() = Some(fb_data(ItemType::ITEM_MONEY.0, 0, 5));
+        assert!(b.pickup_freeblock_if_possible_in_tile_intentional(&fb3, None, true));
+        assert!(b.bh.borrow().this_frame_pickup_requests.as_ref().unwrap().contains_index(fb3.unique_id()));
+    }
+
+    #[test]
+    fn money_pickup_stops_at_each_coin_kind_when_full() {
+        let f = fx();
+        let b = f.b();
+        put(b, 1, (0..98).map(|_| mk(ItemType::ITEM_PLATINUM_COIN.0, 0, 0)).collect());
+        fill_all_other_slots(b, 1, 100);
+        let fb = stub(0, true);
+        *f.ih.fb.borrow_mut() = Some(fb_data(ItemType::ITEM_MONEY.0, 3, 250));
+        assert!(b.pickup_freeblock_if_possible_in_tile_intentional(&fb, None, true));
+        assert_eq!(counts(b)[1], 99);
+        let fbs = f.rec.fbs.borrow().clone();
+        assert_eq!(fbs.len(), 1);
+        assert_eq!((fbs[0].ty, fbs[0].pos), (ItemType::ITEM_MONEY.0, (5, 9)));
+        // two platinum pieces that did not fit: 20_000 + 250 copper left over
+        assert_eq!((fbs[0].a, fbs[0].b), (2, 250));
     }
 }

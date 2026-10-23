@@ -648,10 +648,7 @@ impl Blockhead {
             };
             let n = std::cmp::min(lowest as i32, remaining);
             for _ in 0..n {
-                let item = match slot_last(&sel) {
-                    Some(i) => i,
-                    None => break,
-                };
+                let Some(item) = slot_last(&sel) else { break };
                 self.item_will_be_removed_from_inventory(&item);
                 let (ity, da, db) = {
                     let b = item.borrow();
@@ -793,10 +790,8 @@ impl Blockhead {
                         let c = cur.clone().expect("non-empty");
                         if !super::inventory_model::sub_slots_of(&c).is_empty() {
                             let sub = sub_slot_at(&c, ih.action_interaction_item_sub_index(&a) as i16 as i64);
-                            if let Some(sub) = sub {
-                                if !sub.borrow().is_empty() {
-                                    cur = slot_last(&sub);
-                                }
+                            if let Some(sub) = sub.filter(|s| !s.borrow().is_empty()) {
+                                cur = slot_last(&sub);
                             }
                         }
                     }
