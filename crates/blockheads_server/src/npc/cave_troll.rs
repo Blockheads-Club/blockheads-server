@@ -2543,10 +2543,15 @@ pub(crate) mod test_support {
         pub world: Rc<World>,
         pub bhs: RefCell<Vec<ObjRef>>,
         pub doors: RefCell<Vec<(IntPair, bool, i32)>>,
+        /// `[dynamicWorld isClient]`
+        pub client: Cell<bool>,
     }
     impl crate::npc::npc::NpcEnvStub for TestEnv {
         fn world(&self) -> Option<Rc<World>> {
             Some(self.world.clone())
+        }
+        fn is_client(&self) -> bool {
+            self.client.get()
         }
         fn all_blockheads_including_net(&self) -> Vec<ObjRef> {
             self.bhs.borrow().clone()
@@ -2567,8 +2572,28 @@ pub(crate) mod test_support {
         pub npc_at: Cell<bool>,
         pub babies: RefCell<Vec<(IntPair, i32)>>,
         pub sim_events: RefCell<Vec<String>>,
+        /// Blockhead ids the stand-in answers `paused` / `regenerating` / `onTradeMission` / not `shouldContinueSimulating` for.
+        pub paused: Cell<Option<u64>>,
+        pub regen: Cell<Option<u64>>,
+        pub trade: Cell<Option<u64>>,
+        pub nosim: Cell<Option<u64>>,
     }
     impl HostileHostStub for TestHost {
+        fn bh_paused(&self, b: &ObjRef) -> bool {
+            Some(b.unique_id()) == self.paused.get()
+        }
+        fn bh_regenerating(&self, b: &ObjRef) -> bool {
+            Some(b.unique_id()) == self.regen.get()
+        }
+        fn bh_on_trade_mission(&self, b: &ObjRef) -> bool {
+            Some(b.unique_id()) == self.trade.get()
+        }
+        fn bh_should_continue_simulating(&self, b: &ObjRef) -> bool {
+            match self.nosim.get() {
+                Some(id) => b.unique_id() != id,
+                None => HostileHost::bh_should_continue_simulating(&DefaultHost, b),
+            }
+        }
         fn world(&self) -> Option<Rc<World>> {
             Some(self.world.clone())
         }
@@ -2630,7 +2655,12 @@ pub(crate) mod test_support {
             blockheads: RefCell::new(vec![]),
         });
         let dwr: DynamicWorldRef = dw.clone();
-        let env = Rc::new(TestEnv { world: world.clone(), bhs: RefCell::new(vec![]), doors: RefCell::new(vec![]) });
+        let env = Rc::new(TestEnv {
+            world: world.clone(),
+            bhs: RefCell::new(vec![]),
+            doors: RefCell::new(vec![]),
+            client: Cell::new(false),
+        });
         set_npc_env(env.clone());
         let host = Rc::new(TestHost {
             world: world.clone(),
@@ -2643,6 +2673,10 @@ pub(crate) mod test_support {
             npc_at: Cell::new(false),
             babies: RefCell::new(vec![]),
             sim_events: RefCell::new(vec![]),
+            paused: Cell::new(None),
+            regen: Cell::new(None),
+            trade: Cell::new(None),
+            nosim: Cell::new(None),
         });
         set_hostile_host(host.clone());
         glibc_rand::srand(1);
