@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use base64::Engine;
 
 use crate::client::{Client, ClientConfig, NetEvent, Rx};
-use crate::trace::{to_hex, TraceSink};
+use crate::trace::TraceSink;
 
 /// Single place to adapt names of the lower modules.
 mod deps {
@@ -843,7 +843,7 @@ impl Session {
     /// 0x0a / 0x0b / 0x0c / 0x45.
     pub fn send_object_batch(&mut self, kind: BatchKind, object_type: u8, blobs: &[Vec<u8>]) -> Res<()> {
         let p = object_batches::encode_client_batch(kind, object_type, blobs)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "plist encode failed"))?;
+            .ok_or(io::Error::new(io::ErrorKind::InvalidData, "plist encode failed"))?;
         self.client.send(&p)
     }
 
@@ -1015,14 +1015,10 @@ impl Session {
     }
 }
 
-#[allow(dead_code)]
-fn _hex(b: &[u8]) -> String {
-    to_hex(b)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::trace::to_hex;
     use blockheads_server::types::netdata::BlockheadCreationData;
 
     /// U3.

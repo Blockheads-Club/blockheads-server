@@ -71,6 +71,11 @@ fn enet_err<E: std::fmt::Debug>(what: &str, e: E) -> io::Error {
     io::Error::new(io::ErrorKind::Other, format!("{what}: {e:?}"))
 }
 
+/// Queue the CONNECT to `cfg.addr` on a free peer slot.
+fn start_connect(host: &mut enet::Host<UdpSocket>, cfg: &ClientConfig) -> io::Result<enet::PeerID> {
+    Ok(host.connect(cfg.addr, cfg.channels, cfg.connect_data).map_err(|e| enet_err("connect", e))?.id())
+}
+
 impl Client {
     /// Bind, send CONNECT and wait for VERIFY_CONNECT (`NetEvent::Connected` is queued).
     pub fn connect(cfg: ClientConfig) -> io::Result<Client> {
@@ -79,7 +84,7 @@ impl Client {
         let settings = enet::HostSettings { peer_limit: 1, channel_limit: cfg.channels, ..Default::default() };
         let mut host = enet::Host::new(socket, settings).map_err(|e| enet_err("Host::new", e))?;
         let t0 = Instant::now();
-        let peer = host.connect(cfg.addr, cfg.channels, cfg.connect_data).map_err(|e| enet_err("connect", e))?.id();
+        let peer = start_connect(&mut host, &cfg)?;
         let mut c =
             Client { host, peer, cfg, t0, queue: VecDeque::new(), trace: None, label: String::new(), connected: false };
         let deadline = Instant::now() + Duration::from_millis(c.cfg.connect_timeout_ms);
@@ -88,7 +93,8 @@ impl Client {
             if c.connected {
                 break;
             }
-            if c.queue.iter().any(|e| matches!(e, NetEvent::Disconnected { .. })) || Instant::now() >= deadline {
+            // before the connection is up the only event that can be queued is a refusal
+            if !c.queue.is_empty() || Instant::now() >= deadline {
                 return Err(io::Error::new(io::ErrorKind::TimedOut, format!("ENet connect to {} failed", c.cfg.addr)));
             }
             std::thread::sleep(Duration::from_millis(1));
@@ -119,11 +125,8 @@ impl Client {
     /// Service the host until no event is pending (non-blocking).
     pub fn pump(&mut self) -> io::Result<()> {
         loop {
-            let ev = match self.host.service() {
-                Ok(Some(ev)) => ev.no_ref(),
-                Ok(None) => break,
-                Err(e) => return Err(e),
-            };
+            let Some(ev) = self.host.service()? else { break };
+            let ev = ev.no_ref();
             let t = self.now_ms();
             match ev {
                 enet::EventNoRef::Connect { .. } => {
@@ -199,5 +202,20 @@ impl Client {
     pub fn drop_silently(mut self) {
         self.host.peer_mut(self.peer).reset();
         self.host.flush();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_host_without_free_peer_slots_cannot_connect() {
+        let cfg = ClientConfig::default();
+        let settings = enet::HostSettings { peer_limit: 1, channel_limit: cfg.channels, ..Default::default() };
+        let mut host = enet::Host::new(UdpSocket::bind("127.0.0.1:0").unwrap(), settings).unwrap();
+        assert!(start_connect(&mut host, &cfg).is_ok());
+        let e = start_connect(&mut host, &cfg).unwrap_err();
+        assert!(e.to_string().starts_with("connect: "), "{e}");
     }
 }
