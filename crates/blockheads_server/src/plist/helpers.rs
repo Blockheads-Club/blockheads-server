@@ -135,4 +135,12 @@ mod tests {
         });
         assert_eq!(log, "");
     }
+
+    #[test]
+    fn raw_variant_lets_exceptions_through() {
+        let ok = b"<?xml version=\"1.0\"?><plist><integer>3</integer></plist>";
+        assert_eq!(property_list_with_data_raw(ok, 0).unwrap().long_long_value(), 3);
+        let bad = b"<?xml version=\"1.0\"?><plist><array><date>bad</date></array></plist>";
+        assert!(catch_ns(|| property_list_with_data_raw(bad, 0)).is_err());
+    }
 }
