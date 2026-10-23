@@ -4,7 +4,6 @@
 
 use blockheads_server::foundation::md5::data_string_from_md5;
 use blockheads_server::plist::value::PlistValue as PV;
-use blockheads_server::protocol::block_wire::ExtraData;
 use blockheads_server::protocol::codec::{reject, Malformed};
 use blockheads_server::protocol::messages::{decode_client_packet, decode_server_packet, ClientMsg, ServerMsg};
 use blockheads_server::types::enums::DynamicObjectType;
@@ -141,13 +140,21 @@ pub fn decode_packet(dir: Dir, packet: &[u8]) -> Decoded {
     let (summary, json) = if packet.is_empty() {
         ("EMPTY".to_string(), "{}".to_string())
     } else {
-        let r = std::panic::catch_unwind(|| match dir {
-            Dir::Rx => decode_rx(packet),
-            Dir::Tx => decode_tx(packet),
-        });
-        r.unwrap_or_else(|_| (format!("MALFORMED(decoder panic) {}", hex_prefix(packet, 16)), "{}".to_string()))
+        guarded(
+            || match dir {
+                Dir::Rx => decode_rx(packet),
+                Dir::Tx => decode_tx(packet),
+            },
+            packet,
+        )
     };
     Decoded { ty, name, dir, summary, json }
+}
+
+/// Runs a decoder; a panic inside it becomes a `MALFORMED(decoder panic)` summary.
+fn guarded(decode: impl FnOnce() -> (String, String) + std::panic::UnwindSafe, packet: &[u8]) -> (String, String) {
+    std::panic::catch_unwind(decode)
+        .unwrap_or_else(|_| (format!("MALFORMED(decoder panic) {}", hex_prefix(packet, 16)), "{}".to_string()))
 }
 
 fn malformed(m: &Malformed, packet: &[u8]) -> (String, String) {
@@ -405,9 +412,6 @@ pub fn pretty(r: &TraceRecord) -> String {
     )
 }
 
-#[allow(dead_code)]
-fn _uses(_: ExtraData) {}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -436,34 +440,217 @@ mod tests {
         }
     }
 
-    fn vectors_dir() -> Option<std::path::PathBuf> {
-        let p = crate::harness::private_docs().join("protocol_vectors");
-        p.is_dir().then_some(p)
+    use blockheads_server::foundation::gsdict::GsDict;
+    use blockheads_server::protocol::block_wire::{self, ExtraData, LIGHT_LEN, TILES_LEN};
+    use blockheads_server::protocol::messages as m;
+    use blockheads_server::protocol::object_batches::{encode_batch, encode_client_batch, BatchKind, ClientBatchKind};
+
+    fn dict(pairs: Vec<(&str, PV)>) -> PV {
+        let mut g = GsDict::new();
+        for (k, v) in pairs {
+            g.insert(k.to_string(), v);
+        }
+        PV::dict(g)
+    }
+    fn rx(p: &[u8]) -> Decoded {
+        decode_packet(Dir::Rx, p)
+    }
+    fn tx(p: &[u8]) -> Decoded {
+        decode_packet(Dir::Tx, p)
     }
 
-    /// U2: every captured server packet decodes without MALFORMED; the solo 0x04 vector prints the known hash.
     #[test]
-    fn u2_vectors() {
-        let Some(dir) = vectors_dir() else { return };
-        let mut n = 0;
-        for sub in ["solo", "two_clients"] {
-            let Ok(rd) = std::fs::read_dir(dir.join(sub)) else { continue };
-            for e in rd.flatten() {
-                let name = e.file_name().to_string_lossy().into_owned();
-                if !name.ends_with(".bin") || name.starts_with("A_") && false {
-                    continue;
-                }
-                let data = std::fs::read(e.path()).unwrap();
-                let d = decode_packet(Dir::Rx, &data);
-                assert!(!d.summary.contains("MALFORMED"), "{}: {}", name, d.summary);
-                if sub == "solo" && name.starts_with("007_") {
-                    assert!(d.summary.contains("idx=0 "), "{}", d.summary);
-                    assert!(d.summary.contains("ver=0 upd=0"), "{}", d.summary);
-                    assert!(d.summary.contains("hash=1128c17e53085db291e4b0d5393d0420"), "{}", d.summary);
-                }
-                n += 1;
-            }
+    fn small_helpers() {
+        assert_eq!(reject_name(reject::USER_LOGGED_IN), "USER_LOGGED_IN");
+        for code in 0..=16u8 {
+            assert!(!reject_name(code).is_empty());
         }
-        assert!(n > 0);
+        let mut all: Vec<&str> = (0..=15u8).map(reject_name).collect();
+        all.sort();
+        all.dedup();
+        assert!(all.len() >= 14, "{all:?}");
+        assert_eq!(reject_name(200), "UNKNOWN");
+        assert_eq!(
+            object_type_name(0),
+            DynamicObjectType(0).name().unwrap().strip_prefix("DYNAMIC_OBJECT_TYPE_").unwrap()
+        );
+        assert_eq!(object_type_name(250), "UNKNOWN_250");
+        assert_eq!(jf(1.5), "1.5");
+        assert_eq!(jf(f32::NAN), "null");
+        assert_eq!(hex_prefix(&[1, 2, 3], 2), "0102...");
+        assert_eq!(hex_prefix(&[1, 2], 5), "0102");
+        assert_eq!(malformed_text(&Malformed::Ub("x")), "UB x");
+        assert_eq!(malformed_text(&Malformed::Ignore), "ignored");
+        assert_eq!(malformed_text(&Malformed::malloc()), "NSMallocException: Default zone has run out of memory");
+        let (s, j) = guarded(|| panic!("decoder bug"), &[1, 2, 3]);
+        assert_eq!((s.as_str(), j.as_str()), ("MALFORMED(decoder panic) 010203", "{}"));
+        assert_eq!(rx(&[]).summary, "EMPTY");
+        assert_eq!(tx(&[]).json, "{}");
+    }
+
+    #[test]
+    fn plist_values_become_json() {
+        let v = dict(vec![
+            ("s", PV::string("a\"b")),
+            ("i", PV::int(-1)),
+            ("u", PV::UInt(u64::MAX)),
+            ("f", PV::real_f64(1.5)),
+            ("inf", PV::real_f64(f64::INFINITY)),
+            ("b", PV::Bool(true)),
+            ("d", PV::date(2.0)),
+            ("small", PV::data(vec![1, 2])),
+            ("big", PV::data(vec![7; 100])),
+            ("a", PV::array(vec![PV::Null, PV::int(2)])),
+        ]);
+        let j = pv_json(&v);
+        assert!(j.starts_with("{\"a\":[null,2],\"b\":true,\"big\":\"data(100):"), "{j}");
+        assert!(j.contains("\"d\":2") && j.contains("\"f\":1.5") && j.contains("\"inf\":null"));
+        assert!(
+            j.contains("\"small\":\"data:0102\"")
+                && j.contains("\"s\":\"a\\\"b\"")
+                && j.contains("\"u\":18446744073709551615")
+        );
+        assert_eq!(opt_json(&None), "null");
+        assert!(is_scalar(&PV::int(1)) && !is_scalar(&PV::array(vec![])) && !is_scalar(&PV::data(vec![])));
+    }
+
+    #[test]
+    fn server_packets_are_summarised() {
+        let tiles = [1u8; TILES_LEN];
+        let light = [2u8; LIGHT_LEN];
+        let extra = ExtraData { hash: "abc".into(), receipts: Some(vec![4, 5]) };
+        let block = block_wire::server_block_from_parts(1030, &tiles, 3, 9, Some((&light, &extra))).unwrap();
+        let d = rx(&block);
+        assert!(d.summary.starts_with("idx=1030 x=6 y=2 ver=3 upd=9 tiles="), "{}", d.summary);
+        assert!(d.summary.contains("hash=abc receipts=[4, 5] extra=[]") && d.json.contains("\"receipts\":[4, 5]"));
+        let mut weird = GsDict::new();
+        weird.insert("hash".to_string(), PV::string("h"));
+        weird.insert("other".to_string(), PV::int(1));
+        weird.insert("receipts".to_string(), PV::int(3));
+        assert_eq!(block_extra(&Some(PV::dict(weird))), ("h".to_string(), vec![], vec!["other".to_string()]));
+        assert_eq!(block_extra(&None), (String::new(), vec![], vec![]));
+        assert!(rx(&[0x04, 1, 2]).summary.starts_with("MALFORMED 2B"));
+        assert!(rx(&block_wire::block_not_loaded(7)).summary.contains("index=7 index32=7"));
+        assert!(rx(&[0x27, 1]).summary.starts_with("MALFORMED 1B"));
+        assert_eq!(rx(&block_wire::light_block(3, &light, 4)).summary, "idx=3 upd=4");
+        let batch = rx(&encode_batch(BatchKind::Create, 14, &[vec![1, 0, 0, 0, 0, 0, 0, 0, 9], vec![2; 8]]).unwrap());
+        assert!(batch.summary.contains("count=2 ids=[1, 144680345676153346]") && batch.json.contains("\"kind\":7"));
+        assert!(rx(&encode_batch(BatchKind::Remove, 14, &[]).unwrap()).summary.contains("count=0 ids=[] first16="));
+        let contact = rx(&m::initial_contact(Some("Own"), false, "w"));
+        assert!(contact.summary.starts_with("version=38 plist={") && contact.json.starts_with("{\"version\":38"));
+        let rej = rx(&m::rejection(reject::KICKED));
+        assert!(rej.summary.contains("reason=11 (KICKED) extra=null"));
+        let summary = rx(&m::world_summary(&m::WorldSummary {
+            world_name: "N".into(),
+            welcome_message: Some("w".into()),
+            custom_rules: Some(dict(vec![])),
+            ..Default::default()
+        }));
+        assert!(
+            summary.summary.starts_with("keys=[")
+                && summary.summary.contains("worldName=\"N\"")
+                && summary.summary.contains(" customRules")
+        );
+        assert_eq!(rx(&[0x01]).summary, "keys=[]");
+        assert!(rx(&m::player_list(&[])).summary.contains("[]"));
+        let chat = rx(&m::chat_message(&m::server_chat_dict("hi", "A", "p", 1.0)));
+        assert!(chat.json.starts_with("{\"dict\":") && chat.summary.contains("\"message\":\"hi\""));
+        assert!(rx(&m::chat_history(&PV::array(vec![]), &[])).json.starts_with("{\"plist\":"));
+        assert!(rx(&m::welcome_message(None, None)).json.starts_with("{\"plist\":"));
+        assert!(rx(&m::ownership_sign_player_list(&PV::array(vec![]))).json.starts_with("{\"plist\":"));
+        assert!(rx(&m::ownership_sign_modified(&dict(vec![]))).json.starts_with("{\"plist\":"));
+        assert!(rx(&m::price_offsets(&dict(vec![]))).json.starts_with("{\"plist\":"));
+        let hb = rx(&m::heartbeat(&m::WorldHeartbeat::default()));
+        assert!(hb.summary.starts_with("worldTime=") && hb.json.contains("\"credit\":"));
+        let init = rx(&m::initial_data_reply(&[0; 31], None));
+        assert!(init.summary.starts_with("food=[0, 0, 0, 0] plist=null"));
+        assert_eq!(rx(&m::unique_id_reply(255)).summary, "id=0xff");
+        assert!(rx(&m::pickup_reply(true, 16, &[1])).summary.contains("accepted=true requester=0x10 ids=[1]"));
+        assert_eq!(rx(&m::zoom_response(Some((1, 2)))).summary, "pos=(1,2)");
+        assert_eq!(rx(&m::zoom_response(None)).summary, "none");
+        assert_eq!(rx(&m::admin_or_mod_changed(1, 0)).summary, "(1,0)");
+        assert!(rx(&m::painting_data(5, &[1, 2])).summary.contains("id=5 image=2B"));
+        assert!(rx(&m::chest_inventory(5, None)).summary.contains("inv=0B"));
+        assert!(rx(&m::portal_chest_ack(2)).summary.starts_with("id=2 raw=02"));
+        assert!(rx(&m::portal_chest_not_saved(&[3, 0, 0, 0, 0, 0, 0, 0])).json.contains("\"id\":3"));
+        assert_eq!(rx(&m::clear_chat()).json, "{}");
+        assert_eq!(rx(&m::toggle_repair_mode(true)).summary, "enabled=true");
+        assert!(rx(&m::gather_notification(&m::GatherNetRequest::default())).summary.starts_with("pos=("));
+        assert!(rx(&m::projectile(&m::ProjectileNetRequest::default())).summary.starts_with("from=("));
+        assert!(rx(&m::blockhead_damage(&m::BlockheadDamageNetRequest::default())).json == "{}");
+        let el = rx(&m::electricity_path(1, &[m::ElectricityPathIndex::default()]).unwrap());
+        assert_eq!(el.summary, "path=1 entries");
+        assert_eq!(rx(&m::tip("hello")).json, "{\"text\":\"hello\"}");
+        let unknown = rx(&[0xee, 1, 2]);
+        assert_eq!((unknown.summary.as_str(), unknown.name), ("2B 0102", "UNKNOWN_ee"));
+    }
+
+    #[test]
+    fn client_packets_are_summarised() {
+        let d = dict(vec![("k", PV::int(1))]);
+        assert_eq!(
+            tx(&block_wire::block_request(m::ClientMacroBlockRequest {
+                macro_index: 3,
+                create_if_not_created: 1,
+                ..Default::default()
+            }))
+            .summary,
+            "idx=3 create=1"
+        );
+        assert_eq!(tx(&block_wire::block_removal_notification(8)).summary, "idx=8");
+        for kind in [
+            ClientBatchKind::Create,
+            ClientBatchKind::Update,
+            ClientBatchKind::Remove,
+            ClientBatchKind::CreationDataUpdate,
+        ] {
+            let s = tx(&encode_client_batch(kind, 14, &[vec![0; 9]]).unwrap()).summary;
+            assert!(s.ends_with("count=1"), "{s}");
+        }
+        assert!(tx(&[0x0a, 14]).summary.ends_with("count=0"));
+        assert!(tx(&m::pickup_request(255, &[1])).summary.contains("requester=0xff ids=[1]"));
+        assert!(tx(&m::client_chat(&d)).json.starts_with("{\"dict\":{"));
+        assert_eq!(tx(&[0x24]).summary, "null");
+        assert!(tx(&m::zoom_request("pid", 2)).summary.contains("playerID=Some(\"pid\") cycle=2"));
+        assert!(tx(&[0x1b]).json.contains("\"playerID\":null"));
+        let mut inv = vec![0x21];
+        inv.extend_from_slice(&16u64.to_le_bytes());
+        inv.extend_from_slice(b"zz");
+        assert_eq!(tx(&inv).summary, "blockhead=0x10 data=2B");
+        for ty in [t::CLIENT_TRADE_TRANSACTION, t::CLIENT_WELCOME_MESSAGE_SET_REQUEST, t::CLIENT_REPORT_USER] {
+            assert!(tx(&m::client_gz_plist(ty, &d)).summary.starts_with('{'), "{ty:#x}");
+        }
+        let mut chest = vec![0x3e];
+        chest.extend_from_slice(&[9, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(tx(&chest).summary, "id=9");
+        chest[0] = 0x40;
+        assert_eq!(tx(&chest).json, "{\"id\":9}");
+        assert_eq!(tx(&[0x2d, b'h', b'i']).json, "{\"text\":\"hi\"}");
+        assert!(tx(&m::client_player_information(&d)).json.starts_with("{\"plist\":"));
+        assert!(tx(&[0x10, 1, 2]).summary.starts_with("2B 0102"));
+        assert!(tx(&[0x12]).summary.starts_with("MALFORMED(NSRangeException"));
+        assert!(tx(&[0xee]).summary.starts_with("0B"));
+    }
+
+    #[test]
+    fn records_print_on_one_line() {
+        let rec = |dir, reliable| TraceRecord {
+            seq: 0,
+            t_ms: 12,
+            dir,
+            client: "A".into(),
+            channel: 1,
+            reliable,
+            ty: 0x2d,
+            len: 3,
+            data: vec![0x2d, b'h', b'i'],
+        };
+        let rxl = pretty(&rec(Dir::Rx, true));
+        assert!(rxl.contains("RX ch1 R 0x2d TIP_NOTIFICATION 3B") && rxl.ends_with("\"hi\""), "{rxl}");
+        assert!(pretty(&rec(Dir::Tx, false)).contains("TX ch1 U 0x2d"));
     }
 }
+
+#[cfg(test)]
+#[path = "decode_golden.rs"]
+mod golden;

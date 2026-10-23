@@ -499,8 +499,14 @@ mod tests {
     #[test]
     fn json_accessors_reject_other_kinds() {
         let j = parse_json("{\"s\":\"x\",\"n\":3,\"b\":false,\"neg\":-1}").unwrap();
-        assert_eq!((j.get("s").unwrap().as_u64(), j.get("n").unwrap().as_str(), j.get("n").unwrap().as_bool()), (None, None, None));
-        assert_eq!((j.get("neg").unwrap().as_u64(), j.get("b").unwrap().as_bool(), j.get("n").unwrap().as_u64()), (None, Some(false), Some(3)));
+        assert_eq!(
+            (j.get("s").unwrap().as_u64(), j.get("n").unwrap().as_str(), j.get("n").unwrap().as_bool()),
+            (None, None, None)
+        );
+        assert_eq!(
+            (j.get("neg").unwrap().as_u64(), j.get("b").unwrap().as_bool(), j.get("n").unwrap().as_u64()),
+            (None, Some(false), Some(3))
+        );
         assert_eq!(Json::Null.get("x"), None);
         assert_eq!(j.get("missing"), None);
     }
@@ -519,7 +525,22 @@ mod tests {
         let ok_deep = format!("{}1{}", "[".repeat(60), "]".repeat(60));
         assert!(parse_json(&ok_deep).is_some());
         let bad_escape = format!("\"{}\"", u("12"));
-        for bad in ["", "{", "{\"a\"}", "{\"a\":1 \"b\":2}", "[1 2]", "[1,", "\"abc", "\"\\q\"", &bad_escape, "tru", "x", "{1:2}", "-", "1e"] {
+        for bad in [
+            "",
+            "{",
+            "{\"a\"}",
+            "{\"a\":1 \"b\":2}",
+            "[1 2]",
+            "[1,",
+            "\"abc",
+            "\"\\q\"",
+            &bad_escape,
+            "tru",
+            "x",
+            "{1:2}",
+            "-",
+            "1e",
+        ] {
             assert_eq!(parse_json(bad), None, "{bad}");
         }
     }
@@ -536,7 +557,10 @@ mod tests {
         std::fs::remove_file("bh-trace-relative.jsonl").unwrap();
         rel.unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
-        assert!(text.starts_with("{\"meta\":{\"label\":\"lbl\"") && text.contains("{\"mark\":\"join\",\"outcome\":\"approved\"}"));
+        assert!(
+            text.starts_with("{\"meta\":{\"label\":\"lbl\"")
+                && text.contains("{\"mark\":\"join\",\"outcome\":\"approved\"}")
+        );
         let mut extra = text;
         extra.push_str("\n   \nnot json\n{\"seq\":1}\n{\"seq\":2,\"dir\":\"sideways\",\"hex\":\"00\"}\n{\"seq\":3,\"dir\":\"rx\",\"hex\":\"zz\"}\n{\"seq\":4,\"dir\":\"rx\",\"hex\":\"05\"}\n");
         std::fs::write(&path, extra).unwrap();
