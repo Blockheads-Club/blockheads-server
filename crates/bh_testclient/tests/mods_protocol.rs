@@ -12,7 +12,9 @@ use std::time::{Duration, Instant};
 use bh_testclient::{ClientConfig, Identity, JoinOutcome, LoaderOptions, ModClient, Session};
 use bhmod_proto::{hex, FileRequest, Message, ModInfo, CHUNK_SIZE, PACKET_TYPE};
 use blockheads_server::host::{self, HostConfig, ServerHandle, Status, WorldSelect};
-use blockheads_server::mods::ModsConfig;
+use blockheads_server::mods::{ModsConfig, LIMBO_TEXT};
+use blockheads_server::plist::value::PlistValue;
+use blockheads_server::protocol::messages::{decode_server_packet, ServerMsg};
 
 /// mod-sdk `vectors/*.hex` this test compares with (mod-sdk ca82eaa).
 const VECTORS: &[(&str, &str)] = &[
@@ -211,10 +213,31 @@ fn client_mods_reject_vanilla_and_serve_modded_clients() {
     assert!(srv.log().contains("offering 2 client mod(s) to modded clients (required)"), "{}", srv.log());
     assert!(srv.log().contains("not offering nat to clients: native client mods are never pushed"), "{}", srv.log());
 
-    // Vanilla client: reason 3, never a 0xBC byte.
+    // Vanilla client: held in the limbo. It gets the world summary with the readable welcomeMessage (the vanilla
+    // game shows it as its welcome popup), is not a player and never sees a 0xBC byte; its next packet ends it
+    // with the old reason 3.
     let mut v = srv.session("VANILLA");
-    assert_eq!(v.join(10_000).unwrap(), JoinOutcome::Rejected { reason: 3 });
+    assert_eq!(v.join(10_000).unwrap(), JoinOutcome::Approved);
+    let summary = v.received().iter().find(|rx| rx.data[0] == 0x01).unwrap().data.clone();
+    let ServerMsg::Summary(Some(PlistValue::Dict(d))) = decode_server_packet(&summary).unwrap() else { panic!() };
+    assert_eq!(d.map.get(&"welcomeMessage".to_string()).and_then(|v| v.as_str()), Some(LIMBO_TEXT));
+    assert_eq!(d.map.get(&"saveID".to_string()).and_then(|v| v.as_str()), Some(wid.as_str()));
+    assert!(d.map.get(&"owner".to_string()).is_none() && d.map.get(&"admin".to_string()).is_none());
+    v.run_for(500).unwrap();
+    assert_eq!(v.count_of(0x26), 0, "dropped before the grace ended");
+    assert_eq!(v.count_of(0x17) + v.count_of(0x05), 0, "a limbo peer is not a player");
+    v.request_initial_data().unwrap();
+    assert_eq!(v.wait_for(0x26, 5000).unwrap().unwrap().data, [0x26, 3]);
     no_mod_bytes(&v);
+
+    // A vanilla client that leaves while in the limbo leaves nothing behind: it can join (limbo) again.
+    let mut v = srv.session("LEAVER");
+    assert_eq!(v.join(10_000).unwrap(), JoinOutcome::Approved);
+    v.disconnect();
+    std::thread::sleep(Duration::from_millis(1500));
+    let mut v = srv.session("LEAVER");
+    assert_eq!(v.join(10_000).unwrap(), JoinOutcome::Approved);
+    v.disconnect();
 
     // Protocol mismatch: REJECT_TEXT then 0x26 03, both byte-exact.
     let mut s = srv.session("OLDLOADER");

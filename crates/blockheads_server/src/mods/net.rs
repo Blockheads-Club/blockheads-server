@@ -6,6 +6,7 @@
 //! it ([`ModNet::rekey`] moves the state at approval time). Only peers that sent `HELLO` ever receive a 0xBC byte.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::{Duration, Instant};
 
 use bhmod_core::types::ApiError;
 use bhmod_proto::{
@@ -63,6 +64,14 @@ struct Peer {
     ready: Option<Hash>,
 }
 
+/// A vanilla peer held in the limbo until `until`.
+#[derive(Debug)]
+struct Limbo {
+    peer: String,
+    player: String,
+    until: Instant,
+}
+
 /// Protocol state of the server.
 #[derive(Debug, Default)]
 pub struct ModNet {
@@ -71,6 +80,8 @@ pub struct ModNet {
     peers: BTreeMap<String, Peer>,
     /// Channel name -> wire id (ids start at 1 and are never reused).
     wire: BTreeMap<String, u16>,
+    /// Vanilla peers shown the readable rejection (not approved, not in the game).
+    limbo: Vec<Limbo>,
 }
 
 impl ModNet {
@@ -152,6 +163,31 @@ impl ModNet {
         };
         self.reject_text(link, peer, REJECT_CLIENT_TOO_OLD, text);
         Some(REJECT_CLIENT_TOO_OLD)
+    }
+
+    /// True when a join that failed [`ModNet::check_loader`] gets the limbo instead of the bare rejection: the
+    /// server requires client mods and the peer is vanilla (no `HELLO`, no `bhcModLoader`).
+    pub fn wants_limbo(&self, peer: &str, key: Option<&LoaderKey>) -> bool {
+        self.catalog.client_required && key.is_none() && !self.is_modded(peer)
+    }
+
+    /// Holds a vanilla peer (`player` is its player id) in the limbo for `grace` from `now`.
+    pub fn enter_limbo(&mut self, peer: &str, player: &str, now: Instant, grace: Duration) {
+        self.limbo.push(Limbo { peer: peer.to_string(), player: player.to_string(), until: now + grace });
+    }
+
+    /// Takes a peer (by either name) out of the limbo. `Some(player id)` when it was in it.
+    pub fn leave_limbo(&mut self, peer: &str) -> Option<String> {
+        let i = self.limbo.iter().position(|l| l.peer == peer || l.player == peer)?;
+        Some(self.limbo.remove(i).player)
+    }
+
+    /// Takes the peers whose grace ended at `now` out of the limbo. Returns their player ids.
+    pub fn expired_limbo(&mut self, now: Instant) -> Vec<String> {
+        let (gone, kept): (Vec<Limbo>, Vec<Limbo>) =
+            std::mem::take(&mut self.limbo).into_iter().partition(|l| l.until <= now);
+        self.limbo = kept;
+        gone.into_iter().map(|l| l.player).collect()
     }
 
     /// Announces channels (`CHANNEL_REGISTER`) a peer has not seen yet.

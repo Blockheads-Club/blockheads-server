@@ -8,6 +8,7 @@ use std::rc::Rc;
 use crate::foundation::clock::reference_time;
 use crate::foundation::exception::ns_raise;
 use crate::foundation::gsdict::GsDict;
+use crate::foundation::gzip::{gzip_deflate, gzip_inflate};
 use crate::foundation::indexset::IndexSet;
 use crate::foundation::md5::string_from_md5;
 use crate::foundation::nsstring::{self, safe_case_insensitive_compare as safe_ci};
@@ -18,12 +19,16 @@ use crate::plist::value::{PlistDict, PlistValue};
 use crate::protocol::codec::{self, reject, Malformed};
 use crate::protocol::messages::{self, decode_client_packet, ClientMsg};
 use crate::server::bhserver::{
-    dict_get, dict_str, new_mutable_dict, raise_unrecognized, write_data_atomic, BHServer, NetBlob,
+    dict_get, dict_str, new_mutable_dict, raise_unrecognized, write_data_atomic, BHServer, NetBlob, ServerWorld,
 };
 
 /// `-match:didReceiveData:fromPlayer:`.
 pub fn match_did_receive_data_from_player(srv: &Rc<BHServer>, data: &[u8], peer: &str) {
     srv.update_players();
+    // Mods (not in the original): a vanilla peer in the readable-rejection limbo is dropped by any packet.
+    if crate::mods::hooks().is_some_and(|h| h.limbo_packet(peer)) {
+        return;
+    }
     let ty = data.first().copied().unwrap_or(0);
     let connected = srv.connected_clients.borrow().iter().any(|e| e == peer);
     // Mods (not in the original): 0xBC goes to the mod host, only when one is installed.
@@ -786,6 +791,13 @@ fn handshake(srv: &Rc<BHServer>, payload: &[u8], peer: &str) {
     // with a vanilla reason.
     if let Some(h) = crate::mods::hooks() {
         let loader = crate::mods::LoaderKey::from_player_info(raw_dict.as_ref());
+        // A vanilla client on a server with client-required mods is not approved: it gets a world summary whose
+        // welcome message explains the situation, and the host drops it a little later.
+        if h.limbo_join(peer, p, loader.as_ref()) {
+            send_to(p, limbo_summary(&*world, crate::mods::LIMBO_TEXT));
+            remove_unapproved();
+            return;
+        }
         if let Some(r) = h.pre_login(peer, p, info_alias.as_deref().unwrap_or(""), loader.as_ref()) {
             reject_p(r, Some(p));
             return;
@@ -833,6 +845,33 @@ fn handshake(srv: &Rc<BHServer>, payload: &[u8], peer: &str) {
             h.player_join(p);
         }
     }
+}
+
+/// The 0x01 summary of the readable-rejection limbo: the world's own summary for a plain player (so the client
+/// loads without trouble) with `welcomeMessage` replaced by `text`; a minimal one when that cannot be patched.
+fn limbo_summary(world: &dyn ServerWorld, text: &str) -> Vec<u8> {
+    let real = world.summary_net_data_for_admin_mod_owner_cloud_mode(false, false, false, 0);
+    let patched =
+        real.get(1..).and_then(gzip_inflate).and_then(|x| property_list_from_data(&x)).and_then(|v| match v {
+            PlistValue::Dict(mut d) => {
+                d.map.insert("welcomeMessage".to_string(), PlistValue::string(text.to_string()));
+                data_from_property_list(&PlistValue::Dict(d))
+            }
+            _ => None,
+        });
+    let Some(xml) = patched else {
+        let minimal = messages::WorldSummary {
+            save_id: world.save_id().unwrap_or_default(),
+            world_name: world.world_name().unwrap_or_default(),
+            world_width_macro: world.world_width_macro(),
+            welcome_message: Some(text.to_string()),
+            ..Default::default()
+        };
+        return messages::world_summary(&minimal);
+    };
+    let mut out = vec![codec::t::WORLD_SUMMARY];
+    out.extend_from_slice(&gzip_deflate(&xml));
+    out
 }
 
 /// `-sendPortalChestAcknowledgementIfNeededForClient:`.
@@ -1143,5 +1182,38 @@ mod tests {
         // Alice re-inserted at index 0
         assert_eq!(dict_str(&h.srv.recent_players()[0], "alias").as_deref(), Some("Alice"));
         assert!(h.w.calls.borrow().contains(&format!("client_disconnected {} false", a)));
+    }
+
+    #[test]
+    fn limbo_summary_patches_the_real_summary_or_falls_back() {
+        let h = Harness::new("d_limbo_summary");
+        let welcome = |p: &[u8]| {
+            let xml = gzip_inflate(&p[1..]).unwrap();
+            let PlistValue::Dict(d) = property_list_from_data(&xml).unwrap() else { panic!() };
+            (p[0], d)
+        };
+        // The world's own summary keeps its keys; only the welcome message changes.
+        let mut real = new_mutable_dict();
+        real.map.insert("saveID".to_string(), PlistValue::string("sid"));
+        real.map.insert("welcomeMessage".to_string(), PlistValue::string("old"));
+        let mut packet = vec![0x01];
+        packet.extend(gzip_deflate(&data_from_property_list(&PlistValue::Dict(real)).unwrap()));
+        *h.w.summary.borrow_mut() = Some(packet);
+        let (ty, d) = welcome(&limbo_summary(&*h.world_dyn, "hi"));
+        assert_eq!(ty, 0x01);
+        assert_eq!(dict_str(&d, "saveID").as_deref(), Some("sid"));
+        assert_eq!(dict_str(&d, "welcomeMessage").as_deref(), Some("hi"));
+        // Not a dictionary, not gzip, or empty: a minimal summary of the world.
+        let mut array = vec![0x01];
+        array.extend(gzip_deflate(&data_from_property_list(&PlistValue::string("x")).unwrap()));
+        for bad in [array, vec![0x01, 0, 0, 0, 0], vec![]] {
+            *h.w.summary.borrow_mut() = Some(bad);
+            let (ty, d) = welcome(&limbo_summary(&*h.world_dyn, "hi"));
+            assert_eq!(ty, 0x01);
+            assert_eq!(dict_str(&d, "saveID").as_deref(), Some(h.w.id.as_str()));
+            assert_eq!(dict_str(&d, "worldName").as_deref(), Some("TestWorld"));
+            assert_eq!(dict_get(&d, "worldWidthMacro").map(|v| v.int_value()), Some(512));
+            assert_eq!(dict_str(&d, "welcomeMessage").as_deref(), Some("hi"));
+        }
     }
 }

@@ -966,6 +966,9 @@ impl BHServer {
                     }
                 } else {
                     self.unapproved_clients.borrow_mut().retain(|e| e != player_id);
+                    if let Some(h) = crate::mods::hooks() {
+                        h.limbo_gone(player_id);
+                    }
                 }
                 self.client_disconnected_was_kick(player_id, false);
                 let mut found: Option<(usize, PlistDict)> = None;
@@ -1025,6 +1028,9 @@ impl MatchDelegate for BHServer {
 
     fn match_connection_with_player_failed_with_error(&self, _m: &dyn BhMatch, player_id: &str) {
         crate::nslog!("connectionWithPlayerFailed {}", player_id);
+        if let Some(h) = crate::mods::hooks() {
+            h.limbo_gone(player_id);
+        }
         self.unapproved_clients.borrow_mut().retain(|e| e != player_id);
         self.connected_clients.borrow_mut().retain(|e| e != player_id);
         if let Some(t) = self.trade_portal_transactions.borrow_mut().as_mut() {
@@ -1248,6 +1254,8 @@ pub(crate) mod test_support {
         pub calls: RefCell<Vec<String>>,
         pub clients: RefCell<HashMap<String, Rc<ServerClient>>>,
         pub accept_clients: Cell<bool>,
+        /// What the summary method returns instead of the fixed bytes.
+        pub summary: RefCell<Option<Vec<u8>>>,
         pub dw: Rc<MockDw>,
     }
     impl MockWorld {
@@ -1263,6 +1271,7 @@ pub(crate) mod test_support {
                 calls: RefCell::new(Vec::new()),
                 clients: RefCell::new(HashMap::new()),
                 accept_clients: Cell::new(true),
+                summary: RefCell::new(None),
                 dw: Rc::new(MockDw { calls: RefCell::new(Vec::new()) }),
             })
         }
@@ -1368,7 +1377,10 @@ pub(crate) mod test_support {
             out.push_str("loaded macro blocks:7\n");
         }
         fn summary_net_data_for_admin_mod_owner_cloud_mode(&self, admin: bool, m: bool, o: bool, cm: i32) -> Vec<u8> {
-            vec![0x01, admin as u8, m as u8, o as u8, (cm & 0xff) as u8]
+            self.summary
+                .borrow()
+                .clone()
+                .unwrap_or_else(|| vec![0x01, admin as u8, m as u8, o as u8, (cm & 0xff) as u8])
         }
         fn client_connected(&self, id: &str) -> bool {
             self.rec_log(format!("client_connected {}", id));
