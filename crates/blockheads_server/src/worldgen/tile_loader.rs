@@ -1068,6 +1068,7 @@ mod sweep_tests {
     use crate::types::structs::CustomRules;
     use crate::world::custom_rules::default_custom_rules;
     use crate::worldgen::block_io::LoadOutcome;
+    use crate::worldgen::terrain::GenParams;
 
     struct GenOps {
         loader: RefCell<Option<Rc<WorldTileLoader>>>,
@@ -1156,6 +1157,75 @@ mod sweep_tests {
         for my in (0..32).step_by(step as usize) {
             for mx in (0..w).step_by((w / 4).max(1) as usize) {
                 crate::world::tiles::load_block_at_macro_pos(IntPair { x: mx, y: my }, world);
+            }
+        }
+    }
+
+    #[test]
+    fn terrain_queries_outside_the_world_and_in_odd_settings() {
+        for (k, rainfall) in [0i8, 1, 2, 3, 4, 5].into_iter().enumerate() {
+            let (world, l) = generate(
+                32,
+                200 + k as u32,
+                rules_with(|r| {
+                    r.rainfall = rainfall;
+                    r.caves = (k % 4) as i8;
+                    r.lakes = 2;
+                }),
+                false,
+                true,
+            );
+            let p = GenParams::from_world(&world);
+            let wt = p.wt();
+            let t = l.terrain();
+            for x in [-5, -wt - 5, wt + 5, 2 * wt + 9, 3, wt - 1, wt] {
+                let _ = t.sand_fraction_for_pos(&p, IntPair { x, y: 520 }, true);
+            }
+            for x in [-5, wt + 3, 7, wt] {
+                let _ = (
+                    t.max_of_rock_and_dirt_height(&p, x.min(wt - 1).max(-wt)),
+                    t.lake_height(&p, x.min(wt - 1).max(-wt)),
+                );
+            }
+            for x in 0..wt {
+                let _ = t.unmodified_ground_level(&p, x);
+            }
+            for y in [0, 100, 300, 600, 900] {
+                for x in [10, 400, 900] {
+                    let fo = t.fault_offset(&p, x, y);
+                    let _ = (
+                        t.is_cave(&p, x, y, fo),
+                        t.is_floating_island_cave(&p, x, y),
+                        t.limestone_fraction(&p, x, y, fo),
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn dirt_flows_down_through_air_and_water() {
+        let (world, l) = generate(32, 300, rules_with(|_| {}), false, true);
+        let p = GenParams::from_world(&world);
+        crate::world::tiles::load_block_at_macro_pos(IntPair { x: 3, y: 10 }, &world);
+        crate::world::tiles::load_block_at_macro_pos(IntPair { x: 0, y: 10 }, &world);
+        crate::world::tiles::load_block_at_macro_pos(IntPair { x: 31, y: 10 }, &world);
+        for x0 in [96 + 3, 1, 1020i32] {
+            for dy in 0..6 {
+                for dx in -4..=4 {
+                    let x = (x0 + dx).rem_euclid(p.wt());
+                    if let Some(t) = crate::world::tiles::tile_at_world_position_loaded(x, 330 + dy, &world) {
+                        t.update(|v| {
+                            v.type_index = if dx % 2 == 0 { 2 } else { 3 };
+                            v.zone_type_index = 1;
+                        });
+                    }
+                }
+            }
+            for seed in 1..8u32 {
+                glibc_rand::srand(seed);
+                let start = crate::world::tiles::tile_at_world_position_loaded(x0, 335, &world).unwrap();
+                l.terrain().recursively_flow_out_dirt_from_tile(&p, &world, &start, IntPair { x: x0, y: 335 });
             }
         }
     }
