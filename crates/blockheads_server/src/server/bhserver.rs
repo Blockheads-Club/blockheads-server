@@ -1269,6 +1269,10 @@ pub(crate) mod test_support {
         pub accept_clients: Cell<bool>,
         /// Answer of the custom-rules verification.
         pub rules_ok: Cell<bool>,
+        /// Whether the 1.7 database migration is done (legacy player files are only read before).
+        pub migrated: Cell<bool>,
+        /// Whether the world has a dynamic world yet (it does not before load stage 12).
+        pub dw_present: Cell<bool>,
         /// What the summary method returns instead of the fixed bytes.
         pub summary: RefCell<Option<Vec<u8>>>,
         pub dw: Rc<MockDw>,
@@ -1287,6 +1291,8 @@ pub(crate) mod test_support {
                 clients: RefCell::new(HashMap::new()),
                 accept_clients: Cell::new(true),
                 rules_ok: Cell::new(true),
+                migrated: Cell::new(true),
+                dw_present: Cell::new(true),
                 summary: RefCell::new(None),
                 dw: Rc::new(MockDw { calls: RefCell::new(Vec::new()) }),
             })
@@ -1381,13 +1387,14 @@ pub(crate) mod test_support {
             self.clients.borrow().get(id).cloned()
         }
         fn dynamic_world(&self) -> Option<Rc<dyn ServerDynamicWorld>> {
-            Some(self.dw.clone())
+            let dw: Rc<dyn ServerDynamicWorld> = self.dw.clone();
+            Some(dw).filter(|_| self.dw_present.get())
         }
         fn distance_ordered_food_types(&self) -> Vec<i32> {
             (0..31).collect()
         }
         fn has_finished_database_migration_to17(&self) -> bool {
-            true
+            self.migrated.get()
         }
         fn append_debug_log(&self, out: &mut String) {
             out.push_str("loaded macro blocks:7\n");

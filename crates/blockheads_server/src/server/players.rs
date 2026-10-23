@@ -44,21 +44,17 @@ impl BHServer {
             }
             self.recent_players.borrow_mut().pop();
         }
-        if let Some(data) = data_from_property_list(&PlistValue::Dict(d)) {
-            if let Some(db) = &self.server_database {
-                let key = format!("{}_info", dict_str(player_dict, "playerID").unwrap_or_else(|| "(null)".to_string()));
-                db.set_data(Some(&data), Some(&key));
-            }
+        let key = format!("{}_info", dict_str(player_dict, "playerID").unwrap_or("(null)".to_string()));
+        for (data, db) in data_from_property_list(&PlistValue::Dict(d)).zip(self.server_database.as_ref()) {
+            db.set_data(Some(&data), Some(&key));
         }
     }
 
     /// `-saveAllPlayersArray`.
     pub fn save_all_players_array(&self) {
         let arr = PlistValue::array(self.recent_players.borrow().iter().cloned().map(PlistValue::Dict).collect());
-        if let Some(data) = data_from_property_list(&arr) {
-            if let Some(db) = &self.server_database {
-                db.set_data(Some(&data), Some("recentPlayers"));
-            }
+        for (data, db) in data_from_property_list(&arr).zip(self.server_database.as_ref()) {
+            db.set_data(Some(&data), Some("recentPlayers"));
         }
     }
 
@@ -72,7 +68,7 @@ impl BHServer {
             }
             Some(list) => {
                 let arr = PlistValue::array(list.into_iter().map(PlistValue::string).collect());
-                if let Some(data) = data_from_property_list(&arr) {
+                for data in data_from_property_list(&arr) {
                     write_data_atomic(&path, &data);
                 }
             }
@@ -345,13 +341,10 @@ mod tests {
         let to_b = h.m.packets_to(&b);
         let first_list = to_b.iter().find(|p| p[0] == 0x1e).expect("0x1e to Bob");
         let pl = property_list_from_data(&first_list[1..]).unwrap();
-        if let PlistValue::Array(arr) = pl {
-            assert_eq!(arr.items.len(), 1);
-            assert_eq!(arr.items[0].object_for_key("alias").and_then(|v| v.as_str()), Some("Alice"));
-            assert_eq!(arr.items[0].object_for_key("playerID").and_then(|v| v.as_str()), Some(a.as_str()));
-        } else {
-            panic!("array expected");
-        }
+        let PlistValue::Array(arr) = pl else { unreachable!() };
+        assert_eq!(arr.items.len(), 1);
+        assert_eq!(arr.items[0].object_for_key("alias").and_then(|v| v.as_str()), Some("Alice"));
+        assert_eq!(arr.items[0].object_for_key("playerID").and_then(|v| v.as_str()), Some(a.as_str()));
         // every join schedules its own 2 s timer; only the first does the work
         let n = h.delayed.borrow().len();
         assert!(n >= 2);
@@ -385,13 +378,170 @@ mod tests {
         d.insert("alias".to_string(), PlistValue::string("Zed"));
         h.srv.recent_players.borrow_mut().push(d);
         let v = h.srv.get_recent_player_names_for_ownership_sign();
-        if let PlistValue::Array(a) = v {
-            // Alice appears in recent players as well but is online, so it is skipped there.
-            assert_eq!(a.items.len(), 2);
-            assert_eq!(a.items[0].object_for_key("name").and_then(|v| v.as_str()), Some("Alice"));
-            assert_eq!(a.items[1].object_for_key("name").and_then(|v| v.as_str()), Some("Zed"));
-        } else {
-            panic!()
+        let PlistValue::Array(a) = v else { unreachable!() };
+        // Alice appears in recent players as well but is online, so it is skipped there.
+        assert_eq!(a.items.len(), 2);
+        assert_eq!(a.items[0].object_for_key("name").and_then(|v| v.as_str()), Some("Alice"));
+        assert_eq!(a.items[1].object_for_key("name").and_then(|v| v.as_str()), Some("Zed"));
+    }
+
+    fn plist_file(path: &str, v: &PlistValue) {
+        std::fs::create_dir_all(std::path::Path::new(path).parent().unwrap()).unwrap();
+        std::fs::write(path, data_from_property_list(v).unwrap()).unwrap();
+    }
+
+    fn named(alias: &str) -> PlistValue {
+        let mut d = crate::server::bhserver::new_mutable_dict();
+        d.insert("alias".to_string(), PlistValue::string(alias));
+        PlistValue::Dict(d)
+    }
+
+    #[test]
+    fn without_a_database_nothing_is_stored() {
+        let h = Harness::with_files("players_nodb", |save| std::fs::write(format!("{save}/server_db"), b"x").unwrap());
+        let a = h.join("Alice");
+        h.srv.save_all_players_array();
+        assert!(h.srv.saved_player_info_data_for_player(&a).is_none());
+        assert_eq!(h.srv.recent_players().len(), 1);
+    }
+
+    #[test]
+    fn legacy_player_files_are_read_until_the_migration_is_done() {
+        let h = Harness::new("players_legacy");
+        let pid = "abcdef0123456789abcdef0123456789";
+        let save = format!("{}/saves/{}", paths::appsup(), h.w.id);
+        let file = |id: &str| format!("{save}/players/{}/{}/{}/playerInfo.plist", &id[..1], &id[1..2], &id[2..]);
+        plist_file(&file(pid), &named("Legacy"));
+        assert!(h.srv.saved_player_info_data_for_player(pid).is_none()); // migrated: only the database counts
+        h.w.migrated.set(false);
+        assert!(h.srv.saved_player_info_data_for_player(pid).is_some());
+        assert_eq!(h.srv.player_name_for_player_with_id_including_old_players(Some(pid)).as_deref(), Some("Legacy"));
+        assert_eq!(h.srv.player_name_for_player_with_id_including_old_players(None), None);
+        assert_eq!(
+            h.srv.player_name_for_player_with_id_including_old_players(Some("0123456789abcdef0123456789abcdef")),
+            None
+        );
+        // Garbage and nameless records give no name; a live player is named from the live info.
+        let junk = "fedcba9876543210fedcba9876543210";
+        std::fs::create_dir_all(std::path::Path::new(&file(junk)).parent().unwrap()).unwrap();
+        std::fs::write(file(junk), b"not a plist").unwrap();
+        assert_eq!(h.srv.player_name_for_player_with_id_including_old_players(Some(junk)), None);
+        let bare = "11111111111111111111111111111111";
+        plist_file(&file(bare), &PlistValue::Dict(crate::server::bhserver::new_mutable_dict()));
+        assert_eq!(h.srv.player_name_for_player_with_id_including_old_players(Some(bare)), None);
+        let live = h.join("Alice");
+        assert_eq!(h.srv.player_name_for_player_with_id_including_old_players(Some(&live)).as_deref(), Some("Alice"));
+        // A player the node has never heard of is logged with nulls.
+        h.srv.full_player_information_now_available_for_player("nobody");
+    }
+
+    #[test]
+    fn the_reset_list_file_follows_the_list() {
+        let h = Harness::new("players_reset");
+        let path = format!("{}/saves/{}/resetList.plist", paths::appsup(), h.w.id);
+        *h.srv.reset_list.borrow_mut() = Some(vec!["a".to_string(), "b".to_string()]);
+        h.srv.save_reset_list();
+        assert!(std::fs::read_to_string(&path).unwrap().contains("<string>b</string>"));
+        *h.srv.reset_list.borrow_mut() = None;
+        h.srv.save_reset_list();
+        assert!(!std::path::Path::new(&path).exists());
+    }
+
+    #[test]
+    fn the_player_list_marks_ranks_photos_and_the_requester() {
+        let h = Harness::new("players_list");
+        *h.m.owner.borrow_mut() = Some("Olly".to_string());
+        let ids: Vec<String> = ["Olly", "Ann", "Mo", "Cy", "Vi", "Pam"].iter().map(|a| h.join(a)).collect();
+        h.srv.modify_list_for_player_or_ip_is_added_list_type("ann", true, 2);
+        h.srv.modify_list_for_player_or_ip_is_added_list_type("mo", true, 3);
+        h.srv.cloud_wide_admin_list.replace(Some(vec!["cy".to_string(), "vi".to_string()]));
+        h.srv.cloud_wide_invisible_admin_list.replace(Some(vec!["vi".to_string()]));
+        h.srv
+            .node
+            .player_info_for_peer_id(&ids[5])
+            .unwrap()
+            .borrow_mut()
+            .insert("photo".to_string(), PlistValue::data(vec![7]));
+        // Two live infos that cannot be listed: one without a player id and one without an alias.
+        for (key, val) in [("alias", "Idless"), ("playerID", "no-alias")] {
+            let mut d = crate::server::bhserver::new_mutable_dict();
+            d.insert(key.to_string(), PlistValue::string(val));
+            let info: crate::net::bhmatch::PlayerInfo = std::rc::Rc::new(std::cell::RefCell::new(d));
+            h.srv.node.info_arrived_for_player(&info, val);
         }
+        let list = h.srv.player_list_to_send_including_photos_for_clients_send_client(None, &ids[0]);
+        let by = |alias: &str| list.iter().find(|e| e.alias == alias).unwrap();
+        assert_eq!(list.len(), 5); // everyone but the requester
+        assert_eq!(by("Ann").modk, Some("admin"));
+        assert_eq!(by("Mo").modk, Some("mod"));
+        assert_eq!(by("Cy").supermod, Some("mode1"));
+        assert_eq!(by("Vi").supermod, Some("mode2"));
+        assert_eq!(by("Pam").photo, Some(vec![7]));
+        // The owner is marked when somebody else asks; a photo is withheld from clients not yet sent it.
+        let to_ann = h.srv.player_list_to_send_including_photos_for_clients_send_client(Some(&[]), &ids[1]);
+        assert_eq!(to_ann.iter().find(|e| e.alias == "Olly").unwrap().modk, Some("owner"));
+        assert_eq!(to_ann.iter().find(|e| e.alias == "Pam").unwrap().photo, None);
+        let sent = [ids[5].clone()];
+        let with_photo = h.srv.player_list_to_send_including_photos_for_clients_send_client(Some(&sent), &ids[1]);
+        assert_eq!(with_photo.iter().find(|e| e.alias == "Pam").unwrap().photo, Some(vec![7]));
+        // The coalesced broadcast reaches everyone connected once.
+        h.m.clear();
+        h.srv.send_updated_player_list_to_clients();
+        h.srv.delayed_send_updated_player_list_to_clients();
+        h.srv.delayed_send_updated_player_list_to_clients();
+        assert_eq!(h.m.sent.borrow().len(), 6);
+    }
+
+    #[test]
+    fn the_ownership_list_is_capped_and_sorted() {
+        let h = Harness::new("players_sign");
+        let a = h.join("Zoe");
+        let b = h.join("Abe");
+        // Someone without a name is listed by an empty entry; the rest are named and sorted case-insensitively.
+        let nameless = "22222222222222222222222222222222";
+        let mut d = crate::server::bhserver::new_mutable_dict();
+        d.insert("playerID".to_string(), PlistValue::string(nameless));
+        let info: crate::net::bhmatch::PlayerInfo = std::rc::Rc::new(std::cell::RefCell::new(d));
+        h.srv.node.info_arrived_for_player(&info, nameless);
+        h.srv.connected_clients.borrow_mut().push(nameless.to_string());
+        for i in 0..70 {
+            let mut p = crate::server::bhserver::new_mutable_dict();
+            p.insert("alias".to_string(), PlistValue::string(format!("old{i:02}")));
+            if i % 2 == 0 {
+                p.insert("playerID".to_string(), PlistValue::string(format!("{i:032}")));
+            }
+            h.srv.recent_players.borrow_mut().push(p);
+        }
+        let PlistValue::Array(list) = h.srv.get_recent_player_names_for_ownership_sign() else { unreachable!() };
+        let names: Vec<Option<String>> =
+            list.items.iter().map(|v| v.object_for_key("name").and_then(|v| v.as_str()).map(String::from)).collect();
+        assert_eq!(names.len(), 50); // three online (one nameless) plus the first 47 recent
+        assert!(names.contains(&Some("Abe".to_string())) && names.contains(&Some("Zoe".to_string())));
+        assert!(names.contains(&None));
+        let _ = (a, b);
+    }
+
+    #[test]
+    fn a_cloud_match_logs_the_player_count_with_every_broadcast() {
+        let h = RealMatchHarness::new("players_cloud", Some("SALT"), Some("Boss"), Some("public"), 10.0);
+        h.srv.send_updated_player_list_to_clients();
+        h.srv.delayed_send_updated_player_list_to_clients();
+        assert!(!h.srv.needs_to_send_updated_list_to_clients.get());
+    }
+
+    #[test]
+    fn eviction_copes_with_nameless_records_and_a_missing_world() {
+        let h = Harness::new("players_evict");
+        for _ in 0..0x80 {
+            h.srv.recent_players.borrow_mut().push(crate::server::bhserver::new_mutable_dict());
+        }
+        let mut d = crate::server::bhserver::new_mutable_dict();
+        d.insert("playerID".to_string(), PlistValue::string("p1"));
+        h.srv.add_player_dict_to_all_players_ever(&d); // the evicted record has no player id
+        assert_eq!(h.srv.recent_players().len(), 0x80);
+        *h.srv.world.borrow_mut() = None;
+        h.srv.recent_players.borrow_mut().push(d.clone());
+        h.srv.add_player_dict_to_all_players_ever(&d); // and without a world nothing is archived
+        assert_eq!(h.srv.recent_players().len(), 0x80);
     }
 }

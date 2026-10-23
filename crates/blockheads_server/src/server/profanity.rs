@@ -193,4 +193,27 @@ mod tests {
         assert_eq!(h.srv.replace_curse_words_for_message_client(None, None), None);
         assert!(h.d.messages()[0].ends_with("modified to (null)."));
     }
+
+    #[test]
+    fn folding_covers_non_ascii_and_odd_units() {
+        // Latin-1 and other single-unit lowercase mappings fold; ones that lowercase to several characters (the
+        // dotted capital I) and lone surrogates stay as they are.
+        assert_eq!(replace_ci("\u{c4}RGER \u{e4}rger", "\u{e4}rger", "x"), "x x");
+        assert_eq!(replace_ci("\u{130}", "\u{130}", "x"), "x");
+        assert_eq!(replace_ci("a\u{1F600}b", "\u{1F600}", "x"), "axb");
+        assert!(contains_ci("\u{1F600}", "\u{1F600}") && !contains_ci("\u{1F600}", "\u{1F601}"));
+        assert_eq!(replace_ci("abc", "x", "y"), "abc"); // nothing to replace
+        assert_eq!(fold_unit(0xD83D), 0xD83D);
+    }
+
+    #[test]
+    fn curse_words_are_removed_from_names() {
+        let h = with_curses("prof_e", "bad\nworse");
+        assert_eq!(h.srv.remove_curse_words_from_blockhead_name(Some("Bad Worse Joe")).as_deref(), Some("  Joe"));
+        assert_eq!(h.srv.remove_curse_words_from_blockhead_name(Some("Joe")).as_deref(), Some("Joe"));
+        assert_eq!(h.srv.remove_curse_words_from_blockhead_name(None), None);
+        // Without a curse list nothing is removed.
+        h.srv.curse_list.replace(None);
+        assert_eq!(h.srv.remove_curse_words_from_blockhead_name(Some("Bad")).as_deref(), Some("Bad"));
+    }
 }

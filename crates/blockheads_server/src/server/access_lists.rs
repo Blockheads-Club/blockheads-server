@@ -53,13 +53,9 @@ impl BHServer {
                 crate::nslog!("CLOUD:SETTING:WHITELISTED:OFF");
             } else {
                 crate::nslog!("CLOUD:SETTING:WHITELISTED:ON");
-                if let Some(sm) = self.node.match_().as_ref().and_then(|m| m.as_server_match().map(|s| s.privacy())) {
-                    if sm == 1 {
-                        if let Some(m) = self.node.match_() {
-                            if let Some(s) = m.as_server_match() {
-                                s.set_privacy(2);
-                            }
-                        }
+                if let Some(s) = self.node.match_().as_ref().and_then(|m| m.as_server_match()) {
+                    if s.privacy() == 1 {
+                        s.set_privacy(2);
                         crate::nslog!("CLOUD:SETTING:PRIVACY:SEARCHABLE");
                     }
                 }
@@ -222,17 +218,15 @@ impl BHServer {
         }
         let ip = dict_str(info, "ip");
         let udid = dict_str(info, "udidNew");
-        if let Some(bl) = self.black_list.borrow().as_ref() {
-            for entry in bl {
-                let comps = components_separated_by_string(entry, " \\");
-                if !comps.is_empty() {
-                    let first = &comps[0];
-                    if safe_ci(Some(first), alias.as_deref()) == 0 || safe_ci(Some(first), ip.as_deref()) == 0 {
-                        return true;
-                    }
-                    if comps.len() > 1 && safe_ci(Some(&comps[1]), udid.as_deref()) == 0 {
-                        return true;
-                    }
+        for entry in self.black_list.borrow().iter().flatten() {
+            let comps = components_separated_by_string(entry, " \\");
+            // A split always has a first component.
+            for first in comps.first() {
+                if safe_ci(Some(first), alias.as_deref()) == 0 || safe_ci(Some(first), ip.as_deref()) == 0 {
+                    return true;
+                }
+                if comps.len() > 1 && safe_ci(Some(&comps[1]), udid.as_deref()) == 0 {
+                    return true;
                 }
             }
         }
@@ -432,5 +426,163 @@ mod tests {
         let mut d2 = new_mutable_dict();
         d2.insert("alias".to_string(), crate::plist::value::PlistValue::string("other"));
         assert!(!h.srv.player_is_white_listed_with_info(&d2));
+    }
+
+    fn info_of(alias: &str, ip: &str, udid: &str) -> PlistDict {
+        let mut d = new_mutable_dict();
+        for (k, v) in [("alias", alias), ("ip", ip), ("udidNew", udid)] {
+            d.insert(k.to_string(), crate::plist::value::PlistValue::string(v));
+        }
+        d
+    }
+
+    #[test]
+    fn reloading_boots_players_that_lost_their_access() {
+        let h = Harness::new("lists_reload");
+        let bob = h.join("Bob");
+        let amy = h.join("Amy");
+        // A connected id without info is checked as an empty dictionary.
+        h.srv.connected_clients.borrow_mut().push("ghost".to_string());
+        let save = format!("{}/saves/{}", paths::appsup(), h.w.id);
+        write(&save, "whitelist.txt", &format!("{}\nsomeoneelse", WHITE_HEADER));
+        write(&save, "blacklist.txt", &format!("{}\nbob", BLACK_HEADER));
+        h.m.clear();
+        h.srv.reload_lists();
+        for id in [&bob, &amy, &"ghost".to_string()] {
+            assert!(h.m.packets_to(id).contains(&vec![0x26, 0x0c]), "{id}");
+        }
+    }
+
+    #[test]
+    fn a_cloud_world_with_a_whitelist_turns_searchable() {
+        let h = RealMatchHarness::new("lists_cloud", Some("SALT"), Some("Boss"), Some("public"), 10.0);
+        let path = format!("{}/saves/{}/whitelist.txt", paths::appsup(), h.w.id);
+        std::fs::write(&path, format!("{}\nsomeone", WHITE_HEADER)).unwrap();
+        h.srv.reload_lists();
+        assert_eq!(h.srv.privacy_string().as_deref(), Some("searchable"));
+        h.srv.reload_lists(); // already searchable: left alone
+        assert_eq!(h.srv.privacy_string().as_deref(), Some("searchable"));
+        std::fs::write(&path, WHITE_HEADER).unwrap();
+        h.srv.reload_lists();
+    }
+
+    #[test]
+    fn rank_changes_reach_the_server_client_and_bans_reach_the_dynamic_world() {
+        let h = Harness::new("lists_ranks");
+        let bob = h.join("Bob");
+        let sc = crate::server::server_client::ServerClient::init_with_client_id_server_light_block_index_light_block_database(
+            &bob, &h.srv, 31, None,
+        );
+        h.w.clients.borrow_mut().insert(bob.clone(), sc.clone());
+        h.srv.modify_list_for_player_or_ip_is_added_list_type("127.0.0.1", true, 2); // by address: not by name
+        assert!(!sc.is_admin());
+        h.srv.modify_list_for_player_or_ip_is_added_list_type("bob", true, 2);
+        assert!(sc.is_admin());
+        // Nobody connected matches: no notice.
+        h.m.clear();
+        h.srv.modify_list_for_player_or_ip_is_added_list_type("nobody", true, 3);
+        assert!(h.m.sent.borrow().is_empty());
+        // A ban also tells the dynamic world; a player without an id in the recent list is skipped.
+        h.srv.modify_list_for_player_or_ip_is_added_list_type("bob", true, 0);
+        assert!(h.w.dw.calls.borrow().contains(&format!("userban {bob} false")));
+        h.srv.recent_players.borrow_mut().insert(0, info_of("Bob", "9.9.9.9", "u"));
+        h.srv.modify_list_for_player_or_ip_is_added_list_type("bob", false, 0);
+        // An unknown list type changes nothing in memory.
+        assert!(h.srv.modify_list_for_player_or_ip_is_added_list_type("x", true, 9).is_some());
+        h.srv.clear_list(9);
+    }
+
+    #[test]
+    fn ban_with_device_uses_the_remembered_udid_unless_the_name_is_being_reset() {
+        let h = Harness::new("lists_udid");
+        h.srv.recent_players.borrow_mut().push(info_of("Cara", "1.2.3.4", "udid-cara"));
+        h.srv.recent_players.borrow_mut().push(info_of("Dan", "1.2.3.5", "udid-dan"));
+        *h.srv.reset_list.borrow_mut() = Some(vec!["dan".to_string()]);
+        h.srv.modify_list_for_player_or_ip_is_added_list_type_ban_udid("1.2.3.4", true, 0, true);
+        h.srv.modify_list_for_player_or_ip_is_added_list_type_ban_udid("dan", true, 0, true);
+        h.srv.modify_list_for_player_or_ip_is_added_list_type_ban_udid("unknown", true, 0, true);
+        let bl = h.srv.black_list().unwrap();
+        assert!(bl.contains(&"1.2.3.4 \\udid-cara".to_string()), "{bl:?}");
+        assert!(bl.contains(&"dan".to_string()) && bl.contains(&"unknown".to_string()), "{bl:?}");
+        // The blacklist matches by name, address or the stored device; mods are exempt.
+        assert!(h.srv.player_is_black_listed_with_info(&info_of("Other", "1.2.3.4", "x")));
+        assert!(h.srv.player_is_black_listed_with_info(&info_of("Other", "8.8.8.8", "udid-cara")));
+        assert!(h.srv.player_is_black_listed_with_info(&info_of("Dan", "8.8.8.8", "y")));
+        assert!(!h.srv.player_is_black_listed_with_info(&info_of("Eve", "8.8.8.8", "z")));
+        h.srv.modify_list_for_player_or_ip_is_added_list_type("dan", true, 3);
+        assert!(!h.srv.player_is_black_listed_with_info(&info_of("Dan", "8.8.8.8", "y")));
+    }
+
+    #[test]
+    fn bans_are_looked_up_live_then_in_the_saved_record() {
+        let h = Harness::new("lists_banned");
+        assert!(!h.srv.player_is_banned_with_id(None));
+        let pid = h.join("Fay");
+        assert!(!h.srv.player_is_banned_with_id(Some(&pid)));
+        h.srv.modify_list_for_player_or_ip_is_added_list_type("fay", true, 0);
+        assert!(h.srv.player_is_banned_with_id(Some(&pid)));
+        // An offline player is judged by the saved record, and the answer is remembered.
+        let saved = "33333333333333333333333333333333";
+        let blob = crate::plist::helpers::data_from_property_list(&crate::plist::value::PlistValue::Dict(info_of(
+            "Fay", "5.5.5.5", "u",
+        )))
+        .unwrap();
+        h.srv.server_database().unwrap().set_data(Some(&blob), Some(&format!("{saved}_info")));
+        assert!(h.srv.player_is_banned_with_id(Some(saved)));
+        h.srv.black_list.replace(None);
+        assert!(h.srv.player_is_banned_with_id(Some(saved)));
+        // Unknown, unparsable and non-dictionary records are not banned.
+        assert!(!h.srv.player_is_banned_with_id(Some("44444444444444444444444444444444")));
+        let junk = "55555555555555555555555555555555";
+        h.srv.server_database().unwrap().set_data(Some(b"not a plist"), Some(&format!("{junk}_info")));
+        assert!(!h.srv.player_is_banned_with_id(Some(junk)));
+        let flat = "66666666666666666666666666666666";
+        let array =
+            crate::plist::helpers::data_from_property_list(&crate::plist::value::PlistValue::array(vec![])).unwrap();
+        h.srv.server_database().unwrap().set_data(Some(&array), Some(&format!("{flat}_info")));
+        assert!(!h.srv.player_is_banned_with_id(Some(flat)));
+    }
+
+    #[test]
+    fn connection_predicate_and_whitelist_edges() {
+        let h = Harness::new("lists_conn");
+        let mut local = new_mutable_dict();
+        local.insert("local".to_string(), crate::plist::value::PlistValue::boolean(true));
+        assert!(h.srv.player_is_connected_with_info(&local));
+        assert!(!h.srv.player_is_connected_with_info(&new_mutable_dict()));
+        let pid = h.join("Gus");
+        assert!(h.srv.player_is_connected_with_info(&h.srv.player_info_dict_for_peer_id(&pid).unwrap()));
+        // An empty whitelist admits everybody; a mod passes a whitelist they are not on.
+        h.srv.white_list.replace(Some(vec![]));
+        assert!(h.srv.player_is_white_listed_with_info(&info_of("Anyone", "1.1.1.1", "u")));
+        h.srv.white_list.replace(Some(vec!["gus".to_string()]));
+        h.srv.mod_list.replace(Some(vec!["moe".to_string()]));
+        assert!(h.srv.player_is_white_listed_with_info(&info_of("Moe", "1.1.1.1", "u")));
+        assert!(h.srv.player_is_white_listed_with_info(&info_of("Other", "gus", "u")));
+        assert!(!h.srv.player_is_white_listed_with_info(&info_of("Other", "1.1.1.1", "u")));
+        // The owner and cloud-wide ranks.
+        assert!(h.srv.player_is_admin_with_id(None) == h.srv.player_is_admin_with_alias(None));
+    }
+
+    #[test]
+    fn edge_cases_without_a_world_a_dynamic_world_or_a_blacklist() {
+        let h = Harness::new("lists_edges");
+        let bob = h.join("Bob");
+        h.w.dw_present.set(false);
+        h.srv.modify_list_for_player_or_ip_is_added_list_type("bob", true, 0);
+        assert!(h.w.dw.calls.borrow().is_empty());
+        *h.srv.world.borrow_mut() = None;
+        h.srv.modify_list_for_player_or_ip_is_added_list_type("bob", false, 0);
+        h.srv.modify_list_for_player_or_ip_is_added_list_type("bob", true, 3); // nobody to tell without a world
+        h.srv.black_list.replace(None);
+        assert!(!h.srv.player_is_black_listed_with_info(&info_of("Bob", "1.1.1.1", "u")));
+        assert!(!h.srv.player_is_banned_with_id(Some(&bob)));
+        // A cloud match that is not a server match has nothing to make searchable.
+        h.m.cloud.set(true);
+        h.srv.white_list.replace(None);
+        let save = format!("{}/saves/{}", paths::appsup(), h.w.id);
+        write(&save, "whitelist.txt", &format!("{}\nsomeone", WHITE_HEADER));
+        h.srv.reload_lists();
+        assert!(h.srv.white_list().is_some());
     }
 }

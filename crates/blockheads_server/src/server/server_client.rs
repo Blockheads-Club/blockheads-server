@@ -247,7 +247,7 @@ impl ServerClient {
                     continue;
                 }
                 // dataFromPropertyList failure: nothing is appended after the two header bytes.
-                let pkt = encode_batch(*kind, i as u8, &items).unwrap_or_else(|| vec![*kind as u8, i as u8]);
+                let pkt = encode_batch(*kind, i as u8, &items).unwrap_or(vec![*kind as u8, i as u8]);
                 srv.send_network_data_to_peers_reliable(pkt, &[self.client_id.clone()], *reliable);
             }
         }
@@ -493,11 +493,8 @@ mod tests {
         let kinds: Vec<(u8, u8)> = sent.iter().map(|p| (p[0], p[1])).collect();
         assert_eq!(kinds, vec![(0x07, 2), (0x07, 10), (0x46, 10), (0x08, 10), (0x08, 10), (0x09, 10)]);
         let v = gz_plist_from(&sent[1][2..]).unwrap();
-        if let PlistValue::Array(a) = v {
-            assert_eq!(a.items.len(), 1);
-        } else {
-            panic!()
-        }
+        let PlistValue::Array(a) = v else { unreachable!() };
+        assert_eq!(a.items.len(), 1);
         // queues are emptied
         h.m.clear();
         c.send_all_object_data();
@@ -521,11 +518,8 @@ mod tests {
         c.add_fill_request(tile(40, 5)); // macro (1, 0)
         c.add_fill_request(tile(0, 40)); // macro (0, 1)
         let r = c.get_and_remove_all_reciept_data_for_macro_pos_world(IntPair { x: 1, y: 0 }, w).unwrap();
-        if let PlistValue::Array(a) = r {
-            assert_eq!(a.items.len(), 2);
-        } else {
-            panic!()
-        }
+        let PlistValue::Array(a) = r else { unreachable!() };
+        assert_eq!(a.items.len(), 2);
         assert_eq!(c.fill_indices.borrow().len(), 1);
         assert!(c.get_and_remove_all_reciept_data_for_macro_pos_world(IntPair { x: 9, y: 9 }, w).is_none());
     }
@@ -560,5 +554,44 @@ mod tests {
         assert!(c.update_arrays_to_send.borrow()[0].is_empty());
         assert!(c.block_is_requested(1), "request-type map is not reset");
         assert!(c.paused());
+    }
+
+    #[test]
+    fn the_dynamic_world_face_forwards_to_the_client() {
+        let h = Harness::new("sc_face");
+        let c = client(&h, "c9");
+        let face: &dyn DwServerClient = &*c;
+        assert!(face.connected());
+        assert_eq!(face.client_id(), "c9");
+        assert_eq!(face.light_block_index(), 31);
+        assert!(!face.block_is_wired(5));
+        assert!(!face.dynamic_object_is_wired(7));
+        face.wire_dynamic_object(7);
+        assert!(face.dynamic_object_is_wired(7));
+        assert!(c.wired_dynamic_objects().contains_index(7));
+        face.unwire_dynamic_object(7);
+        assert!(!face.dynamic_object_is_wired(7));
+        face.add_creation_object_data_to_send_of_type_object_id(&blob(1, 0), 4, 1);
+        face.add_creation_data_update_object_data_to_send_of_type(&blob(2, 0), 4);
+        face.add_update_object_data_to_send_of_type_reliable(&blob(3, 0), 4, true);
+        face.add_removal_object_data_to_send_of_type_object_id(&blob(4, 0), 4, 4);
+        h.m.clear();
+        face.send_all_object_data();
+        assert_eq!(h.m.packets_to("c9").len(), 4);
+        assert_eq!(face.world_indices_containing_tamed_animals().borrow().len(), NUM_TYPE_BUCKETS);
+        assert_eq!(c.world_indices_containing_tamed_animals().borrow().len(), NUM_TYPE_BUCKETS);
+        // The plain accessors.
+        c.set_requests_heart_beat(true);
+        c.set_has_ever_requested_heartbeat(true);
+        c.set_time_since_last_heartbeat_request(1.5);
+        c.set_is_admin(true);
+        c.set_paused(true);
+        assert!(c.requests_heart_beat() && c.has_ever_requested_heartbeat() && c.is_admin() && c.paused());
+        assert_eq!(c.time_since_last_heartbeat_request(), 1.5);
+        assert_eq!(c.client_id(), "c9");
+        assert_eq!(c.light_block_index(), 31);
+        c.set_connected(false);
+        assert!(!c.connected() && !c.paused());
+        let _ = (c.all_light_block_indices().borrow().count(), c.found_items_list().borrow().count());
     }
 }
