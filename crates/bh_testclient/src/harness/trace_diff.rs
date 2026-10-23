@@ -81,8 +81,7 @@ fn reason(a: &NormMsg, b: &NormMsg) -> String {
                 }
             }
             (Some((n, _)), None) => return format!("section {} only in ref", n),
-            (None, Some((n, _))) => return format!("section {} only in ours", n),
-            (None, None) => {}
+            (None, other) => return format!("section {} only in ours", other.map_or("", |(n, _)| n.as_str())),
         }
     }
     "identical".into()
@@ -109,8 +108,7 @@ fn strict_diffs(a: &[NormMsg], b: &[NormMsg]) -> Vec<MsgDiff> {
                 }
             }
             (Some(x), None) => d.push(mk(Some(i), None, Some(x), None, "only in ref".into())),
-            (None, Some(y)) => d.push(mk(None, Some(i), None, Some(y), "only in ours".into())),
-            (None, None) => {}
+            (None, y) => d.extend(y.map(|y| mk(None, Some(i), None, Some(y), "only in ours".into()))),
         }
     }
     d
@@ -155,8 +153,7 @@ fn per_type_diffs(a: &[NormMsg], b: &[NormMsg]) -> Vec<MsgDiff> {
                     }
                 }
                 (Some(&i), None) => d.push(mk(Some(i), None, Some(&a[i]), None, "only in ref".into())),
-                (None, Some(&l)) => d.push(mk(None, Some(l), None, Some(&b[l]), "only in ours".into())),
-                (None, None) => {}
+                (None, l) => d.extend(l.map(|&l| mk(None, Some(l), None, Some(&b[l]), "only in ours".into()))),
             }
         }
     }
@@ -279,5 +276,83 @@ mod tests {
         let t = diff_traces(&a, &a[..3], DiffMode::Strict);
         assert!(t.diffs[0].reason.contains("only in ref"));
         assert!(!t.render().is_empty());
+    }
+
+    fn msg(ty: u8, client: &str, channel: u8, sections: &[(&str, &str)]) -> NormMsg {
+        NormMsg {
+            ty,
+            channel,
+            client: client.into(),
+            sections: sections.iter().map(|(n, d)| (n.to_string(), d.as_bytes().to_vec())).collect(),
+            text: format!("text of {ty:#x}"),
+            t_ms: 0.0,
+        }
+    }
+
+    #[test]
+    fn reasons_name_the_first_difference() {
+        let base = msg(1, "A", 0, &[("body", "abc")]);
+        assert!(reason(&base, &msg(2, "A", 0, &[("body", "abc")])).starts_with("type differs: ref 0x01 ours 0x02"));
+        assert_eq!(reason(&base, &msg(1, "B", 0, &[("body", "abc")])), "client differs: A vs B");
+        assert_eq!(reason(&base, &msg(1, "A", 3, &[("body", "abc")])), "channel differs: 0 vs 3");
+        assert!(reason(&base, &msg(1, "A", 0, &[("other", "abc")])).contains("section #0 name differs: body vs other"));
+        assert!(reason(&base, &msg(1, "A", 0, &[("body", "abX")]))
+            .contains("section body differs at byte 2 (len ref 3 ours 3)"));
+        assert!(reason(&base, &msg(1, "A", 0, &[("body", "ab")])).contains("at byte 2 (len ref 3 ours 2)"));
+        assert_eq!(reason(&base, &base), "identical");
+        let pl = msg(1, "A", 0, &[("chat.plist", "l1\nl2\nl3")]);
+        let r = reason(&pl, &msg(1, "A", 0, &[("chat.plist", "l1\nXX\nl3")]));
+        assert!(r.contains("line 2: ref `l2` ours `XX`"), "{r}");
+        let r = reason(&pl, &msg(1, "A", 0, &[("chat.plist", "l1\nl2")]));
+        assert!(r.contains("line 3: ref `l3` ours `<none>`"), "{r}");
+        let r = reason(&msg(1, "A", 0, &[("chat.plist", "l1")]), &msg(1, "A", 0, &[("chat.plist", "l1\nl2")]));
+        assert!(r.contains("line 2: ref `<none>` ours `l2`"), "{r}");
+        assert_eq!(reason(&base, &msg(1, "A", 0, &[("body", "abc"), ("extra", "x")])), "section extra only in ours");
+        assert_eq!(reason(&msg(1, "A", 0, &[("body", "abc"), ("extra", "x")]), &base), "section extra only in ref");
+    }
+
+    #[test]
+    fn strict_and_per_type_modes_report_missing_messages() {
+        let a = vec![msg(1, "A", 0, &[("body", "1")]), msg(2, "A", 0, &[("body", "2")])];
+        let b =
+            vec![msg(1, "A", 0, &[("body", "1")]), msg(2, "A", 0, &[("body", "X")]), msg(3, "A", 0, &[("body", "3")])];
+        for mode in [DiffMode::Strict, DiffMode::PerType] {
+            let r = diff_traces(&a, &b, mode);
+            assert_eq!(r.diffs.len(), 2);
+            assert_eq!(
+                (r.diffs[1].index_a, r.diffs[1].index_b, r.diffs[1].reason.as_str()),
+                (None, Some(2), "only in ours")
+            );
+            assert_eq!(r.diffs[1].b_text, "text of 0x3");
+            let rev = diff_traces(&b, &a, mode);
+            assert_eq!((rev.diffs[1].index_a, rev.diffs[1].index_b), (Some(2), None));
+            assert_eq!(rev.diffs[1].reason, "only in ref");
+        }
+        assert_eq!(
+            diff_traces(&a, &b, DiffMode::PerType).diffs[0].reason,
+            "A #0 of its type: section body differs at byte 0 (len ref 1 ours 1)"
+        );
+    }
+
+    #[test]
+    fn reports_render_text_and_json() {
+        let a = vec![msg(1, "A", 0, &[("chat.plist", "x\ny")]), msg(2, "A", 0, &[("body", "2")])];
+        let swapped = vec![a[1].clone(), a[0].clone()];
+        let r = diff_traces(&a, &swapped, DiffMode::Strict);
+        assert!(r.reordered_only);
+        let text = r.render();
+        assert!(
+            text.contains("NOTE: only the SEND ORDER differs")
+                && text.contains("ref : ")
+                && text.contains("ours: text of")
+        );
+        let j = r.render_json();
+        assert!(j.starts_with("{\"count_a\":2,\"count_b\":2,\"strict_equal\":false,\"per_type_equal\":true,\"reordered_only\":true,\"clean\":false,\"diffs\":[{\"type\":1,"));
+        assert!(j.contains("},{\"type\":2,") && j.ends_with("]}"));
+        let empty = diff_traces(&[], &a, DiffMode::PerType);
+        assert!(empty.render().contains("WARNING: empty trace on at least one side"));
+        assert!(!empty.is_clean());
+        assert!(diff_traces(&a, &a, DiffMode::PerType).render_json().contains("\"diffs\":[]"));
+        assert_eq!(subkey(&msg(7, "A", 0, &[("objType", "\u{9}")])), vec![9]);
     }
 }

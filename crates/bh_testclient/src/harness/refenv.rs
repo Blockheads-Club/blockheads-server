@@ -656,41 +656,11 @@ mod tests {
         assert!(matches!(e, Err(HarnessError::Timeout(_))));
     }
 
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    /// The environment is process-wide: tests that change it run one at a time.
-    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
-        ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
-    }
-
-    fn script(dir: &Path, name: &str, body: &str) -> PathBuf {
-        use std::os::unix::fs::PermissionsExt;
-        let p = dir.join(name);
-        std::fs::write(&p, format!("#!/bin/sh\n{}", body)).unwrap();
-        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
-        p
-    }
+    use super::super::testkit::{env_lock, script, EnvGuard};
 
     /// Prints the load line, then echoes every console line it reads.
     const CONSOLE: &str = "echo \"2026-10-16 20:30:41.724 x[6] World load complete.\" >&2\n\
                            while read l; do echo \"console: $l\" >&2; done\nsleep 30\n";
-
-    /// Restores an environment variable when dropped (the test binaries run single-threaded).
-    struct EnvGuard(&'static str, Option<std::ffi::OsString>);
-    impl EnvGuard {
-        fn set(k: &'static str, v: impl AsRef<std::ffi::OsStr>) -> EnvGuard {
-            let g = EnvGuard(k, std::env::var_os(k));
-            std::env::set_var(k, v);
-            g
-        }
-    }
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            match &self.1 {
-                Some(v) => std::env::set_var(self.0, v),
-                None => std::env::remove_var(self.0),
-            }
-        }
-    }
 
     /// Console input reaches our server's stdin; without `RunSpec::console` there is none.
     #[test]

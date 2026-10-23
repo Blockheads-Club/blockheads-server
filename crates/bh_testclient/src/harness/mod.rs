@@ -472,6 +472,45 @@ pub fn run_script_ports(
     Ok(all)
 }
 
+/// Helpers shared by the harness tests that fake external programs.
+#[cfg(test)]
+pub(crate) mod testkit {
+    use std::path::{Path, PathBuf};
+
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    /// The environment is process-wide: tests that change it run one at a time.
+    pub(crate) fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// An executable `#!/bin/sh` script `dir/name` with the given body.
+    pub(crate) fn script(dir: &Path, name: &str, body: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let p = dir.join(name);
+        std::fs::write(&p, format!("#!/bin/sh\n{}", body)).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        p
+    }
+
+    /// Restores an environment variable when dropped.
+    pub(crate) struct EnvGuard(&'static str, Option<std::ffi::OsString>);
+    impl EnvGuard {
+        pub(crate) fn set(k: &'static str, v: impl AsRef<std::ffi::OsStr>) -> EnvGuard {
+            let g = EnvGuard(k, std::env::var_os(k));
+            std::env::set_var(k, v);
+            g
+        }
+    }
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.1 {
+                Some(v) => std::env::set_var(self.0, v),
+                None => std::env::remove_var(self.0),
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -105,6 +105,10 @@ OUT.flush()
 
 /// Run the reference under gdbserver + gdb for `limit` events.
 pub fn run_reference_trace(args: &[String], limit: u64, out: &Path) -> Result<Vec<RngEvent>> {
+    run_reference_trace_within(args, limit, out, Duration::from_secs(600))
+}
+
+fn run_reference_trace_within(args: &[String], limit: u64, out: &Path, timeout: Duration) -> Result<Vec<RngEvent>> {
     let srv = RefDebugServer::start(&RunSpec { tag: "rng".into(), args: args.to_vec(), ..Default::default() })?;
     let tmp = TempDir::new("gdbrng")?;
     let script = tmp.path().join("rng.py");
@@ -132,7 +136,7 @@ pub fn run_reference_trace(args: &[String], limit: u64, out: &Path) -> Result<Ve
         .stderr(Stdio::null())
         .spawn()
         .map_err(|e| HarnessError::Io(e))?;
-    let end = Instant::now() + Duration::from_secs(600);
+    let end = Instant::now() + timeout;
     loop {
         match gdb.try_wait()? {
             Some(_) => break,
@@ -140,7 +144,7 @@ pub fn run_reference_trace(args: &[String], limit: u64, out: &Path) -> Result<Ve
                 if Instant::now() >= end {
                     let _ = gdb.kill();
                     let _ = gdb.wait();
-                    return Err(HarnessError::Timeout("gdb did not finish within 600 s".into()));
+                    return Err(HarnessError::Timeout(format!("gdb did not finish within {} s", timeout.as_secs())));
                 }
                 std::thread::sleep(Duration::from_millis(100));
             }
@@ -158,6 +162,16 @@ pub fn run_our_trace(
     limit: u64,
     out: &Path,
 ) -> Result<Vec<RngEvent>> {
+    run_our_trace_within(args, virtual_clock_unix, limit, out, Duration::from_secs(600))
+}
+
+fn run_our_trace_within(
+    args: &[String],
+    virtual_clock_unix: Option<u64>,
+    limit: u64,
+    out: &Path,
+    timeout: Duration,
+) -> Result<Vec<RngEvent>> {
     let _ = std::fs::remove_file(out);
     let mut env = vec![("BH_RNG_TRACE".to_string(), out.display().to_string())];
     if let Some(c) = virtual_clock_unix {
@@ -165,7 +179,7 @@ pub fn run_our_trace(
     }
     let mut srv =
         OurServer::start(&RunSpec { tag: "rngours".into(), args: args.to_vec(), data_dir: None, env, console: false })?;
-    let end = Instant::now() + Duration::from_secs(600);
+    let end = Instant::now() + timeout;
     loop {
         let lines = std::fs::read(out).map(|b| b.iter().filter(|c| **c == b'\n').count() as u64).unwrap_or(0);
         if lines >= limit {
@@ -333,5 +347,109 @@ mod tests {
         for k in ["FinishBreakpoint", "$eax", "$xmm0.v2_double[0]", "*fn_rand"] {
             assert!(s.contains(k), "{}", k);
         }
+    }
+
+    #[test]
+    fn trace_files_are_parsed_strictly() {
+        let ev = parse_trace("# comment\n\nR 1 tag 5\nM 2 t 0.5\n").unwrap();
+        assert_eq!(ev.len(), 2);
+        assert_eq!(ev[1], RngEvent { kind: 'M', seq: 2, tag: "t".into(), value: "0.5".into() });
+        for bad in ["R", "R x tag 1", "R 1", "R 1 tag", "Q 1 a b"] {
+            assert!(matches!(parse_trace(bad), Err(HarnessError::Parse(_))), "{bad}");
+        }
+        assert_eq!(first_srand_seed(&parse_trace("S 0 a notanumber\n").unwrap()), None);
+        assert_eq!(first_srand_seed(&ev), None);
+    }
+
+    fn ev(kind: char, seq: u64, value: &str) -> RngEvent {
+        RngEvent { kind, seq, tag: "t".into(), value: value.into() }
+    }
+
+    #[test]
+    fn divergences_and_rendering() {
+        // kinds differ, doubles compare bit for bit (NaN equals NaN), integers numerically, unparsable text literally
+        let r = |v: Vec<RngEvent>, w: Vec<RngEvent>| diff_rng(&v, &w, true);
+        assert!(r(vec![ev('R', 0, "1")], vec![ev('M', 0, "1")]).first.is_some());
+        assert!(r(vec![ev('M', 0, "nan")], vec![ev('M', 0, "NaN")]).is_clean());
+        assert!(r(vec![ev('M', 0, "x")], vec![ev('M', 0, "x")]).is_clean());
+        assert!(r(vec![ev('M', 0, "x")], vec![ev('M', 0, "y")]).first.is_some());
+        assert!(r(vec![ev('R', 0, "07")], vec![ev('R', 0, "7")]).is_clean());
+        assert!(r(vec![ev('R', 0, "a")], vec![ev('R', 0, "a")]).is_clean());
+        assert!(r(vec![ev('R', 0, "a")], vec![ev('R', 0, "b")]).first.is_some());
+        // a longer reference without equal-length checking is only a tail note
+        let long = vec![ev('R', 0, "1"), ev('R', 1, "2")];
+        let d = diff_rng(&long, &long[..1], false);
+        assert!(d.is_clean() && d.render().contains("tail: one side is longer (2 vs 1 events)"));
+        let d = diff_rng(&long, &long[..1], true);
+        let first = d.first.as_ref().unwrap();
+        assert_eq!((first.index, first.reference.seq, first.ours.is_none()), (1, 1, true));
+        assert!(d.render().contains(">> ours: <none>") && d.render().contains("RESULT: DIFFERENT"));
+        let d = diff_rng(&long[..1], &long, true);
+        assert_eq!(d.first.as_ref().unwrap().reference.tag, "<end of reference>");
+        let empty = diff_rng(&[], &[], false);
+        assert!(
+            empty.render().contains("WARNING: nothing was compared") && empty.render().contains("RESULT: NOT CLEAN")
+        );
+        let same = diff_rng(&long, &long, true);
+        assert!(same.render().contains("RESULT: identical") && !same.render().contains("tail:"));
+        // context shows up to eight earlier pairs
+        let many: Vec<RngEvent> = (0..12).map(|i| ev('R', i, "1")).collect();
+        let mut other = many.clone();
+        other[10].value = "2".into();
+        let d = diff_rng(&many, &other, false);
+        assert_eq!((d.first.as_ref().unwrap().context.len(), d.render().matches("   ref : ").count()), (8, 8));
+    }
+
+    #[test]
+    fn our_trace_runner_with_a_fake_server() {
+        let _l = super::super::testkit::env_lock();
+        let tmp = TempDir::new("our-trace").unwrap();
+        let out = tmp.path().join("trace.log");
+        let writer = format!("printf 'R 0 a 1\nR 1 b 2\nR 2 c 3\nS 3 d 4\nR 4 e' > '{}'\nsleep 30\n", out.display());
+        let bin = super::super::testkit::script(tmp.path(), "ours.sh", &format!("trap 'exit 0' INT\n{writer}"));
+        let _g = super::super::testkit::EnvGuard::set("BH_SERVER_BIN", &bin);
+        // the partial last line is dropped and the list is cut to the limit
+        let ev = run_our_trace(&[], Some(1_700_000_000), 3, &out).unwrap();
+        assert_eq!(ev.len(), 3);
+        let ev = run_our_trace_within(&[], None, 100, &out, Duration::from_millis(400));
+        assert!(matches!(ev, Err(HarnessError::Timeout(_))));
+        // a server that exits before the limit: whatever it wrote is returned
+        let quick = super::super::testkit::script(
+            tmp.path(),
+            "quick.sh",
+            &format!("printf 'R 0 a 1\n' > '{}'\n", out.display()),
+        );
+        let _g2 = super::super::testkit::EnvGuard::set("BH_SERVER_BIN", &quick);
+        assert_eq!(run_our_trace(&[], None, 50, &out).unwrap().len(), 1);
+        let none = super::super::testkit::script(tmp.path(), "none.sh", "exit 0\n");
+        let _g3 = super::super::testkit::EnvGuard::set("BH_SERVER_BIN", &none);
+        assert!(run_our_trace(&[], None, 5, &out).unwrap().is_empty());
+    }
+
+    #[test]
+    fn reference_trace_runner_with_fake_gdb() {
+        use super::super::testkit::*;
+        let _l = env_lock();
+        let tmp = TempDir::new("ref-trace").unwrap();
+        let bin = tmp.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        script(&bin, "docker", "exit 0\n");
+        script(&bin, "gdb", "printf 'S 0 x 7\nR 1 y 8\n' > \"$BH_RNG_OUT\"\nexit 0\n");
+        script(tmp.path(), "run_ref_debug.sh", "echo \"Listening on port $GDBPORT\" >&2\nsleep 30\n");
+        let _p = EnvGuard::set("PATH", format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default()));
+        let _r = EnvGuard::set("BH_REFENV", tmp.path());
+        let out = tmp.path().join("ref.log");
+        let ev = run_reference_trace(&[], 10, &out).unwrap();
+        assert_eq!((ev.len(), first_srand_seed(&ev)), (2, Some(7)));
+        // a gdb that never finishes is killed when the time is up
+        script(&bin, "gdb", "sleep 30\n");
+        let err = run_reference_trace_within(&[], 10, &out, Duration::from_millis(300)).unwrap_err();
+        assert!(matches!(err, HarnessError::Timeout(ref m) if m.contains("did not finish")), "{err}");
+        // no gdb at all
+        script(&bin, "gdb", "exit 0\n");
+        std::fs::remove_file(&out).ok();
+        assert!(run_reference_trace(&[], 10, &out).is_err());
+        let _p2 = EnvGuard::set("PATH", tmp.path().join("nothing"));
+        assert!(matches!(run_reference_trace(&[], 10, &out), Err(HarnessError::Docker(_)) | Err(HarnessError::Io(_))));
     }
 }
