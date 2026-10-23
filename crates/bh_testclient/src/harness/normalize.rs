@@ -291,38 +291,44 @@ fn camel(s: &str) -> String {
         })
         .collect()
 }
+/// `DynamicObjectType` numbers and names (without the `DYNAMIC_OBJECT_TYPE_` prefix) of a `save_format_enums.txt`.
+fn parse_object_classes(text: &str) -> BTreeMap<u32, String> {
+    let mut m = BTreeMap::new();
+    let mut inside = false;
+    for l in text.lines() {
+        if l.starts_with("## enum ") {
+            inside = l.trim() == "## enum DynamicObjectType";
+            continue;
+        }
+        if !inside {
+            continue;
+        }
+        if let Some((n, name)) = l.split_once('\t') {
+            if let (Ok(n), Some(rest)) = (n.parse::<u32>(), name.trim().strip_prefix("DYNAMIC_OBJECT_TYPE_")) {
+                m.insert(n, rest.to_string());
+            }
+        }
+    }
+    m
+}
 fn object_classes() -> &'static BTreeMap<u32, String> {
     static C: OnceLock<BTreeMap<u32, String>> = OnceLock::new();
     C.get_or_init(|| {
-        let mut m = BTreeMap::new();
-        if let Ok(t) = std::fs::read_to_string(super::private_docs().join("save_format_enums.txt")) {
-            let mut inside = false;
-            for l in t.lines() {
-                if l.starts_with("## enum ") {
-                    inside = l.trim() == "## enum DynamicObjectType";
-                    continue;
-                }
-                if !inside {
-                    continue;
-                }
-                if let Some((n, name)) = l.split_once('\t') {
-                    if let (Ok(n), Some(rest)) = (n.parse::<u32>(), name.trim().strip_prefix("DYNAMIC_OBJECT_TYPE_")) {
-                        m.insert(n, rest.to_string());
-                    }
-                }
-            }
-        }
-        m
+        let text = std::fs::read_to_string(super::private_docs().join("save_format_enums.txt")).unwrap_or_default();
+        parse_object_classes(&text)
     })
 }
 /// Candidate `*NetData` struct names for an object batch `(kind, objType)`.
 fn struct_candidates(kind: u8, obj_type: u8) -> Vec<String> {
+    struct_candidates_in(object_classes(), kind, obj_type)
+}
+fn struct_candidates_in(classes: &BTreeMap<u32, String>, kind: u8, obj_type: u8) -> Vec<String> {
     let suffix = match kind {
         0x07 | 0x0a | 0x46 | 0x45 => "CreationNetData",
         _ => "UpdateNetData",
     };
     let mut v = Vec::new();
-    if let Some(n) = object_classes().get(&(obj_type as u32)) {
+    if let Some(n) = classes.get(&(obj_type as u32)) {
         let c = camel(n);
         v.push(format!("{}{}", c, suffix));
         if let Some(r) = n.strip_prefix("NPC_") {
@@ -330,6 +336,17 @@ fn struct_candidates(kind: u8, obj_type: u8) -> Vec<String> {
         }
     }
     v
+}
+
+/// Zero the padding ranges of every candidate struct inside `bytes`.
+fn mask_padding(bytes: &mut [u8], cands: &[String], padding: &PaddingMeta) {
+    for c in cands {
+        for (off, len) in padding.ranges(c) {
+            for j in *off..(*off + *len).min(bytes.len()) {
+                bytes[j] = 0;
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------------------------- normalised messages
@@ -451,13 +468,7 @@ pub struct NormalizeOptions {
 }
 impl Default for NormalizeOptions {
     fn default() -> Self {
-        let padding = match PaddingMeta::load(&super::meta_json_path()) {
-            Ok(p) => p,
-            Err(e) => {
-                eprintln!("warning: padding meta not loaded ({}); object blob padding is not statically masked", e);
-                PaddingMeta::empty()
-            }
-        };
+        let padding = padding_or_empty(&super::meta_json_path());
         NormalizeOptions {
             keep_tx: false,
             keep_channel: true,
@@ -470,6 +481,14 @@ impl Default for NormalizeOptions {
             mask_relayed_chat_date: false,
         }
     }
+}
+
+/// The padding metadata of `path`, or none (with a warning) when it cannot be read.
+fn padding_or_empty(path: &Path) -> PaddingMeta {
+    PaddingMeta::load(path).unwrap_or_else(|e| {
+        eprintln!("warning: padding meta not loaded ({}); object blob padding is not statically masked", e);
+        PaddingMeta::empty()
+    })
 }
 
 const MASKED: &str = "<masked>";
@@ -604,13 +623,7 @@ fn normalize_one(e: &TraceEvent, o: &NormalizeOptions) -> NormMsg {
                         match it {
                             PlistValue::Data(x) => {
                                 let mut bytes = x.bytes.clone();
-                                for c in &cands {
-                                    for (off, len) in o.padding.ranges(c) {
-                                        for j in *off..(*off + *len).min(bytes.len()) {
-                                            bytes[j] = 0;
-                                        }
-                                    }
-                                }
+                                mask_padding(&mut bytes, &cands, &o.padding);
                                 sections.push((format!("obj[{}]", i), bytes));
                             }
                             other => {
@@ -698,63 +711,10 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    fn vec_dir(name: &str) -> PathBuf {
-        super::super::private_docs().join("protocol_vectors").join(name)
-    }
-    fn load_bins(name: &str, prefix_filter: &dyn Fn(&str) -> bool) -> Vec<TraceEvent> {
-        let dir = vec_dir(name);
-        let mut files: Vec<PathBuf> = match std::fs::read_dir(&dir) {
-            Ok(r) => r.map(|e| e.unwrap().path()).filter(|p| p.extension().map_or(false, |x| x == "bin")).collect(),
-            Err(_) => {
-                eprintln!("SKIP: {} missing", dir.display());
-                return vec![];
-            }
-        };
-        files.sort();
-        files
-            .into_iter()
-            .filter(|p| prefix_filter(p.file_name().unwrap().to_str().unwrap()))
-            .enumerate()
-            .map(|(i, p)| TraceEvent {
-                t_ms: i as f64 * 100.0,
-                dir: Dir::Rx,
-                channel: 0,
-                reliable: true,
-                client: "TCA".into(),
-                bytes: std::fs::read(p).unwrap(),
-            })
-            .collect()
-    }
     fn opts() -> NormalizeOptions {
         NormalizeOptions {
             padding: PaddingMeta::load(&super::super::meta_json_path()).unwrap_or_default(),
             ..Default::default()
-        }
-    }
-
-    /// S10 part 1: golden vectors normalise to themselves regardless of timestamps.
-    #[test]
-    fn s10_golden_time_independent() {
-        for dir in ["solo", "two_clients"] {
-            let ev = load_bins(dir, &|n| !n.starts_with("B_"));
-            if ev.is_empty() {
-                continue;
-            }
-            let a = normalize_trace(&ev, &opts());
-            let mut ev2 = ev.clone();
-            for (i, e) in ev2.iter_mut().enumerate() {
-                e.t_ms = 5.0 + (i as f64) * 777.0;
-            }
-            let b = normalize_trace(&ev2, &opts());
-            assert!(!a.is_empty());
-            assert_eq!(a.len(), b.len());
-            for (x, y) in a.iter().zip(b.iter()) {
-                assert_eq!(x.sections, y.sections);
-            }
-            // block messages must have been split into sections
-            if let Some(m) = a.iter().find(|m| m.ty == 0x04) {
-                assert!(m.sections.iter().any(|(n, _)| n == "t.tiles"), "{}", m.text);
-            }
         }
     }
 
@@ -821,5 +781,357 @@ mod tests {
         let back = read_jsonl(&p).unwrap();
         assert_eq!(back.len(), 2);
         assert_eq!(back[0].bytes, evs[0].bytes);
+    }
+}
+
+#[cfg(test)]
+#[path = "normalize_golden.rs"]
+mod golden;
+
+#[cfg(test)]
+mod unit {
+    use super::*;
+    use blockheads_server::foundation::gsdict::GsDict;
+    use blockheads_server::foundation::gzip::gzip_deflate;
+    use blockheads_server::plist::xml_write::write_xml;
+
+    fn gz_plist(v: &PlistValue) -> Vec<u8> {
+        gzip_deflate(&write_xml(v))
+    }
+    fn dict(pairs: Vec<(&str, PlistValue)>) -> PlistValue {
+        let mut m = GsDict::new();
+        for (k, v) in pairs {
+            m.insert(k.to_string(), v);
+        }
+        PlistValue::dict(m)
+    }
+    fn ev(bytes: Vec<u8>) -> TraceEvent {
+        TraceEvent { t_ms: 0.0, dir: Dir::Rx, channel: 2, reliable: true, client: "C".into(), bytes }
+    }
+    fn norm(bytes: Vec<u8>) -> NormMsg {
+        normalize_trace(&[ev(bytes)], &opts()).remove(0)
+    }
+    fn opts() -> NormalizeOptions {
+        NormalizeOptions { padding: PaddingMeta::empty(), ..NormalizeOptions::default() }
+    }
+    fn names(m: &NormMsg) -> Vec<&str> {
+        m.sections.iter().map(|(n, _)| n.as_str()).collect()
+    }
+
+    #[test]
+    fn jsonl_round_trip_and_errors() {
+        let tmp = super::super::TempDir::new("jsonl-unit").unwrap();
+        let p = tmp.path().join("t.jsonl");
+        let evs = vec![
+            TraceEvent {
+                t_ms: 12.4,
+                dir: Dir::Tx,
+                channel: 1,
+                reliable: false,
+                client: "A\"b".into(),
+                bytes: vec![0x24, 1],
+            },
+            ev(vec![]),
+        ];
+        write_jsonl(&p, &evs).unwrap();
+        let mut text = std::fs::read_to_string(&p).unwrap();
+        text = format!(
+            "{{\"meta\":1}}\n\n{{\"mark\":\"x\"}}\n{{\"seq\":9,\"mark\":1,\"dir\":\"rx\",\"hex\":\"00\"}}\n{text}"
+        );
+        std::fs::write(&p, text).unwrap();
+        let back = read_jsonl(&p).unwrap();
+        assert_eq!(back.len(), 2);
+        assert_eq!((back[0].dir, back[0].channel, back[0].reliable, back[0].t_ms), (Dir::Tx, 1, false, 12.0));
+        assert_eq!(back[0].client, "A\"b");
+        assert_eq!(back[1].bytes, Vec::<u8>::new());
+        for (bad, what) in [
+            ("{\"dir\":\"rx\"}", "hex"),
+            ("{\"dir\":\"sideways\",\"hex\":\"00\"}", "dir"),
+            ("{\"dir\":\"rx\",\"hex\":\"0\"}", "hex"),
+            ("not json", "json"),
+        ] {
+            std::fs::write(&p, bad).unwrap();
+            let e = read_jsonl(&p).unwrap_err().to_string();
+            assert!(e.contains(what) || e.contains("expected"), "{bad}: {e}");
+        }
+        std::fs::write(&p, "{\"dir\":\"rx\",\"hex\":\"00\"}").unwrap();
+        let minimal = read_jsonl(&p).unwrap();
+        assert_eq!(
+            (minimal[0].channel, minimal[0].reliable, minimal[0].client.as_str(), minimal[0].t_ms),
+            (0, true, "", 0.0)
+        );
+        assert!(read_jsonl(&tmp.path().join("missing")).is_err());
+    }
+
+    #[test]
+    fn static_masks_are_clipped() {
+        assert_eq!(static_mask_ranges(0x17, 20), vec![1..9]);
+        assert_eq!(static_mask_ranges(0x17, 5), vec![1..5]);
+        assert_eq!(static_mask_ranges(0x13, 20), vec![2..8]);
+        assert_eq!(static_mask_ranges(0x3f, 20), vec![3..9]);
+        assert_eq!(static_mask_ranges(0x2c, 20), vec![5..9]);
+        assert_eq!(static_mask_ranges(0x1a, 20), vec![10..17]);
+        assert_eq!(static_mask_ranges(0x29, 20), vec![19..20]);
+        assert_eq!(static_mask_ranges(0x2a, 20), vec![14..17]);
+        assert!(static_mask_ranges(0x17, 1).is_empty() && static_mask_ranges(0x55, 20).is_empty());
+    }
+
+    #[test]
+    fn padding_meta_reads_json() {
+        let tmp = super::super::TempDir::new("meta-unit").unwrap();
+        let p = tmp.path().join("meta.json");
+        let u = '\\';
+        let json = format!(
+            "{{\"x\":[true,false,null,-1.5e1,\"a{u}n{u}t{u}r{u}\"{u}{u}{u}u0041{u}q\"],\"padding_ranges_own_level\":{{\"FooCreationNetData\":[[2,3],[10,1],[1],[\"a\",1]],\"Weird\":5,\"Empty\":[],\"Mixed\":[5,[0,1]]}},\"y\":{{}}}}"
+        );
+        std::fs::write(&p, json).unwrap();
+        let m = PaddingMeta::load(&p).unwrap();
+        assert_eq!(m.ranges("FooCreationNetData"), &[(2, 3), (10, 1)]);
+        assert!(m.knows("Empty") && m.ranges("Empty").is_empty() && m.knows("Weird") && !m.knows("Nope"));
+        assert!(m.ranges("Nope").is_empty());
+        for (bad, what) in [
+            ("{", "invalid JSON"),
+            ("[1,2]", "no padding_ranges_own_level"),
+            ("{\"a\":1}", "no padding"),
+            ("{\"a\" 1}", "invalid JSON"),
+            ("{\"a\":[1 2]}", "invalid JSON"),
+            ("{\"a\":x}", "invalid JSON"),
+            ("{\"a\":\"b", "invalid JSON"),
+            ("{1:2}", "invalid JSON"),
+            ("[1,", "invalid JSON"),
+            ("{\"a\":nul}", "invalid JSON"),
+        ] {
+            std::fs::write(&p, bad).unwrap();
+            let e = PaddingMeta::load(&p).unwrap_err().to_string();
+            assert!(e.contains(what), "{bad}: {e}");
+        }
+        assert!(PaddingMeta::load(&tmp.path().join("missing")).is_err());
+        assert!(padding_or_empty(&tmp.path().join("missing")).ranges("x").is_empty());
+        std::fs::write(&p, "{\"padding_ranges_own_level\":5}").unwrap();
+        assert!(PaddingMeta::load(&p).unwrap_err().to_string().contains("no padding"));
+        std::fs::write(&p, "{\"padding_ranges_own_level\":{\"S\":[[0,1]]}}").unwrap();
+        assert!(padding_or_empty(&p).knows("S"));
+        let _ = NormalizeOptions::default();
+    }
+
+    #[test]
+    fn json_value_parser_corner_cases() {
+        for ok in ["[]", "{}", " [ 1 , 2 ] ", "{\"a\":{\"b\":[]}}", "\"s\"", "true", "false", "null", "-0.5E+2", "[{}]"]
+        {
+            assert!(jv_parse(ok).is_some(), "{ok}");
+        }
+        let u = '\\';
+        let esc = format!("\"{u}n{u}t{u}r{u}{u}{u}x{u}u00e9{u}ud83d\"");
+        assert!(matches!(jv_parse(&esc), Some(JV::Str(s)) if s == "\n\t\r\\x\u{e9}?"));
+        for bad in [
+            "",
+            "[",
+            "[1,",
+            "[1 2]",
+            "{\"a\"}",
+            "{\"a\":1,}",
+            "{,}",
+            "\"x",
+            "\"\\",
+            "\"\\u12\"",
+            "-",
+            "@",
+            "{\"a\":1 \"b\":2}",
+        ] {
+            assert!(jv_parse(bad).is_none(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn object_class_tables() {
+        let text = "## enum Other\n1\tDYNAMIC_OBJECT_TYPE_NOPE\n## enum DynamicObjectType\n5\tDYNAMIC_OBJECT_TYPE_NPC_DODO\n7\tDYNAMIC_OBJECT_TYPE_BLOCKHEAD\nbad\tDYNAMIC_OBJECT_TYPE_X\n8\tOTHER_PREFIX\nno tab line\n## enum Next\n9\tDYNAMIC_OBJECT_TYPE_LATE\n";
+        let m = parse_object_classes(text);
+        assert_eq!(m.len(), 2);
+        assert_eq!(m[&5], "NPC_DODO");
+        assert_eq!(camel("NPC_DODO_X"), "NpcDodoX");
+        assert_eq!(camel(""), "");
+        assert_eq!(struct_candidates_in(&m, 0x07, 5), vec!["NpcDodoCreationNetData", "DodoCreationNetData"]);
+        assert_eq!(struct_candidates_in(&m, 0x08, 7), vec!["BlockheadUpdateNetData"]);
+        assert!(struct_candidates_in(&m, 0x08, 99).is_empty());
+        let _ = struct_candidates(0x07, 5);
+        let mut padding = PaddingMeta::default();
+        padding.map.insert("BlockheadUpdateNetData".into(), vec![(1, 2), (6, 100)]);
+        let mut bytes = vec![9u8; 8];
+        mask_padding(&mut bytes, &struct_candidates_in(&m, 0x08, 7), &padding);
+        assert_eq!(bytes, [9, 0, 0, 9, 9, 9, 0, 0]);
+    }
+
+    #[test]
+    fn volatile_bytes_are_learned_and_truncated() {
+        let msg = |client: &str, bytes: Vec<u8>| norm_with(client, bytes);
+        fn norm_with(client: &str, bytes: Vec<u8>) -> NormMsg {
+            let mut e = ev(bytes);
+            e.client = client.into();
+            normalize_trace(&[e], &opts()).remove(0)
+        }
+        assert_eq!(VolatileMask::learn(&[vec![msg("A", vec![0x55, 1])]]).volatile_messages(), 0);
+        let run3 = vec![msg("A", vec![0x55, 1, 2])];
+        let run1 = vec![msg("A", vec![0x55, 1, 2, 3]), msg("A", vec![0x56, 1]), msg("B", vec![0x55, 9])];
+        let run2 = vec![msg("A", vec![0x55, 1, 7, 3, 4]), msg("A", vec![0x56, 1]), msg("C", vec![0x55, 9])];
+        let vm = VolatileMask::learn(&[run1.clone(), run2, run3]);
+        assert_eq!((vm.volatile_messages(), vm.volatile_bytes()), (1, 1));
+        let mut o = opts();
+        o.volatile = Some(vm);
+        let a = normalize_trace(&[ev(vec![0x55, 1, 2, 3, 4, 5])], &o);
+        // the client name is part of the key, so only client "A" is affected
+        assert_eq!(a[0].sections, norm(vec![0x55, 1, 2, 3, 4, 5]).sections);
+        let mut e = ev(vec![0x55, 1, 2, 3, 4, 5]);
+        e.client = "A".into();
+        let masked = normalize_trace(&[e], &o);
+        let body = &masked[0].sections[0].1;
+        assert_eq!(body[..], [0x55, 1, 0][..]);
+    }
+
+    #[test]
+    fn plist_flattening_covers_every_kind() {
+        let v = dict(vec![
+            ("b", PlistValue::int(-3)),
+            ("a", PlistValue::UInt(u64::MAX)),
+            ("c", PlistValue::real_f64(1.5)),
+            ("d", PlistValue::Bool(true)),
+            ("e", PlistValue::date(0.0)),
+            ("f", PlistValue::data(vec![1, 2])),
+            ("g", PlistValue::Null),
+            ("h", PlistValue::array(vec![PlistValue::string("s")])),
+            ("skip", PlistValue::int(1)),
+        ]);
+        let lines = plist_lines(&v, &["skip".to_string()]);
+        assert_eq!(lines[0], " = dict");
+        assert!(lines.contains(&"/a = unsigned:18446744073709551615".to_string()));
+        assert!(lines.contains(&"/b = integer:-3".to_string()));
+        assert!(lines.iter().any(|l| l.starts_with("/c = real:3ff8000000000000")));
+        assert!(lines.contains(&"/d = bool:true".to_string()) && lines.contains(&"/e = date:0".to_string()));
+        assert!(lines.contains(&"/f = data:0102".to_string()) && lines.contains(&"/g = null".to_string()));
+        assert!(lines.contains(&"/h = array[1]".to_string()) && lines.contains(&"/h/[0] = string:\"s\"".to_string()));
+        assert!(lines.contains(&"/skip = <masked>".to_string()));
+    }
+
+    #[test]
+    fn handshake_and_chat_messages() {
+        let summary = dict(vec![("worldTime", PlistValue::real_f64(5.0)), ("name", PlistValue::string("w"))]);
+        let mut pk = vec![0x01];
+        pk.extend(gz_plist(&summary));
+        let m = norm(pk);
+        assert_eq!(names(&m), ["summary.plist"]);
+        assert!(String::from_utf8_lossy(&m.sections[0].1).contains("/worldTime = <masked>"));
+        assert!(m.text.contains("ch2") && m.text.contains("[summary.plist]"));
+        assert_eq!(names(&norm(vec![0x01, 1, 2, 3])), ["raw"]);
+        let not_plist = {
+            let mut v = vec![0x01];
+            v.extend(gzip_deflate(b"<?xml junk"));
+            v
+        };
+        assert_eq!(names(&norm(not_plist)), ["summary.raw"]);
+        let chat = |extra: Vec<(&str, PlistValue)>| {
+            let mut pairs = vec![("message", PlistValue::string("hi")), ("date", PlistValue::date(1.0))];
+            pairs.extend(extra);
+            let mut v = vec![0x24];
+            v.extend(write_xml(&dict(pairs)));
+            v
+        };
+        let owner = norm(chat(vec![("mod", PlistValue::string("owner"))]));
+        assert!(String::from_utf8_lossy(&owner.sections[0].1).contains("/date = <masked>"));
+        let relayed = norm(chat(vec![]));
+        assert!(String::from_utf8_lossy(&relayed.sections[0].1).contains("/date = date:"));
+        let mut array_chat = vec![0x24];
+        array_chat.extend(write_xml(&PlistValue::array(vec![])));
+        assert_eq!(names(&norm(array_chat)), ["chat.plist"]);
+        let mut bad_chat = vec![0x24];
+        bad_chat.extend_from_slice(b"<?xml junk");
+        assert_eq!(names(&norm(bad_chat)), ["chat.raw"]);
+        let mut o = opts();
+        o.mask_relayed_chat_date = true;
+        let m = normalize_trace(&[ev(chat(vec![]))], &o).remove(0);
+        assert!(String::from_utf8_lossy(&m.sections[0].1).contains("/date = <masked>"));
+        let o2 = NormalizeOptions { mask_plist_keys: vec![], keep_channel: false, ..opts() };
+        let m = normalize_trace(&[ev(chat(vec![("mod", PlistValue::string("owner"))]))], &o2).remove(0);
+        assert!(
+            String::from_utf8_lossy(&m.sections[0].1).contains("/date = date:")
+                && m.channel == 0
+                && m.text.contains("ch0")
+        );
+    }
+
+    fn block_msg(r: Option<Vec<u8>>, t: Option<Vec<u8>>, extra: bool) -> Vec<u8> {
+        let mut pairs = vec![];
+        if let Some(r) = r {
+            pairs.push(("r", PlistValue::data(gzip_deflate(&r))));
+        }
+        if let Some(t) = t {
+            pairs.push(("t", PlistValue::data(gzip_deflate(&t))));
+        }
+        if extra {
+            pairs.push(("z", PlistValue::int(4)));
+        }
+        let mut v = vec![0x04, 0, 0, 0, 0];
+        v.extend(write_xml(&dict(pairs)));
+        v
+    }
+
+    #[test]
+    fn terrain_block_messages() {
+        let mut r = vec![7u8; 0x400];
+        r.extend(write_xml(&dict(vec![("k", PlistValue::int(1))])));
+        let full = norm(block_msg(Some(r), Some(vec![1; 12]), true));
+        assert_eq!(names(&full), ["macroIndex", "r.light", "r.plist", "t.tiles", "t.trailer", "extra.plist"]);
+        assert_eq!(full.sections[3].1.len(), 7);
+        let short = norm(block_msg(Some(vec![1, 2]), Some(vec![9]), false));
+        assert_eq!(names(&short), ["macroIndex", "r.raw", "t.raw"]);
+        let missing = norm(block_msg(None, None, false));
+        assert_eq!(names(&missing), ["macroIndex", "r.missing", "t.missing"]);
+        let mut not_dict = vec![0x04, 0, 0, 0, 0];
+        not_dict.extend(write_xml(&PlistValue::array(vec![])));
+        assert_eq!(names(&norm(not_dict)), ["macroIndex", "plist.raw"]);
+        assert_eq!(names(&norm(vec![0x04, 1, 2, 3, 4])), ["body"]);
+    }
+
+    #[test]
+    fn object_batches_and_generic_masks() {
+        let blobs = PlistValue::array(vec![PlistValue::data(vec![1, 2, 3]), PlistValue::string("odd")]);
+        let mut pk = vec![0x07, 9];
+        pk.extend(gz_plist(&blobs));
+        let m = norm(pk);
+        assert_eq!(names(&m), ["objType", "obj[0]", "obj[1].plist"]);
+        assert!(m.text.contains("[obj[1].plist]"));
+        assert_eq!(names(&norm(vec![0x08, 9, 1, 2, 3])), ["objType", "batch.raw"]);
+        assert_eq!(names(&norm(vec![0x09, 9])), ["body"]);
+        let mut o = opts();
+        o.extra_masks = vec![(0x30, 1..3), (0x30, 50..60), (0x31, 1..2)];
+        let m = normalize_trace(&[ev(vec![0x30, 1, 2, 3, 4])], &o).remove(0);
+        assert_eq!(m.sections[0].1, [0x30, 0, 0, 3, 4]);
+        let long = norm((0..100).collect());
+        assert!(long.text.ends_with("..."));
+        assert_eq!(norm(vec![]).ty, 0);
+    }
+
+    #[test]
+    fn trace_filtering_and_burst_sorting() {
+        let mk = |t: f64, client: &str, ty: u8, dir: Dir| TraceEvent {
+            t_ms: t,
+            dir,
+            channel: 0,
+            reliable: true,
+            client: client.into(),
+            bytes: vec![ty, 1],
+        };
+        let evs = vec![
+            mk(0.0, "A", 0x30, Dir::Rx),
+            mk(1.0, "A", 0x20, Dir::Rx),
+            mk(2.0, "A", 0x10, Dir::Tx),
+            mk(100.0, "A", 0x40, Dir::Rx),
+            mk(101.0, "B", 0x41, Dir::Rx),
+            mk(102.0, "B", 0x39, Dir::Rx),
+        ];
+        let plain = normalize_trace(&evs, &opts());
+        assert_eq!(plain.iter().map(|m| m.ty).collect::<Vec<_>>(), [0x30, 0x20, 0x40, 0x41, 0x39]);
+        let with_tx = normalize_trace(&evs, &NormalizeOptions { keep_tx: true, ..opts() });
+        assert_eq!(with_tx.len(), 6);
+        let sorted = normalize_trace(&evs, &NormalizeOptions { sort_bursts: true, ..opts() });
+        assert_eq!(sorted.iter().map(|m| m.ty).collect::<Vec<_>>(), [0x20, 0x30, 0x40, 0x39, 0x41]);
     }
 }
