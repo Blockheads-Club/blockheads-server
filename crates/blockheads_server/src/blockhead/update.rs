@@ -9,7 +9,7 @@
 
 use std::rc::Rc;
 
-use crate::fmath::cconv::{f32_to_i32, f32_to_u8, f64_to_i32};
+use crate::fmath::cconv::{f32_to_i32, f64_to_i32};
 use crate::fmath::libm::{powf, sinf};
 use crate::fmath::vector::{clamp, linear_interpolate};
 use crate::items::misc::default_data_a_and_b_for_item_type;
@@ -20,7 +20,7 @@ use crate::items::predicates::{
 };
 use crate::nslog;
 use crate::objects::base::{DynamicObject, WorldApi};
-use crate::objects::handle::{ptr_eq, ObjRef};
+use crate::objects::handle::ObjRef;
 use crate::path::can_enter::{check_can_enter_tile, FromProps};
 use crate::plist::value::PlistValue;
 use crate::rng::glibc_rand::{r01_from, rand_tagged};
@@ -2837,15 +2837,10 @@ fn u8(c: &Ctx) {
     // `else if jetSound != nil` (client only): never runs
 }
 
-#[allow(dead_code)]
-fn _unused(_: u8) {
-    let _ = (
-        f32_to_u8 as fn(f32) -> u8,
-        ptr_eq as fn(&ObjRef, &ObjRef) -> bool,
-        tile_is_tree_trunk as fn(Option<TileRef>) -> bool,
-    );
-    let _ = (state_asleep, WorldApi::world_width_macro as fn(&World) -> i32);
-}
+#[cfg(test)]
+pub(crate) mod cov_host;
+#[cfg(test)]
+mod coverage_tests;
 
 #[cfg(test)]
 mod tests {
