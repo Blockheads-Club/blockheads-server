@@ -349,6 +349,16 @@ mod tests {
         assert!(w.tile_is_protected_at_pos_against_blockhead(ip(100, 100), &mock(true, "bo")));
         // not a blockhead: id comes from deps (recorder answers none) -> signs not consulted
         assert!(!w.tile_is_protected_at_pos_against_blockhead(ip(100, 100), &mock(false, "al")));
+        // the stand-in itself answers its small interface
+        let m = mock(true, "zed");
+        let _ = (m.class_info(), m.base().borrow().unique_id);
+        let bh = m.as_blockhead().unwrap();
+        assert_eq!(bh.client_id().as_deref(), Some("zed"));
+        assert!(!bh.is_client_blockhead_being_controlled_by_server());
+        assert!(!bh.is_interacting_with_any_interaction_object());
+        bh.set_interaction_object(None);
+        bh.stop_interacting();
+        assert!(m.as_any().is::<MockObj>());
         install_deps(Rc::new(NullDeps));
     }
 }
