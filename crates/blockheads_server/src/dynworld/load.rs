@@ -24,7 +24,9 @@ use crate::objects::type_tables::{
     object_type_requires_partial_update, DYNAMIC_OBJECT_TYPE_BLOCKHEAD, DYNAMIC_OBJECT_TYPE_CHEST,
     DYNAMIC_OBJECT_TYPE_FREE_BLOCK, DYNAMIC_OBJECT_TYPE_TRAIN_CAR_FREIGHT,
 };
-use crate::plist::helpers::{data_from_property_list, property_list_from_data_opt, property_list_with_data_raw};
+use crate::plist::helpers::{
+    data_from_property_list, data_from_property_list_hooked, property_list_from_data_opt, property_list_with_data_raw,
+};
 use crate::plist::keyed_archiver::{archive_index_set, unarchive_index_set_opt};
 use crate::plist::value::PlistValue;
 use crate::rng::glibc_rand::rand_tagged;
@@ -147,10 +149,9 @@ pub fn migration_fish_depth(y: i32, r: i32) -> i32 {
 /// Build `{key: value,...}` as a mutable dictionary.
 fn dict_of(entries: Vec<(&str, PlistValue)>) -> PlistValue {
     let mut v = PlistValue::mutable_dict();
-    if let PlistValue::Dict(d) = &mut v {
-        for (k, val) in entries {
-            d.map.insert(k.to_string(), val);
-        }
+    let PlistValue::Dict(d) = &mut v else { unreachable!() };
+    for (k, val) in entries {
+        d.map.insert(k.to_string(), val);
     }
     v
 }
@@ -825,12 +826,12 @@ impl DynamicWorld {
         for (old, new) in renames.iter() {
             let _ = std::fs::rename(old, new);
         }
+        // the renames came from this very list
         let mut list = self.version_one_to_two_conversion_list.borrow_mut();
-        if let Some(l) = list.as_mut() {
-            l.remove(&dir.to_string());
-            if l.is_empty() {
-                *list = None;
-            }
+        let l = list.as_mut().expect("conversion list");
+        l.remove(&dir.to_string());
+        if l.is_empty() {
+            *list = None;
         }
     }
 
@@ -1065,10 +1066,8 @@ impl DynamicWorld {
         let world = self.world();
         let mt = world.macro_tiles().get(macro_tile_index.max(0) as usize)?;
         let pb = mt.physical_block();
+        // a tile exists, so the world is at least one macro tile wide
         let w = world.world_width_macro();
-        if w == 0 {
-            return None;
-        }
         let (mpx, mpy) = (macro_tile_index % w, macro_tile_index / w);
         let _ = tile_at_world_position_loaded(mpx << 5, mpy << 5, &world);
         if let Some(h) = world.ops_hooks() {
@@ -1120,11 +1119,8 @@ impl DynamicWorld {
         let conv = |g: &GsDict<NsNumberKey, Vec<NetBlob>>| -> Vec<(u32, Vec<NetBlob>)> {
             g.iter()
                 .map(|(k, v)| {
-                    let n = match k.0 {
-                        NsNumber::UInt(u) => u as u32,
-                        NsNumber::Int(i) => i as u32,
-                        _ => 0,
-                    };
+                    // the keys are always `numberWithUnsignedInt:`
+                    let n = if let NsNumber::UInt(u) = k.0 { u as u32 } else { 0 };
                     (n, v.clone())
                 })
                 .collect()
@@ -1373,10 +1369,11 @@ impl DynamicWorld {
             dicts.push(hooks.blockhead_save_dict_including_workbench_or_interaction_object(&bh, false));
         }
         let save_data_dict = dict_of(vec![("dynamicObjects", PlistValue::array(dicts))]);
-        match data_from_property_list(&save_data_dict) {
-            None => ns_raise("DataSaveException", "Failed to save blockheads."),
-            Some(d) => self.world_db_put("blockheads", &d), // SERVER: uncompressed XML plist
-        }
+        // SERVER: uncompressed XML plist
+        self.world_db_put(
+            "blockheads",
+            &serialize_or_raise(&save_data_dict, "Failed to save blockheads.", false, || {}),
+        );
         let cache_nonempty =
             self.disconnected_clients_cached_save_dicts_not_done.borrow().as_ref().map_or(false, |c| !c.is_empty());
         if cache_nonempty {
@@ -1411,10 +1408,8 @@ impl DynamicWorld {
                     .cloned()
                     .unwrap_or_default();
                 let sd2 = dict_of(vec![("dynamicObjects", PlistValue::array(arr))]);
-                match data_from_property_list(&sd2).map(|d| gzip_deflate(&d)) {
-                    None => ns_raise("DataSaveException", "Failed to save disconnected blockheads."),
-                    Some(gz) => self.world_db_put(&format!("{}_blockheads", dir), &gz),
-                }
+                let xml = serialize_or_raise(&sd2, "Failed to save disconnected blockheads.", false, || {});
+                self.world_db_put(&format!("{}_blockheads", dir), &gzip_deflate(&xml));
             }
             let mut unactive: Vec<String> = dirs;
             for bh in self.net_blockheads_with_disconnected_clients.borrow().clone() {
@@ -1433,9 +1428,7 @@ impl DynamicWorld {
     pub fn save_blockhead_inventory(&self, blockhead: &ObjRef) {
         let hooks = self.hooks();
         let slots = hooks.blockhead_save_item_slots_array(blockhead);
-        let Some(data) = data_from_property_list(&slots) else {
-            ns_raise("DataSaveException", "Failed to save blockhead inventory.");
-        };
+        let data = serialize_or_raise(&slots, "Failed to save blockhead inventory.", false, || {});
         let uid = blockhead.unique_id() as i64;
         match hooks.blockhead_client_save_dir(blockhead) {
             None => self.world_db_put(&format!("blockhead_{}_inventory", uid), &data),
@@ -1499,15 +1492,10 @@ impl DynamicWorld {
         if object_type_can_be_loaded_only_when_client_owner_online(object_type) {
             let mut pc: GsDict<String, Vec<PlistValue>> = GsDict::new();
             for client_id in self.server_client_keys() {
-                if let Some(sc) = self.server_client(&client_id) {
-                    let has = sc
-                        .world_indices_containing_tamed_animals()
-                        .borrow()
-                        .get(ot)
-                        .map_or(false, |s| s.contains(&macro_index));
-                    if has && pc.get(&client_id).is_none() {
-                        pc.insert(client_id.clone(), Vec::new());
-                    }
+                let sc = self.server_client(&client_id).expect("key of the client map");
+                let has = sc.world_indices_containing_tamed_animals().borrow()[ot].contains(&macro_index);
+                if has && pc.get(&client_id).is_none() {
+                    pc.insert(client_id.clone(), Vec::new());
                 }
             }
             per_client = Some(pc);
@@ -1572,34 +1560,34 @@ impl DynamicWorld {
             }
         }
         let pl = dict_of(vec![("dynamicObjects", PlistValue::array(dicts))]);
-        match data_from_property_list(&pl) {
-            None => {
-                nslog!("error compressing property list to save objects");
-                ns_raise("DataSaveException", "Failed to save dynamic world object data.");
-            }
-            Some(data) => self.dw_db_put(&format!("{}_{}/{}", x_pos, y_pos, object_type), &data),
-        }
+        let data = serialize_or_raise(&pl, "Failed to save dynamic world object data.", true, || {});
+        self.dw_db_put(&format!("{}_{}/{}", x_pos, y_pos, object_type), &data);
         if let Some(pc) = per_client {
             for (client_id, arr) in pc.iter() {
                 let empty = arr.is_empty();
                 let pl2 = dict_of(vec![("dynamicObjects", PlistValue::array(arr.clone()))]);
                 if empty {
-                    if let Some(sc) = self.server_client(client_id) {
-                        if let Some(set) = sc.world_indices_containing_tamed_animals().borrow_mut().get_mut(ot) {
-                            set.remove(&macro_index);
-                        }
-                    }
+                    // per-client files exist only for registered clients
+                    let sc = self.server_client(client_id).expect("registered client");
+                    sc.world_indices_containing_tamed_animals().borrow_mut()[ot].remove(&macro_index);
                 }
-                match data_from_property_list(&pl2) {
-                    None => {
-                        nslog!("error compressing property list to save objects");
-                        ns_raise("DataSaveException", "Failed to save dynamic world object data.");
-                    }
-                    Some(data2) => {
-                        self.dw_db_put(&format!("{}_{}_{}/{}", client_id, x_pos, y_pos, object_type), &data2)
-                    }
-                }
+                let data2 = serialize_or_raise(&pl2, "Failed to save dynamic world object data.", true, || {});
+                self.dw_db_put(&format!("{}_{}_{}/{}", client_id, x_pos, y_pos, object_type), &data2);
             }
+        }
+    }
+}
+
+/// `dataFromPropertyList:` of a save record; `DataSaveException` when it fails. `hook` runs inside the `@try` of the
+/// serializer (the seam the tests use to make it fail). `log` adds the "error compressing" line some callers print.
+fn serialize_or_raise(v: &PlistValue, reason: &str, log: bool, hook: impl FnOnce()) -> Vec<u8> {
+    match data_from_property_list_hooked(v, hook) {
+        Some(d) => d,
+        None => {
+            if log {
+                nslog!("error compressing property list to save objects");
+            }
+            ns_raise("DataSaveException", reason)
         }
     }
 }
@@ -1722,14 +1710,6 @@ mod tests {
             0
         }
     }
-    #[allow(dead_code)]
-    struct ZeroNoise;
-    impl DwNoise for ZeroNoise {
-        fn get_x_y_octaves(&self, _x: f64, _y: f64, _o: i32) -> f64 {
-            0.0
-        }
-    }
-
     struct Rec {
         log: Rc<RefCell<Vec<String>>>,
         next: std::cell::Cell<u64>,
@@ -1746,9 +1726,6 @@ mod tests {
         }
         fn load_npc_at_position(&self, pos: IntPair, npc_type: i32, _adult: bool, _placed: bool) {
             self.log.borrow_mut().push(format!("npc({},{},{})", npc_type, pos.x, pos.y));
-        }
-        fn load_tree_at_position(&self, pos: IntPair, t: i32, mh: i32, gr: i32, _a: bool, _m: f32) {
-            self.log.borrow_mut().push(format!("tree({},{},{},{},{})", t, pos.x, pos.y, mh, gr));
         }
         fn light_changed_at_macro_pos_send_reliably(&self, p: IntPair, r: bool) {
             self.log.borrow_mut().push(format!("light({},{},{})", p.x, p.y, r));
@@ -1813,10 +1790,8 @@ mod tests {
         assert_eq!(v.object_for_key("activeBlockheadIndex").unwrap().int_value(), 0);
         assert!(!v.object_for_key("workbenchHasBeenCrafted").unwrap().bool_value());
         assert!(v.object_for_key("poleItemTakenTimes").is_none());
-        match v.object_for_key("savedGlowIndices").unwrap() {
-            PlistValue::Data(b) => assert!(b.bytes.starts_with(b"bplist00")),
-            o => panic!("savedGlowIndices is {:?}", o),
-        }
+        let glow = v.object_for_key("savedGlowIndices").unwrap();
+        assert!(matches!(glow, PlistValue::Data(b) if b.bytes.starts_with(b"bplist00")), "{glow:?}");
         assert_eq!(d.world_database.get("worldv2").unwrap(), b"worlddata");
         // reload into a fresh DynamicWorld on the same databases
         let d2 = new_dw_on("ld_save2", d.world_database.clone(), d.dynamic_object_database.clone());
@@ -1856,10 +1831,8 @@ mod tests {
         d.save_dynamic_objects_for_macro_tile_object_type_x_pos_y_pos(&mt, 14, 3, 0);
         let data = d.dynamic_object_database.get("3_0/14").unwrap();
         let v = crate::plist::helpers::property_list_from_data(&data).unwrap();
-        match v.object_for_key("dynamicObjects").unwrap() {
-            PlistValue::Array(a) => assert_eq!(a.items.len(), 4999),
-            _ => panic!(),
-        }
+        let objects = v.object_for_key("dynamicObjects").unwrap();
+        assert!(matches!(objects, PlistValue::Array(a) if a.items.len() == 4999));
         // not loaded -> nothing written; a record is written even when empty
         mt.dynamic_objects_loaded.set(false);
         d.save_dynamic_objects_for_macro_tile_object_type_x_pos_y_pos(&mt, 13, 3, 0);
@@ -2023,11 +1996,10 @@ mod tests {
 /// Decision-table tests of the macro-block population (generation, load from save, surface blocks).
 #[cfg(test)]
 mod population_tests {
+    use super::fakes::{Sc, Srv};
     use super::*;
     use crate::dynworld::state::testutil::*;
-    use crate::dynworld::state::{
-        DwHooks, DwNoise, DwServer, DwServerClient, DynamicWorldInit, FreeBlockInit, ServerClientMap,
-    };
+    use crate::dynworld::state::{DwHooks, DwNoise, DynamicWorldInit, FreeBlockInit, ServerClientMap};
     use crate::foundation::gsdict::GsDict;
     use crate::rng::glibc_rand::{rand, srand};
     use std::cell::{Cell, RefCell};
@@ -2142,48 +2114,6 @@ mod population_tests {
         }
     }
 
-    struct Client;
-    impl DwServerClient for Client {
-        fn connected(&self) -> bool {
-            true
-        }
-        fn client_id(&self) -> String {
-            "c1".into()
-        }
-        fn light_block_index(&self) -> i32 {
-            0
-        }
-        fn block_is_wired(&self, _m: i32) -> bool {
-            false
-        }
-        fn dynamic_object_is_wired(&self, _u: u64) -> bool {
-            false
-        }
-        fn wire_dynamic_object(&self, _u: u64) {}
-        fn unwire_dynamic_object(&self, _u: u64) {}
-        fn add_creation_object_data_to_send_of_type_object_id(&self, _d: &NetBlob, _t: u8, _i: u64) {}
-        fn add_creation_data_update_object_data_to_send_of_type(&self, _d: &NetBlob, _t: u8) {}
-        fn add_update_object_data_to_send_of_type_reliable(&self, _d: &NetBlob, _t: u8, _r: bool) {}
-        fn add_removal_object_data_to_send_of_type_object_id(&self, _d: &NetBlob, _t: u8, _i: u64) {}
-        fn send_all_object_data(&self) {}
-        fn world_indices_containing_tamed_animals(&self) -> &RefCell<Vec<HashSet<u32>>> {
-            Box::leak(Box::new(RefCell::new(vec![HashSet::new(); 65])))
-        }
-    }
-    struct Server;
-    impl DwServer for Server {
-        fn player_info_for_peer_id(&self, _p: &str) -> Option<PlistValue> {
-            None
-        }
-        fn player_is_admin_with_id(&self, _c: &str) -> bool {
-            false
-        }
-        fn player_update(&self) -> Option<String> {
-            None
-        }
-        fn notify_players_changed(&self) {}
-    }
-
     struct Fx {
         dw: Rc<DynamicWorld>,
         log: Log,
@@ -2198,11 +2128,11 @@ mod population_tests {
         std::mem::forget(w.clone());
         let noise = Rc::new(Noise { samples: RefCell::new(vec![]), by_y: noise });
         let clients: ServerClientMap = Rc::new(RefCell::new(GsDict::new()));
-        clients.borrow_mut().insert("c1".to_string(), Rc::new(Client));
+        clients.borrow_mut().insert("c1".to_string(), Rc::new(Sc::new("c1")));
         let dw = DynamicWorld::new(DynamicWorldInit {
             world: w,
             world_tile_loader: None,
-            server: if server { Some(Rc::new(Server)) } else { None },
+            server: if server { Some(Rc::new(Srv)) } else { None },
             server_clients: if server { Some(clients) } else { None },
             cache: None,
             tree_density_noise_function: Some(noise.clone()),
@@ -2722,17 +2652,16 @@ mod population_tests {
         let items = ids
             .iter()
             .map(|(id, x, y, ito)| {
-                let mut m = PlistValue::mutable_dict();
-                if let PlistValue::Dict(d) = &mut m {
-                    d.map.insert("uniqueID".to_string(), PlistValue::int(*id));
-                    d.map.insert("pos_x".to_string(), PlistValue::int(*x as i64));
-                    d.map.insert("pos_y".to_string(), PlistValue::int(*y as i64));
-                    if let Some((i, w)) = ito {
-                        d.map.insert("interactionObjectType".to_string(), PlistValue::int(*i as i64));
-                        d.map.insert("workbenchType".to_string(), PlistValue::int(*w as i64));
-                    }
+                let mut e = vec![
+                    ("uniqueID", PlistValue::int(*id)),
+                    ("pos_x", PlistValue::int(*x as i64)),
+                    ("pos_y", PlistValue::int(*y as i64)),
+                ];
+                if let Some((i, w)) = ito {
+                    e.push(("interactionObjectType", PlistValue::int(*i as i64)));
+                    e.push(("workbenchType", PlistValue::int(*w as i64)));
                 }
-                m
+                dict_of(e)
             })
             .collect();
         data_from_property_list(&dict_of(vec![("dynamicObjects", PlistValue::array(items))])).unwrap()
@@ -3180,5 +3109,1276 @@ mod population_tests {
         c.set(-1, 9);
         c.set(3, 9);
         assert_eq!(*c.0.borrow(), vec![1, 9, 3]);
+    }
+}
+
+/// A server client with real tamed-animal sets and a server that knows nobody, shared by the load/save tests.
+#[cfg(test)]
+mod fakes {
+    use super::*;
+    use crate::dynworld::state::{DwServer, DwServerClient};
+    use std::cell::RefCell;
+
+    pub(super) struct Sc {
+        id: String,
+        pub(super) tamed: RefCell<Vec<HashSet<u32>>>,
+        pub(super) wired: RefCell<Vec<u64>>,
+    }
+    impl Sc {
+        pub(super) fn new(id: &str) -> Sc {
+            Sc { id: id.into(), tamed: RefCell::new(vec![HashSet::new(); 65]), wired: RefCell::new(vec![]) }
+        }
+    }
+    impl DwServerClient for Sc {
+        fn connected(&self) -> bool {
+            true
+        }
+        fn client_id(&self) -> String {
+            self.id.clone()
+        }
+        fn light_block_index(&self) -> i32 {
+            0
+        }
+        fn block_is_wired(&self, _m: i32) -> bool {
+            false
+        }
+        fn dynamic_object_is_wired(&self, _u: u64) -> bool {
+            false
+        }
+        fn wire_dynamic_object(&self, u: u64) {
+            self.wired.borrow_mut().push(u);
+        }
+        fn unwire_dynamic_object(&self, _u: u64) {}
+        fn add_creation_object_data_to_send_of_type_object_id(&self, _d: &NetBlob, _t: u8, _i: u64) {}
+        fn add_creation_data_update_object_data_to_send_of_type(&self, _d: &NetBlob, _t: u8) {}
+        fn add_update_object_data_to_send_of_type_reliable(&self, _d: &NetBlob, _t: u8, _r: bool) {}
+        fn add_removal_object_data_to_send_of_type_object_id(&self, _d: &NetBlob, _t: u8, _i: u64) {}
+        fn send_all_object_data(&self) {}
+        fn world_indices_containing_tamed_animals(&self) -> &RefCell<Vec<HashSet<u32>>> {
+            &self.tamed
+        }
+    }
+
+    pub(super) struct Srv;
+    impl DwServer for Srv {
+        fn player_info_for_peer_id(&self, _p: &str) -> Option<PlistValue> {
+            None
+        }
+        fn player_is_admin_with_id(&self, _c: &str) -> bool {
+            false
+        }
+        fn player_update(&self) -> Option<String> {
+            None
+        }
+        fn notify_players_changed(&self) {}
+    }
+
+    /// The fakes answer the way a quiet connected client does.
+    #[test]
+    fn fake_client_and_server_are_inert() {
+        let sc = Sc::new("c9");
+        assert!(sc.connected());
+        assert_eq!(sc.client_id(), "c9");
+        assert_eq!(sc.light_block_index(), 0);
+        assert!(!sc.block_is_wired(1));
+        assert!(!sc.dynamic_object_is_wired(2));
+        sc.wire_dynamic_object(3);
+        sc.unwire_dynamic_object(3);
+        let blob: NetBlob = vec![1];
+        sc.add_creation_object_data_to_send_of_type_object_id(&blob, 1, 2);
+        sc.add_creation_data_update_object_data_to_send_of_type(&blob, 1);
+        sc.add_update_object_data_to_send_of_type_reliable(&blob, 1, true);
+        sc.add_removal_object_data_to_send_of_type_object_id(&blob, 1, 2);
+        sc.send_all_object_data();
+        assert_eq!(*sc.wired.borrow(), vec![3]);
+        assert_eq!(sc.world_indices_containing_tamed_animals().borrow().len(), 65);
+        assert!(Srv.player_info_for_peer_id("p").is_none());
+        assert!(!Srv.player_is_admin_with_id("c"));
+        assert!(Srv.player_update().is_none());
+        Srv.notify_players_changed();
+    }
+}
+
+/// Branch coverage of the save/load paths: legacy files, blockhead loading limits, per-type constructors, saves of
+/// chests, freight cars and owner-bound animals, and the initial net data of a macro tile.
+#[cfg(test)]
+mod load_save_tests {
+    use super::fakes::{Sc, Srv};
+    use super::*;
+    use crate::dynworld::state::testutil::*;
+    use crate::dynworld::state::{DynamicWorldInit, ServerClientMap};
+    use crate::objects::base::{DynamicObject, DynamicObjectBase};
+    use crate::objects::class_info::{ClassInfo, DYNAMIC_OBJECT_CLASS};
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+
+    type Log = Rc<RefCell<Vec<String>>>;
+
+    /// An object with scriptable net data, owner and `blockheadsLoaded` counting.
+    struct TObj {
+        base: RefCell<DynamicObjectBase>,
+        ty: i32,
+        log: Log,
+        creation: Option<Vec<u8>>,
+        update: Option<Vec<u8>>,
+        owner: Option<String>,
+    }
+    fn tobj(
+        ty: i32,
+        id: u64,
+        log: &Log,
+        creation: Option<&[u8]>,
+        update: Option<&[u8]>,
+        owner: Option<&str>,
+    ) -> ObjRef {
+        let o = crate::objects::handle::alloc_obj(|w| TObj {
+            base: RefCell::new(DynamicObjectBase::alloc_zeroed_with(w)),
+            ty,
+            log: log.clone(),
+            creation: creation.map(|c| c.to_vec()),
+            update: update.map(|c| c.to_vec()),
+            owner: owner.map(str::to_string),
+        });
+        o.base.borrow_mut().unique_id = id;
+        o
+    }
+    impl DynamicObject for TObj {
+        fn base(&self) -> &RefCell<DynamicObjectBase> {
+            &self.base
+        }
+        fn class_info(&self) -> &'static ClassInfo {
+            &DYNAMIC_OBJECT_CLASS
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+        fn object_type(&self) -> i32 {
+            self.ty
+        }
+        fn creation_net_data_for_client(&self, _me: &ObjRef, _c: Option<&str>) -> Option<Vec<u8>> {
+            self.creation.clone()
+        }
+        fn update_net_data_for_client(&self, _me: &ObjRef, _c: Option<&str>) -> Option<Vec<u8>> {
+            self.update.clone()
+        }
+        fn client_id_for_saving_seperately_and_only_loading_while_player_online(&self) -> Option<String> {
+            self.owner.clone()
+        }
+        fn blockheads_loaded(&self, _me: &ObjRef) {
+            self.log.borrow_mut().push(format!("loaded({})", self.base.borrow().unique_id));
+        }
+    }
+
+    /// Scriptable hooks: what the constructors return and which flags the blockhead/chest/freight hooks report.
+    struct Hk {
+        log: Log,
+        existing: RefCell<Option<ObjRef>>,
+        fail_blockhead: Cell<bool>,
+        fail_construct: Cell<bool>,
+        level: Cell<i32>,
+        save_dir: RefCell<Option<String>>,
+        chest_type: Cell<i32>,
+        chest_chain: Cell<bool>,
+        freight_dict: Cell<bool>,
+        freight_flag: Cell<bool>,
+        no_dir: RefCell<Vec<u64>>,
+        save_ok: Cell<bool>,
+    }
+    impl crate::dynworld::state::DwHooksStub for Hk {
+        fn blockhead_with_id_including_net(&self, _id: u64) -> Option<ObjRef> {
+            self.existing.borrow().clone()
+        }
+        fn blockhead_will_be_unloaded(&self, b: &ObjRef) {
+            self.log.borrow_mut().push(format!("unload({})", b.unique_id()));
+        }
+        fn blockhead_from_save_dict(
+            &self,
+            d: &crate::plist::value::PlistDict,
+            _slots: Option<PlistValue>,
+            _repos: bool,
+            _dir: Option<&str>,
+            _local: Option<PlistValue>,
+        ) -> Option<ObjRef> {
+            if self.fail_blockhead.get() {
+                return None;
+            }
+            let id = d.map.get(&"uniqueID".to_string()).map_or(0, |v| v.unsigned_long_value());
+            Some(tobj(24, id, &self.log, None, None, None))
+        }
+        fn fully_load_if_needed_around_pos(&self, _p: IntPair, _i: u32, b: &ObjRef) {
+            self.log.borrow_mut().push(format!("fullload({})", b.unique_id()));
+        }
+        fn blockhead_stop_interacting_if_no_interaction_object(&self, b: &ObjRef) {
+            self.log.borrow_mut().push(format!("stop({})", b.unique_id()));
+        }
+        fn blockhead_die(&self, b: &ObjRef) {
+            self.log.borrow_mut().push(format!("die({})", b.unique_id()));
+        }
+        fn blockhead_prepare_inventory_for_saving(&self, b: &ObjRef) {
+            self.log.borrow_mut().push(format!("prep({})", b.unique_id()));
+        }
+        fn blockhead_inventory_needs_saving(&self, _b: &ObjRef) -> bool {
+            true
+        }
+        fn blockhead_set_inventory_needs_saving(&self, b: &ObjRef, v: bool) {
+            self.log.borrow_mut().push(format!("needs({},{})", b.unique_id(), v));
+        }
+        fn blockhead_client_save_dir(&self, b: &ObjRef) -> Option<String> {
+            if self.no_dir.borrow().contains(&b.unique_id()) {
+                return None;
+            }
+            self.save_dir.borrow().clone()
+        }
+        fn save_physical_block_for_macro_tile(&self, mt: &MacroTileRef, rel: bool, dont: bool, only: bool) -> bool {
+            self.log.borrow_mut().push(format!("savepb({},{},{}){}", rel, dont, only, mt.dynamic_objects_loaded.get()));
+            self.save_ok.get()
+        }
+        fn save_light_block_for_client_light_block_index(&self, i: i32, pb: Option<PhysicalBlockRef>, now: bool) {
+            self.log.borrow_mut().push(format!("lightblock({},{},{})", i, pb.is_some(), now));
+        }
+        fn blockhead_save_item_slots_array(&self, _b: &ObjRef) -> PlistValue {
+            PlistValue::array(vec![PlistValue::int(1)])
+        }
+        fn blockhead_save_dict_including_workbench_or_interaction_object(&self, b: &ObjRef, inc: bool) -> PlistValue {
+            dict_of(vec![("uniqueID", PlistValue::int(b.unique_id() as i64)), ("inc", PlistValue::boolean(inc))])
+        }
+        fn workbench_level(&self, _w: &ObjRef) -> i32 {
+            self.level.get()
+        }
+        fn workbench_set_level_silently(&self, _w: &ObjRef, l: i32) {
+            self.log.borrow_mut().push(format!("level({l})"));
+        }
+        fn tree_update_all_owned_tiles_to_new_id_size(&self, t: &ObjRef) {
+            self.log.borrow_mut().push(format!("treetiles({})", t.unique_id()));
+        }
+        fn dynamic_world_changed_at_pos_object_type(&self, p: IntPair, t: i32) {
+            self.log.borrow_mut().push(format!("changed({},{},{})", p.x, p.y, t));
+        }
+        fn chest_type(&self, _c: &ObjRef) -> i32 {
+            self.chest_type.get()
+        }
+        fn chest_inventory_data_allowing_empty(&self, _c: &ObjRef) -> Option<Vec<u8>> {
+            self.chest_chain.get().then(|| b"inv".to_vec())
+        }
+        fn chest_save_dict_excluding_inventory(&self, _c: &ObjRef) -> Option<PlistValue> {
+            self.chest_chain.get().then(|| dict_of(vec![("chest", PlistValue::boolean(true))]))
+        }
+        fn freight_needs_chest_save(&self, _c: &ObjRef) -> bool {
+            self.freight_flag.get()
+        }
+        fn freight_set_needs_chest_save(&self, c: &ObjRef, v: bool) {
+            self.log.borrow_mut().push(format!("freightflag({},{})", c.unique_id(), v));
+        }
+        fn freight_chest_save_dict(&self, _c: &ObjRef) -> Option<PlistValue> {
+            self.freight_dict.get().then(|| dict_of(vec![("items", PlistValue::int(3))]))
+        }
+        fn construct_from_save_dict(
+            &self,
+            kind: SaveLoadKind,
+            t: i32,
+            d: &crate::plist::value::PlistDict,
+            chest: Option<&crate::plist::value::PlistDict>,
+        ) -> Option<ObjRef> {
+            self.log.borrow_mut().push(format!("construct({:?},{},{})", kind, t, chest.is_some()));
+            if self.fail_construct.get() {
+                return None;
+            }
+            let id = d.map.get(&"uniqueID".to_string()).map_or(0, |v| v.unsigned_long_value());
+            let o = tobj(t, id, &self.log, None, None, None);
+            let x = d.map.get(&"pos_x".to_string()).map_or(0, |v| v.int_value());
+            let y = d.map.get(&"pos_y".to_string()).map_or(0, |v| v.int_value());
+            o.base().borrow_mut().pos = IntPair { x, y };
+            Some(o)
+        }
+    }
+
+    fn hk(log: &Log) -> Rc<Hk> {
+        Rc::new(Hk {
+            log: log.clone(),
+            existing: RefCell::new(None),
+            fail_blockhead: Cell::new(false),
+            fail_construct: Cell::new(false),
+            level: Cell::new(0),
+            save_dir: RefCell::new(None),
+            chest_type: Cell::new(0),
+            chest_chain: Cell::new(false),
+            freight_dict: Cell::new(true),
+            freight_flag: Cell::new(true),
+            no_dir: RefCell::new(vec![]),
+            save_ok: Cell::new(true),
+        })
+    }
+
+    fn fixture(name: &str) -> (Rc<DynamicWorld>, Log, Rc<Hk>) {
+        let d = dw(name, 1);
+        let log: Log = Rc::new(RefCell::new(vec![]));
+        let h = hk(&log);
+        d.set_hooks(h.clone());
+        (d, log, h)
+    }
+
+    /// A server-backed world with one connected client `c1`.
+    fn served(name: &str, app: bool) -> (Rc<DynamicWorld>, Log, Rc<Hk>, Rc<Sc>) {
+        let (main, dwdb) = dbs(name);
+        let w = world(1);
+        std::mem::forget(w.clone());
+        let log: Log = Rc::new(RefCell::new(vec![]));
+        let sc = Rc::new(Sc::new("c1"));
+        let clients: ServerClientMap = Rc::new(RefCell::new(GsDict::new()));
+        clients.borrow_mut().insert("c1".to_string(), sc.clone());
+        clients.borrow_mut().insert("c2".to_string(), Rc::new(Sc::new("c2")));
+        let d = DynamicWorld::new(DynamicWorldInit {
+            world: w,
+            world_tile_loader: None,
+            server: Some(Rc::new(Srv)),
+            server_clients: Some(clients),
+            cache: None,
+            tree_density_noise_function: None,
+            season_offset_noise_function: None,
+            app_database: app.then(|| dbs(&format!("{name}_app")).0),
+            world_database: main,
+            dynamic_object_database: dwdb,
+            world_save_directory_override: Some(scratch(&format!("{name}_save"))),
+        });
+        let h = hk(&log);
+        d.set_hooks(h.clone());
+        (d, log, h, sc)
+    }
+
+    fn dict_with(entries: Vec<(&str, i64)>) -> PlistValue {
+        dict_of(entries.into_iter().map(|(k, v)| (k, PlistValue::int(v))).collect())
+    }
+    fn plist_bytes(v: &PlistValue) -> Vec<u8> {
+        data_from_property_list(v).unwrap()
+    }
+
+    #[test]
+    fn small_helpers() {
+        assert_eq!(clampi255(-4), 0);
+        assert_eq!(clampi255(77), 77);
+        assert_eq!(clampi255(300), 255);
+    }
+
+    /// Part A reads `dynamicWorldv2` and then the legacy `dynamicWorld` from the save directory; a version-1 save
+    /// arms the conversion of the old per-tile files.
+    #[test]
+    fn legacy_save_files_arm_the_conversion() {
+        let (d, _log, _h) = fixture("lsf_legacy");
+        let mut times = PlistValue::mutable_dict();
+        if let PlistValue::Dict(t) = &mut times {
+            t.map.insert("3".to_string(), PlistValue::int(9));
+        }
+        let sd = dict_of(vec![
+            ("dynamicObjectIDCount", PlistValue::int(41)),
+            ("activeBlockheadIndex", PlistValue::int(2)),
+            ("workbenchHasBeenCrafted", PlistValue::boolean(true)),
+            ("poleItemTakenTimes", times),
+        ]);
+        let dir = d.world_save_directory.clone();
+        std::fs::write(format!("{dir}dynamicWorld"), plist_bytes(&sd)).unwrap();
+        for f in ["3_4_dynamicWorld_7", "3_4_dynamicWorld_8", "5_6_dynamicWorld_9", "junk_dynamicWorld", "other"] {
+            std::fs::write(format!("{dir}{f}"), b"x").unwrap();
+        }
+        assert!(d.load_dynamic_objects_reposition_blockhead_load_failures(true, false));
+        assert_eq!(d.dynamic_object_id_count.get(), 41);
+        assert!(d.workbench_has_been_crafted.get());
+        assert!(d.pole_item_taken_times.borrow().is_some());
+        let list = d.version_one_to_two_conversion_list.borrow();
+        let list = list.as_ref().expect("conversion armed");
+        assert_eq!(list.len(), 2);
+        assert_eq!(list.get(&"3_4".to_string()).unwrap().len(), 2);
+        drop(list);
+        // the save written while converting is still version 1
+        d.save_game_with_world_data_sign_ownership_data(Some(b"w"), Some(b"signs"));
+        let v =
+            crate::plist::helpers::property_list_from_data(&d.world_database.get("dynamicWorldv2").unwrap()).unwrap();
+        assert_eq!(v.object_for_key("saveVersion").unwrap().int_value(), 1);
+        assert!(v.object_for_key("poleItemTakenTimes").is_some());
+        assert_eq!(d.world_database.get("signOwnershipData").unwrap(), b"signs");
+    }
+
+    #[test]
+    fn old_save_without_old_files_has_nothing_to_convert() {
+        let (d, _log, _h) = fixture("lsf_noconv");
+        let dir = d.world_save_directory.clone();
+        std::fs::write(format!("{dir}dynamicWorldv2"), plist_bytes(&dict_with(vec![("saveVersion", 1)]))).unwrap();
+        assert!(d.load_dynamic_objects_reposition_blockhead_load_failures(true, false));
+        assert!(d.version_one_to_two_conversion_list.borrow().is_none());
+    }
+
+    /// Part C: at most five blockheads are loaded, missing inventories are skipped, an already-loaded blockhead
+    /// is unloaded first and custom-rules death mode kills everybody.
+    #[test]
+    fn blockhead_loading_limits_and_death_rule() {
+        let (d, log, h) = fixture("lsf_bhs");
+        let mut rules = d.world().custom_rules();
+        rules.custom_rules_enabled = 1;
+        rules.death = 4;
+        d.world().set_custom_rules(rules);
+        let dicts: Vec<PlistValue> = (1..=8).map(|i| dict_with(vec![("uniqueID", i)])).collect();
+        d.world_database.put("blockheads", &plist_bytes(&dict_of(vec![("dynamicObjects", PlistValue::array(dicts))])));
+        let inv = plist_bytes(&PlistValue::array(vec![]));
+        for i in [1, 2, 4, 5, 6, 7, 8] {
+            d.world_database.put(&format!("blockhead_{i}_inventory"), &inv);
+        }
+        // the inventory of 3 only exists as a legacy file; 2 is already loaded elsewhere
+        std::fs::write(format!("{}blockhead_3_inventory", d.world_save_directory), &inv).unwrap();
+        let old = tobj(24, 2, &log, None, None, None);
+        *h.existing.borrow_mut() = Some(old.clone());
+        d.blockheads.borrow_mut().push(old.clone());
+        d.net_blockheads.borrow_mut().push(old);
+        d.active_blockhead_index.set(40);
+        let o1 = tobj(14, 90, &log, None, None, None);
+        d.do_set(14, 90, o1);
+        let o2 = tobj(14, 91, &log, None, None, None);
+        d.ta_set(14, 91, o2);
+        assert!(d.load_dynamic_objects_reposition_blockhead_load_failures(true, true));
+        let ids: Vec<u64> = d.blockheads.borrow().iter().map(|b| b.unique_id()).collect();
+        assert_eq!(ids, vec![1, 2, 3, 4, 5]);
+        assert_eq!(d.active_blockhead_index.get(), 0);
+        assert!(d.has_loaded_blockheads.get());
+        assert!(d.net_blockheads.borrow().is_empty());
+        let l = log.borrow().clone();
+        assert!(l.contains(&"unload(2)".to_string()));
+        assert!(l.contains(&"loaded(90)".to_string()) && l.contains(&"loaded(91)".to_string()));
+        assert!(l.contains(&"fullload(5)".to_string()));
+        assert!(l.contains(&"stop(3)".to_string()) && l.contains(&"die(3)".to_string()));
+    }
+
+    #[test]
+    fn blockhead_load_failure_aborts() {
+        let (d, _log, h) = fixture("lsf_bhfail");
+        h.fail_blockhead.set(true);
+        d.world_database.put(
+            "blockheads",
+            &plist_bytes(&dict_of(vec![("dynamicObjects", PlistValue::array(vec![dict_with(vec![("uniqueID", 4)])]))])),
+        );
+        d.world_database.put("blockhead_4_inventory", &plist_bytes(&PlistValue::array(vec![])));
+        assert!(!d.load_dynamic_objects_reposition_blockhead_load_failures(true, true));
+        // a record without the dynamicObjects key loads nothing but still counts as loaded
+        let (d2, _l2, _h2) = fixture("lsf_bhnone");
+        d2.world_database.put("blockheads", &plist_bytes(&dict_with(vec![("other", 1)])));
+        assert!(d2.load_dynamic_objects_reposition_blockhead_load_failures(true, true));
+        assert!(d2.has_loaded_blockheads.get());
+    }
+
+    fn mk_dict(id: i64, x: i64, y: i64, extra: Vec<(&str, i64)>) -> PlistValue {
+        let mut e = vec![("uniqueID", id), ("pos_x", x), ("pos_y", y)];
+        e.extend(extra);
+        dict_with(e)
+    }
+    fn blob(dicts: Vec<PlistValue>) -> Vec<u8> {
+        plist_bytes(&dict_of(vec![("dynamicObjects", PlistValue::array(dicts))]))
+    }
+    fn block(d: &DynamicWorld, mx: i32, my: i32) -> PhysicalBlockRef {
+        let world = d.world();
+        let pb = world.take_physical_block();
+        pb.x_pos.set(mx);
+        pb.y_pos.set(my);
+        *world.macro_tiles().get(my as usize).unwrap().physical_block.borrow_mut() = Some(pb);
+        pb
+    }
+
+    /// Duplicates, static positions and the per-type constructors of `loadDynamicObjectsOfType`.
+    #[test]
+    fn load_of_type_constructors_and_duplicates() {
+        let (d, log, h) = fixture("lsf_types");
+        let pb = block(&d, 0, 0);
+        pb.version.set(3);
+        let mut portal = false;
+        // dupe id already being added: reported as a change at its position
+        d.currently_adding_object_ids.borrow_mut()[13].insert(5);
+        let b = blob(vec![mk_dict(5, 7, 8, vec![])]);
+        d.load_dynamic_objects_of_type_from_data_physical_block_loaded_portal_client_owned_id(
+            13,
+            Some(&b),
+            pb,
+            &mut portal,
+            None,
+        );
+        assert!(log.borrow().contains(&"changed(7,8,13)".to_string()));
+        // static position already occupied (chest type 46 is an interaction object)
+        let occupied = tobj(16, 1, &log, None, None, None);
+        let key = d.world_index_key(IntPair { x: 3, y: 4 });
+        d.bp_set(16, key, occupied.clone());
+        let b = blob(vec![mk_dict(6, 3, 4, vec![])]);
+        d.load_dynamic_objects_of_type_from_data_physical_block_loaded_portal_client_owned_id(
+            16,
+            Some(&b),
+            pb,
+            &mut portal,
+            None,
+        );
+        assert!(log.borrow().contains(&"changed(3,4,16)".to_string()));
+        // the same for an interaction object type (no dupe-position log line for 0x12)
+        d.bp_set(18, key, occupied);
+        d.load_dynamic_objects_of_type_from_data_physical_block_loaded_portal_client_owned_id(
+            18,
+            Some(&b),
+            pb,
+            &mut portal,
+            None,
+        );
+        // trees below version 4 get their tiles upgraded, plants do not
+        log.borrow_mut().clear();
+        let b = blob(vec![mk_dict(20, 9, 9, vec![])]);
+        d.load_dynamic_objects_of_type_from_data_physical_block_loaded_portal_client_owned_id(
+            1,
+            Some(&b),
+            pb,
+            &mut portal,
+            None,
+        );
+        assert!(log.borrow().contains(&"treetiles(20)".to_string()));
+        pb.version.set(5);
+        let b = blob(vec![mk_dict(21, 10, 9, vec![])]);
+        d.load_dynamic_objects_of_type_from_data_physical_block_loaded_portal_client_owned_id(
+            2,
+            Some(&b),
+            pb,
+            &mut portal,
+            None,
+        );
+        assert!(!log.borrow().contains(&"treetiles(21)".to_string()));
+        let b = blob(vec![mk_dict(22, 11, 9, vec![])]);
+        d.load_dynamic_objects_of_type_from_data_physical_block_loaded_portal_client_owned_id(
+            10,
+            Some(&b),
+            pb,
+            &mut portal,
+            None,
+        );
+        // sharks: at most 16 per call
+        log.borrow_mut().clear();
+        let sharks: Vec<PlistValue> = (0..20).map(|i| mk_dict(100 + i, i, 3, vec![])).collect();
+        d.load_dynamic_objects_of_type_from_data_physical_block_loaded_portal_client_owned_id(
+            0x24,
+            Some(&blob(sharks)),
+            pb,
+            &mut portal,
+            None,
+        );
+        assert_eq!(log.borrow().iter().filter(|s| s.starts_with("construct(Shark")).count(), 16);
+        // a constructor that returns nil forgets the id again
+        h.fail_construct.set(true);
+        d.load_dynamic_objects_of_type_from_data_physical_block_loaded_portal_client_owned_id(
+            13,
+            Some(&blob(vec![mk_dict(30, 1, 1, vec![])])),
+            pb,
+            &mut portal,
+            None,
+        );
+        assert!(!d.currently_adding_object_ids.borrow()[13].contains(&30));
+        h.fail_construct.set(false);
+        // generic types and the surface block type
+        d.load_dynamic_objects_of_type_from_data_physical_block_loaded_portal_client_owned_id(
+            13,
+            Some(&blob(vec![mk_dict(31, 2, 2, vec![])])),
+            pb,
+            &mut portal,
+            None,
+        );
+        assert!(log.borrow().contains(&"construct(Generic,13,false)".to_string()));
+        log.borrow_mut().clear();
+        d.load_dynamic_objects_of_type_from_data_physical_block_loaded_portal_client_owned_id(
+            22,
+            Some(&blob(vec![mk_dict(32, 2, 2, vec![])])),
+            pb,
+            &mut portal,
+            None,
+        );
+        assert!(log.borrow().is_empty());
+        // loaded objects know when the blockheads were loaded already
+        d.has_loaded_blockheads.set(true);
+        d.load_dynamic_objects_of_type_from_data_physical_block_loaded_portal_client_owned_id(
+            13,
+            Some(&blob(vec![mk_dict(33, 2, 3, vec![])])),
+            pb,
+            &mut portal,
+            None,
+        );
+        assert!(log.borrow().contains(&"loaded(33)".to_string()));
+    }
+
+    /// A load of a type that is still being loaded for the same macro block is dropped.
+    #[test]
+    fn load_of_type_mid_load_is_dropped() {
+        let (d, log, _h) = fixture("lsf_mid");
+        let pb = block(&d, 0, 0);
+        d.currently_loading_macro_blocks.borrow_mut()[13].insert(0);
+        let mut portal = false;
+        d.load_dynamic_objects_of_type_from_data_physical_block_loaded_portal_client_owned_id(
+            13,
+            Some(&blob(vec![mk_dict(5, 7, 8, vec![])])),
+            pb,
+            &mut portal,
+            None,
+        );
+        assert_eq!(d.ta_len(13), 0);
+        assert!(log.borrow().is_empty());
+    }
+
+    /// Freight cars read their chest record from the database or the legacy file; workbenches convert portal tiles.
+    #[test]
+    fn load_of_type_freight_and_workbench() {
+        let (d, log, h) = fixture("lsf_wb");
+        let pb = block(&d, 0, 0);
+        let mut portal = false;
+        d.dynamic_object_database.put("trainchest_50", &plist_bytes(&dict_with(vec![("a", 1)])));
+        let b = blob(vec![mk_dict(50, 1, 1, vec![]), mk_dict(51, 2, 1, vec![])]);
+        d.load_dynamic_objects_of_type_from_data_physical_block_loaded_portal_client_owned_id(
+            43,
+            Some(&b),
+            pb,
+            &mut portal,
+            None,
+        );
+        let l = log.borrow().clone();
+        assert!(l.contains(&"construct(FreightCar,43,true)".to_string()));
+        assert!(l.contains(&"construct(FreightCar,43,false)".to_string()));
+        drop(l);
+        // portal workbench: the tile below changes to the type matching the level
+        let tile = tile_at_world_position_loaded(3, 4, &d.world()).unwrap();
+        for (level, want) in [
+            (0, Some(0x19u8)),
+            (1, Some(0x21)),
+            (2, Some(0x22)),
+            (3, Some(0x23)),
+            (4, Some(0x24)),
+            (5, Some(0x25)),
+            (9, None),
+        ] {
+            h.level.set(level);
+            tile.set_type_index(7);
+            let id = 200 + level as i64;
+            let b = blob(vec![mk_dict(id, 3, 5, vec![("interactionObjectType", 1), ("workbenchType", 1)])]);
+            d.load_dynamic_objects_of_type_from_data_physical_block_loaded_portal_client_owned_id(
+                45,
+                Some(&b),
+                pb,
+                &mut portal,
+                None,
+            );
+            assert_eq!(tile.type_index(), want.unwrap_or(7), "level {level}");
+            d.dynamic_objects_to_add.borrow_mut()[45].clear();
+            d.dynamic_objects_by_world_pos_index.borrow_mut()[45].clear();
+            d.currently_adding_object_ids.borrow_mut()[45].clear();
+        }
+        assert!(portal);
+        // a type-13 workbench (0xd) only registers the portal; old type-2 workbenches at level 2 become 3
+        pb.version.set(6);
+        h.level.set(2);
+        let b = blob(vec![mk_dict(300, 20, 9, vec![("interactionObjectType", 1), ("workbenchType", 2)])]);
+        d.load_dynamic_objects_of_type_from_data_physical_block_loaded_portal_client_owned_id(
+            45,
+            Some(&b),
+            pb,
+            &mut portal,
+            None,
+        );
+        assert!(!log.borrow().contains(&"level(3)".to_string()));
+        pb.version.set(5);
+        let b = blob(vec![mk_dict(301, 21, 9, vec![("interactionObjectType", 1), ("workbenchType", 0xd)])]);
+        d.load_dynamic_objects_of_type_from_data_physical_block_loaded_portal_client_owned_id(
+            45,
+            Some(&b),
+            pb,
+            &mut portal,
+            None,
+        );
+        assert!(d.portal_positions.borrow().contains_index(d.world_index_key(IntPair { x: 21, y: 9 })));
+        pb.version.set(5);
+        for v in [5u8, 2] {
+            pb.version.set(v);
+            let b =
+                blob(vec![mk_dict(310 + v as i64, 22, 9, vec![("interactionObjectType", 1), ("workbenchType", 2)])]);
+            d.load_dynamic_objects_of_type_from_data_physical_block_loaded_portal_client_owned_id(
+                45,
+                Some(&b),
+                pb,
+                &mut portal,
+                None,
+            );
+            d.dynamic_objects_by_world_pos_index.borrow_mut()[45].clear();
+        }
+        assert!(log.borrow().contains(&"level(3)".to_string()));
+        // other interaction objects, and the generic interaction object slot 0xF re-reports its position
+        let b = blob(vec![mk_dict(400, 5, 5, vec![("interactionObjectType", 2)])]);
+        d.load_dynamic_objects_of_type_from_data_physical_block_loaded_portal_client_owned_id(
+            46,
+            Some(&b),
+            pb,
+            &mut portal,
+            None,
+        );
+        assert!(log.borrow().contains(&"construct(InteractionObject(2),46,false)".to_string()));
+        log.borrow_mut().clear();
+        let b = blob(vec![mk_dict(401, 6, 5, vec![("interactionObjectType", 3)])]);
+        d.load_dynamic_objects_of_type_from_data_physical_block_loaded_portal_client_owned_id(
+            0xF,
+            Some(&b),
+            pb,
+            &mut portal,
+            None,
+        );
+        let l = log.borrow().clone();
+        assert!(l.contains(&"changed(6,5,23)".to_string()) && l.contains(&"changed(6,5,15)".to_string()));
+    }
+
+    fn raised(f: impl FnOnce()) -> crate::foundation::exception::NsException {
+        crate::foundation::exception::catch_ns(f).expect_err("expected an NSException")
+    }
+
+    /// Fix-ups for blockheads without inventory, unreadable records and a missing save directory.
+    #[test]
+    fn load_skips_missing_inventory_and_bad_records() {
+        let (d, log, _h) = fixture("lsf_skip");
+        let dicts: Vec<PlistValue> = (1..=8).map(|i| dict_with(vec![("uniqueID", i)])).collect();
+        d.world_database.put("blockheads", &plist_bytes(&dict_of(vec![("dynamicObjects", PlistValue::array(dicts))])));
+        let inv = plist_bytes(&PlistValue::array(vec![]));
+        for i in [1, 3, 4, 5, 6, 7, 8] {
+            d.world_database.put(&format!("blockhead_{i}_inventory"), &inv);
+        }
+        assert!(d.load_dynamic_objects_reposition_blockhead_load_failures(false, false));
+        let ids: Vec<u64> = d.blockheads.borrow().iter().map(|b| b.unique_id()).collect();
+        assert_eq!(ids, vec![1, 3, 4, 5, 6]);
+        assert!(log.borrow().contains(&"fullload(6)".to_string()));
+        // an unparsable record is ignored but the blockheads still count as loaded
+        let (d2, _l2, _h2) = fixture("lsf_garbage");
+        d2.world_database.put("blockheads", b"not a plist at all");
+        assert!(d2.load_dynamic_objects_reposition_blockhead_load_failures(false, false));
+        assert!(d2.has_loaded_blockheads.get());
+        // a version-1 save whose directory vanished has nothing to convert
+        let (d3, _l3, _h3) = fixture("lsf_nodir");
+        d3.world_database.put("dynamicWorldv2", &plist_bytes(&dict_with(vec![("saveVersion", 1)])));
+        std::fs::remove_dir_all(&d3.world_save_directory).unwrap();
+        assert!(d3.load_dynamic_objects_reposition_blockhead_load_failures(true, false));
+        assert!(d3.version_one_to_two_conversion_list.borrow().is_none());
+    }
+
+    /// An object blob without the `dynamicObjects` key loads nothing; a missing client leaves the sets alone.
+    #[test]
+    fn load_of_type_without_objects_or_client() {
+        let (d, _log, _h) = fixture("lsf_nokey");
+        let pb = block(&d, 0, 0);
+        let mut portal = false;
+        d.load_dynamic_objects_of_type_from_data_physical_block_loaded_portal_client_owned_id(
+            13,
+            Some(&plist_bytes(&dict_with(vec![("other", 1)]))),
+            pb,
+            &mut portal,
+            None,
+        );
+        assert_eq!(d.ta_len(13), 0);
+        d.load_dynamic_objects_of_type_from_data_physical_block_loaded_portal_client_owned_id(
+            13,
+            Some(&blob(vec![mk_dict(5, 1, 1, vec![])])),
+            pb,
+            &mut portal,
+            Some("nobody"),
+        );
+        assert_eq!(d.ta_len(13), 1);
+        // a portal workbench at the bottom of the world has no tile below it; a failed constructor adds nothing
+        let (d2, log2, h2) = fixture("lsf_nowb");
+        let pb2 = block(&d2, 0, 0);
+        let b = blob(vec![mk_dict(8, 4, 0, vec![("interactionObjectType", 1), ("workbenchType", 1)])]);
+        d2.load_dynamic_objects_of_type_from_data_physical_block_loaded_portal_client_owned_id(
+            45,
+            Some(&b),
+            pb2,
+            &mut portal,
+            None,
+        );
+        assert_eq!(d2.ta_len(45), 1);
+        pb2.version.set(2);
+        h2.fail_construct.set(true);
+        let b = blob(vec![mk_dict(9, 5, 7, vec![("interactionObjectType", 1), ("workbenchType", 2)])]);
+        d2.load_dynamic_objects_of_type_from_data_physical_block_loaded_portal_client_owned_id(
+            45,
+            Some(&b),
+            pb2,
+            &mut portal,
+            None,
+        );
+        assert_eq!(d2.ta_len(45), 1);
+        assert!(!log2.borrow().contains(&"level(3)".to_string()));
+    }
+
+    /// The conversion of old per-tile files happens when the block is first populated, one directory at a time.
+    #[test]
+    fn conversion_renames_files_when_the_block_loads() {
+        let (d, _log, _h) = fixture("lsf_conv");
+        let dir = d.world_save_directory.clone();
+        d.world_database.put("dynamicWorldv2", &plist_bytes(&dict_with(vec![("saveVersion", 1)])));
+        std::fs::write(format!("{dir}0_0_dynamicWorld_13"), blob(vec![])).unwrap();
+        std::fs::write(format!("{dir}0_1_dynamicWorld_13"), blob(vec![])).unwrap();
+        assert!(d.load_dynamic_objects_reposition_blockhead_load_failures(true, false));
+        assert_eq!(d.version_one_to_two_conversion_list.borrow().as_ref().unwrap().len(), 2);
+        for my in 0..2 {
+            let pb = block(&d, 0, my);
+            pb.version.set(2);
+            let mt = d.world().macro_tiles().get(my as usize).unwrap();
+            d.load_dynamic_objects_for_macro_tile_include_surface_blocks(&mt, false);
+            assert!(std::path::Path::new(&format!("{dir}0_{my}/dynamicWorld")).exists());
+            assert_eq!(d.version_one_to_two_conversion_list.borrow().as_ref().map(|l| l.len()), (my == 0).then_some(1));
+        }
+    }
+
+    /// Blockhead inventories are saved for local and disconnected blockheads, disconnected clients keep a cache of
+    /// their dicts that is rewritten and pruned on every save, and the app database gets a copy of the world.
+    #[test]
+    fn saves_blockheads_inventories_and_disconnected_cache() {
+        let (d, log, h, _sc) = served("lsf_save_bh", true);
+        let local = tobj(24, 1, &log, None, None, None);
+        let away = tobj(24, 2, &log, None, None, None);
+        let new_away = tobj(24, 3, &log, None, None, None);
+        d.blockheads.borrow_mut().push(local);
+        d.net_blockheads_with_disconnected_clients.borrow_mut().push(away);
+        d.net_blockheads_with_disconnected_clients.borrow_mut().push(new_away);
+        *h.save_dir.borrow_mut() = Some("cl".to_string());
+        let mut cache: GsDict<String, Vec<PlistValue>> = GsDict::new();
+        cache.insert("cl".to_string(), vec![dict_with(vec![("uniqueID", 2)]), dict_with(vec![("uniqueID", 99)])]);
+        cache.insert("stale".to_string(), vec![]);
+        *d.disconnected_clients_cached_save_dicts_not_done.borrow_mut() = Some(cache);
+        d.client_blockhead_inventories_to_save.borrow_mut().insert("extra".to_string(), b"inv".to_vec());
+        d.dynamic_world_changed_macro_positions.borrow_mut()[24].push(IntPair { x: 0, y: 0 });
+        d.save_game_with_world_data_sign_ownership_data(Some(b"world"), None);
+        assert_eq!(d.world_database.get("extra").unwrap(), b"inv");
+        assert!(
+            d.world_database.get("_worldv2").is_some() || d.app_database.as_ref().unwrap().get("_worldv2").is_some()
+        );
+        assert!(d.world_database.get("cl_blockhead_2_inventory").is_some());
+        assert!(d.world_database.get("cl_blockhead_3_inventory").is_some());
+        assert!(d.world_database.get("cl_blockhead_1_inventory").is_some());
+        let gz = d.world_database.get("cl_blockheads").unwrap();
+        let v = crate::plist::helpers::property_list_from_data(&crate::foundation::gzip::gzip_inflate(&gz).unwrap())
+            .unwrap();
+        let PlistValue::Array(a) = v.object_for_key("dynamicObjects").unwrap() else { panic!() };
+        assert_eq!(a.items.len(), 3);
+        let cache = d.disconnected_clients_cached_save_dicts_not_done.borrow();
+        assert_eq!(cache.as_ref().unwrap().keys_in_order(), vec!["cl".to_string()]);
+        assert!(log.borrow().contains(&"needs(2,false)".to_string()));
+    }
+
+    #[test]
+    fn serializer_failures_raise_data_save_exceptions() {
+        let v = dict_with(vec![("a", 1)]);
+        let ex = raised(|| {
+            serialize_or_raise(&v, "Failed to save blockheads.", false, || {
+                crate::foundation::exception::ns_raise("NSInvalidArgumentException", "boom")
+            });
+        });
+        assert_eq!((ex.name.as_str(), ex.reason_or_null()), ("DataSaveException", "Failed to save blockheads."));
+        let ex = raised(|| {
+            serialize_or_raise(&v, "Failed to save dynamic world object data.", true, || {
+                crate::foundation::exception::ns_raise("NSInvalidArgumentException", "boom")
+            });
+        });
+        assert_eq!(ex.reason_or_null(), "Failed to save dynamic world object data.");
+        assert!(!serialize_or_raise(&v, "unused", true, || {}).is_empty());
+    }
+
+    /// The incremental flush needs a server; unknown macro positions are skipped without being dropped.
+    #[test]
+    fn incremental_flush_needs_a_server() {
+        let (d, _log, _h) = fixture("lsf_flush0");
+        d.world_changed_macro_positions.borrow_mut().push(IntPair { x: 0, y: 1 });
+        d.save_and_send_only_blocks_that_need_to_be_sent();
+        assert_eq!(d.world_changed_macro_positions.borrow().len(), 1);
+        let (d, _log, _h, _sc) = served("lsf_flush1", false);
+        d.world_changed_macro_positions.borrow_mut().push(IntPair { x: 0, y: 99 });
+        d.world_changed_send_unreliably_macro_positions.borrow_mut().push(IntPair { x: 0, y: 99 });
+        d.save_and_send_only_blocks_that_need_to_be_sent();
+        assert_eq!(d.world_changed_macro_positions.borrow().len(), 1);
+        assert_eq!(d.world_changed_send_unreliably_macro_positions.borrow().len(), 1);
+    }
+
+    /// Owner-bound animals go to per-client files, everything else to the macro tile file; train chests and
+    /// chests write their inventories separately.
+    #[test]
+    fn macro_tile_save_splits_owned_animals_chests_and_freight() {
+        let (d, log, h, sc) = served("lsf_tilesave", false);
+        let world = d.world();
+        let mt = world.macro_tiles().get(0).unwrap();
+        mt.dynamic_objects_loaded.set(true);
+        // a client that owns animals in this macro tile but has none left: its file is rewritten empty
+        sc.tamed.borrow_mut()[13].insert(0);
+        *mt.dynamic_objects.borrow_mut() = Some(vec![]);
+        d.save_dynamic_objects_for_macro_tile_object_type_x_pos_y_pos(&mt, 13, 0, 0);
+        assert!(!sc.tamed.borrow()[13].contains(&0));
+        let empty = d.dynamic_object_database.get("c1_0_0/13").unwrap();
+        assert!(String::from_utf8_lossy(&empty).contains("dynamicObjects"));
+        // owned, server-owned and orphaned animals
+        let pet = tobj(13, 1, &log, None, None, Some("c1"));
+        let farm = tobj(13, 2, &log, None, None, Some("server"));
+        let ghost = tobj(13, 3, &log, None, None, Some("ghost"));
+        let plain = tobj(13, 4, &log, None, None, None);
+        let odd = tobj(14, 5, &log, None, None, Some("c1"));
+        *mt.dynamic_objects.borrow_mut() = Some(vec![pet, farm, ghost, plain, odd]);
+        d.save_dynamic_objects_for_macro_tile_object_type_x_pos_y_pos(&mt, 13, 0, 0);
+        assert!(sc.tamed.borrow()[13].contains(&0));
+        let read = |k: &str| {
+            let v = crate::plist::helpers::property_list_from_data(&d.dynamic_object_database.get(k).unwrap()).unwrap();
+            let PlistValue::Array(a) = v.object_for_key("dynamicObjects").unwrap() else { panic!() };
+            a.items.len()
+        };
+        assert_eq!(read("0_0/13"), 2);
+        assert_eq!(read("c1_0_0/13"), 1);
+        // a non-animal type with an owner is dropped from every file but remembered in the client's set
+        d.save_dynamic_objects_for_macro_tile_object_type_x_pos_y_pos(&mt, 14, 0, 0);
+        assert_eq!(read("0_0/14"), 0);
+        assert!(sc.tamed.borrow()[14].contains(&0));
+        // chests
+        let chest = tobj(46, 6, &log, None, None, None);
+        let portal_chest = tobj(46, 7, &log, None, None, None);
+        *mt.dynamic_objects.borrow_mut() = Some(vec![chest, portal_chest]);
+        h.chest_chain.set(true);
+        d.save_dynamic_objects_for_macro_tile_object_type_x_pos_y_pos(&mt, 46, 0, 0);
+        assert_eq!(d.dynamic_object_database.get("0_0/chest_6").unwrap(), b"inv");
+        h.chest_chain.set(false);
+        d.save_dynamic_objects_for_macro_tile_object_type_x_pos_y_pos(&mt, 46, 0, 0);
+        h.chest_type.set(4);
+        d.dynamic_object_database.remove("0_0/chest_7");
+        d.save_dynamic_objects_for_macro_tile_object_type_x_pos_y_pos(&mt, 46, 0, 0);
+        assert!(d.dynamic_object_database.get("0_0/chest_7").is_none());
+        // freight cars save their chest only when it changed
+        let car = tobj(43, 8, &log, None, None, None);
+        *mt.dynamic_objects.borrow_mut() = Some(vec![car]);
+        d.save_dynamic_objects_for_macro_tile_object_type_x_pos_y_pos(&mt, 43, 0, 0);
+        assert!(d.dynamic_object_database.get("trainchest_8").is_some());
+        assert!(log.borrow().contains(&"freightflag(8,false)".to_string()));
+        h.freight_dict.set(false);
+        let ex = raised(|| d.save_dynamic_objects_for_macro_tile_object_type_x_pos_y_pos(&mt, 43, 0, 0));
+        assert_eq!(ex.reason_or_null(), "Failed to save train chest data.");
+        // the debug line for the interaction slot 15
+        d.save_dynamic_objects_for_macro_tile_object_type_x_pos_y_pos(&mt, 15, 0, 0);
+    }
+
+    /// The first net data of a macro tile: normal objects, blockheads with both blobs, and the nil-blob exceptions.
+    #[test]
+    fn initial_net_data_of_a_macro_tile() {
+        let (d, log, _h, sc) = served("lsf_initial", false);
+        let world = d.world();
+        assert!(d.initial_dynamic_objects_net_data_for_macro_tile_index_wire_for_client(100_000, "c1").is_none());
+        // no physical block yet
+        assert!(d.initial_dynamic_objects_net_data_for_macro_tile_index_wire_for_client(0, "c1").is_none());
+        let pb = block(&d, 0, 0);
+        let _ = pb;
+        let mt = world.macro_tiles().get(0).unwrap();
+        let tree = tobj(1, 10, &log, Some(b"tree"), None, None);
+        let silent = tobj(2, 11, &log, None, None, None);
+        let bh = tobj(24, 12, &log, Some(b"bh-create"), Some(b"bh-update"), None);
+        *mt.dynamic_objects.borrow_mut() = Some(vec![tree, silent, bh]);
+        let got = d.initial_dynamic_objects_net_data_for_macro_tile_index_wire_for_client(0, "c1").unwrap();
+        assert_eq!(got.creation_data.len(), 2);
+        let mut creation = got.creation_data.clone();
+        creation.sort();
+        assert_eq!(creation, vec![(1, vec![b"tree".to_vec()]), (24, vec![b"bh-create".to_vec()])]);
+        assert_eq!(got.update_data, vec![(24, vec![b"bh-update".to_vec()])]);
+        let mut wired = sc.wired.borrow().clone();
+        wired.sort();
+        assert_eq!(wired, vec![10, 12]);
+        // without a known client nothing is wired
+        let got = d.initial_dynamic_objects_net_data_for_macro_tile_index_wire_for_client(0, "stranger").unwrap();
+        assert_eq!(got.creation_data.len(), 2);
+        // blockheads must have both blobs
+        let no_create = tobj(24, 13, &log, None, Some(b"u"), None);
+        *mt.dynamic_objects.borrow_mut() = Some(vec![no_create]);
+        let ex = raised(|| {
+            d.initial_dynamic_objects_net_data_for_macro_tile_index_wire_for_client(0, "c1");
+        });
+        assert_eq!(ex.reason_or_null(), "Tried to add nil to array");
+        let no_update = tobj(24, 14, &log, Some(b"c"), None, None);
+        *mt.dynamic_objects.borrow_mut() = Some(vec![no_update]);
+        let ex = raised(|| {
+            d.initial_dynamic_objects_net_data_for_macro_tile_index_wire_for_client(0, "c1");
+        });
+        assert_eq!(ex.name, "NSInvalidArgumentException");
+    }
+
+    /// Unloading a macro tile forgets static positions and partial-update lists; light changes of unknown tiles
+    /// are dropped.
+    #[test]
+    fn unloading_and_light_flush_edge_cases() {
+        let (d, log, _h) = fixture("lsf_unload");
+        let world = d.world();
+        let mt = world.macro_tiles().get(0).unwrap();
+        *mt.physical_block.borrow_mut() = Some(world.take_physical_block());
+        let rail = tobj(29, 1, &log, None, None, None);
+        rail.base().borrow_mut().pos = IntPair { x: 4, y: 5 };
+        let key = d.world_index_key(IntPair { x: 4, y: 5 });
+        d.do_set(29, 1, rail.clone());
+        d.bp_set(29, key, rail.clone());
+        d.partial_update_ordered_objects.borrow_mut()[29].push(rail.clone());
+        *mt.dynamic_objects.borrow_mut() = Some(vec![rail]);
+        d.remove_dynamic_objects_for_macro_tile(&mt);
+        assert!(!d.bp_contains(29, key));
+        assert!(d.partial_update_ordered_objects.borrow()[29].is_empty());
+        d.light_changed_send_unreliably_macro_positions_single_client.borrow_mut()[0].push(IntPair { x: 0, y: 99 });
+        d.send_lightblocks_to_clients();
+        assert!(d.light_changed_send_unreliably_macro_positions_single_client.borrow()[0].is_empty());
+    }
+
+    /// Small persistence helpers: portal list, chest records and the legacy files they may still live in.
+    #[test]
+    fn portal_and_chest_record_helpers() {
+        let (d, log, _h) = fixture("lsf_chest");
+        d.portal_positions.borrow_mut().add_index(d.world_index_key(IntPair { x: 40, y: 41 }));
+        d.remove_portal_from_list_at_pos(IntPair { x: 40, y: 41 });
+        assert!(d.portal_positions.borrow().is_empty());
+        let chest = tobj(46, 6, &log, None, None, None);
+        chest.base().borrow_mut().pos = IntPair { x: 70, y: 40 };
+        let key = "2_1/chest_6";
+        d.dynamic_object_database.put(key, b"db");
+        assert_eq!(d.load_local_inventory_data_for_chest(&chest).unwrap(), b"db");
+        d.dynamic_object_database.remove(key);
+        std::fs::create_dir_all(format!("{}2_1", d.world_save_directory)).unwrap();
+        std::fs::write(format!("{}{key}", d.world_save_directory), b"legacy").unwrap();
+        assert_eq!(d.load_local_inventory_data_for_chest(&chest).unwrap(), b"legacy");
+        d.remove_saved_inventory_for_chest(&chest);
+        assert!(d.load_local_inventory_data_for_chest(&chest).is_none());
+    }
+
+    struct Ops(Cell<u32>);
+    impl crate::world::state::WorldOpsHooks for Ops {
+        fn load_physical_block_for_macro_tile_at_x_y_load_surrounding_blocks_create_if_not_created(
+            &self,
+            _w: &crate::world::state::World,
+            _mt: &MacroTileRef,
+            _mx: i32,
+            _my: i32,
+            _s: bool,
+            _c: bool,
+        ) -> bool {
+            false
+        }
+        fn load_dynamic_objects_if_not_already_loaded_for_macro_tile_include_surface_blocks(
+            &self,
+            _w: &crate::world::state::World,
+            _mt: &MacroTileRef,
+            _s: bool,
+        ) {
+            self.0.set(self.0.get() + 1);
+        }
+        fn tile_is_protected_at_pos_against_blockhead(
+            &self,
+            _w: &crate::world::state::World,
+            _p: IntPair,
+            _b: &ObjRef,
+        ) -> bool {
+            false
+        }
+    }
+
+    /// Animals owned by a client come back when the client's block is loaded; an unloaded macro tile is loaded first.
+    #[test]
+    fn client_owned_objects_load_with_the_block() {
+        let (d, _log, _h, sc) = served("lsf_owned", false);
+        let world = d.world();
+        let ops = Rc::new(Ops(Cell::new(0)));
+        world.set_ops_hooks(Some(ops.clone()));
+        let pb = block(&d, 0, 0);
+        let mt = world.macro_tiles().get(0).unwrap();
+        d.dynamic_object_database.put("c1_0_0/13", &blob(vec![mk_dict(5, 1, 1, vec![])]));
+        d.load_client_owned_dynamic_objects_for_client_physical_block("c1", pb);
+        assert_eq!(ops.0.get(), 1);
+        assert_eq!(d.ta_len(13), 0);
+        mt.dynamic_objects_loaded.set(true);
+        d.load_client_owned_dynamic_objects_for_client_physical_block("c1", pb);
+        assert_eq!(d.ta_len(13), 1);
+        assert!(sc.tamed.borrow()[13].contains(&0));
+        // a block that is not the macro tile's current one is ignored
+        let other = world.take_physical_block();
+        other.x_pos.set(0);
+        other.y_pos.set(0);
+        d.load_client_owned_dynamic_objects_for_client_physical_block("c1", other);
+        assert_eq!(ops.0.get(), 1);
+        world.set_ops_hooks(None);
+        mt.dynamic_objects_loaded.set(false);
+        d.load_client_owned_dynamic_objects_for_client_physical_block("c1", pb);
+        assert_eq!(ops.0.get(), 1);
+    }
+
+    /// The gene bands between the thresholds.
+    #[test]
+    fn tulip_gene_bands() {
+        let (m, _) = tulip_genes_dual(0.5, 0.5);
+        assert_eq!(m, (5 | 4 << 12 | 5 << 8 | 4 << 4) as i16 as i32);
+        let (m, _) = tulip_genes_dual(0.3, 0.1);
+        assert_eq!(m, (4 | 3 << 12 | 4 << 8 | 3 << 4) as i16 as i32);
+    }
+
+    /// The test doubles answer through their trait objects too.
+    #[test]
+    fn test_doubles_report_their_state() {
+        let log: Log = Rc::new(RefCell::new(vec![]));
+        let o = tobj(14, 1, &log, None, None, None);
+        assert_eq!(o.class_info().name, DYNAMIC_OBJECT_CLASS.name);
+        assert!(o.as_any().is::<TObj>());
+        let w = world(1);
+        let ops = Ops(Cell::new(0));
+        let mt = w.macro_tiles().get(0).unwrap();
+        use crate::world::state::WorldOpsHooks;
+        assert!(!ops.load_physical_block_for_macro_tile_at_x_y_load_surrounding_blocks_create_if_not_created(
+            &w, &mt, 0, 0, false, false
+        ));
+        assert!(!ops.tile_is_protected_at_pos_against_blockhead(&w, IntPair { x: 0, y: 0 }, &o));
+    }
+
+    /// Free blocks loaded from a file are indexed by position.
+    #[test]
+    fn loaded_free_blocks_are_indexed() {
+        let (d, _log, _h) = fixture("lsf_free");
+        let pb = block(&d, 0, 0);
+        let mut portal = false;
+        d.load_dynamic_objects_of_type_from_data_physical_block_loaded_portal_client_owned_id(
+            14,
+            Some(&blob(vec![mk_dict(5, 12, 13, vec![])])),
+            pb,
+            &mut portal,
+            None,
+        );
+        assert_eq!(d.free_blocks_by_position.borrow().len(), 1);
+    }
+
+    /// Light blocks, dynamic object files and physical blocks are flushed to the world hooks.
+    #[test]
+    fn save_game_flushes_dirty_lists() {
+        let (d, log, _h) = fixture("lsf_flushall");
+        let world = d.world();
+        let mt = world.macro_tiles().get(1).unwrap();
+        mt.dynamic_objects_loaded.set(true);
+        *mt.dynamic_objects.borrow_mut() = Some(vec![]);
+        d.light_changed_send_unreliably_macro_positions_single_client.borrow_mut()[3].push(IntPair { x: 0, y: 1 });
+        d.light_changed_send_unreliably_macro_positions_single_client.borrow_mut()[4].push(IntPair { x: 0, y: 2 });
+        d.light_changed_send_unreliably_macro_positions_single_client.borrow_mut()[5].push(IntPair { x: 0, y: 3 });
+        d.world_changed_macro_positions.borrow_mut().push(IntPair { x: 0, y: 2 });
+        d.world_changed_send_unreliably_macro_positions.borrow_mut().push(IntPair { x: 0, y: 3 });
+        d.send_lightblocks_to_clients();
+        let l = log.borrow().clone();
+        assert!(l.contains(&"lightblock(3,false,true)".to_string()));
+        assert!(l.contains(&"lightblock(4,false,false)".to_string()));
+        assert!(l.contains(&"lightblock(5,false,false)".to_string()));
+        log.borrow_mut().clear();
+        d.dynamic_world_changed_macro_positions.borrow_mut()[13].push(IntPair { x: 0, y: 1 });
+        d.dynamic_world_changed_macro_positions.borrow_mut()[13].push(IntPair { x: 0, y: 99 });
+        d.dynamic_world_changed_macro_positions.borrow_mut()[24].push(IntPair { x: 0, y: 1 });
+        d.world_changed_macro_positions.borrow_mut().push(IntPair { x: 0, y: 99 });
+        d.save_game_with_world_data_sign_ownership_data(None, None);
+        assert!(d.dynamic_object_database.get("0_1/13").is_some());
+        assert!(d.dynamic_object_database.get("0_1/24").is_none());
+        assert!(d.dynamic_world_changed_macro_positions.borrow()[13].is_empty());
+        assert!(d.world_changed_macro_positions.borrow().is_empty());
+        let l = log.borrow().clone();
+        assert!(l.contains(&"savepb(true,false,false)false".to_string()));
+        assert!(l.contains(&"savepb(false,false,false)false".to_string()));
+        // dirty tiles that exist reach the hook; the front entry is consumed even when the hook declines
+        d.world_changed_dont_send_macro_positions.borrow_mut().push(IntPair { x: 0, y: 1 });
+        d.snow_changed_macro_positions.borrow_mut().push(IntPair { x: 0, y: 2 });
+        log.borrow_mut().clear();
+        d.save_game_with_world_data_sign_ownership_data(None, None);
+        assert!(log.borrow().contains(&"savepb(false,true,false)true".to_string()));
+        assert!(d.snow_changed_macro_positions.borrow().is_empty());
+    }
+
+    /// At most four blocks are sent per call; rejected blocks stay queued.
+    #[test]
+    fn incremental_flush_sends_at_most_four_blocks() {
+        let (d, log, h, _sc) = served("lsf_flush4", false);
+        for y in 0..6 {
+            d.world_changed_macro_positions.borrow_mut().push(IntPair { x: 0, y });
+        }
+        d.world_changed_send_unreliably_macro_positions.borrow_mut().push(IntPair { x: 0, y: 7 });
+        d.save_and_send_only_blocks_that_need_to_be_sent();
+        assert_eq!(d.world_changed_macro_positions.borrow().len(), 2);
+        assert!(d.world_changed_send_unreliably_macro_positions.borrow().is_empty());
+        h.save_ok.set(false);
+        d.world_changed_send_unreliably_macro_positions.borrow_mut().push(IntPair { x: 0, y: 7 });
+        log.borrow_mut().clear();
+        d.save_and_send_only_blocks_that_need_to_be_sent();
+        assert_eq!(d.world_changed_macro_positions.borrow().len(), 2);
+        assert_eq!(d.world_changed_send_unreliably_macro_positions.borrow().len(), 1);
+        assert_eq!(log.borrow().iter().filter(|l| l.starts_with("savepb")).count(), 3);
+    }
+
+    /// Cached dicts of disconnected clients: a new directory, blockheads without a directory, inventories without one.
+    #[test]
+    fn disconnected_cache_edge_cases() {
+        let (d, log, h, _sc) = served("lsf_cache2", false);
+        let a = tobj(24, 1, &log, None, None, None);
+        let b = tobj(24, 2, &log, None, None, None);
+        d.net_blockheads_with_disconnected_clients.borrow_mut().push(a.clone());
+        d.net_blockheads_with_disconnected_clients.borrow_mut().push(b);
+        *h.save_dir.borrow_mut() = Some("new".to_string());
+        h.no_dir.borrow_mut().push(2);
+        let mut cache: GsDict<String, Vec<PlistValue>> = GsDict::new();
+        cache.insert("old".to_string(), vec![]);
+        *d.disconnected_clients_cached_save_dicts_not_done.borrow_mut() = Some(cache);
+        d.save_blockheads();
+        assert!(d.world_database.get("new_blockheads").is_some());
+        assert!(d.world_database.get("old_blockheads").is_some());
+        let keys = d.disconnected_clients_cached_save_dicts_not_done.borrow().as_ref().unwrap().keys_in_order();
+        assert_eq!(keys, vec!["new".to_string()]);
+        // a local blockhead without a client directory keeps its inventory under the plain key
+        d.save_blockhead_inventory(&a);
+        h.no_dir.borrow_mut().push(1);
+        d.save_blockhead_inventory(&a);
+        assert!(d.world_database.get("blockhead_1_inventory").is_some());
+        assert!(d.world_database.get("new_blockhead_1_inventory").is_some());
+    }
+
+    /// A client that owns animals here but is not the owner of any is not part of the per-client files; train
+    /// chests whose flag is clear are left alone.
+    #[test]
+    fn macro_tile_save_second_client_and_clean_freight() {
+        let (d, log, h, sc) = served("lsf_tile2", false);
+        let world = d.world();
+        let mt = world.macro_tiles().get(0).unwrap();
+        mt.dynamic_objects_loaded.set(true);
+        sc.tamed.borrow_mut()[13].insert(0);
+        let car = tobj(43, 8, &log, None, None, None);
+        *mt.dynamic_objects.borrow_mut() = Some(vec![car]);
+        h.freight_flag.set(false);
+        d.save_dynamic_objects_for_macro_tile_object_type_x_pos_y_pos(&mt, 43, 0, 0);
+        assert!(d.dynamic_object_database.get("trainchest_8").is_none());
+        d.save_dynamic_objects_for_macro_tile_object_type_x_pos_y_pos(&mt, 13, 0, 0);
+        assert!(d.dynamic_object_database.get("c1_0_0/13").is_some());
+        assert!(d.dynamic_object_database.get("c2_0_0/13").is_none());
+    }
+
+    /// Tiles without a loaded physical block are left alone; the net data call also goes through the world hooks.
+    #[test]
+    fn unload_and_net_data_of_tiles_without_blocks() {
+        let (d, log, _h, _sc) = served("lsf_noblock", false);
+        let world = d.world();
+        let mt = world.macro_tiles().get(0).unwrap();
+        let o = tobj(14, 1, &log, None, None, None);
+        d.do_set(14, 1, o.clone());
+        *mt.dynamic_objects.borrow_mut() = Some(vec![o]);
+        d.remove_dynamic_objects_for_macro_tile(&mt);
+        assert!(d.do_contains(14, 1));
+        assert!(mt.dynamic_objects.borrow().is_none());
+        // an empty tile has empty net data
+        let ops = Rc::new(Ops(Cell::new(0)));
+        world.set_ops_hooks(Some(ops.clone()));
+        block(&d, 0, 0);
+        *mt.dynamic_objects.borrow_mut() = Some(vec![]);
+        let got = d.initial_dynamic_objects_net_data_for_macro_tile_index_wire_for_client(0, "c1").unwrap();
+        assert!(got.creation_data.is_empty() && got.update_data.is_empty());
+        assert_eq!(ops.0.get(), 1);
+        world.set_ops_hooks(None);
+        // a client-owned file for a macro tile outside the world is ignored
+        let pb = block(&d, 0, 1);
+        pb.y_pos.set(99);
+        d.dynamic_object_database.put("c1_0_99/13", &blob(vec![mk_dict(5, 1, 1, vec![])]));
+        d.load_client_owned_dynamic_objects_for_client_physical_block("c1", pb);
+        assert_eq!(d.ta_len(13), 0);
+    }
+
+    #[test]
+    fn incremental_flush_with_nothing_queued() {
+        let (d, log, _h, _sc) = served("lsf_flush_empty", false);
+        d.save_and_send_only_blocks_that_need_to_be_sent();
+        assert!(log.borrow().is_empty());
     }
 }
