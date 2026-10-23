@@ -304,12 +304,7 @@ mod tests {
         f();
         let next = rand();
         srand(seed);
-        for n in 0..4 {
-            if rand() == next {
-                return n;
-            }
-        }
-        usize::MAX
+        (0..4).find(|_| rand() == next).unwrap_or(usize::MAX)
     }
 
     /// Plain reference implementation using raw draws, for the sequence/parity comparison.
@@ -518,5 +513,92 @@ mod tests {
         assert_eq!(tame_count_requirement_for_npc_type(NPCType(0)), 2);
         assert_eq!(class_name_for_npc_type(NPCType(8)), Some("Yak"));
         assert_eq!(class_name_for_npc_type(NPCType(0)), None);
+    }
+
+    #[test]
+    fn donkey_without_breeding_keeps_the_breed_and_draws_nothing() {
+        assert_eq!(generate_donkey_child_breed_from_parent_breed(DonkeyBreed(3), DonkeyBreed(4), false).0, 3);
+        assert_eq!(
+            draws(9, || {
+                generate_donkey_child_breed_from_parent_breed(DonkeyBreed(3), DonkeyBreed(3), false);
+            }),
+            0
+        );
+    }
+
+    #[test]
+    fn every_name_and_table_entry() {
+        let dodo = [
+            "STONE",
+            "LIMESTONE",
+            "SANDSTONE",
+            "MARBLE",
+            "RED MARBLE",
+            "LAPIS",
+            "DIRT",
+            "COMPOST",
+            "WOOD",
+            "GRAVEL",
+            "SAND",
+            "BLACK SAND",
+            "GLASS",
+            "BLACK GLASS",
+            "CLAY",
+            "RED BRICK",
+            "FLINT",
+            "COAL",
+            "OIL",
+            "FUEL",
+            "COPPER",
+            "TIN",
+            "IRON",
+            "GOLD",
+            "TITANIUM",
+            "PLATINUM",
+            "AMETHYST",
+            "SAPPHIRE",
+            "EMERALD",
+            "RUBY",
+            "DIAMOND",
+            "RAINBOW",
+        ];
+        for (i, p) in dodo.iter().enumerate() {
+            let b = DodoBreed(i as u16 + 1);
+            assert_eq!(prefix_name_for_dodo_breed(b), Some(*p));
+            assert_eq!(name_for_dodo_breed(b), format!("{p} DODO"));
+        }
+        assert_eq!(prefix_name_for_dodo_breed(DodoBreed(0)), None);
+        assert_eq!(prefix_name_for_dodo_breed(DodoBreed(33)), None);
+        let donkey = [
+            "BROWN", "BLACK", "BLUE", "GREEN", "YELLOW", "ORANGE", "RED", "PURPLE", "PINK", "WHITE", "RAINBOW", "GREY",
+        ];
+        for (i, p) in donkey.iter().enumerate() {
+            let low = DonkeyBreed(i as u16 + 1);
+            assert_eq!(prefix_name_for_donkey_breed(low), Some(*p));
+            if i < 11 {
+                assert_eq!(prefix_name_for_donkey_breed(DonkeyBreed(i as u16 + 13)), Some(*p));
+            }
+        }
+        assert_eq!(prefix_name_for_donkey_breed(DonkeyBreed(0)), None);
+        assert_eq!(prefix_name_for_donkey_breed(DonkeyBreed(24)), None);
+        // laying likelihood by tier
+        for (breeds, p) in [
+            (&[5u16, 6, 12, 15, 16, 17, 21, 22, 27][..], 0.5f32),
+            (&[18, 19, 28][..], 0.25),
+            (&[13, 14, 20, 23, 29][..], 0.125),
+            (&[24, 30][..], 0.0625),
+            (&[25, 26, 31, 32][..], 0.03125),
+        ] {
+            for b in breeds {
+                assert_eq!(lay_likelyhood_for_breed(DodoBreed(*b)), p);
+            }
+        }
+        // NPC taming counts and class names
+        let counts = [2, 4, 4, 2, 8, 10, 4, 4];
+        let classes = ["Dodo", "DropBear", "Donkey", "ClownFish", "Shark", "CaveTroll", "Scorpion", "Yak"];
+        for t in 1..=8u32 {
+            assert_eq!(tame_count_requirement_for_npc_type(NPCType(t)), counts[t as usize - 1]);
+            assert_eq!(class_name_for_npc_type(NPCType(t)), Some(classes[t as usize - 1]));
+        }
     }
 }

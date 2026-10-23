@@ -201,4 +201,11 @@ mod tests {
             crate::types::structs::MJColor8 { r: 255, g: 0, b: 127, a: 255 }
         );
     }
+
+    #[test]
+    fn tulip_gene_orders() {
+        for (p, order) in [(1, 3), (2, 5), (3, 0), (4, 1), (5, 2), (6, 6), (7, 7), (8, 4)] {
+            assert_eq!(tulip_gene_order_for_pigment(p), order);
+        }
+    }
 }

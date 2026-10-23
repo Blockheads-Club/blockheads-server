@@ -1148,12 +1148,8 @@ pub fn title_for_item_type_and_count_including_one(t: ItemType, count: i32) -> S
 mod tests {
     use super::*;
 
-    #[test]
-    fn tsv_rows() {
-        let tsv = match std::fs::read_to_string(crate::testenv::modules("item_tables_names.tsv")) {
-            Ok(t) => t,
-            Err(_) => return, // spec data not available in this checkout
-        };
+    /// Checks every row of a spec TSV against the name tables; returns the number of rows.
+    fn check_tsv(tsv: &str) -> usize {
         let mut n = 0;
         for l in tsv.lines().filter(|l| !l.starts_with('#')) {
             let f: Vec<&str> = l.split('\t').collect();
@@ -1163,7 +1159,21 @@ mod tests {
             assert_eq!(plural_ns_string_from_item_type(ItemType(id)), pl);
             n += 1;
         }
-        assert_eq!(n, 1105);
+        n
+    }
+
+    #[test]
+    fn tsv_rows() {
+        // the spec data is not available in every checkout; then nothing is compared
+        let tsv = std::fs::read_to_string(crate::testenv::modules("item_tables_names.tsv")).unwrap_or_default();
+        let n = check_tsv(&tsv);
+        assert!(n == 0 || n == 1105);
+    }
+
+    #[test]
+    fn tsv_row_format() {
+        let tsv = "# id\tname\tsingular\tplural\n4\tITEM_STICK\tSTICK\tSTICKS\n14\tITEM_CHARCOAL\tCHARCOAL\t=\n";
+        assert_eq!(check_tsv(tsv), 2);
     }
 
     #[test]

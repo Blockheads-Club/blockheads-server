@@ -160,6 +160,7 @@ mod tests {
         assert_eq!(nourishment_fraction_for_food_type(FoodType::FOOD_WORM).to_bits(), 0x3c75c28f);
         assert_eq!(nourishment_fraction_for_food_type(FoodType::FOOD_BREAD).to_bits(), 0x3ecccccd);
         assert_eq!(nourishment_fraction_for_food_type(FoodType::FOOD_PIZZA).to_bits(), 0x3f4ccccd);
+        assert_eq!(nourishment_fraction_for_food_type(FoodType::FOOD_COOKED_DODO_MEAT), 0.25);
         assert_eq!(nourishment_fraction_for_food_type(FoodType::FOOD_NONE), 0.0);
         assert_eq!(nourishment_fraction_for_food_type(FoodType(31)), 0.0);
     }
