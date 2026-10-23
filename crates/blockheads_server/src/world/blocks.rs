@@ -512,3 +512,119 @@ mod tests {
         install_deps(Rc::new(NullDeps));
     }
 }
+
+/// Light blocks of clients, evicting nothing, pooled blocks and the thin forwarders.
+#[cfg(test)]
+mod more_tests {
+    use super::*;
+    use crate::foundation::gsdict::GsDict;
+    use crate::world::helpers::testutil::new_obj;
+    use crate::world::misc::{install_deps, testkit, NullDeps};
+    use crate::world::state::{BHServer, ServerClient, WorldTileLoader};
+    use std::cell::RefCell;
+
+    fn server_world(rec: &Rc<testkit::Rec>) -> Rc<World> {
+        let w = World::alloc(32);
+        *w.world_tile_loader.borrow_mut() = Some(Rc::new(WorldTileLoader {}));
+        *w.server.borrow_mut() = Some(Rc::new(BHServer { api: None }));
+        let mut m: GsDict<String, Rc<ServerClient>> = GsDict::new();
+        m.insert("a".into(), Rc::new(ServerClient {}));
+        m.insert("b".into(), Rc::new(ServerClient {}));
+        *w.server_clients.borrow_mut() = Some(Rc::new(RefCell::new(m)));
+        rec.light_idx.borrow_mut().insert("a".into(), 5);
+        rec.light_idx.borrow_mut().insert("b".into(), 6);
+        *rec.world.borrow_mut() = Some(Rc::downgrade(&w));
+        rec.load_makes_valid.set(true);
+        install_ops_hooks(&w);
+        w
+    }
+
+    #[test]
+    fn same_macro_tile_identity() {
+        let w = World::alloc(32);
+        let a = w.macro_tiles().get(0);
+        let b = w.macro_tiles().get(1);
+        assert!(same_mt(&None, &None) && same_mt(&a, &a.clone()));
+        assert!(!same_mt(&a, &b) && !same_mt(&a, &None));
+    }
+
+    #[test]
+    fn light_blocks_are_routed_to_the_client_that_owns_the_index() {
+        let rec = testkit::install();
+        let w = server_world(&rec);
+        let pb = w.take_physical_block();
+        w.load_light_block_for_client_light_block_index_into_physical_block(6, &pb);
+        w.save_light_block_for_client_light_block_index_physical_block_send_now(5, &pb, true);
+        let log = rec.take();
+        assert!(log.contains(&"loadLightBlock(6,b)".to_string()), "{log:?}");
+        assert!(log.contains(&"saveLightBlock(5,a,true)".to_string()), "{log:?}");
+        // an index nobody owns, and -1
+        w.load_light_block_for_client_light_block_index_into_physical_block(9, &pb);
+        w.save_light_block_for_client_light_block_index_physical_block_send_now(9, &pb, false);
+        w.save_light_block_for_client_light_block_index_physical_block_send_now(-1, &pb, false);
+        assert!(rec.take().is_empty());
+        install_deps(Rc::new(NullDeps));
+    }
+
+    #[test]
+    fn forwarders_bulk_updates_and_reloading_a_dirty_block() {
+        let rec = testkit::install();
+        let w = server_world(&rec);
+        assert_eq!(w.unmodified_ground_level_for_x(10), 11);
+        w.archive_light_blocks_for_client("a");
+        assert_eq!(rec.take(), vec!["archiveLightBlocks(a)"]);
+        // a dirty block is loaded again; a loader that leaves it invalid adds no light
+        let mt = w.macro_tiles().get(0).unwrap();
+        assert!(w.load_physical_block_for_macro_tile_at_x_y_load_surrounding_blocks_create_if_not_created(
+            &mt, 0, 0, false, true
+        ));
+        mt.dirty.set(1);
+        rec.load_makes_valid.set(false);
+        let pb = mt.physical_block().unwrap();
+        pb.valid.set(false);
+        assert!(w.load_physical_block_for_macro_tile_at_x_y_load_surrounding_blocks_create_if_not_created(
+            &mt, 0, 0, false, true
+        ));
+        // nothing to fully load for a missing tile
+        w.fully_load_and_update_if_needed_for_macro_block_including_pos_client_light_block_index_for_blockhead(
+            None,
+            IntPair { x: 0, y: 0 },
+            -1,
+            None,
+        );
+        // the ops hooks forward dynamic object loading
+        let hooks = w.ops_hooks().unwrap();
+        hooks.load_dynamic_objects_if_not_already_loaded_for_macro_tile_include_surface_blocks(&w, &mt, false);
+        assert!(hooks.tile_is_protected_at_pos_against_blockhead(&w, IntPair { x: 0, y: 0 }, &new_obj()) == false);
+        // without a loader the answers are zero
+        *w.world_tile_loader.borrow_mut() = None;
+        assert_eq!(w.unmodified_ground_level_for_x(10), 0);
+        mt.dirty.set(1);
+        assert!(w.load_physical_block_for_macro_tile_at_x_y_load_surrounding_blocks_create_if_not_created(
+            &mt, 0, 0, false, true
+        ));
+        w.archive_light_blocks_for_client("a");
+        // bulk database updates without and with an environment
+        w.start_bulk_database_update();
+        assert!(!w.finish_bulk_database_update());
+        let dir = format!("{}/bhbl_env_{}", std::env::temp_dir().display(), std::process::id());
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        *w.database_environment.borrow_mut() =
+            crate::storage::lmdb::DatabaseEnvironment::new(&format!("{dir}/"), 4, 16);
+        assert!(w.database_environment.borrow().is_some());
+        w.start_bulk_database_update();
+        assert!(w.finish_bulk_database_update());
+        install_deps(Rc::new(NullDeps));
+    }
+
+    #[cfg(not(feature = "faithful-crashes"))]
+    #[test]
+    #[should_panic(expected = "UB-PARITY")]
+    fn decommissioning_a_tile_without_a_block_is_ub() {
+        let rec = testkit::install();
+        let w = server_world(&rec);
+        let mt = w.macro_tiles().get(0).unwrap();
+        w.decommision_block_block_to_save_physcial_block(&mt, false);
+    }
+}

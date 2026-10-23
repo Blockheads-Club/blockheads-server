@@ -1168,6 +1168,12 @@ pub(crate) mod testkit {
         fn bh_is_net(&self, _bh: &ObjRef) -> bool {
             self.net_bh.get()
         }
+        fn unmodified_ground_level_for_x(&self, x: i32) -> i32 {
+            x + 1
+        }
+        fn archive_light_blocks_for_client(&self, client_id: &str) {
+            self.push(format!("archiveLightBlocks({client_id})"));
+        }
         fn bh_is_idle(&self, _bh: &ObjRef) -> bool {
             !self.busy.get()
         }
