@@ -1049,6 +1049,19 @@ mod tests {
     }
 
     #[test]
+    fn numbers_in_every_notation() {
+        assert_eq!(num::<i64>("12", "n"), Ok(12));
+        assert_eq!(num::<i64>("-12", "n"), Ok(-12));
+        assert_eq!(num::<i64>("0x1f", "n"), Ok(31));
+        assert_eq!(num::<i64>("0X1F", "n"), Ok(31));
+        assert_eq!(num::<i64>("-0x10", "n"), Ok(-16));
+        assert_eq!(num::<u8>("300", "n"), Err("n '300' out of range".to_string()));
+        assert_eq!(num::<i64>("zz", "n"), Err("bad n 'zz'".to_string()));
+        assert_eq!(hex_type("0x1e"), Ok(0x1e));
+        assert_eq!(create_flag(None), Ok(true));
+    }
+
+    #[test]
     fn errors_display_and_convert() {
         assert_eq!(ScenarioError::Timeout { line: 3, what: "x".into() }.to_string(), "FAIL 3 timeout: x");
         assert_eq!(ScenarioError::Unexpected { line: 4, what: "y".into() }.to_string(), "FAIL 4 y");

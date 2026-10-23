@@ -113,6 +113,12 @@ disconnect
     // the inventory step with no blockhead known fails with a hint
     let e = failure(&cfg, "client C\ninventory @LAST_BLOCKHEAD []\n");
     assert!(e.contains("no created blockhead known"), "{e}");
+    // a blockhead announced to us can be addressed as @LAST_BLOCKHEAD (the notes of the session are reported too)
+    let mut script =
+        String::from("client Boss\nblock-tile 100 600\nwait 04\nuid\nblockhead Al 100 600\nwait 07\nsleep 300\n");
+    script.push_str("inventory @LAST_BLOCKHEAD [[],[],[],[],[],[],[],[]]\nsleep 100\n");
+    let created = run(&cfg, &script, &fast());
+    assert!(created.is_ok(), "{:?}", created.err());
     // an explicit blockhead id is sent as is
     run(&cfg, "client D\ninventory 12345 [[],[]]\nsleep 50\n", &fast()).unwrap();
 }
@@ -231,6 +237,27 @@ fn a_server_that_hangs_up_or_stays_silent_after_the_handshake() {
     });
     let e = run(&hangup.cfg(), "client A\n", &fast()).unwrap_err();
     assert!(e.to_string().contains("disconnected during join"), "{e}");
+    // a block with a wrong receipt hash ends up in the notes of the report
+    let tiles = [0u8; blockheads_server::protocol::block_wire::TILES_LEN];
+    let light = [0u8; blockheads_server::protocol::block_wire::LIGHT_LEN];
+    let bad_block = blockheads_server::protocol::block_wire::server_block_from_parts(
+        5,
+        &tiles,
+        0,
+        1,
+        Some((&light, &blockheads_server::protocol::block_wire::ExtraData { hash: "wrong".into(), receipts: None })),
+    )
+    .unwrap();
+    let noisy = Fake::start(move |host, ev| match ev {
+        OwnedEvent::Connect { peer, .. } => host.send_reliable(peer, 0, &m::initial_contact(None, false, "w")),
+        OwnedEvent::Receive { peer, data, .. } if data.first() == Some(&0x1f) => {
+            host.send_reliable(peer, 0, &m::world_summary(&m::WorldSummary::default()));
+            host.send_reliable(peer, 0, &bad_block);
+        }
+        _ => {}
+    });
+    let report = run(&noisy.cfg(), "client A\nsleep 300\n", &fast()).unwrap();
+    assert!(report.notes.iter().any(|n| n.starts_with("A: block 5 hash mismatch (wrong)")), "{:?}", report.notes);
     // approves the join and then ignores every request
     let mute = Fake::start(|host, ev| {
         if let OwnedEvent::Connect { peer, .. } = ev {

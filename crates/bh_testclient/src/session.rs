@@ -1142,12 +1142,13 @@ mod tests {
         use rusty_enet as enet;
         let sock = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
         let addr = sock.local_addr().unwrap();
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stop2 = stop.clone();
         let th = std::thread::spawn(move || {
             let mut host =
                 enet::Host::new(sock, enet::HostSettings { peer_limit: 4, channel_limit: 8, ..Default::default() })
                     .unwrap();
-            let end = Instant::now() + Duration::from_secs(10);
-            while Instant::now() < end {
+            while !stop2.load(std::sync::atomic::Ordering::SeqCst) {
                 let ev = host.service().unwrap().map(|e| e.no_ref());
                 match ev {
                     Some(enet::EventNoRef::Connect { peer, .. }) => {
@@ -1199,7 +1200,8 @@ mod tests {
         assert_eq!(b.join(3000).unwrap(), JoinOutcome::Rejected { reason: 14 });
         assert_eq!(b.state.last_rejection, Some(14));
         b.disconnect();
-        drop(th);
+        stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        th.join().unwrap();
     }
 
     #[test]
