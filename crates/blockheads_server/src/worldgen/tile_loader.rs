@@ -1317,6 +1317,16 @@ mod sweep_tests {
         for (w, seed, rules, expert) in cases {
             let (world, l) = generate(w, seed, rules, expert, true);
             load_blocks(&world, 2);
+            // blocks of an old version are brought up to date: chests, black sand, platinum and titanium
+            let w = world.world_width_macro();
+            for my in (14..20).step_by(1) {
+                for mx in (0..w).step_by((w / 4).max(1) as usize) {
+                    if let Some(pb) = world.macro_tiles().get((my * w + mx) as usize).and_then(|m| m.physical_block()) {
+                        pb.version.set(0);
+                        l.update_physical_block_to_latest_version(pb);
+                    }
+                }
+            }
             let _ = (l.highest_point(), l.best_start_position());
         }
         // a world that is reloaded rather than created

@@ -480,8 +480,12 @@ mod tests {
 
     /// Copies a sample `world_db` to a scratch dir (opening LMDB may touch lock files) and returns all stored blocks.
     fn sample_blocks(sample: &str, id: &str) -> Option<Vec<(i32, i32, Vec<u8>)>> {
+        sample_blocks_under(&crate::testenv::refenv_samples(), sample, id)
+    }
+
+    fn sample_blocks_under(root: &str, sample: &str, id: &str) -> Option<Vec<(i32, i32, Vec<u8>)>> {
         let id = if id.is_empty() {
-            std::fs::read_dir(format!("{}/{}", crate::testenv::refenv_samples(), sample))
+            std::fs::read_dir(format!("{}/{}", root, sample))
                 .ok()?
                 .filter_map(|e| e.ok())
                 .find(|e| e.path().join("world_db").exists())?
@@ -491,7 +495,7 @@ mod tests {
         } else {
             id.to_string()
         };
-        let src = format!("{}/{}/{}/world_db", crate::testenv::refenv_samples(), sample, id);
+        let src = format!("{}/{}/{}/world_db", root, sample, id);
         if !std::path::Path::new(&src).exists() {
             return None;
         }
@@ -578,7 +582,19 @@ mod tests {
         rules: crate::types::structs::CustomRules,
         expert: bool,
     ) {
-        let blocks = match sample_blocks(sample, id) {
+        compare_sample_under(&crate::testenv::refenv_samples(), sample, id, w, seed, rules, expert);
+    }
+
+    fn compare_sample_under(
+        root: &str,
+        sample: &str,
+        id: &str,
+        w: i32,
+        seed: u32,
+        rules: crate::types::structs::CustomRules,
+        expert: bool,
+    ) {
+        let blocks = match sample_blocks_under(root, sample, id) {
             Some(b) => b,
             None => return,
         };
@@ -743,6 +759,148 @@ mod tests {
             _ => panic!("not a dict"),
         };
         compare_sample("custom", "", 512, 166199516, rules, false);
+    }
+
+    /// Blocks in the old per-block files load, and the lava layer is re-asserted on every load.
+    #[test]
+    fn legacy_block_files_load_and_get_their_lava_back() {
+        let dir = scratch("legacy_blocks");
+        let (world, _server) = world_with_server(32);
+        let l = loader_with_dbs(&world, &dir, false);
+        std::fs::create_dir_all(dir.join("blocks")).unwrap();
+        let mut tiles = vec![Tile::default(); 1024];
+        for t in tiles.iter_mut() {
+            t.type_index = 6;
+        }
+        let plain = crate::types::tile::serialize_block_plain(&tiles, 8, 0);
+        // the raw file, and the gzip one; a gzip file that is no gzip; a block that is too short
+        std::fs::write(dir.join("blocks/3_0_physicalBlock"), &plain).unwrap();
+        std::fs::write(dir.join("blocks/4_1_compressedBlock"), gzip_deflate(&plain)).unwrap();
+        std::fs::write(dir.join("blocks/5_1_compressedBlock"), b"junk").unwrap();
+        std::fs::write(dir.join("blocks/6_1_physicalBlock"), b"short").unwrap();
+        for (x, y) in [(3, 0), (4, 1), (5, 1), (6, 1), (7, 7), (-1, 0), (40, 0)] {
+            let pb = world.take_physical_block();
+            let outcome = l.load_physical_block_at_x_pos_y_pos_create_if_not_created(pb, x, y, false, false);
+            if (x, y) == (3, 0) || (x, y) == (4, 1) {
+                assert_eq!(outcome, LoadOutcome::Loaded);
+                assert_eq!(pb.version.get(), 8);
+                // the lava layer sits at the bottom of the low block
+                if y == 0 {
+                    assert_eq!(pb.tiles[0].get().type_index, tt::LAVA);
+                }
+            } else {
+                assert_eq!(outcome, LoadOutcome::NotFound);
+            }
+        }
+        // asked to create but not allowed to look: skipped
+        let pb = world.take_physical_block();
+        assert_eq!(
+            l.load_physical_block_at_x_pos_y_pos_create_if_not_created(pb, 9, 9, false, true),
+            LoadOutcome::Skipped
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Saving and sending when the light blocks, the server or the peer are missing.
+    #[test]
+    fn saving_and_sending_with_missing_pieces() {
+        let host = install_host();
+        let dir = scratch("save_missing");
+        let (world, server) = world_with_server(32);
+        let l = loader_with_dbs(&world, &dir, true);
+        host.clients.borrow_mut().insert("c1".into(), (true, 3));
+        // saved to nobody without a server: only the database is written
+        let pb = marked_block(&world, 5, 6, 8, 41);
+        l.save_physical_block_send_to_clients_server_send_reliably(pb, &["c1".to_string()], None, false);
+        assert!(host.sent.borrow().is_empty());
+        // no light block database: nothing to attach, still saved and pushed
+        l.light_block_database.borrow_mut().take();
+        let pb = marked_block(&world, 5, 7, 8, 1);
+        l.save_physical_block_send_to_clients_server_send_reliably(pb, &["c1".to_string()], Some(&server), false);
+        assert_eq!(host.sent.borrow().len(), 1);
+        // sending without a light block database still hands out an empty light block
+        let pb = marked_block(&world, 5, 8, 8, 1);
+        assert!(l
+            .send_block_to_client_without_saving_for_block_pos_send_to_client_server_send_dynamic_objects_reliable(
+                pb,
+                IntPair { x: 5, y: 8 },
+                Some("c1"),
+                Some(&server),
+                false,
+                true,
+            ));
+        // a connected client that is not connected
+        host.clients.borrow_mut().insert("c2".into(), (false, 1));
+        assert!(!l
+            .send_block_to_client_without_saving_for_block_pos_send_to_client_server_send_dynamic_objects_reliable(
+                pb,
+                IntPair { x: 5, y: 8 },
+                Some("c2"),
+                Some(&server),
+                false,
+                true,
+            ));
+        // no server or no client given
+        assert!(!l
+            .send_block_to_client_without_saving_for_block_pos_send_to_client_server_send_dynamic_objects_reliable(
+                pb,
+                IntPair { x: 5, y: 8 },
+                None,
+                Some(&server),
+                false,
+                true,
+            ));
+        set_host(None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The comparison itself against a reference made on the spot: blocks generated once, stored in a `world_db`,
+    /// generated again from the same seed and compared.
+    #[test]
+    fn a_world_matches_its_own_stored_blocks() {
+        let root = std::env::temp_dir().join(format!("wg_synth_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let db_dir = root.join("synth/id0/world_db");
+        std::fs::create_dir_all(&db_dir).unwrap();
+        let rules = rules_default(false, false);
+        // first pass: generate and store a spread of blocks
+        {
+            let world = World::alloc(32);
+            world.set_custom_rules(rules);
+            let ops = Rc::new(TestOps { loader: std::cell::RefCell::new(None) });
+            world.set_ops_hooks(Some(ops.clone()));
+            glibc_rand::srand(1792182287);
+            let l = WorldTileLoader::init_with_world_random_seed_is_new_world_save_id_loaded_version_block_database(
+                &world,
+                1792182287,
+                true,
+                "wgtest_synth",
+                0,
+                None,
+            );
+            *ops.loader.borrow_mut() = Some(l.clone());
+            glibc_rand::srand(l.random_seed());
+            for _ in 0..8 {
+                l.refine_terrain();
+            }
+            let env = DatabaseEnvironment::new(db_dir.to_str().unwrap(), 8, 64).unwrap();
+            let db = Database::new(&env, "blocks").unwrap();
+            for (x, y) in [(3, 15), (3, 16), (10, 16), (20, 17)] {
+                crate::world::tiles::load_block_at_macro_pos(IntPair { x, y }, &world);
+                let mt = world.macro_tiles().get((y * 32 + x) as usize).unwrap();
+                let pb = mt.physical_block().unwrap();
+                let tiles: Vec<Tile> = pb.tiles.iter().map(|t| t.get()).collect();
+                let plain = crate::types::tile::serialize_block_plain(&tiles, 0, 0);
+                db.set_data(Some(&gzip_deflate(&plain)), Some(&format!("{x}_{y}")));
+            }
+        }
+        // a leftover that is not a block key is skipped by the reader
+        let blocks = sample_blocks_under(root.to_str().unwrap(), "synth", "").unwrap();
+        assert_eq!(blocks.len(), 4);
+        assert!(sample_blocks_under(root.to_str().unwrap(), "nothing", "").is_none());
+        assert!(sample_blocks_under(root.to_str().unwrap(), "synth", "missing").is_none());
+        compare_sample_under(root.to_str().unwrap(), "synth", "id0", 32, 1792182287, rules, false);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     // ------------------------------------------------------------------------------------------------
