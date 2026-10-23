@@ -692,6 +692,9 @@ mod tests {
         // too young to shave
         npc_state(&me).borrow_mut().age = 10.0;
         assert!(!Yak::shave_by_blockhead(&me, &bh));
+        assert_eq!(DonkeyLikeClass::max_velocity(y), 6.0);
+        assert!(!DonkeyLikeClass::galloping(y));
+        assert_eq!(DonkeyLikeClass::generate_breed_for_child(y), 0);
         assert!(DonkeyLikeClass::jumps(y));
         npc_state(&me).borrow_mut().age = 1000.0;
         assert!(!DonkeyLikeClass::jumps(y));

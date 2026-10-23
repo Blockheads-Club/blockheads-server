@@ -724,6 +724,8 @@ pub(crate) mod test_support {
         pub npc_here: Cell<bool>,
         pub bhs: RefCell<Vec<ObjRef>>,
         pub server_clients: Cell<usize>,
+        /// The animal `npcCloseEnoughToBreedWithNPC:` finds.
+        pub breed_with: RefCell<Option<ObjRef>>,
     }
     impl TestPassiveEnv {
         pub fn new() -> Rc<TestPassiveEnv> {
@@ -748,6 +750,7 @@ pub(crate) mod test_support {
                 npc_here: Cell::new(false),
                 bhs: RefCell::new(vec![]),
                 server_clients: Cell::new(1),
+                breed_with: RefCell::new(None),
             })
         }
         /// Installs this object as both the `PassiveEnv` and the `NpcEnv`.
@@ -836,6 +839,9 @@ pub(crate) mod test_support {
         }
         fn dw_npc_exists_at_pos(&self, _pos: IntPair, _ignore: &ObjRef) -> bool {
             self.npc_here.get()
+        }
+        fn dw_npc_close_enough_to_breed(&self, _npc: &ObjRef) -> Option<ObjRef> {
+            self.breed_with.borrow().clone()
         }
         fn dw_tree_at_pos(&self, pos: IntPair) -> Option<ObjRef> {
             self.trees.borrow().get(&(pos.x, pos.y)).cloned()
