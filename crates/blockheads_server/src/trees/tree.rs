@@ -2991,3 +2991,148 @@ mod scenario_tests {
         assert!(plant(&w, &d, 99, 12, false).is_none());
     }
 }
+
+/// Random disturbances around every species: neighbours appear and vanish, fire, water, saved and reloaded.
+#[cfg(test)]
+mod fuzz_tests {
+    use super::testenv::{env, GROUND};
+    use super::*;
+    use crate::rng::glibc_rand::srand;
+
+    struct Lcg(u64);
+    impl Lcg {
+        fn next(&mut self) -> u64 {
+            self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            self.0 >> 33
+        }
+        fn pick<T: Copy>(&mut self, v: &[T]) -> T {
+            v[(self.next() % v.len() as u64) as usize]
+        }
+    }
+
+    #[test]
+    fn owner_ids_are_migrated_to_the_wide_field() {
+        let (w, d) = env("tr_fuzz_ids");
+        let t = new_tree_for_type(
+            TREE_APPLE,
+            &w,
+            &d,
+            IntPair { x: 20, y: GROUND + 1 },
+            None,
+            9,
+            5,
+            None,
+            None,
+            true,
+            99_999.0,
+        )
+        .unwrap();
+        let uid = t.unique_id();
+        let tile = crate::world::tiles::tile_at_world_position_loaded(21, GROUND + 3, &w).unwrap();
+        tile.update(|x| {
+            x.dynamic_object_owner_old = uid as u32;
+            x.dynamic_object_owner = 0;
+        });
+        tree_update_all_owned_tiles_to_new_id_size(&t);
+        assert_eq!(tile.get().dynamic_object_owner, uid);
+    }
+
+    #[test]
+    fn disturbed_trees_of_every_species() {
+        let species = [
+            TREE_APPLE,
+            TREE_MANGO,
+            TREE_MAPLE,
+            TREE_PINE,
+            TREE_CACTUS,
+            TREE_COCONUT,
+            TREE_ORANGE,
+            TREE_CHERRY,
+            TREE_COFFEE,
+            TREE_LIME,
+            11,
+            12,
+            13,
+            14,
+            15,
+        ];
+        let mut r = Lcg(5);
+        for (k, tree_type) in species.into_iter().enumerate() {
+            let (w, d) = env(&format!("tr_fuzz_{k}"));
+            let x = 20;
+            for round in 0..6u32 {
+                srand(round + 1);
+                let Some(t) = new_tree_for_type(
+                    tree_type,
+                    &w,
+                    &d,
+                    IntPair { x, y: GROUND + 1 },
+                    None,
+                    9,
+                    5,
+                    None,
+                    None,
+                    round % 2 == 0,
+                    99_999.0,
+                ) else {
+                    continue;
+                };
+                for step in 0..60 {
+                    w.set_world_time(f64::from(round) * 4000.0 + f64::from(step) * 61.0);
+                    t.update_accurate_dt_is_simulation(&t, 12.0, 12.0, step % 7 == 0);
+                    if r.next() % 3 == 0 {
+                        let mut changed = vec![];
+                        for _ in 0..(1 + r.next() % 6) {
+                            let p = IntPair { x: x + (r.next() % 13) as i32 - 6, y: GROUND + (r.next() % 14) as i32 };
+                            if let Some(tr) = crate::world::tiles::tile_at_world_position_loaded(p.x, p.y, &w) {
+                                let (ty, fire, contents) = (
+                                    r.pick(&[2u8, 2, 6, 3, 1]),
+                                    r.pick(&[0u8, 0, 0, 1]),
+                                    r.pick(&[0u8, 0, 0, 0x30, 0x03]),
+                                );
+                                if p.y > GROUND && r.next() % 2 == 0 {
+                                    tr.update(|tile| {
+                                        tile.type_index = ty;
+                                        tile.on_fire = fire;
+                                        if tile.dynamic_object_owner == 0 {
+                                            tile.contents = contents;
+                                        }
+                                    });
+                                }
+                                changed.push(p);
+                            }
+                        }
+                        t.world_changed(&t, &mut changed);
+                    }
+                    if step == 30 {
+                        let dict = t.get_save_dict(&t);
+                        w.set_world_time(f64::from(round) * 4000.0 + 20_000.0);
+                        if let Some(back) = new_tree_from_save_dict(t.object_type(), &w, &d, &dict, None, None, None) {
+                            back.update_accurate_dt_is_simulation(&back, 5.0, 5.0, false);
+                            back.world_changed(&back, &mut vec![IntPair { x, y: GROUND + 2 }]);
+                            back.set_needs_removed(&back, true);
+                            back.remove_from_macro_block(&back);
+                        }
+                    }
+                }
+                t.set_needs_removed(&t, true);
+                t.remove_from_macro_block(&t);
+                for y in GROUND + 1..GROUND + 30 {
+                    for dx in -8..=8 {
+                        if let Some(tr) = crate::world::tiles::tile_at_world_position_loaded(x + dx, y, &w) {
+                            tr.update(|tile| {
+                                tile.type_index = 2;
+                                tile.contents = 0;
+                                tile.foreground_contents = 0;
+                                tile.on_fire = 0;
+                                tile.dynamic_object_owner = 0;
+                                tile.back_wall_type_index = 2;
+                                tile.sun_light = 255;
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
