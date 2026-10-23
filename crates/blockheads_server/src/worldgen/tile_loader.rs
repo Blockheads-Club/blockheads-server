@@ -1190,6 +1190,16 @@ mod sweep_tests {
             for x in 0..wt {
                 let _ = t.unmodified_ground_level(&p, x);
             }
+            if k % 2 == 0 {
+                for isl in 0..=12u32 {
+                    for wx in (0..1024).step_by(23) {
+                        for wy in (0..1024).step_by(29) {
+                            let mut tile = crate::types::tile::Tile::default();
+                            t.place_gems_in_cave_tile(&p, &mut tile, wx, wy, isl);
+                        }
+                    }
+                }
+            }
             for y in [0, 100, 300, 600, 900] {
                 for x in [10, 400, 900] {
                     let fo = t.fault_offset(&p, x, y);
@@ -1291,10 +1301,22 @@ mod sweep_tests {
             (32, 39, rules_with(|r| r.trees = 3), false),
             (32, 40, rules_with(|r| r.ore_distribution = 0), false),
             (32, 41, rules_with(|r| r.ore_distribution = 2), false),
+            (32, 42, rules_with(|r| r.trees = 5), false),
+            (32, 43, rules_with(|r| r.plants = 1), false),
+            (32, 44, rules_with(|r| r.treasure = 0), false),
+            (32, 45, rules_with(|r| r.caves = 2), true),
+            (32, 46, rules_with(|r| r.sky_islands = 3), true),
+            (64, 47, rules_with(|r| r.sky_islands = 3), false),
+            (64, 48, rules_with(|r| r.sky_islands = 3), false),
+            (32, 49, rules_with(|r| r.sky_islands = 3), false),
+            (32, 50, rules_with(|r| r.sky_islands = 3), false),
+            (32, 51, rules_with(|r| r.sky_islands = 3), false),
+            (32, 52, rules_with(|r| r.sky_islands = 3), false),
+            (32, 53, rules_with(|r| r.sky_islands = 3), false),
         ];
         for (w, seed, rules, expert) in cases {
             let (world, l) = generate(w, seed, rules, expert, true);
-            load_blocks(&world, 3);
+            load_blocks(&world, 2);
             let _ = (l.highest_point(), l.best_start_position());
         }
         // a world that is reloaded rather than created

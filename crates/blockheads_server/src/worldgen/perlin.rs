@@ -184,4 +184,14 @@ mod tests {
         assert_eq!(a.to_bits(), b.to_bits());
         assert!(a.abs() < 4.0);
     }
+
+    /// Many octaves shift the lattice size out of range: the sizes are clamped to one.
+    #[test]
+    fn deep_octaves_clamp_the_lattice() {
+        let n = nf(false);
+        let mut v = [0.25, 0.5];
+        assert!(perlin_noise_2d(&mut v, n.struct_ref(), 40).is_finite());
+        let mut v3 = [0.25, 0.5, 0.75];
+        assert!(perlin_noise_3d(&mut v3, n.struct_ref(), 40).is_finite());
+    }
 }
