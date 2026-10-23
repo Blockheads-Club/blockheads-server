@@ -3522,12 +3522,6 @@ mod tests {
         let (camp, cme) = make(&f, 3, 5, 10);
         assert!(camp.st.borrow().light.is_some());
         cme.add_artificial_light_contribution_for_physical_block_loaded_at_x_pos_y_pos(&cme, 0, 0);
-        // a solar panel in the dark does not need its block loaded, one in the sun does
-        let (solar, sme) = make(&f, 20, 1, 10);
-        solar.st.borrow_mut().available_electricity = 1;
-        assert!(!sme.requires_physical_block());
-        crate::world::tiles::tile_at_world_position_loaded(1, 11, &f.world).unwrap().update(|t| t.sun_light = 255);
-        assert!(sme.requires_physical_block());
         // a bench that is being used without a recipe still saves
         let (idle, ime) = make(&f, 2, 3, 10);
         idle.io.borrow_mut().is_in_use = true;
@@ -3541,6 +3535,17 @@ mod tests {
         assert_eq!(bench.level(), 1);
         assert_eq!(deps.workbench_level(&bme), 1);
         deps.workbench_upgrade_to_next_level(&blockhead(9, false));
+    }
+
+    #[test]
+    fn solar_panel_physical_block_follows_the_light() {
+        let f = fixture();
+        // a solar panel in the dark does not need its block loaded, one in the sun does
+        let (solar, sme) = make(&f, 20, 10, 10);
+        solar.st.borrow_mut().available_electricity = 1;
+        assert!(!sme.requires_physical_block());
+        crate::world::tiles::tile_at_world_position_loaded(10, 11, &f.world).unwrap().update(|t| t.sun_light = 255);
+        assert!(sme.requires_physical_block());
     }
 
     #[test]
