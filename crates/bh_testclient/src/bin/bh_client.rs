@@ -187,7 +187,11 @@ fn report_error(e: &ScenarioError) -> i32 {
 }
 
 fn run_scenario(sc: &Scenario, addr: &str, trace_dir: Option<&str>, timeout: Option<u64>) -> i32 {
-    let opts = RunOptions { trace_dir: trace_dir.map(PathBuf::from), default_timeout_ms: timeout.unwrap_or(5000) };
+    let opts = RunOptions {
+        trace_dir: trace_dir.map(PathBuf::from),
+        default_timeout_ms: timeout.unwrap_or(5000),
+        ..Default::default()
+    };
     match sc.run(&cfg_for(addr), &opts) {
         Ok(rep) => {
             for n in &rep.notes {

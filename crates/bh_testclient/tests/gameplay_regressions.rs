@@ -930,8 +930,12 @@ fn parity_placing_and_gates_match_reference() {
     assert!(gate_kept && !door_kept, "reference: gate kept {} door kept {}", gate_kept, door_kept);
     b.disconnect();
     s.disconnect();
-    // Found items are not compared: after a 0x4c of ours the reference logs "unknown type ?16" when the player
-    // joins again and never sends the initial data (open question: our index-set encoding vs the client's).
+    // Found items are not compared. After any non-empty 0x4c the reference logs "unknown type ?16" when the player
+    // joins again and never sends the initial data: it builds `foundItems_v2` with `-[NSIndexSet serializedData]`,
+    // which enumerates through a block, and the docker environment's old libobjc cannot parse block encodings (the
+    // same artifact as `faithful-crashes`). It is not our encoding: the reference accepted the 0x4c (an unparsable
+    // payload is ignored and leaves the list empty, which joins fine), and the bytes are pinned to the serialisation
+    // spec in `protocol::messages` tests.
 }
 
 #[test]

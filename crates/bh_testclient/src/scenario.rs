@@ -5,6 +5,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 use std::io;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -138,10 +139,13 @@ pub struct RunOptions {
     pub trace_dir: Option<PathBuf>,
     /// default 5000
     pub default_timeout_ms: u64,
+    /// Bind the n-th client to UDP port `base + n` (the server keys connections by `host:port` and picks the send
+    /// channel from their hash order, so runs only compare channel for channel with fixed client ports).
+    pub client_port_base: Option<u16>,
 }
 impl Default for RunOptions {
     fn default() -> Self {
-        RunOptions { trace_dir: None, default_timeout_ms: 5000 }
+        RunOptions { trace_dir: None, default_timeout_ms: 5000, client_port_base: None }
     }
 }
 
@@ -334,7 +338,11 @@ impl<'a> Runner<'a> {
     }
 
     fn open(&mut self, id: Identity) -> Result<usize, ScenarioError> {
-        let mut s = Session::connect(self.cfg.clone(), id)?;
+        let mut cfg = self.cfg.clone();
+        if let Some(base) = self.out.client_port_base {
+            cfg.local_bind = Some(SocketAddr::from(([0, 0, 0, 0], base + self.clients.len() as u16)));
+        }
+        let mut s = Session::connect(cfg, id)?;
         if let Some(dir) = &self.out.trace_dir {
             let path = dir.join(format!("{}_{}.jsonl", self.sc.name, s.id.alias));
             let sink = TraceSink::create(&path, &self.sc.name)?;
