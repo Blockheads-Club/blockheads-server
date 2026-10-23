@@ -989,6 +989,8 @@ mod nil_tests {
         assert!(!tile_is_paintable(Some(t), elsewhere, &w, Some(&obj)));
         assert!(!tile_is_half_depth(Some(t), &w, elsewhere));
         assert!(!tile_is_half_depth(Some(t), &World::alloc(32), elsewhere));
+        t.update(|x| x.contents = 0);
+        assert!(!tile_is_half_depth(Some(t), &w, elsewhere));
         // the placement view of a world without a dynamic world
         let bare = World::alloc(32);
         assert_eq!(PlacementWorld::interaction_object_type_for_object_at_pos(&*bare, 1, 1), 0);
