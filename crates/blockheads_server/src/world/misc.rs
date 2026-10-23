@@ -1132,6 +1132,18 @@ pub(crate) mod testkit {
         pub send_block_calls: RefCell<Vec<(i32, i32, String)>>,
         pub world: RefCell<Option<std::rc::Weak<World>>>,
         pub path_creator: RefCell<Option<Rc<crate::path::path_creator::PathCreator>>>,
+        /// `bh_is_net` / `bh_is_client_blockhead_being_controlled_by_server` / `io_is_paintable` answers.
+        pub net_bh: Cell<bool>,
+        pub controlled_bh: Cell<bool>,
+        pub paintable: Cell<bool>,
+        /// What `blockhead_with_id_including_net` returns.
+        pub bh_by_id: RefCell<Option<ObjRef>>,
+        /// What `workbench_at_pos` returns, with its level and type.
+        pub wb: RefCell<Option<ObjRef>>,
+        pub wb_level: Cell<i32>,
+        pub wb_type: Cell<u32>,
+        /// `obj_can_be_removed_by_blockhead` answers the opposite of the default.
+        pub cannot_remove: Cell<bool>,
     }
     impl Rec {
         pub fn push(&self, s: String) {
@@ -1145,6 +1157,33 @@ pub(crate) mod testkit {
         format!("({},{})", pos.x, pos.y)
     }
     impl WorldOpsDepsStub for Rec {
+        fn bh_is_net(&self, _bh: &ObjRef) -> bool {
+            self.net_bh.get()
+        }
+        fn bh_is_client_blockhead_being_controlled_by_server(&self, _bh: &ObjRef) -> bool {
+            self.controlled_bh.get()
+        }
+        fn bh_add_to_crystal_discrepency(&self, _bh: &ObjRef, n: i32) {
+            self.push(format!("crystalDiscrepency({n})"));
+        }
+        fn io_is_paintable(&self, _io: &ObjRef) -> bool {
+            self.paintable.get()
+        }
+        fn blockhead_with_id_including_net(&self, _id: u64) -> Option<ObjRef> {
+            self.bh_by_id.borrow().clone()
+        }
+        fn workbench_at_pos(&self, _pos: IntPair) -> Option<ObjRef> {
+            self.wb.borrow().clone()
+        }
+        fn workbench_level(&self, _wb: &ObjRef) -> i32 {
+            self.wb_level.get()
+        }
+        fn workbench_type(&self, _wb: &ObjRef) -> WorkbenchType {
+            WorkbenchType(self.wb_type.get())
+        }
+        fn obj_can_be_removed_by_blockhead(&self, _o: &ObjRef, _bh: &ObjRef) -> bool {
+            !self.cannot_remove.get()
+        }
         fn all_blockheads_including_net(&self) -> Vec<ObjRef> {
             self.blockheads.borrow().clone()
         }

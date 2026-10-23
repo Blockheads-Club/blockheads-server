@@ -226,3 +226,31 @@ impl TreeLike for PineTree {
         d.map.insert("availableFood".to_string(), PlistValue::real_f32(self.available_food.get()));
     }
 }
+
+/// Pines feed the animals that live in them once they are tall enough.
+#[cfg(test)]
+mod scenario_tests {
+    use super::*;
+    use crate::rng::glibc_rand::srand;
+    use crate::trees::tree::testenv::{env, GROUND};
+
+    #[test]
+    fn well_fed_tall_pines_release_an_animal() {
+        for seed in 1..40u32 {
+            let (w, d) = env(&format!("pine_food_{seed}"));
+            srand(seed);
+            let t = PineTree::new(&w, &d, IntPair { x: 20, y: GROUND + 1 }, None, 12, 5, None, None, true, 99_999.0)
+                .expect("pine");
+            let pine = downcast::<PineTree>(&t).unwrap();
+            pine.tree.borrow_mut().height = 10;
+            for _ in 0..4 {
+                pine.available_food.set(5000.0);
+                t.update_accurate_dt_is_simulation(&t, 5.0, 5.0, false);
+            }
+            assert!(pine.available_food() < 5000.0);
+            pine.tree.borrow_mut().dead = true;
+            t.update_accurate_dt_is_simulation(&t, 5.0, 5.0, false);
+            t.set_needs_removed(&t, true);
+        }
+    }
+}

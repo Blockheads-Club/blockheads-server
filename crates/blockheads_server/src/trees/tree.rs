@@ -1926,7 +1926,6 @@ mod tests {
     use crate::trees::mango::MangoTree;
     use crate::trees::maple::MapleTree;
     use crate::trees::orange::OrangeTree;
-    use crate::trees::pine::PineTree;
     use std::cell::RefCell as RC;
 
     type NewFn =
@@ -2845,9 +2844,11 @@ mod tests {
 mod scenario_tests {
     use super::testenv::{env, GROUND};
     use super::*;
+    use crate::objects::handle::downcast;
     use crate::rng::glibc_rand::srand;
+    use crate::trees::cactus::CactusTree;
 
-    const SPECIES: [(i32, i32); 11] = [
+    const SPECIES: [(i32, i32); 15] = [
         (TREE_APPLE, OBJECT_TYPE_APPLE),
         (TREE_MANGO, OBJECT_TYPE_MANGO),
         (TREE_MAPLE, OBJECT_TYPE_MAPLE),
@@ -2859,6 +2860,10 @@ mod scenario_tests {
         (TREE_COFFEE, OBJECT_TYPE_COFFEE),
         (TREE_LIME, OBJECT_TYPE_LIME),
         (11, OBJECT_TYPE_GEM),
+        (12, OBJECT_TYPE_GEM),
+        (13, OBJECT_TYPE_GEM),
+        (14, OBJECT_TYPE_GEM),
+        (15, OBJECT_TYPE_GEM),
     ];
 
     fn plant(w: &Rc<World>, d: &Rc<DynamicWorld>, tree_type: i32, x: i32, adult: bool) -> Option<ObjRef> {
@@ -2875,9 +2880,28 @@ mod scenario_tests {
                     srand(seed);
                     let Some(t) = plant(&w, &d, *tree_type, x, adult) else { continue };
                     assert_eq!(t.object_type(), *object_type);
-                    for step in 0..120 {
-                        w.set_world_time(f64::from(step) * 77.0);
-                        t.update_accurate_dt_is_simulation(&t, 25.0, 25.0, false);
+                    for step in 0..150 {
+                        w.set_world_time(f64::from(step) * 37.5);
+                        t.update_accurate_dt_is_simulation(&t, 500.0, 500.0, false);
+                    }
+                    // the animals living in pines and cacti come when the food is there
+                    if let Some(cactus) = downcast::<CactusTree>(&t) {
+                        for _ in 0..4 {
+                            cactus.set_available_food(5000.0);
+                            t.update_accurate_dt_is_simulation(&t, 5.0, 5.0, false);
+                        }
+                    }
+                    // old age: the tree dies, its tiles die with it and are removed a minute later
+                    if seed == 2 {
+                        let max_age = tl(&t).tree().borrow().max_age;
+                        tl(&t).tree().borrow_mut().age = max_age + 10.0;
+                        for step in 0..40 {
+                            w.set_world_time(10_000.0 + f64::from(step) * 3.0);
+                            t.update_accurate_dt_is_simulation(&t, 1.5, 1.5, false);
+                        }
+                        w.set_world_time(10_200.0);
+                        t.update_accurate_dt_is_simulation(&t, 1.5, 1.5, false);
+                        assert!(t.needs_removed() || *tree_type == TREE_CACTUS || *object_type == OBJECT_TYPE_GEM);
                     }
                     // a save and a reload long after
                     let dict = t.get_save_dict(&t);
@@ -2940,9 +2964,9 @@ mod scenario_tests {
             let like = tl(&t);
             let _ = (like.tree_type(), like.fruit_item_type(), like.should_add_fallen_fruits());
             let _ = (like.fruit_should_fall_in_season(1), like.is_static_tree(), like.height());
-            for step in 0..24 {
-                w.set_world_time(f64::from(step) * 150.0);
-                t.update_accurate_dt_is_simulation(&t, 25.0, 25.0, false);
+            for step in 0..160 {
+                w.set_world_time(f64::from(step) * 22.5);
+                t.update_accurate_dt_is_simulation(&t, 500.0, 500.0, false);
                 tree_add_fallen_fruits(&t);
             }
             like.update_growth(&t, true);

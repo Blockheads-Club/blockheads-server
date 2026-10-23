@@ -507,8 +507,13 @@ pub(crate) mod testutil {
     pub struct StubObj {
         pub base: RefCell<DynamicObjectBase>,
         pub removable: Cell<bool>,
+        /// `objectType`; `MAX_DYNAMIC_OBJECT_TYPES` (the base answer) by default.
+        pub ty: Cell<i32>,
     }
     impl DynamicObject for StubObj {
+        fn object_type(&self) -> i32 {
+            self.ty.get()
+        }
         fn base(&self) -> &RefCell<DynamicObjectBase> {
             &self.base
         }
@@ -526,12 +531,20 @@ pub(crate) mod testutil {
         handle::alloc_obj(|w| StubObj {
             base: RefCell::new(DynamicObjectBase::alloc_zeroed_with(w)),
             removable: Cell::new(true),
+            ty: Cell::new(crate::objects::base::MAX_DYNAMIC_OBJECT_TYPES),
         })
+    }
+    pub fn dw_obj_of_type(object_type: i32) -> DwObject {
+        let o = dw_obj(0, 0, 0, false, true);
+        let stub = crate::objects::handle::downcast::<StubObj>(&o.obj).unwrap();
+        stub.ty.set(object_type);
+        o
     }
     pub fn dw_obj(item_type: i32, io_type: u16, chest: i32, paintable: bool, removable: bool) -> DwObject {
         let o = handle::alloc_obj(|w| StubObj {
             base: RefCell::new(DynamicObjectBase::alloc_zeroed_with(w)),
             removable: Cell::new(removable),
+            ty: Cell::new(crate::objects::base::MAX_DYNAMIC_OBJECT_TYPES),
         });
         DwObject {
             obj: o,
