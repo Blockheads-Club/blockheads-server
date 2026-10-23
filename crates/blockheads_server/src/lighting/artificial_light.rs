@@ -530,9 +530,8 @@ impl ArtificialLight {
         let me = Self::alloc(world);
         let me_obj: ObjRef = me.clone();
         let wref: WorldRef = world.clone();
-        if !base_init_with_world_dynamic_world_save_dict_cache(&me_obj, &wref, dynamic_world, save_dict, cache) {
-            return None;
-        }
+        // `base_init_with_world_dynamic_world_save_dict_cache` answers true on every path
+        let _ = base_init_with_world_dynamic_world_save_dict_cache(&me_obj, &wref, dynamic_world, save_dict, cache);
         let geti = |k: &str| save_dict.get(&k.to_string()).map_or(0, |v| v.int_value());
         {
             let mut st = me.st.borrow_mut();

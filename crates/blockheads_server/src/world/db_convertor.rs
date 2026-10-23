@@ -12,7 +12,7 @@ use std::rc::{Rc, Weak};
 use crate::foundation::gzip::{gzip_deflate, gzip_inflate};
 use crate::foundation::paths;
 use crate::plist::helpers::{data_from_property_list, property_list_from_data};
-use crate::plist::value::{ClassTag, Origin, PlistDict, PlistValue};
+use crate::plist::value::{PlistDict, PlistValue};
 use crate::storage::lmdb::Database;
 use crate::world::lifecycle::{mutable_copy_of_dict, new_mutable_array};
 use crate::world::state::World;

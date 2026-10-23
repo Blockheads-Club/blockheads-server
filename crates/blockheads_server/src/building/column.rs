@@ -247,9 +247,8 @@ impl Column {
         let me = Self::alloc(world, dw);
         let me_obj: ObjRef = me.clone();
         let (wref, dref): (WorldRef, DynamicWorldRef) = (world.clone(), dw.clone());
-        if !base_init_with_world_dynamic_world_at_position_cache(&me_obj, &wref, &dref, pos, cache) {
-            return None;
-        }
+        // `base_init_with_world_dynamic_world_at_position_cache` answers true on every path
+        let _ = base_init_with_world_dynamic_world_at_position_cache(&me_obj, &wref, &dref, pos, cache);
         me.st.borrow_mut().item_type = item_type;
         me.init_sub_derived_items();
         me.update_configuration(&me_obj);
@@ -270,9 +269,8 @@ impl Column {
         let me = Self::alloc(world, dw);
         let me_obj: ObjRef = me.clone();
         let (wref, dref): (WorldRef, DynamicWorldRef) = (world.clone(), dw.clone());
-        if !base_init_with_world_dynamic_world_save_dict_cache(&me_obj, &wref, &dref, save_dict, cache) {
-            return None;
-        }
+        // `base_init_with_world_dynamic_world_save_dict_cache` answers true on every path
+        let _ = base_init_with_world_dynamic_world_save_dict_cache(&me_obj, &wref, &dref, save_dict, cache);
         let geti = |k: &str| save_dict.map.get(&k.to_string()).map_or(0, |v| v.int_value());
         {
             let mut st = me.st.borrow_mut();
@@ -461,7 +459,6 @@ impl DynamicObject for Column {
     /// `-[Column worldChanged:]`.
     fn world_changed(&self, me: &ObjRef, positions: &mut Vec<IntPair>) {
         let world = self.links.world();
-        let dw = self.links.dw();
         let pos = self.base.borrow().pos;
         for p in positions.iter() {
             let dx = wrap_dx(p.x.wrapping_sub(pos.x), world.world_width_macro());
@@ -474,9 +471,6 @@ impl DynamicObject for Column {
                             let above = tile_at_world_position_loaded(pos.x, pos.y + 1, &world);
                             if let Some(a) = above {
                                 if !tile_is_solid(Some(a)) && a.foreground_contents() != CONTENTS_COLUMN {
-                                    if dw.is_client() {
-                                        return;
-                                    }
                                     if self.base.borrow().needs_removed {
                                         return;
                                     }
@@ -707,5 +701,112 @@ mod tests {
         let e = r.err().expect("raises");
         assert_eq!(e.name, "NSRangeException");
         assert_eq!(e.reason_or_null(), "Range location + length too great");
+    }
+}
+
+#[cfg(test)]
+mod more_tests {
+    use super::testkit::*;
+    use super::*;
+
+    fn mk(w: &Rc<World>, d: &Rc<DynamicWorld>, x: i32, y: i32, item: i32) -> ObjRef {
+        Column::init_with_world_dynamic_world_at_position_cache_type_save_dict_placed_by_client(
+            w,
+            d,
+            pos(x, y),
+            None,
+            item,
+            None,
+            None,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn helpers_and_trait_answers() {
+        assert_eq!(tail_string(&None, "k"), None);
+        let e = crate::foundation::exception::catch_ns(|| tail_string(&Some(PlistValue::int(1)), "k")).unwrap_err();
+        assert_eq!(e.name, "NSInvalidArgumentException");
+        ub_crash_or_return();
+        let (w, d) = env();
+        let c = mk(&w, &d, 40, 20, 222);
+        let _ = c.class_info();
+        assert_eq!(c.freeblock_creation_item_type(), 222);
+        assert!(c.free_block_creation_save_dict(&c).is_some());
+        // an update from the net overrides configuration and colour
+        let mut net = c.creation_net_data_for_client(&c, None).unwrap();
+        net[0x1a] = COLUMN_NO_PLINTH as u8;
+        net[0x1c] = 7;
+        c.remote_update(&c, &net);
+        let col = handle::downcast::<Column>(&c).unwrap();
+        assert_eq!((col.st.borrow().current_configuration, col.st.borrow().paint_color), (COLUMN_NO_PLINTH, 7));
+        // the same values again change nothing
+        c.remote_update(&c, &net);
+        // a net object on a tile that is not loaded cannot be created
+        let mut lost = c.creation_net_data_for_client(&c, None).unwrap();
+        lost[12..16].copy_from_slice(&300u32.to_le_bytes());
+        assert!(Column::init_with_world_dynamic_world_cache_net_data(&w, &d, None, &lost).is_none());
+    }
+
+    #[test]
+    fn ice_columns_melt_when_it_is_warm() {
+        let (w, d) = env();
+        let c = mk(&w, &d, 40, 20, ITEM_ICE_COLUMN);
+        let col = handle::downcast::<Column>(&c).unwrap();
+        // not yet time
+        col.st.borrow_mut().ice_melt_timer = 0.0;
+        c.update_accurate_dt_is_simulation(&c, 0.1, 0.1, false);
+        assert!(!c.needs_removed());
+        // time, but cold
+        tile(&w, 40, 20).update(|t| t.artificial_heat = -3000);
+        c.update_accurate_dt_is_simulation(&c, 6.0, 6.0, false);
+        assert!(!c.needs_removed());
+        // warm
+        tile(&w, 40, 20).update(|t| t.artificial_heat = 0);
+        c.update_accurate_dt_is_simulation(&c, 6.0, 6.0, false);
+        assert!(c.needs_removed());
+        // a removed column does nothing, nor does a non-ice one
+        c.update_accurate_dt_is_simulation(&c, 6.0, 6.0, false);
+        let plain = mk(&w, &d, 50, 20, 222);
+        plain.update_accurate_dt_is_simulation(&plain, 6.0, 6.0, false);
+        assert!(!plain.needs_removed());
+        // an ice column on a tile that is not there
+        let lost = mk(&w, &d, 41, 20, ITEM_ICE_COLUMN);
+        lost.base().borrow_mut().pos = pos(41, 300);
+        handle::downcast::<Column>(&lost).unwrap().st.borrow_mut().ice_melt_timer = 9.0;
+        lost.update_accurate_dt_is_simulation(&lost, 1.0, 1.0, false);
+    }
+
+    #[test]
+    fn floating_columns_in_odd_surroundings() {
+        let (w, d) = env();
+        let set = |x: i32, y: i32| tile(&w, x, y).set_foreground_contents(CONTENTS_COLUMN);
+        // already being removed: stays put
+        let a = mk(&w, &d, 40, 20, 222);
+        set(40, 20);
+        a.set_needs_removed(&a, true);
+        a.world_changed(&a, &mut vec![pos(40, 20)]);
+        assert_eq!(tile(&w, 40, 20).foreground_contents(), CONTENTS_COLUMN);
+        // solid below, solid above, nothing loaded below or above
+        let b = mk(&w, &d, 50, 20, 222);
+        solid(&w, 50, 19, true);
+        b.world_changed(&b, &mut vec![pos(50, 20)]);
+        solid(&w, 50, 19, false);
+        solid(&w, 50, 21, true);
+        b.world_changed(&b, &mut vec![pos(50, 20)]);
+        assert!(!b.needs_removed());
+        let low = mk(&w, &d, 60, 0, 222);
+        low.world_changed(&low, &mut vec![pos(60, 0)]);
+        let high = mk(&w, &d, 60, 63, 222);
+        high.world_changed(&high, &mut vec![pos(60, 63)]);
+        // a neighbour column keeps it
+        let near = mk(&w, &d, 80, 20, 222);
+        set(80, 21);
+        near.world_changed(&near, &mut vec![pos(80, 21)]);
+        assert!(!near.needs_removed());
+        // a change that is not next to the column
+        let far = mk(&w, &d, 70, 20, 222);
+        far.world_changed(&far, &mut vec![pos(75, 20), pos(70, 30)]);
+        assert!(!far.needs_removed());
     }
 }

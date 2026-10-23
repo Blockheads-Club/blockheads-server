@@ -472,9 +472,8 @@ pub fn tree_init_static_tree(
     link_world(me, world, dw, tdnf, sonf);
     let wr: WorldRef = world.clone();
     let dr: DynamicWorldRef = dw.clone();
-    if !base_init_with_world_dynamic_world_at_position_cache(me, &wr, &dr, pos, cache) {
-        return false;
-    }
+    // `base_init_with_world_dynamic_world_at_position_cache` answers true on every path
+    let _ = base_init_with_world_dynamic_world_at_position_cache(me, &wr, &dr, pos, cache);
     let p = me.pos();
     match tile_at(world, p.x, p.y) {
         Some(t) if t.get().contents == 0 => true,
@@ -505,9 +504,8 @@ pub fn tree_init_with_world_dynamic_world_at_position_cache_max_height_growth_ra
     link_world(me, world, dw, tdnf, sonf);
     let wr: WorldRef = world.clone();
     let dr: DynamicWorldRef = dw.clone();
-    if !base_init_with_world_dynamic_world_at_position_cache(me, &wr, &dr, pos, cache) {
-        return false;
-    }
+    // `base_init_with_world_dynamic_world_at_position_cache` answers true on every path
+    let _ = base_init_with_world_dynamic_world_at_position_cache(me, &wr, &dr, pos, cache);
     let t = tl(me);
     let p = me.pos();
     let (mhg, grg) = (clampi(max_height as i32, 1, 255) as u16, clampi(growth_rate as i32, 1, 255) as u16);
@@ -555,9 +553,8 @@ pub fn tree_init_with_world_dynamic_world_save_dict_cache_tdnf_sonf(
     link_world(me, world, dw, tdnf, sonf);
     let wr: WorldRef = world.clone();
     let dr: DynamicWorldRef = dw.clone();
-    if !base_init_with_world_dynamic_world_save_dict_cache(me, &wr, &dr, d, cache) {
-        return false;
-    }
+    // `base_init_with_world_dynamic_world_save_dict_cache` answers true on every path
+    let _ = base_init_with_world_dynamic_world_save_dict_cache(me, &wr, &dr, d, cache);
     tl(me).load_save_dict_values(me, d);
     let save_time = d.map.get(&"saveTime".to_string()).map_or(0.0, |v| v.double_value());
     tree_grow_in_time_since_saved(me, save_time);

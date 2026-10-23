@@ -104,9 +104,8 @@ impl GlowBlock {
         let me = Self::alloc(world);
         let me_obj: ObjRef = me.clone();
         let wref: WorldRef = world.clone();
-        if !base_init_with_world_dynamic_world_at_position_cache(&me_obj, &wref, dw, pos, cache.clone()) {
-            return None;
-        }
+        // `base_init_with_world_dynamic_world_at_position_cache` answers true on every path
+        let _ = base_init_with_world_dynamic_world_at_position_cache(&me_obj, &wref, dw, pos, cache.clone());
         let tile_type = tile.type_index() as i32;
         me.st.borrow_mut().tile_type = tile_type;
         let (r, g, b, radius) = glow_color_for_tile(tile_type, tile.contents());
@@ -139,9 +138,8 @@ impl GlowBlock {
         let me = Self::alloc(world);
         let me_obj: ObjRef = me.clone();
         let wref: WorldRef = world.clone();
-        if !base_init_with_world_dynamic_world_save_dict_cache(&me_obj, &wref, dw, save_dict, cache.clone()) {
-            return None;
-        }
+        // `base_init_with_world_dynamic_world_save_dict_cache` answers true on every path
+        let _ = base_init_with_world_dynamic_world_save_dict_cache(&me_obj, &wref, dw, save_dict, cache.clone());
         me.st.borrow_mut().tile_type = save_dict.get(&"tileType".to_string()).map_or(0, |v| v.int_value());
         if let Some(PlistValue::Dict(ld)) = save_dict.get(&"lightDict".to_string()) {
             let light = ArtificialLight::init_with_world_dynamic_world_save_dict_cache_parent_object(

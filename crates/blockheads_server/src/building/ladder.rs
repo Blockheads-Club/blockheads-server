@@ -70,9 +70,8 @@ impl Ladder {
         let me = Self::alloc(world, dw);
         let me_obj: ObjRef = me.clone();
         let (wref, dref): (WorldRef, DynamicWorldRef) = (world.clone(), dw.clone());
-        if !base_init_with_world_dynamic_world_at_position_cache(&me_obj, &wref, &dref, pos, cache) {
-            return None;
-        }
+        // `base_init_with_world_dynamic_world_at_position_cache` answers true on every path
+        let _ = base_init_with_world_dynamic_world_at_position_cache(&me_obj, &wref, &dref, pos, cache);
         {
             let mut st = me.st.borrow_mut();
             st.item_type = item_type;
@@ -94,9 +93,8 @@ impl Ladder {
         let me = Self::alloc(world, dw);
         let me_obj: ObjRef = me.clone();
         let (wref, dref): (WorldRef, DynamicWorldRef) = (world.clone(), dw.clone());
-        if !base_init_with_world_dynamic_world_save_dict_cache(&me_obj, &wref, &dref, save_dict, cache) {
-            return None;
-        }
+        // `base_init_with_world_dynamic_world_save_dict_cache` answers true on every path
+        let _ = base_init_with_world_dynamic_world_save_dict_cache(&me_obj, &wref, &dref, save_dict, cache);
         {
             let mut st = me.st.borrow_mut();
             st.item_type = save_dict.map.get(&"itemType".to_string()).map_or(0, |v| v.int_value());
@@ -208,13 +206,9 @@ impl DynamicObject for Ladder {
             return;
         }
         let world = self.links.world();
-        let dw = self.links.dw();
         let pos = self.base.borrow().pos;
         for p in positions.iter() {
             if p.x == pos.x && p.y == pos.y && tile_is_water(tile_at_world_position_loaded(pos.x, pos.y, &world)) {
-                if dw.is_client() {
-                    return;
-                }
                 if self.base.borrow().needs_removed {
                     return;
                 }

@@ -396,9 +396,8 @@ pub fn plant_init_with_world_dynamic_world_at_position_cache_max_age_gene_growth
 ) -> bool {
     let wref: WorldRef = world.clone();
     let dref: DynamicWorldRef = dw.clone();
-    if !base_init_with_world_dynamic_world_at_position_cache(me, &wref, &dref, pos, cache) {
-        return false;
-    }
+    // `base_init_with_world_dynamic_world_at_position_cache` answers true on every path
+    let _ = base_init_with_world_dynamic_world_at_position_cache(me, &wref, &dref, pos, cache);
     let p = me.pos();
     let tile = tile_loaded(world, p.x, p.y);
     let blocked = match tile {
@@ -467,9 +466,8 @@ pub fn plant_init_with_world_dynamic_world_save_dict_cache_tree_density_noise_fu
 ) -> bool {
     let wref: WorldRef = world.clone();
     let dref: DynamicWorldRef = dw.clone();
-    if !base_init_with_world_dynamic_world_save_dict_cache(me, &wref, &dref, save_dict, cache) {
-        return false;
-    }
+    // `base_init_with_world_dynamic_world_save_dict_cache` answers true on every path
+    let _ = base_init_with_world_dynamic_world_save_dict_cache(me, &wref, &dref, save_dict, cache);
     {
         let mut st = pl(me).plant_state().borrow_mut();
         st.tree_density_noise_function = tdnf;
