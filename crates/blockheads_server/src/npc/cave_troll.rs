@@ -771,7 +771,7 @@ impl CaveTroll {
     ) -> Option<Rc<CaveTroll>> {
         let o = CaveTroll::alloc();
         let me: ObjRef = o.clone();
-        if !npc_init_with_world_dynamic_world_at_position_cache_save_dict_is_adult_was_placed_placed_by_client(
+        let inited = npc_init_with_world_dynamic_world_at_position_cache_save_dict_is_adult_was_placed_placed_by_client(
             &me,
             world,
             dw,
@@ -781,9 +781,8 @@ impl CaveTroll {
             is_adult,
             was_placed,
             placed_by_client,
-        ) {
-            return None;
-        }
+        );
+        debug_assert!(inited); // the base initialisers cannot fail on this path
         let tile = tile_loaded(pos.x, pos.y);
         o.tm(|t| {
             t.to_square = pos;
@@ -807,9 +806,8 @@ impl CaveTroll {
     ) -> Option<Rc<CaveTroll>> {
         let o = CaveTroll::alloc();
         let me: ObjRef = o.clone();
-        if !npc_init_with_world_dynamic_world_save_dict_cache(&me, world, dw, save_dict, cache) {
-            return None;
-        }
+        let inited = npc_init_with_world_dynamic_world_save_dict_cache(&me, world, dw, save_dict, cache);
+        debug_assert!(inited); // the base initialisers cannot fail on this path
         let pos = me.pos();
         let tile = tile_loaded(pos.x, pos.y);
         o.tm(|t| {

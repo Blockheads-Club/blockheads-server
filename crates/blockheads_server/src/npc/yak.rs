@@ -91,11 +91,11 @@ impl Yak {
     ) -> Option<ObjRef> {
         let o = Yak::alloc();
         let me: ObjRef = o.clone();
-        if !donkey_like_init_with_world_dynamic_world_at_position_cache_save_dict_is_adult_was_placed_placed_by_client(
-            &me, world, dw, pos, cache, save_dict, is_adult, was_placed, client_id,
-        ) {
-            return None;
-        }
+        let inited =
+            donkey_like_init_with_world_dynamic_world_at_position_cache_save_dict_is_adult_was_placed_placed_by_client(
+                &me, world, dw, pos, cache, save_dict, is_adult, was_placed, client_id,
+            );
+        debug_assert!(inited); // the base initialisers cannot fail on this path
         if let Some(sd) = save_dict {
             let mut y = o.yak.borrow_mut();
             y.milk = sd.map.get(&"milk".to_string()).map_or(0.0f32, |v| v.float_value());
@@ -130,9 +130,8 @@ impl Yak {
     ) -> Option<ObjRef> {
         let o = Yak::alloc();
         let me: ObjRef = o.clone();
-        if !donkey_like_init_with_world_dynamic_world_save_dict_cache(&me, world, dw, save_dict, cache) {
-            return None;
-        }
+        let inited = donkey_like_init_with_world_dynamic_world_save_dict_cache(&me, world, dw, save_dict, cache);
+        debug_assert!(inited); // the base initialisers cannot fail on this path
         {
             let mut y = o.yak.borrow_mut();
             y.milk = save_dict.map.get(&"milk".to_string()).map_or(0.0f32, |v| v.float_value());
@@ -658,5 +657,59 @@ mod tests {
         let l = if v[0] > 0x3fffffff { 2 } else { 1 };
         let w = if v[1] > 0x3fffffff { 1 } else { 0 };
         assert_eq!(fx.env.drops.borrow().len() as i32, l + w + horn);
+    }
+
+    /// Every forwarded selector of the class answers.
+    #[test]
+    fn faces() {
+        let fx = fixture();
+        let me = make(&fx, true, None);
+        let bh: ObjRef = crate::objects::base::testutil::TestObj::new();
+        crate::npc::npc::faces::exercise_faces(&me, &bh);
+    }
+
+    /// The horn drops on a low draw; a replica asks for shaving instead of doing it; the jump rule.
+    #[test]
+    fn horn_replica_shave_and_jumping() {
+        let fx = fixture();
+        let me = make(&fx, true, None);
+        let horn_seed = (1..200u32).find(|&s| (((raw(s, 3)[2] as f32) / 2147483648.0f32) as f64) < 0.2f64).unwrap();
+        glibc_rand::srand(horn_seed);
+        yak_create_item_drops_for_death(&me);
+        assert!(fx.env.drops.borrow().iter().any(|d| d.0 == 321));
+        let y = yak_of(&me);
+        let bh: ObjRef = crate::objects::base::testutil::TestObj::new();
+        bh.base().borrow_mut().unique_id = 12;
+        npc_state(&me).borrow_mut().age = 1000.0;
+        y.yak.borrow_mut().hair = 1000.0;
+        // a replica only records the request
+        me.base().borrow_mut().is_net = true;
+        assert!(Yak::shave_by_blockhead(&me, &bh));
+        assert_eq!(npc_state(&me).borrow().harvest_type_to_send, 5);
+        assert_eq!(npc_state(&me).borrow().harvest_blockhead_unique_id_to_send, 12);
+        assert_eq!(y.yak.borrow().hair, 1000.0);
+        me.base().borrow_mut().is_net = false;
+        // too young to shave
+        npc_state(&me).borrow_mut().age = 10.0;
+        assert!(!Yak::shave_by_blockhead(&me, &bh));
+        assert!(DonkeyLikeClass::jumps(y));
+        npc_state(&me).borrow_mut().age = 1000.0;
+        assert!(!DonkeyLikeClass::jumps(y));
+    }
+
+    /// A replica image outside the loaded world is refused.
+    #[test]
+    fn unloaded_net_image_is_refused() {
+        let fx = fixture();
+        let me = make(&fx, true, None);
+        let mut c = me.creation_net_data_for_client(&me, None).unwrap();
+        c[8..12].copy_from_slice(&5000u32.to_le_bytes());
+        assert!(Yak::init_with_world_dynamic_world_cache_net_data(
+            &(fx.w.clone() as WorldRef),
+            &(fx.dw.clone() as DynamicWorldRef),
+            None,
+            &c,
+        )
+        .is_none());
     }
 }

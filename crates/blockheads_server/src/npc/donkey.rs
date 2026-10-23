@@ -201,11 +201,11 @@ impl Donkey {
         client_id: Option<&str>,
     ) -> Option<ObjRef> {
         let me: ObjRef = Donkey::alloc();
-        if !donkey_like_init_with_world_dynamic_world_at_position_cache_save_dict_is_adult_was_placed_placed_by_client(
-            &me, world, dw, pos, cache, save_dict, is_adult, was_placed, client_id,
-        ) {
-            return None;
-        }
+        let inited =
+            donkey_like_init_with_world_dynamic_world_at_position_cache_save_dict_is_adult_was_placed_placed_by_client(
+                &me, world, dw, pos, cache, save_dict, is_adult, was_placed, client_id,
+            );
+        debug_assert!(inited); // the base initialisers cannot fail on this path
         Some(me)
     }
 
@@ -234,9 +234,8 @@ impl Donkey {
         cache: CacheRef,
     ) -> Option<ObjRef> {
         let me: ObjRef = Donkey::alloc();
-        if !donkey_like_init_with_world_dynamic_world_save_dict_cache(&me, world, dw, save_dict, cache) {
-            return None;
-        }
+        let inited = donkey_like_init_with_world_dynamic_world_save_dict_cache(&me, world, dw, save_dict, cache);
+        debug_assert!(inited); // the base initialisers cannot fail on this path
         Some(me)
     }
 

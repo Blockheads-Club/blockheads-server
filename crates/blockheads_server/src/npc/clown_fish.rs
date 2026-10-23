@@ -238,11 +238,10 @@ impl ClownFish {
         client_id: Option<&str>,
     ) -> Option<ObjRef> {
         let me: ObjRef = ClownFish::alloc();
-        if !npc_init_with_world_dynamic_world_at_position_cache_save_dict_is_adult_was_placed_placed_by_client(
+        let inited = npc_init_with_world_dynamic_world_at_position_cache_save_dict_is_adult_was_placed_placed_by_client(
             &me, world, dw, pos, cache, save_dict, is_adult, was_placed, client_id,
-        ) {
-            return None;
-        }
+        );
+        debug_assert!(inited); // the base initialisers cannot fail on this path
         let p = me.pos();
         let env = penv();
         let tile = env.tile_loaded(p.x, p.y);
@@ -297,9 +296,8 @@ impl ClownFish {
         cache: CacheRef,
     ) -> Option<ObjRef> {
         let me: ObjRef = ClownFish::alloc();
-        if !npc_init_with_world_dynamic_world_save_dict_cache(&me, world, dw, save_dict, cache) {
-            return None;
-        }
+        let inited = npc_init_with_world_dynamic_world_save_dict_cache(&me, world, dw, save_dict, cache);
+        debug_assert!(inited); // the base initialisers cannot fail on this path
         clown_fish_load_derived_stuff(&me);
         Some(me)
     }

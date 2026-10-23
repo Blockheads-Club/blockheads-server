@@ -211,7 +211,7 @@ impl DropBear {
     ) -> Option<Rc<DropBear>> {
         let o = DropBear::alloc();
         let me: ObjRef = o.clone();
-        if !npc_init_with_world_dynamic_world_at_position_cache_save_dict_is_adult_was_placed_placed_by_client(
+        let inited = npc_init_with_world_dynamic_world_at_position_cache_save_dict_is_adult_was_placed_placed_by_client(
             &me,
             world,
             dw,
@@ -221,9 +221,8 @@ impl DropBear {
             is_adult,
             was_placed,
             placed_by_client,
-        ) {
-            return None;
-        }
+        );
+        debug_assert!(inited); // the base initialisers cannot fail on this path
         o.s(|b| b.courage_meter = 1.0f32);
         if was_placed {
             let tile = tile_loaded(pos.x, pos.y);
@@ -245,9 +244,8 @@ impl DropBear {
     ) -> Option<Rc<DropBear>> {
         let o = DropBear::alloc();
         let me: ObjRef = o.clone();
-        if !npc_init_with_world_dynamic_world_save_dict_cache(&me, world, dw, save_dict, cache) {
-            return None;
-        }
+        let inited = npc_init_with_world_dynamic_world_save_dict_cache(&me, world, dw, save_dict, cache);
+        debug_assert!(inited); // the base initialisers cannot fail on this path
         o.s(|b| {
             b.provoke_meter = dict_float(save_dict, "provokeMeter");
             b.courage_meter = dict_float(save_dict, "courageMeter");

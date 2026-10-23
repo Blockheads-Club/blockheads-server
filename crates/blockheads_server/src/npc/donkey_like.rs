@@ -271,11 +271,10 @@ pub fn donkey_like_init_with_world_dynamic_world_at_position_cache_save_dict_is_
     was_placed: bool,
     client_id: Option<&str>,
 ) -> bool {
-    if !npc_init_with_world_dynamic_world_at_position_cache_save_dict_is_adult_was_placed_placed_by_client(
+    let inited = npc_init_with_world_dynamic_world_at_position_cache_save_dict_is_adult_was_placed_placed_by_client(
         me, world, dw, pos, cache, save_dict, is_adult, was_placed, client_id,
-    ) {
-        return false;
-    }
+    );
+    debug_assert!(inited); // the base initialisers cannot fail on this path
     dl(me).load_derived_stuff(me);
     true
 }
@@ -288,9 +287,8 @@ pub fn donkey_like_init_with_world_dynamic_world_save_dict_cache(
     save_dict: &PlistDict,
     cache: CacheRef,
 ) -> bool {
-    if !npc_init_with_world_dynamic_world_save_dict_cache(me, world, dw, save_dict, cache) {
-        return false;
-    }
+    let inited = npc_init_with_world_dynamic_world_save_dict_cache(me, world, dw, save_dict, cache);
+    debug_assert!(inited); // the base initialisers cannot fail on this path
     dl(me).load_derived_stuff(me);
     true
 }

@@ -1010,9 +1010,8 @@ pub fn npc_init_with_world_dynamic_world_at_position_cache_save_dict_is_adult_wa
     was_placed: bool,
     client_id: Option<&str>,
 ) -> bool {
-    if !base_init_with_world_dynamic_world_at_position_cache(me, world, dw, pos, cache) {
-        return false;
-    }
+    let inited = base_init_with_world_dynamic_world_at_position_cache(me, world, dw, pos, cache);
+    debug_assert!(inited); // the base initialisers cannot fail on this path
     let npc = vn(me);
     npc.npc().borrow_mut().saved_blockhead_index = -1;
     if is_adult {
@@ -1047,9 +1046,8 @@ pub fn npc_init_with_world_dynamic_world_save_dict_cache(
     save_dict: &PlistDict,
     cache: CacheRef,
 ) -> bool {
-    if !base_init_with_world_dynamic_world_save_dict_cache(me, world, dw, save_dict, cache) {
-        return false;
-    }
+    let inited = base_init_with_world_dynamic_world_save_dict_cache(me, world, dw, save_dict, cache);
+    debug_assert!(inited); // the base initialisers cannot fail on this path
     let npc = vn(me);
     npc.load_values_from_save_dict(me, save_dict);
     npc.npc().borrow_mut().random_harm_from_hunger_timer = r01("NPC.init.hunger") * 20.0f32 + 1.0f32;
@@ -3017,5 +3015,130 @@ mod tests {
         assert_eq!(s.damage, 5, "no hunger / temperature damage on the isNet branch");
         assert_eq!(s.fullness, 100.0 - 0.2);
         assert_eq!(s.tame_cooldown_timer, 0.0);
+    }
+}
+
+/// A walk over every selector a concrete NPC class forwards or overrides, for the species' own test modules:
+/// whatever the class answers, the call has to go through.
+#[cfg(test)]
+pub(crate) mod faces {
+    use super::*;
+    use crate::types::structs::{IntPair, Vector2};
+
+    /// Calls the `DynamicObject`, `Npc`, `Harmable`, `Ridable` and `TapChoice` faces of `me` with `b` (a plain
+    /// object standing in for a blockhead). `me` is dealloc'ed at the end.
+    pub(crate) fn exercise_faces(me: &ObjRef, b: &ObjRef) {
+        let n = as_npc(me).expect("an NPC");
+        // DynamicObject face
+        let _ = (me.class_info().name, me.object_type(), me.render_pos(), me.requires_physical_block());
+        let _ = (
+            me.should_save_every_change_in_position(),
+            me.client_id_for_saving_seperately_and_only_loading_while_player_online(),
+        );
+        let sd = me.get_save_dict(me);
+        let c = me.creation_net_data_for_client(me, None).unwrap_or_default();
+        let u = me.update_net_data_for_client(me, None).unwrap_or_default();
+        me.remote_update(me, &u);
+        me.remote_creation_data_update(me, &c);
+        me.blockheads_loaded(me);
+        me.blockhead_unloaded(me, b);
+        let _ = me.can_be_removed_by_blockhead(me, b);
+        me.update_position(me, IntPair { x: me.pos().x, y: me.pos().y });
+        assert!(me.as_harmable().is_some() && me.as_ridable().is_some() && me.as_tap_choice().is_some());
+        // Npc constants and hooks
+        let _ = (
+            n.rider_rides_with_arms_down(),
+            n.npc_type(),
+            n.max_age(),
+            n.dies_of_old_age(),
+            n.min_fullness(),
+            n.dies_of_low_fullness(),
+            n.max_health(),
+            n.creation_data_struct_size(),
+            n.min_ridable_age(),
+            n.species_name(),
+            n.food_item_type(),
+            n.captured_item_type(),
+            n.capture_required_item_type(),
+            n.get_names_array().map(|a| a.len()),
+            n.get_names_array_count(),
+            n.breed_string(),
+            n.suffers_damage_at_high_temperatures(),
+            n.ridable_when_tamed(),
+            n.remove_title(),
+            n.remove_is_red(),
+            n.second_choice_is_blue(),
+            n.second_option_title(),
+        );
+        n.load_values_from_save_dict(me, &sd);
+        n.set_adult_creation_start_values(me);
+        n.set_baby_creation_start_values(me);
+        let _ = (n.npc_creation_net_data_for_client(me, None), n.npc_update_net_data_for_client(me, None));
+        let _ = n.append_npc_creation_data_to_data(me, vec![0u8; 4]);
+        n.react_to_being_hit(me);
+        n.react_to_being_fed(me);
+        n.create_item_drops_for_death(me);
+        n.generate_new_name(me);
+        let _ = (
+            n.can_be_fed_by_blockhead(me, b),
+            n.cant_be_fed_tip_string_for_blockhead(b),
+            n.can_be_milked_by_blockhead(b),
+            n.cant_be_milked_tip_string_for_blockhead(b),
+            n.can_be_shaved_by_blockhead(b),
+            n.cant_be_shaved_tip_string_for_blockhead(b),
+            n.can_be_captured_by_blockhead_with_item_type(b, 0),
+            n.cant_be_captured_tip_string_for_blockhead_with_item_type(b, 0),
+            n.tamed(),
+            n.belongs_to_player_with_blockhead(b),
+            n.belongs_to_local_player(),
+            n.can_mate(),
+            n.action_title(),
+            n.health_fraction(),
+            n.fullness_fraction(),
+            n.name(),
+            n.name_pos(),
+            n.age(),
+            n.breed(),
+        );
+        let _ = (n.milk_by_blockhead(me, b), n.shave_by_blockhead(me, b));
+        n.check_current_position_for_food(me);
+        n.begin_blockhead_inspection(b);
+        n.blockhead_is_coming_to_inspect(b);
+        n.inspection_stopped();
+        n.set_age(n.age());
+        n.set_breed(n.breed());
+        n.draw_name();
+        n.change_name(me, "Nameless");
+        // protocol faces
+        let h = me.as_harmable().unwrap();
+        let _ = (
+            h.tap_is_within_body_radius(Vector2 { x: 0.0, y: 0.0 }),
+            h.will_die_if_hit_by_force(1),
+            h.is_visible(),
+            h.center(),
+        );
+        let r = me.as_ridable().unwrap();
+        let _ = (
+            r.rider_pos_for_blockhead(b),
+            r.camera_pos_for_blockhead(b),
+            r.rider_body_y_rotation_for_blockhead(b),
+            r.ride_direction(),
+            r.blockhead_can_ride_using_item(b, 0),
+            r.jumps_on_swipe(),
+            r.requires_fuel(),
+            r.acts_as_interaction_object(),
+            r.rider_d_pad_should_allow_up_down(),
+            r.rider_d_pad_should_give_discrete_values(),
+        );
+        r.set_target_velocity(Vector2 { x: 0.0, y: 0.0 });
+        r.swipe_up_gesture(me);
+        let _ = (n.rider_body_z_rotation_for_blockhead(b), n.is_double_height(), n.can_be_removed_by_blockhead_npc(b));
+        let t = me.as_tap_choice().unwrap();
+        let _ = (t.action_title(), t.is_double_height());
+        // riders last: they change state
+        r.add_rider(me, b);
+        r.remove_rider(me, b);
+        n.remove_rider_opt(me, None);
+        me.dealloc(me);
     }
 }

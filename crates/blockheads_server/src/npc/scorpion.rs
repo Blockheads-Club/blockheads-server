@@ -199,7 +199,7 @@ impl Scorpion {
     ) -> Option<Rc<Scorpion>> {
         let o = Scorpion::alloc();
         let me: ObjRef = o.clone();
-        if !npc_init_with_world_dynamic_world_at_position_cache_save_dict_is_adult_was_placed_placed_by_client(
+        let inited = npc_init_with_world_dynamic_world_at_position_cache_save_dict_is_adult_was_placed_placed_by_client(
             &me,
             world,
             dw,
@@ -209,9 +209,8 @@ impl Scorpion {
             is_adult,
             was_placed,
             placed_by_client,
-        ) {
-            return None;
-        }
+        );
+        debug_assert!(inited); // the base initialisers cannot fail on this path
         o.load_derived_stuff();
         Some(o)
     }
@@ -225,9 +224,8 @@ impl Scorpion {
     ) -> Option<Rc<Scorpion>> {
         let o = Scorpion::alloc();
         let me: ObjRef = o.clone();
-        if !npc_init_with_world_dynamic_world_save_dict_cache(&me, world, dw, save_dict, cache) {
-            return None;
-        }
+        let inited = npc_init_with_world_dynamic_world_save_dict_cache(&me, world, dw, save_dict, cache);
+        debug_assert!(inited); // the base initialisers cannot fail on this path
         o.load_derived_stuff();
         Some(o)
     }

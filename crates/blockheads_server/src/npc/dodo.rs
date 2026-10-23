@@ -438,11 +438,10 @@ impl Dodo {
     ) -> Option<ObjRef> {
         let o = Dodo::alloc();
         let me: ObjRef = o;
-        if !npc_init_with_world_dynamic_world_at_position_cache_save_dict_is_adult_was_placed_placed_by_client(
+        let inited = npc_init_with_world_dynamic_world_at_position_cache_save_dict_is_adult_was_placed_placed_by_client(
             &me, world, dw, pos, cache, save_dict, is_adult, was_placed, client_id,
-        ) {
-            return None;
-        }
+        );
+        debug_assert!(inited); // the base initialisers cannot fail on this path
         dodo_load_derived_stuff(&me);
         Some(me)
     }
@@ -473,9 +472,8 @@ impl Dodo {
     ) -> Option<ObjRef> {
         let o = Dodo::alloc();
         let me: ObjRef = o;
-        if !npc_init_with_world_dynamic_world_save_dict_cache(&me, world, dw, save_dict, cache) {
-            return None;
-        }
+        let inited = npc_init_with_world_dynamic_world_save_dict_cache(&me, world, dw, save_dict, cache);
+        debug_assert!(inited); // the base initialisers cannot fail on this path
         dodo_load_derived_stuff(&me);
         Some(me)
     }

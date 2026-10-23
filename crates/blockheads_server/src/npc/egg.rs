@@ -456,9 +456,8 @@ impl Egg {
     ) -> Option<ObjRef> {
         let o = Egg::alloc();
         let me: ObjRef = o.clone();
-        if !base_init_with_world_dynamic_world_at_position_cache(&me, world, dw, pos, cache) {
-            return None;
-        }
+        let inited = base_init_with_world_dynamic_world_at_position_cache(&me, world, dw, pos, cache);
+        debug_assert!(inited); // the base initialisers cannot fail on this path
         let mut found = false;
         let mut genes: Option<PlistDict> = None;
         let mut hatch = 0.0f32;
@@ -491,9 +490,8 @@ impl Egg {
     ) -> Option<ObjRef> {
         let o = Egg::alloc();
         let me: ObjRef = o.clone();
-        if !base_init_with_world_dynamic_world_save_dict_cache(&me, world, dw, save_dict, cache) {
-            return None;
-        }
+        let inited = base_init_with_world_dynamic_world_save_dict_cache(&me, world, dw, save_dict, cache);
+        debug_assert!(inited); // the base initialisers cannot fail on this path
         let hatch = save_dict.map.get(&"hatchTimer".to_string()).map_or(0.0f32, |v| v.float_value());
         let genes = match save_dict.map.get(&"genesDict".to_string()) {
             Some(PlistValue::Dict(g)) => Some(g.clone()),
