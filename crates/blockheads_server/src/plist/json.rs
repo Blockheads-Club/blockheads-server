@@ -395,95 +395,130 @@ pub fn json_object_with_data(data: &[u8]) -> JsonResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plist::helpers::testutil;
 
-    fn canon(v: &PlistValue, out: &mut String) {
-        match v {
-            PlistValue::Bool(b) => out.push_str(&format!("B{}", *b as i32)),
-            PlistValue::Null => out.push_str("null"),
-            PlistValue::Real { value, .. } => out.push_str(&format!("N{:016x}", value.to_bits())),
-            PlistValue::String(s) => {
-                out.push('S');
-                out.push('"');
-                for u in s.s.encode_utf16() {
-                    out.push_str(&format!("{:04x}", u));
-                }
-                out.push('"');
-            }
-            PlistValue::Array(a) => {
-                out.push('[');
-                for x in a.items.iter() {
-                    canon(x, out);
-                    out.push(',');
-                }
-                out.push(']');
-            }
-            PlistValue::Dict(d) => {
-                let mut ks: Vec<&String> = d.map.iter().map(|(k, _)| k).collect();
-                ks.sort_by(|a, b| crate::foundation::nsstring::compare(a, b).cmp(&0));
-                out.push('{');
-                for k in ks {
-                    canon(&PlistValue::string(k.clone()), out);
-                    out.push(':');
-                    canon(d.map.get(k).unwrap(), out);
-                    out.push(',');
-                }
-                out.push('}');
-            }
-            _ => out.push('?'),
+    fn utf16(s: &str, le: bool, bom: bool) -> Vec<u8> {
+        let mut u: Vec<u16> = s.encode_utf16().collect();
+        if bom {
+            u.insert(0, 0xfeff);
         }
+        u.iter().flat_map(|x| if le { x.to_le_bytes() } else { x.to_be_bytes() }).collect()
+    }
+    fn utf32(s: &str, le: bool, bom: bool) -> Vec<u8> {
+        let mut u: Vec<u32> = s.chars().map(|c| c as u32).collect();
+        if bom {
+            u.insert(0, 0xfeff);
+        }
+        u.iter().flat_map(|x| if le { x.to_le_bytes() } else { x.to_be_bytes() }).collect()
+    }
+    fn arr_len(d: &[u8]) -> usize {
+        let PlistValue::Array(a) = parse(d).unwrap() else { panic!() };
+        a.items.len()
     }
 
-    fn run(data: &[u8]) -> String {
-        match crate::foundation::exception::catch_ns(|| parse(data)) {
-            Ok(Ok(v)) => {
-                let mut s = String::from("OK ");
-                canon(&v, &mut s);
-                s
-            }
-            Ok(Err(JErr::Parse(r))) => format!("ERR JSON Parse error | {}", r),
-            Ok(Err(JErr::Nil)) => "ERR (null) | ".to_string(),
-            Ok(Err(JErr::Exc(r))) => format!("EXC NSRangeException | {}", r),
-            Err(e) => panic!("{:?}", e),
+    #[test]
+    fn encodings_are_detected() {
+        let mut u8bom = vec![0xef, 0xbb, 0xbf];
+        u8bom.extend_from_slice(b"[1,2]");
+        assert_eq!(arr_len(&u8bom), 2);
+        // the byte order mark of the wide encodings stays in the text and is not a JSON character
+        for d in [
+            utf16("[1,2]", true, true),
+            utf16("[1,2]", false, true),
+            utf32("[1,2]", true, true),
+            utf32("[1,2]", false, true),
+        ] {
+            assert!(matches!(parse(&d), Err(JErr::Parse(_))));
+        }
+        assert_eq!(arr_len(&utf16("[1,2]", false, false)), 2);
+        assert_eq!(arr_len(&utf16("[1,2]", true, false)), 2);
+        assert_eq!(arr_len(&utf32("[1,2]", false, false)), 2);
+        assert_eq!(arr_len(&utf32("[1,2]", true, false)), 2);
+    }
+
+    #[test]
+    fn undecodable_text_is_empty() {
+        for bad in [
+            vec![0xef, 0xbb, 0xbf, 0xff, 0xfe],
+            vec![0xff, 0xfe, 0x5b],
+            vec![0xff, 0xfe, 0x00, 0xd8, 0x5b, 0x00],
+            vec![0xff, 0xfe, 0, 0, 0x5b, 0, 0],
+            vec![0xff, 0xfe, 0, 0, 0, 0, 0x11, 0],
+        ] {
+            assert!(parse(&bad).is_err(), "{bad:?}");
         }
     }
 
     #[test]
-    fn corpus() {
-        let Some(rows) = testutil::load_json_corpus() else { return };
-        assert!(rows.len() >= 15000);
-        let mut bad = 0;
-        for (inp, want) in &rows {
-            let got = run(inp);
-            if &got != want {
-                bad += 1;
-                if bad < 10 {
-                    eprintln!("MISMATCH in={:?}\n  got  {}\n  want {}", String::from_utf8_lossy(inp), got, want);
-                }
-            }
-        }
-        assert_eq!(bad, 0);
+    fn literals_and_numbers() {
+        assert!(matches!(parse(b" true"), Ok(PlistValue::Bool(true))));
+        assert!(matches!(parse(b"false"), Ok(PlistValue::Bool(false))));
+        assert!(matches!(parse(b"null"), Ok(PlistValue::Null)));
+        assert!(matches!(parse(b"[null]"), Err(JErr::Parse(_))));
+        assert!(matches!(parse(b"tru"), Err(JErr::Parse(_))));
+        assert!(matches!(parse(b"x"), Err(JErr::Parse(_))));
+        let num = |s: &str| {
+            let PlistValue::Real { value, .. } = parse(s.as_bytes()).unwrap() else { panic!() };
+            value
+        };
+        assert_eq!(num("-"), 0.0);
+        assert_eq!(num("1.5"), 1.5);
+        assert_eq!(num("1e5x"), 100000.0);
+        assert_eq!(num("1ex2"), 1.0);
+        assert!(matches!(parse(b"1e"), Err(JErr::Exc(_))));
+        assert_eq!(parse_number_text("-3.25abc"), -3.25);
+        assert_eq!(parse_number_text("abc"), 0.0);
+        assert_eq!(parse_number_text("inf"), 0.0);
+        assert_eq!(parse_number_text(".5"), 0.5);
+        assert_eq!(parse_number_text("7."), 7.0);
     }
 
     #[test]
-    fn cli_cases() {
-        let r = json_object_with_data(b"not json");
-        assert!(r.value.is_none());
-        assert_eq!(r.error_description.as_deref(), Some("JSON Parse error"));
-        let r = json_object_with_data(br#"{"a":true}"#);
-        assert_eq!(r.error_description.as_deref(), Some("JSON Parse error"));
-        let r = json_object_with_data(br#"{"a":"\ud83d"}"#);
-        assert!(r.value.is_none() && r.error_description.is_none());
-        let r = json_object_with_data(br#"{"seed":"custom","sunColor_0":255}"#);
-        let v = r.value.unwrap();
-        assert_eq!(v.class_name(), "GSDictionary");
-        assert!(
-            matches!(v.object_for_key("sunColor_0"), Some(PlistValue::Real { value, is_float: false }) if *value == 255.0)
-        );
-        let r = json_object_with_data(b"[1,2]");
-        assert_eq!(r.value.unwrap().class_name(), "GSArray");
-        let e = crate::foundation::exception::catch_ns(|| json_object_with_data(br#"{"a":"x"#)).unwrap_err();
+    fn strings_escapes_and_nonchars() {
+        let s = |d: &[u8]| {
+            let PlistValue::String(s) = parse(d).unwrap() else { panic!() };
+            s.s
+        };
+        assert_eq!(s(br#""a\nb\tc\rd\be\ff\/g\qh""#), "a\nb\tc\rd\u{8}e\u{c}f/gqh");
+        assert_eq!(s(br#""\u0041\u00e9""#), "A\u{e9}");
+        assert_eq!(s(br#""\uFEFFabc""#), "abc");
+        assert_eq!(s("\"\u{1f600}\"".as_bytes()), "\u{1f600}");
+        assert_eq!(s(b"\"ab\0"), "ab");
+        assert!(matches!(parse(b" \"\0"), Err(JErr::Parse(_))));
+        assert!(matches!(parse(b"\"unterminated"), Err(JErr::Exc(_))));
+        assert!(matches!(parse(br#""\u12G4""#), Err(JErr::Parse(_))));
+        for bad in [&br#""\uFDD0""#[..], br#""\uDC00""#, br#""\uD800""#, br#""\uFFFF""#, "\"\u{10fffe}\"".as_bytes()] {
+            assert!(matches!(parse(bad), Err(JErr::Nil)), "{}", String::from_utf8_lossy(bad));
+        }
+        assert!(matches!(parse(b"\"\\uFDD0\0"), Err(JErr::Nil)));
+        assert!(bad_units(&[0xd800, 0x41]));
+        assert!(!bad_units(&[0xd83d, 0xde00]));
+        assert!(bad_units(&[0xdbff, 0xdfff]));
+    }
+
+    #[test]
+    fn containers() {
+        let v = parse(br#" { "a" : [1, 2 ,3] , "b":{} "c":"x" } "#).unwrap();
+        let PlistValue::Dict(d) = v else { panic!() };
+        assert_eq!(d.map.len(), 3);
+        assert!(matches!(parse(br#"{"a" 1}"#), Err(JErr::Parse(_))));
+        assert!(matches!(parse(b"{1:2}"), Err(JErr::Parse(_))));
+        assert!(matches!(parse(b"[1 2"), Err(JErr::Parse(_))));
+        assert_eq!(arr_len(b"[1 2]"), 2);
+    }
+
+    #[test]
+    fn public_entry_point() {
+        let ok = json_object_with_data(b"[1]");
+        assert!(ok.value.is_some() && ok.error_description.is_none());
+        let bad = json_object_with_data(b"x");
+        assert_eq!(bad.error_description.as_deref(), Some("JSON Parse error"));
+        let nil = json_object_with_data(br#""\uFFFF""#);
+        assert!(nil.value.is_none() && nil.error_description.is_none());
+        let e = crate::foundation::exception::catch_ns(|| json_object_with_data(b"[1e")).unwrap_err();
         assert_eq!(e.name, "NSRangeException");
-        assert_eq!(e.reason.as_deref(), Some("in getCharacters:range:, range { 8, 64 } extends beyond size (7)"));
     }
 }
+
+#[cfg(test)]
+#[path = "json_golden.rs"]
+mod golden;

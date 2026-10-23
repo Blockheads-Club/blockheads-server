@@ -926,11 +926,9 @@ fn parse_openstep(d: &[u8], opts: u32) -> ReadResult {
         if p.eos_in_data {
             return fail(p.u.len() + 1, "unexpected end of string when parsing data");
         }
-        let off = p.i;
-        if p.u.get(off) == Some(&(b'<' as u16)) || off > 0 {
-            return fail(off + 1, "unexpected character (wanted '>')");
-        }
-        return fail(off, "unexpected character");
+        // The first character starts a value (checked above), so a failing value always consumed at least that
+        // character: the offset is never 0 and every failure is reported this way.
+        return fail(p.i + 1, "unexpected character (wanted '>')");
     };
     p.skip_ws();
     if p.i < p.u.len() {
@@ -998,49 +996,6 @@ mod tests {
     }
 
     #[test]
-    fn real_parse_vectors() {
-        let Ok(txt) = std::fs::read_to_string(crate::testenv::plist_golden("xml_real_parse.json")) else { return };
-        // tiny extractor for {"text": "...", "bits": "..."}
-        let mut n = 0;
-        let mut rest = txt.as_str();
-        while let Some(p) = rest.find("{\"text\": \"") {
-            rest = &rest[p + 10..];
-            let e = rest.find("\", \"bits\": \"").unwrap();
-            let mut text = String::new();
-            let mut it = rest[..e].chars();
-            while let Some(c) = it.next() {
-                if c != '\\' {
-                    text.push(c);
-                    continue;
-                }
-                match it.next().unwrap() {
-                    'n' => text.push('\n'),
-                    't' => text.push('\t'),
-                    'r' => text.push('\r'),
-                    'f' => text.push('\x0c'),
-                    'b' => text.push('\x08'),
-                    'u' => {
-                        let h: String = (0..4).map(|_| it.next().unwrap()).collect();
-                        text.push(char::from_u32(u32::from_str_radix(&h, 16).unwrap()).unwrap());
-                    }
-                    o => text.push(o),
-                }
-            }
-            rest = &rest[e + 12..];
-            let bits = u64::from_str_radix(&rest[..16], 16).unwrap();
-            assert_eq!(parse_ns_double(&text).to_bits(), bits, "text {:?}", text);
-            n += 1;
-        }
-        assert!(n > 1000);
-        assert_eq!(parse_ns_double("1.7").to_bits(), 0x3ffb333333333334);
-        assert_eq!(parse_ns_double("1e"), 0.0);
-        assert_eq!(parse_ns_double(".5"), 0.5);
-        assert_eq!(parse_ns_double("5."), 5.0);
-        assert_eq!(parse_ns_double("1_000"), 1.0);
-        assert_eq!(parse_ns_double("1.5e3.2"), 1500.0);
-    }
-
-    #[test]
     fn long_long_rules() {
         assert_eq!(parse_ns_long_long("9223372036854775808"), i64::MAX);
         assert_eq!(parse_ns_long_long("99999999999999999999"), i64::MAX);
@@ -1059,12 +1014,10 @@ mod tests {
         assert_eq!(a.items[0].class_name(), "NSLongLongNumber");
         assert_eq!(a.items[1].class_name(), "NSIntNumber");
         assert_eq!(a.items[2].as_str(), Some("a&bAB"));
-        if let V::Date(d) = a.items[3] {
-            assert_eq!(d + 978307200.0, 1792182285.0);
-        }
-        if let V::Data(ref d) = a.items[4] {
-            assert_eq!(d.bytes, b"abcd");
-        }
+        let V::Date(d) = a.items[3] else { panic!() };
+        assert_eq!(d + 978307200.0, 1792182285.0);
+        let V::Data(ref d) = a.items[4] else { panic!() };
+        assert_eq!(d.bytes, b"abcd");
         let r2 = read(&wrap("<array/>"), 2);
         assert_eq!(r2.value.unwrap().class_name(), "GSMutableArray");
     }
@@ -1141,284 +1094,187 @@ mod tests {
 }
 
 #[cfg(test)]
-mod golden_inputs {
+mod edge_cases {
     use super::*;
     use crate::foundation::exception::catch_ns;
+    use crate::plist::value::PlistValue as V;
 
-    /// Every golden reader input must be handled without a non-NSException panic; the key rows are checked in detail.
-    #[test]
-    fn all_inputs_no_crash() {
-        let dir = crate::testenv::plist_golden("xml_read_inputs");
-        let Ok(rd) = std::fs::read_dir(&dir) else { return };
-        let mut mism = Vec::new();
-        for e in rd.flatten() {
-            let name = e.file_name().to_string_lossy().into_owned();
-            let d = std::fs::read(e.path()).unwrap();
-            let exp = std::fs::read_to_string(format!("{}/../xml_read_expected/{}.out", dir, name)).unwrap_or_default();
-            let sec0 = exp.split("-- opt 2").next().unwrap_or("");
-            let got = catch_ns(|| property_list_with_data(&d, 0));
-            let (want_nil, want_exc) = (sec0.contains("\n(nil)"), sec0.contains("\nEXC "));
-            match got {
-                Ok(r) => {
-                    if want_exc || (want_nil != r.value.is_none() && !sec0.is_empty() && !name.ends_with(".bin")) {
-                        mism.push(name);
-                    }
-                }
-                Err(_) => {
-                    if !want_exc && !sec0.is_empty() && !name.ends_with(".bin") {
-                        mism.push(name);
-                    }
-                }
-            }
-        }
-        assert!(mism.is_empty(), "{:?}", mism);
+    fn xml(body: &str) -> ReadResult {
+        property_list_with_data(format!("<?xml version=\"1.0\"?>{body}").as_bytes(), 0)
     }
-}
-
-#[cfg(test)]
-mod golden_dump {
-    //! Full t6-style dump comparison against `plist_golden/xml_read_expected`.
-    //! Dictionary key classes and date descriptions are not modelled (keys are Rust `String`s, `Date` has no tag) and are normalised.
-    use super::*;
-    use crate::foundation::exception::catch_ns;
-
-    fn ctype(v: &PlistValue) -> &'static str {
-        match v {
-            PlistValue::Int(i) => {
-                if crate::plist::value::ns_number_class_name_i64(*i) == "NSIntNumber" {
-                    "i"
-                } else {
-                    "q"
-                }
-            }
-            PlistValue::UInt(_) => "Q",
-            PlistValue::Real { is_float: true, .. } => "f",
-            PlistValue::Real { .. } => "d",
-            PlistValue::Bool(_) => "C",
-            _ => "",
-        }
+    fn os(s: &str) -> ReadResult {
+        property_list_with_data(s.as_bytes(), 0)
     }
-
-    fn dump(v: &PlistValue, ind: usize, out: &mut String) {
-        let pad = "  ".repeat(ind);
-        match v {
-            PlistValue::Dict(d) => {
-                out.push_str(&format!("{pad}{} {{\n", v.class_name()));
-                for (k, val) in d.map.iter() {
-                    out.push_str(&format!("{pad}  key {k}:\n"));
-                    dump(val, ind + 2, out);
-                }
-                out.push_str(&format!("{pad}}}\n"));
-            }
-            PlistValue::Array(a) => {
-                out.push_str(&format!("{pad}{} [\n", v.class_name()));
-                for it in a.items.iter() {
-                    dump(it, ind + 1, out);
-                }
-                out.push_str(&format!("{pad}]\n"));
-            }
-            PlistValue::Date(_) => out.push_str(&format!("{pad}DATE\n")),
-            PlistValue::Data(_) => out.push_str(&format!("{pad}{} {}\n", v.class_name(), v.description())),
-            PlistValue::String(s) => out.push_str(&format!("{pad}{} {}\n", v.class_name(), s.s)),
-            PlistValue::Null => out.push_str(&format!("{pad}NSNull\n")),
-            _ => out.push_str(&format!("{pad}{} {} ctype={}\n", v.class_name(), v.description(), ctype(v))),
-        }
-    }
-
-    fn normalise(exp: &str) -> String {
-        let mut s = String::new();
-        for l in exp.split('\n') {
-            let t = l.trim_start_matches(' ');
-            let pad = &l[..l.len() - t.len()];
-            if let Some(r) = t.strip_prefix("key(") {
-                let r = &r[r.find(')').unwrap() + 1..];
-                s.push_str(&format!("{pad}key{r}\n"));
-            } else if t.starts_with("NSCalendarDate") || t.starts_with("NSGDate") {
-                s.push_str(&format!("{pad}DATE\n"));
-            } else {
-                s.push_str(l);
-                s.push('\n');
-            }
-        }
-        s
-    }
-
-    fn run(d: &[u8], opts: u32) -> String {
-        match catch_ns(|| property_list_with_data(d, opts)) {
-            Err(e) => format!("EXC {} | {}\n", e.name, e.reason.unwrap_or_default()),
-            Ok(r) => {
-                let mut s = format!("fmt={} err={}\n", r.format as u32, r.error.as_deref().unwrap_or("nil"));
-                match r.value {
-                    None => s.push_str("(nil)\n"),
-                    Some(v) => dump(&v, 0, &mut s),
-                }
-                s
-            }
-        }
+    fn bad_xml(body: &str) {
+        let r = xml(body);
+        assert!(r.value.is_none(), "{body}");
+        assert_eq!(r.error.as_deref(), Some(XML_FAIL), "{body}");
     }
 
     #[test]
-    fn dumps_match() {
-        let dir = crate::testenv::plist_golden("xml_read_inputs");
-        let Ok(rd) = std::fs::read_dir(&dir) else { return };
-        let mut bad = Vec::new();
-        for e in rd.flatten() {
-            let name = e.file_name().to_string_lossy().into_owned();
-            let Ok(exp) = std::fs::read_to_string(format!("{dir}/../xml_read_expected/{name}.out")) else { continue };
-            let d = std::fs::read(e.path()).unwrap();
-            let body = exp.split_once('\n').unwrap().1;
-            let mut want = String::new();
-            let mut got = String::new();
-            for (k, sec) in body.split("-- opt ").filter(|x| !x.is_empty()).enumerate() {
-                let (o, rest) = sec.split_once('\n').unwrap();
-                want.push_str(&format!("-- opt {o}\n{}\n", normalise(rest).trim_end()));
-                got.push_str(&format!("-- opt {o}\n{}\n", run(&d, o.trim().parse().unwrap()).trim_end()));
-                let _ = k;
-            }
-            // Note: the 1-based "char" of GNUstep's OpenStep
-            // "unexpected character (wanted '>')" error is not reproduced (2 for `<plist`/`<array`/`<!--`, 4 for
-            // ` <plist`). The text is never logged by the server and the value (nil) matches, so only that line is
-            // excused here.
-            let excuse = |t: &str| -> String {
-                t.lines()
-                    .map(|l| {
-                        if l.starts_with("fmt=1 err=Parse failed at line 1 (char ")
-                            && l.ends_with("unexpected character (wanted '>')")
-                        {
-                            "fmt=1 err=<wanted '>'>"
-                        } else {
-                            l
-                        }
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            };
-            if excuse(&want) != excuse(&got) {
-                bad.push(format!("##### {name}\n--- want\n{want}--- got\n{got}"));
-            }
-        }
-        if !bad.is_empty() {
-            std::fs::write(std::env::temp_dir().join("plist_dump_mismatch.txt"), bad.join("\n")).ok();
-        }
-        assert!(bad.is_empty(), "{} mismatches:\n{}", bad.len(), bad.join("\n"));
+    fn number_grammar_edges() {
+        assert_eq!(parse_ns_long_long("  \t12"), 12);
+        assert_eq!(parse_ns_double(" \n2.5"), 2.5);
+        assert_eq!(parse_ns_double("abc"), 0.0);
+        assert_eq!(parse_ns_double("1e2"), 100.0);
+        assert_eq!(parse_ns_double("1E+2"), 100.0);
+        assert_eq!(parse_ns_double("1e-2"), 0.01);
+        assert_eq!(parse_ns_double("1e+"), 0.0);
+        assert!(parse_ns_double("1e5000000").is_infinite());
+        assert_eq!(parse_ns_double("-1.5e1"), -15.0);
+        assert_eq!(parse_ns_double("0e0"), 0.0);
+        let r = xml("<plist><array><dict/><data>+/8=!</data></array></plist>");
+        let V::Array(a) = r.value.unwrap() else { panic!() };
+        let V::Data(d) = &a.items[1] else { panic!() };
+        assert_eq!(d.bytes, [0xfb, 0xff]);
+        assert_eq!(decode_entities("a&b"), "a&b".encode_utf16().collect::<Vec<_>>());
+        assert!(parse_date("2026X").is_none());
     }
-}
-
-#[cfg(test)]
-mod golden_escapes {
-    //! Replays `xml_read_expected/string_escape_cases.txt` (oracle programs t21, t22, t23, t20;).
-    use super::*;
-    use crate::foundation::exception::catch_ns;
-
-    const T21: &[&str] = &[
-        "a\\UD83D\\UDE00b",
-        "\\UD83D\\UDE00\\UD83D\\UDE00",
-        "\\UD83Dx",
-        "\\UD83D\\U0041",
-        "\\UDE00x",
-        "x\\UDE00",
-        "\\UD800\\UDC00",
-        "\\UDBFF\\UDFFF",
-        "\\Ud83d\\Ude00",
-        "\\UD83D\\UDE00z",
-        "\\UD83D \\UDE00",
-        "\\UD83D\\UD83D",
-        "\\UDC00\\UD800",
-        "\\UD83D\\UDE0",
-        "\\UD83D\\UDE",
-        "\\UD83D\\U",
-        "\\UD83D\\",
-        "\\UD83D\\UDE00\\UDE00",
-        "aaaa\\UD83D\\UDE00",
-        "\\UD83D\\UDE00bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-    ];
-    const T22: &[&str] = &[
-        "\\UD83Dabcdefg",
-        "\\UD83Dabcde",
-        "\\UD83D\\Uzzzz",
-        "\\UD83D\\UDE00\\UDE00x",
-        "\\UD83D\\u0041zz",
-        "\\UD83D12345",
-        "\\UD83D123456",
-        "\\UD83D\\U12345678",
-        "\\UD83D\\UDE00\\U0041",
-        "\\UD83D\\UD83D\\UD83D",
-        "\\U0041\\UD83Dq",
-        "\\UD83D\\UDE00\\UD83Dxxxxxx",
-        "\\UD83D\\UDE00\\UD83D\\UDE00ab",
-        "q\\UDE00xxxxxx",
-    ];
-    const T23: &[&str] = &[
-        "\\UD83D abcdefg",
-        "\\UD83D a",
-        "\\UD83D \\U0041",
-        "\\UD83Dabc \\U0041",
-        "\\UD83D\\U0041 \\U0041",
-        "\\UD83D\\U004 \\U0041",
-        "\\UD83D abcdef",
-        "\\UD83Dabcdef ",
-        "\\UD83D \\UDE00",
-        "\\UD83D\\\\UDE00",
-        "\\UD83D&amp;abcdef",
-        "\\UD83D&#65;abcdef",
-        "\\UD83D\\UDE00 ",
-    ];
-    const T20: &[&str] = &[
-        "\\U0041",
-        "\\U0001",
-        "\\U00e9",
-        "\\U00E9",
-        "\\UD83D\\UDE00",
-        "\\UDE00",
-        "\\UD83D",
-        "\\U12",
-        "\\U12345",
-        "\\Uzzzz",
-        "\\u0041",
-        "\\\\U0041",
-        "a\\Ub",
-        "\\U0000",
-        "\\U001F end",
-        "x\\U0009y",
-        "&#1;",
-        "&#x1F600;",
-        "&#65;&#x42;",
-        "&amp;lt;",
-        "a&#10;b",
-        "&#0;",
-        "&#xD800;",
-        "&#55357;&#56832;",
-        "\\n",
-    ];
 
     #[test]
-    fn replay() {
-        let Ok(txt) =
-            std::fs::read_to_string(crate::testenv::plist_golden("xml_read_expected/string_escape_cases.txt"))
-        else {
-            return;
+    fn entity_edges() {
+        let _ = xml("<plist><string>a\tbc&amp;de</string></plist>");
+        assert_eq!(decode_entities("&#zz;x"), "#zzx".encode_utf16().collect::<Vec<_>>());
+        assert_eq!(decode_entities("&bogus;"), "bogus".encode_utf16().collect::<Vec<_>>());
+        assert!(xml_string_split_storage("a\tbcd"));
+        let r = xml("<plist><string>q&#xZZ;&nope;</string></plist>");
+        assert_eq!(r.value.unwrap().as_str(), Some("q#xZZnope"));
+    }
+
+    #[test]
+    fn date_forms() {
+        assert!(parse_date("2026-10-16 20:24:45 +0100").is_some());
+        assert_eq!(parse_date("2026-10-16 20:24:45 +0100"), parse_date("2026-10-16T19:24:45Z"));
+        assert!(parse_date("2026-10-16 20:24:45 -0230").is_some());
+        assert!(parse_date("2026-10-16 20:24:45 *0100").is_none());
+        assert!(parse_date("2026-10-16X20:24:45Z").is_none());
+        assert!(parse_date("2026-13-16T20:24:45Z").is_none());
+        assert!(parse_date("2026-10-16T20:24:45Zjunk").is_none());
+    }
+
+    #[test]
+    fn xml_comments_pis_and_doctype() {
+        assert!(xml("<plist><!-- c --><array/></plist>").value.is_some());
+        assert!(xml("<!DOCTYPE plist [ <!ENTITY a \"b\"> ]><plist><array/></plist>").value.is_some());
+        bad_xml("<plist><!-- c");
+        bad_xml("<plist><? x");
+        bad_xml("<!DOCTYPE plist [ <!ENTITY a \"b\">");
+        assert!(xml("").value.is_none());
+        assert!(xml("").error.is_none());
+        bad_xml("junk");
+        bad_xml("<other/>");
+        assert!(xml("<plist/>").value.is_none());
+        assert!(xml("<plist/>").error.is_none());
+        bad_xml("<plist>");
+        bad_xml("<plist></notplist>");
+        assert!(xml("<plist></plist>").value.is_none());
+    }
+
+    #[test]
+    fn xml_container_edges() {
+        let r = xml("<plist><dict><key>a</key><integer>1</integer><key>b</key><true/></dict></plist>");
+        assert_eq!(r.value.unwrap().object_for_key("a").unwrap().long_long_value(), 1);
+        assert!(xml("<plist><array><![CDATA[x]]><integer>1</integer>text</array></plist>").value.is_some());
+        assert!(xml("<plist><array>text<integer>1</integer></array></plist>").value.is_some());
+        bad_xml("<plist><array><![CDATA[x</array></plist>");
+        bad_xml("<plist><array>text");
+        bad_xml("<plist><array>");
+        bad_xml("<plist><array><integer");
+        bad_xml("<plist><array></array");
+        bad_xml("<plist><array></dict></plist>");
+        bad_xml("<plist><dict></array></plist>");
+        bad_xml("<plist><dict><integer>1</integer></dict></plist>");
+        bad_xml("<plist><array><unknown/></array></plist>");
+        assert!(xml("<plist><dict><key/><string>v</string></dict></plist>").value.is_some());
+    }
+
+    #[test]
+    fn xml_leaf_edges() {
+        bad_xml("<plist><integer>");
+        bad_xml("<plist><integer>12");
+        bad_xml("<plist><string><![CDATA[x</string></plist>");
+        assert_eq!(xml("<plist><string>a<![CDATA[x]]>b</string></plist>").value.unwrap().as_str(), Some("ab"));
+        assert_eq!(xml("<plist><string>a<!-- c -->b</string></plist>").value.unwrap().as_str(), Some("ab"));
+        bad_xml("<plist><string>a<!-- c</string></plist>");
+        bad_xml("<plist><string><b/></string></plist>");
+        bad_xml("<plist><string>x</integer></plist>");
+    }
+
+    #[test]
+    fn xml_nil_values_raise() {
+        let e = catch_ns(|| xml("<plist><array><date>nope</date></array></plist>")).unwrap_err();
+        assert_eq!(e.name, "NSInvalidArgumentException");
+        let e = catch_ns(|| xml("<plist><dict><key>k</key><date>nope</date></dict></plist>")).unwrap_err();
+        assert_eq!(e.name, "NSInvalidArgumentException");
+        assert!(xml("<plist><date>nope</date></plist>").value.is_none());
+    }
+
+    #[test]
+    fn xml_declared_latin1_and_leading_space() {
+        let mut d = b"<?xml version=\"1.0\" encoding=\"ISO-8859-1\"?><plist><string>".to_vec();
+        d.push(0xe9);
+        d.extend_from_slice(b"</string></plist>");
+        let r = property_list_with_data(&d, 0);
+        assert_eq!(r.value.unwrap().as_str(), Some("\u{e9}"));
+        let r = property_list_with_data(b" <?xml version=\"1.0\"?><plist/>", 0);
+        assert_eq!(r.error.as_deref(), Some(XML_FAIL));
+        // the document parser itself rejects leading whitespace and empty text
+        let mk = |s| XmlParser {
+            s,
+            i: 0,
+            tag_cont: ClassTag { origin: Origin::Xml, mutable: false, alt: false },
+            tag_leaf: ClassTag { origin: Origin::Xml, mutable: false, alt: false },
         };
-        let secs = [T21.to_vec(), T22.to_vec(), T23.to_vec(), T20.to_vec()];
-        let txt = txt.replace("======\n", "=====\n");
-        for (sec, inputs) in txt.split("=====\n").zip(secs.iter()) {
-            let lines: Vec<&str> = sec.lines().collect();
-            assert_eq!(lines.len(), inputs.len());
-            for (l, inp) in lines.iter().zip(inputs.iter()) {
-                let got = catch_ns(|| decode_u_escapes(&decode_entities(inp)));
-                if let Some(r) = l.strip_prefix("READEXC ") {
-                    let e = got.expect_err(inp);
-                    assert_eq!(format!("{} | {}", e.name, e.reason.unwrap_or_default()), r, "{inp}");
-                } else {
-                    let want: Vec<u16> = l
-                        .split("->")
-                        .nth(1)
-                        .unwrap()
-                        .split_whitespace()
-                        .map(|h| u16::from_str_radix(h, 16).unwrap())
-                        .collect();
-                    assert_eq!(got.expect(inp), want, "{inp}");
-                }
-            }
-        }
+        assert!(mk(" <plist/>").document().is_err());
+        assert!(mk("").document().is_err());
+    }
+
+    #[test]
+    fn openstep_comments_and_containers() {
+        assert!(os("// line\n{a = b;}").value.is_some());
+        assert!(os("/* block */ (a, b)").value.is_some());
+        assert!(os("/* open").value.is_none());
+        let v = os("{lonely; b = c;}").value.unwrap();
+        let V::Dict(d) = v else { panic!() };
+        assert_eq!(d.map.len(), 2);
+        assert!(os("{a = b}").value.is_none());
+        assert!(os("{a = b;").value.is_none());
+        assert!(os("{(x) = b;}").value.is_none());
+        assert!(os("(a b)").value.is_none());
+        assert!(os("(a, b").value.is_none());
+        assert!(os("(a,)").value.is_some());
+        assert!(os("(a,").value.is_none());
+        assert!(os("{ = x;}").value.is_none());
+    }
+
+    #[test]
+    fn openstep_data_and_strings() {
+        assert!(os("<0a 0b>").value.is_some());
+        assert!(os("<0a0>").value.is_none());
+        let r = os("<0a0b");
+        assert!(r.value.is_none());
+        assert!(r.error.unwrap().contains("end of string when parsing data"));
+        let r = os("\"a\\nb\\tc\\rd\\U0041\\101\\7\\q\"");
+        assert_eq!(r.value.unwrap().as_str(), Some("a\nb\tc\rdAA\u{7}q"));
+        assert!(os("\"trail\\").value.is_none());
+        assert!(os("\"unterminated").value.is_none());
+        let r = os("a b");
+        assert!(r.error.unwrap().contains("extra data"));
+        let r = os("{a = <}");
+        assert!(r.error.unwrap().contains("wanted '>'"));
+        let e = catch_ns(|| os("\0")).unwrap_err();
+        assert_eq!(e.name, "NSRangeException");
+    }
+
+    #[test]
+    fn corrupt_binary_raises() {
+        let mut d = b"bplist00".to_vec();
+        d.extend_from_slice(&[0u8; 32]);
+        let e = catch_ns(|| property_list_with_data(&d, 0)).unwrap_err();
+        assert_eq!(e.name, "NSGenericException");
     }
 }
+
+#[cfg(test)]
+#[path = "xml_read_golden.rs"]
+mod golden;

@@ -437,76 +437,8 @@ mod tests {
     use super::super::value::PlistValue as V;
     use super::*;
 
-    fn vec_hex(name: &str) -> Option<Vec<u8>> {
-        let txt = std::fs::read_to_string(crate::testenv::plist_golden("bplist_vectors.txt")).ok()?;
-        for l in txt.lines() {
-            let mut it = l.split(' ');
-            if it.next() == Some(name) {
-                let h = it.next()?;
-                return Some((0..h.len() / 2).map(|i| u8::from_str_radix(&h[2 * i..2 * i + 2], 16).unwrap()).collect());
-            }
-        }
-        None
-    }
-
     fn arr(items: Vec<V>) -> V {
         V::array(items)
-    }
-
-    #[test]
-    fn generic_vectors() {
-        let Some(want) = vec_hex("ints") else { return };
-        let ints =
-            [0i64, 1, 255, 256, 65535, 65536, 4294967295, 4294967296, -1, -128, -129, -32768, -2147483648, i64::MAX];
-        assert_eq!(write_bplist(&arr(ints.iter().map(|&i| V::int(i)).collect())), want);
-
-        let reals = vec![
-            V::real_f64(1.5),
-            V::real_f32(1.5),
-            V::real_f64(0.1),
-            V::real_f32(0.1),
-            V::real_f64(2.0),
-            V::real_f64(-0.0),
-            V::Bool(true),
-            V::Bool(false),
-            V::int(1),
-            V::real_f64(1.0),
-            V::UInt(u64::MAX),
-        ];
-        assert_eq!(write_bplist(&arr(reals)), vec_hex("reals").unwrap());
-
-        let strs = vec![
-            V::string(""),
-            V::string("abc"),
-            V::string("\u{20ac}a"),
-            V::string("a\u{e9}"),
-            V::string("abc"),
-            V::string(format!("{:0100}", 1)),
-        ];
-        assert_eq!(write_bplist(&arr(strs)), vec_hex("strs").unwrap());
-
-        let misc = vec![
-            V::date(0.0),
-            V::date(1760000000.5 - 978307200.0),
-            V::data(vec![]),
-            V::data(b"abc".to_vec()),
-            V::data(b"abc".to_vec()),
-            arr(vec![]),
-            arr(vec![]),
-            V::dict(GsDict::new()),
-            arr(vec![V::string("abc")]),
-            arr(vec![V::string("abc")]),
-        ];
-        assert_eq!(write_bplist(&arr(misc)), vec_hex("misc").unwrap());
-        assert_eq!(write_bplist(&arr(vec![])), vec_hex("emptyarr").unwrap());
-        assert_eq!(write_bplist(&V::string("x")), vec_hex("topstr").unwrap());
-        assert_eq!(write_bplist(&V::int(300)), vec_hex("topint").unwrap());
-        let mut big: Vec<V> = (0..20).map(V::int).collect();
-        big.push(V::string("0123456789abcdefghij"));
-        assert_eq!(write_bplist(&arr(big)), vec_hex("bigarr").unwrap());
-        let a300 = arr((0..300).map(|i| V::int(1000 + i)).collect());
-        let got = write_bplist(&a300);
-        assert_eq!(&got[..40], &vec_hex("arr300_head").unwrap()[..]);
     }
 
     #[test]
@@ -545,65 +477,111 @@ mod tests {
 }
 
 #[cfg(test)]
-mod golden_read {
+mod edge_cases {
+    use super::super::value::PlistValue as V;
     use super::*;
+
+    /// A bplist whose objects are the given encodings (1-byte offsets and references), `top` as the root.
+    fn mk(objs: &[Vec<u8>], top: u64) -> Vec<u8> {
+        let mut d = b"bplist00".to_vec();
+        let mut offs = vec![];
+        for o in objs {
+            offs.push(d.len() as u8);
+            d.extend_from_slice(o);
+        }
+        let tab = d.len() as u64;
+        d.extend_from_slice(&offs);
+        trailer(&mut d, 1, 1, objs.len() as u64, top, tab);
+        d
+    }
+    fn trailer(d: &mut Vec<u8>, osz: u8, rsz: u8, nobj: u64, top: u64, tab: u64) {
+        d.extend_from_slice(&[0, 0, 0, 0, 0, 0, osz, rsz]);
+        for v in [nobj, top, tab] {
+            d.extend_from_slice(&v.to_be_bytes());
+        }
+    }
+    fn read1(o: &[u8]) -> Option<V> {
+        let mut d = vec![0u8; 32]; // padding so the file reaches the 40 byte minimum
+        d.truncate(0);
+        d.extend_from_slice(&mk(&[o.to_vec()], 0));
+        read_bplist(&d, 0).unwrap()
+    }
+
     #[test]
-    fn corrupt_trailers() {
-        let dir = crate::testenv::plist_golden("xml_read_inputs");
-        for (f, want) in [
-            ("z_badtrailer.bin", "Unknown offset size 255"),
-            ("z_trunc.bin", "Unknown offset size 0"),
-            ("arr300_head_821.bin", "Unknown offset size 0"),
-        ] {
-            let Ok(d) = std::fs::read(format!("{dir}/{f}")) else { return };
-            let e = read_bplist(&d, 0).unwrap_err();
-            assert_eq!(e.reason.as_deref(), Some(want), "{f}");
+    fn writer_value_kinds() {
+        assert_eq!(size_code(8), 3);
+        let long = V::array((0..300).map(V::int).collect());
+        let V::Array(back) = read_bplist(&write_bplist(&long), 0).unwrap().unwrap() else { panic!() };
+        assert_eq!(back.items.len(), 300);
+        assert_eq!(nbytes(1 << 40), 8);
+        let a = V::array(vec![V::real_f32(1.5), V::Date(12.5), V::UInt(7), V::Null, V::Bool(false), V::Bool(true)]);
+        let back = read_bplist(&write_bplist(&a), 0).unwrap().unwrap();
+        let V::Array(items) = back else { panic!() };
+        assert!(matches!(items.items[0], V::Real { value, is_float: true } if value == 1.5));
+        assert!(matches!(items.items[1], V::Date(d) if d == 12.5));
+        assert!(matches!(items.items[2], V::Int(7)));
+        assert_eq!(items.items[3].as_str(), Some("<null>"));
+        assert!(matches!(items.items[4], V::Bool(false)));
+        assert!(matches!(items.items[5], V::Bool(true)));
+        let uid = write_bnode(&BNode::Array(vec![BNode::Uid(u64::MAX), BNode::Uid(3)]));
+        let V::Array(items) = read_bplist(&uid, 0).unwrap().unwrap() else { panic!() };
+        assert_eq!(items.items[0].object_for_key("CF$UID").map(|v| v.long_long_value()), Some(-1));
+    }
+
+    #[test]
+    fn reader_object_kinds() {
+        assert!(matches!(read1(&[0x08]), Some(V::Bool(false))));
+        assert!(read1(&[0x00]).is_none());
+        assert!(read1(&[0x14, 0, 0]).is_none());
+        assert!(read1(&[0x20]).is_none());
+        assert!(read1(&[0x32, 0]).is_none());
+        assert!(matches!(read1(&[0x33, 0, 0, 0, 0, 0, 0, 0, 0]), Some(V::Date(_))));
+        assert!(read1(&[0x70]).is_none());
+        assert!(read1(&[0xaf, 0x20]).is_none());
+        assert!(read1(&[0xaf, 0x14]).is_none());
+        assert!(read1(&[0xaf, 0x10]).is_none());
+    }
+
+    #[test]
+    fn reader_depth_limit() {
+        // object i is an array holding object i + 1: 300 levels deep trips the guard
+        let n = 300usize;
+        let mut d = b"bplist00".to_vec();
+        let mut offs = vec![];
+        for i in 0..n {
+            offs.push(d.len() as u16);
+            d.extend_from_slice(&[0xa1]);
+            d.extend_from_slice(&((i + 1) as u16).to_be_bytes());
         }
-        for f in [
-            "apple_bin.plist",
-            "apple_bin_uid.plist",
-            "ka_arr.bin",
-            "ka_dict.bin",
-            "top_string.bin",
-            "reals_751.bin",
-            "strs_633.bin",
-            "misc_190.bin",
-            "ints_586.bin",
-            "bigarr_716.bin",
-            "dict_996.bin",
-        ] {
-            let Ok(d) = std::fs::read(format!("{dir}/{f}")) else { return };
-            assert!(read_bplist(&d, 0).unwrap().is_some(), "{f}");
+        offs.push(d.len() as u16);
+        d.push(0x09);
+        let tab = d.len() as u64;
+        for o in &offs {
+            d.extend_from_slice(&o.to_be_bytes());
         }
+        trailer(&mut d, 2, 2, (n + 1) as u64, 0, tab);
+        assert!(read_bplist(&d, 0).unwrap().is_none());
+    }
+
+    #[test]
+    fn reader_trailer_checks() {
+        let base = || b"bplist00".to_vec();
+        let tail = |osz: u8, rsz, nobj, top, tab| {
+            let mut d = base();
+            d.extend_from_slice(&[0x09, 8, 0, 0]);
+            trailer(&mut d, osz, rsz, nobj, top, tab);
+            d
+        };
+        assert!(read_bplist(&tail(1, 1, 1, 0, 9), 0).unwrap().is_some());
+        assert!(read_bplist(&tail(1, 0, 1, 0, 9), 0).unwrap().is_none());
+        assert!(read_bplist(&tail(2, 1, u64::MAX, 0, 9), 0).unwrap().is_none());
+        assert!(read_bplist(&tail(1, 1, 1, 0, 1 << 40), 0).unwrap().is_none());
+        assert!(read_bplist(&tail(1, 1, 0, 0, 9), 0).unwrap().is_none());
+        assert!(read_bplist(&tail(1, 1, 1, 1, 9), 0).unwrap().is_none());
+        assert_eq!(read_bplist(&tail(0, 1, 1, 0, 9), 0).unwrap_err().name, "NSGenericException");
     }
 }
 
 #[cfg(test)]
-mod golden_dicts {
-    //! The 12 `dict` rows of `bplist_vectors.txt` (oracle t8: `[NSMutableDictionary dictionary]`, keys `key<i>_<r>` inserted for
-    //! i = 0..n with value i). Exercises BFS keys-then-values order in `GsDict` enumeration order.
-    use super::*;
-    #[test]
-    fn dict_rows() {
-        let Ok(txt) = std::fs::read_to_string(crate::testenv::plist_golden("bplist_vectors.txt")) else { return };
-        let mut n = 0;
-        for l in txt.lines().filter(|l| l.starts_with("dict ")) {
-            let h = l.split(' ').nth(1).unwrap();
-            let want: Vec<u8> =
-                (0..h.len() / 2).map(|i| u8::from_str_radix(&h[2 * i..2 * i + 2], 16).unwrap()).collect();
-            let Some(PlistValue::Dict(d)) = read_bplist(&want, 0).unwrap() else { panic!("{l}") };
-            if d.map.contains_key(&"$objects".to_string()) {
-                continue; // the keyed-archive `dict` row (NSDictionary archive), not a t8 row
-            }
-            let mut keys: Vec<(i64, String)> = d.map.iter().map(|(k, v)| (v.long_long_value(), k.clone())).collect();
-            keys.sort();
-            let mut m = GsDict::new();
-            for (i, k) in keys {
-                m.insert(k, PlistValue::int(i));
-            }
-            assert_eq!(write_bplist(&PlistValue::dict(m)), want, "{l}");
-            n += 1;
-        }
-        assert_eq!(n, 12);
-    }
-}
+#[path = "binary_golden.rs"]
+mod golden;
