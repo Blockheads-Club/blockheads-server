@@ -689,6 +689,7 @@ struct Npc {
     ty: i32,
     dies: bool,
     hits: RefCell<Vec<i32>>,
+    rider: std::cell::Cell<[f32; 4]>,
 }
 impl DynamicObject for Npc {
     fn base(&self) -> &RefCell<crate::objects::base::DynamicObjectBase> {
@@ -705,6 +706,45 @@ impl DynamicObject for Npc {
     }
     fn as_harmable(&self) -> Option<&dyn crate::objects::protocols::HarmableDynamicObject> {
         Some(self)
+    }
+    fn as_ridable(&self) -> Option<&dyn crate::objects::protocols::RidableDynamicObject> {
+        Some(self)
+    }
+}
+impl crate::objects::protocols::RidableDynamicObject for Npc {
+    fn rider_pos_for_blockhead(&self, _b: &ObjRef) -> [f32; 4] {
+        self.rider.get()
+    }
+    fn camera_pos_for_blockhead(&self, _b: &ObjRef) -> Vector2 {
+        Vector2 { x: 0.0, y: 0.0 }
+    }
+    fn rider_body_y_rotation_for_blockhead(&self, _b: &ObjRef) -> f32 {
+        0.0
+    }
+    fn set_target_velocity(&self, _v: Vector2) {}
+    fn ride_direction(&self) -> i32 {
+        0
+    }
+    fn add_rider(&self, _me: &ObjRef, _b: &ObjRef) {}
+    fn remove_rider(&self, _me: &ObjRef, _b: &ObjRef) {}
+    fn swipe_up_gesture(&self, _me: &ObjRef) {}
+    fn blockhead_can_ride_using_item(&self, _b: &ObjRef, _item: i32) -> bool {
+        true
+    }
+    fn jumps_on_swipe(&self) -> bool {
+        false
+    }
+    fn requires_fuel(&self) -> bool {
+        false
+    }
+    fn acts_as_interaction_object(&self) -> Option<ObjRef> {
+        None
+    }
+    fn rider_d_pad_should_allow_up_down(&self) -> bool {
+        false
+    }
+    fn rider_d_pad_should_give_discrete_values(&self) -> bool {
+        false
     }
 }
 impl crate::objects::protocols::HarmableDynamicObject for Npc {
@@ -730,6 +770,7 @@ fn npc(ty: i32, dies: bool) -> (ObjRef, Rc<Npc>) {
         ty,
         dies,
         hits: RefCell::new(Vec::new()),
+        rider: std::cell::Cell::new([0.0; 4]),
     });
     (rc.clone(), rc)
 }
@@ -1692,4 +1733,653 @@ fn place_sign_starts_the_text_dialog_and_events() {
     r.h.item_available.set(false);
     u6_place(&r.c(), it::PLACE_ITEM, 0.0, 0.2);
     assert_eq!(r.b().st().interacting, 0);
+}
+
+// ---------------------------------------------------------------------------------------------------
+// dispatch of the bucket types through U6b, U8
+// ---------------------------------------------------------------------------------------------------
+
+#[test]
+fn u6b_dispatches_buckets_and_ranged_weapons() {
+    for ty in [it::FILL_BUCKET, it::CAPTURE, it::HARVEST_NPC, it::PLACE_ITEM, it::PLACE_SOLID_BLOCK, it::FIRE_RANGED_WEAPON, it::DIG_FOREGROUND] {
+        let r = rig(ty, 0x66);
+        r.h.cit.set(ty);
+        fire(&r);
+        let _ = r.h.take();
+    }
+}
+
+#[test]
+fn u8_rider_position_and_jetpack_tail() {
+    let (_w, _d, _dw, o, h) = mk();
+    let b = bh_of(&o);
+    steady(b);
+    let (ride, rid) = npc(1, false);
+    rid.rider.set([7.5, 8.0, 0.0, 0.0]);
+    b.bh.borrow_mut().ride_object = Some(ride.clone());
+    let w = b.world_rc().unwrap();
+    let c = ctx(b, &o, &w);
+    u8(&c);
+    assert_eq!(b.float_pos(), Vector2 { x: 7.5, y: 8.0 });
+    assert_eq!(b.bh.borrow().to_square, IntPair { x: 7, y: 8 });
+    assert_eq!(b.pos(), IntPair { x: 7, y: 8 });
+    // an unchanged position is not re-registered
+    u8(&c);
+    // simulation skips the rider placement
+    rid.rider.set([9.5, 8.0, 0.0, 0.0]);
+    u8(&Ctx { sim: true, ..ctx(b, &o, &w) });
+    assert_eq!(b.float_pos().x, 7.5);
+    // a non-ridable ride object is ignored
+    b.bh.borrow_mut().ride_object = Some(stub(1, true));
+    u8(&c);
+    b.bh.borrow_mut().ride_object = None;
+    // free flight keeps the jet motion going
+    b.bh.borrow_mut().is_in_jet_pack_free_flight_mode = true;
+    u8(&c);
+    assert!(h.take().contains(&"jetmotion".to_string()));
+    // a jetpack with fuel
+    h.set("jetfuel", 3);
+    {
+        let mut f = b.bh.borrow_mut();
+        f.shirt_item_type = 0x116;
+        f.jet_fuel_usage = 0.0;
+    }
+    u8(&c);
+    assert_eq!(b.bh.borrow().jet_fuel_usage, 0.2f32);
+    // the pickup request set is cleared on the server tail
+    b.bh.borrow_mut().this_frame_pickup_requests = Some(Default::default());
+    u8(&c);
+}
+
+#[test]
+fn interpolation_covers_every_animation() {
+    let (_w, _d, _dw, o, _h) = mk();
+    let b = bh_of(&o);
+    let w = b.world_rc().unwrap();
+    let squares = [
+        (IntPair { x: 5, y: 8 }, IntPair { x: 6, y: 8 }),
+        (IntPair { x: 5, y: 8 }, IntPair { x: 6, y: 9 }),
+        (IntPair { x: 5, y: 9 }, IntPair { x: 6, y: 8 }),
+        (IntPair { x: 5, y: 8 }, IntPair { x: 5, y: 9 }),
+        (IntPair { x: 2, y: 8 }, IntPair { x: 1020, y: 8 }),
+        (IntPair { x: 1020, y: 8 }, IntPair { x: 2, y: 8 }),
+    ];
+    for anim in 0..34u32 {
+        for (fs, ts) in squares {
+            for tf in [0.0f32, 0.1, 0.3, 0.6, 0.9] {
+                {
+                    let mut f = b.bh.borrow_mut();
+                    f.state.animation_type = anim;
+                    f.from_square = fs;
+                    f.to_square = ts;
+                    f.travel_fraction = tf;
+                    f.travel_fraction_normalized = tf;
+                    f.traverse_to_key_frame = 0;
+                    f.traverse_from_key_frame = 0;
+                    f.traverse_type = 1;
+                }
+                u7_interpolate(&ctx(b, &o, &w));
+                let p = b.float_pos();
+                assert!(p.x.is_finite() && p.y.is_finite(), "anim {anim}");
+            }
+        }
+    }
+    // stairs suppress the walk arc
+    for (tkf, ttype, fkf) in [(kf::STAIRS, 1, 0), (0, tt::STAIRS, 0), (0, 1, kf::STAIRS)] {
+        let mut f = b.bh.borrow_mut();
+        f.state.animation_type = 1;
+        f.from_square = IntPair { x: 5, y: 8 };
+        f.to_square = IntPair { x: 6, y: 9 };
+        f.travel_fraction_normalized = 0.5;
+        f.traverse_to_key_frame = tkf as i32;
+        f.traverse_type = ttype as i32;
+        f.traverse_from_key_frame = fkf as i32;
+        drop(f);
+        u7_interpolate(&ctx(b, &o, &w));
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------
+// U7
+// ---------------------------------------------------------------------------------------------------
+
+fn u7_rig() -> Rig {
+    let (world, _d, _dw, o, h) = mk();
+    let b = bh_of(&o);
+    steady(b);
+    {
+        let mut f = b.bh.borrow_mut();
+        f.next_action_delay = 1.0;
+        f.travel_fraction = 1.0;
+        f.travel_speed = 4.0;
+    }
+    Rig { world, o, h }
+}
+
+fn run_u7(r: &Rig, c: &Ctx) {
+    let mut cd = DT;
+    u7(c, &mut cd);
+}
+
+fn go(r: &Rig, path: Vec<PlistValue>) {
+    r.b().bh.borrow_mut().path = Some(path);
+    run_u7(r, &r.c());
+}
+
+fn sim_ctx(r: &Rig) -> Ctx<'_> {
+    Ctx { sim: true, sim_or_ctl: true, ..r.c() }
+}
+
+#[test]
+fn u7_waits_for_the_action_delay_and_rates() {
+    let r = u7_rig();
+    let b = r.b();
+    b.bh.borrow_mut().next_action_delay = 0.0;
+    run_u7(&r, &r.c());
+    assert_eq!(b.bh.borrow().next_action_delay, DT);
+    // replicas wait longer when their queue is empty
+    b.base.borrow_mut().is_net = true;
+    b.bh.borrow_mut().next_action_delay = 0.3;
+    run_u7(&r, &Ctx { is_net: true, ..r.c() });
+    assert_eq!(b.bh.borrow().next_action_delay, 0.3 + DT);
+    b.base.borrow_mut().is_net = false;
+    // falling / flying / elevator rates
+    for ty in [tt::FALL, tt::FLY, tt::ELEVATOR] {
+        let r = u7_rig();
+        r.b().bh.borrow_mut().traverse_type = ty as i32;
+        r.b().bh.borrow_mut().travel_speed = 2.0;
+        go(&r, vec![step(idx(6, 8), 10, 1, 0)]);
+    }
+    // chasing skips the delay
+    let r = u7_rig();
+    r.b().bh.borrow_mut().next_action_delay = 0.0;
+    r.b().bh.borrow_mut().chasing_ride_object = true;
+    run_u7(&r, &r.c());
+}
+
+#[test]
+fn u7_doors_close_behind_and_open_ahead() {
+    // behind: the origin tile is a door
+    for setup in 0..4 {
+        let r = u7_rig();
+        let w = &r.world;
+        place_between(r.b(), w, IntPair { x: 5, y: 8 }, IntPair { x: 6, y: 8 });
+        match setup {
+            0 => tile(w, 5, 8).set_background_contents(0x46),
+            1 => tile(w, 5, 8).set_background_contents(0x4b),
+            2 => tile(w, 5, 8).set_contents(0x92),
+            _ => tile(w, 5, 9).set_background_contents(0x46),
+        }
+        go(&r, vec![step(idx(7, 8), 10, 1, 0)]);
+        assert!(r.h.take().contains(&"door:5,8:false:0".to_string()), "setup {setup}");
+    }
+    // ahead: door / gate lean right, trap door and a door above do not
+    for (setup, expect) in [(0, "door:7,8:true:1"), (1, "door:7,8:true:-1"), (2, "door:7,8:true:1"), (3, "door:7,8:true:-1")] {
+        let r = u7_rig();
+        let w = &r.world;
+        place_between(r.b(), w, IntPair { x: 5, y: 8 }, IntPair { x: 6, y: 8 });
+        match setup {
+            0 => tile(w, 7, 8).set_background_contents(0x46),
+            1 => tile(w, 7, 8).set_background_contents(0x4b),
+            2 => tile(w, 7, 8).set_contents(0x92),
+            _ => tile(w, 7, 9).set_background_contents(0x46),
+        }
+        go(&r, vec![step(idx(7, 8), 10, 1, 0)]);
+        assert!(r.h.take().contains(&expect.to_string()), "setup {setup}: {:?}", r.h.take());
+    }
+}
+
+#[test]
+fn u7_footsteps_and_cacti() {
+    let r = u7_rig();
+    place_between(r.b(), &r.world, IntPair { x: 5, y: 8 }, IntPair { x: 6, y: 9 });
+    go(&r, vec![step(idx(7, 9), 10, 1, 0)]);
+    assert!(r.b().bh.borrow().footstep_ping_pong);
+    let r = u7_rig();
+    place_between(r.b(), &r.world, IntPair { x: 5, y: 8 }, IntPair { x: 6, y: 8 });
+    r.b().bh.borrow_mut().footstep_ping_pong = false;
+    go(&r, vec![step(idx(7, 8), 10, 1, 0)]);
+    assert!(r.b().bh.borrow().footstep_ping_pong);
+    // walking out of a cactus tile while hanging on it hurts, the event names the cause
+    let r = u7_rig();
+    sim_ready(r.b());
+    place_between(r.b(), &r.world, IntPair { x: 5, y: 8 }, IntPair { x: 6, y: 8 });
+    tile(&r.world, 6, 8).set_contents(0x2b);
+    r.b().bh.borrow_mut().traverse_to_key_frame = kf::HANG_BACK as i32;
+    r.b().bh.borrow_mut().path = Some(vec![step(idx(7, 8), 10, 1, 0)]);
+    run_u7(&r, &sim_ctx(&r));
+    assert!(r.h.take().contains(&"sim:4:Text(\"hurt by a cactus\")".to_string()));
+    assert!(r.b().st().health < 1.0);
+    // a cactus ahead divides the cost by ten
+    let r = u7_rig();
+    tile(&r.world, 7, 8).set_contents(0x2b);
+    go(&r, vec![step(idx(7, 8), 100, 1, kf::HANG_BACK as i64)]);
+    assert_eq!(r.b().bh.borrow().travel_speed, 40.0f32 / 10.0f32);
+}
+
+#[test]
+fn u7_falls_cost_damage_and_cap_the_difficulty() {
+    let r = u7_rig();
+    sim_ready(r.b());
+    {
+        let mut f = r.b().bh.borrow_mut();
+        f.traverse_type = tt::FALL as i32;
+        f.terrain_difficulty = 148;
+    }
+    r.b().bh.borrow_mut().path = Some(vec![step(idx(5, 7), 120, tt::FALL as i64, 0)]);
+    run_u7(&r, &sim_ctx(&r));
+    assert_eq!(r.b().bh.borrow().terrain_difficulty, 150);
+    assert!(r.h.take().iter().any(|l| l.starts_with("sim:4:Text(") && l.contains("in a fall")));
+    // a low cost: the speed floor of one
+    let r = u7_rig();
+    r.b().bh.borrow_mut().traverse_type = tt::FALL as i32;
+    r.b().bh.borrow_mut().terrain_difficulty = -30;
+    go(&r, vec![step(idx(5, 7), -30, tt::FALL as i64, 0)]);
+    assert_eq!(r.b().bh.borrow().travel_speed, 1.0);
+    // flying costs half again
+    let r = u7_rig();
+    go(&r, vec![step(idx(6, 8), 10, tt::FLY as i64, 0)]);
+    assert_eq!(r.b().bh.borrow().terrain_difficulty, 15);
+}
+
+#[test]
+fn u7_final_steps_interact_or_stay() {
+    // the last point is where we stand already: no move
+    let r = u7_rig();
+    go(&r, vec![step(idx(5, 8), 10, 1, 0)]);
+    assert_eq!(r.b().bh.borrow().traverse_from_key_frame, r.b().bh.borrow().traverse_to_key_frame);
+    // goal interactions: the face index is dropped for crafting and riding
+    for goal in [it::CRAFT, it::RIDE_TRAIN_CAR, it::USE_INTERACTIVE_OBJECT, it::DIG] {
+        let r = u7_rig();
+        r.h.cit.set(goal);
+        r.b().bh.borrow_mut().state.goal_interaction_type_while_walking = goal;
+        go(&r, vec![step(idx(6, 8), 10, 1, 0)]);
+        if goal != it::RIDE_TRAIN_CAR {
+            assert_eq!(r.b().st().interacting, 1, "goal {goal}");
+        }
+    }
+    // riding goals are not started while already riding
+    for (ride, started) in [(true, false), (false, true)] {
+        let r = u7_rig();
+        r.h.cit.set(it::RIDE);
+        {
+            let mut f = r.b().bh.borrow_mut();
+            f.state.goal_interaction_type_while_walking = it::RIDE;
+            if ride {
+                f.ride_object = Some(stub(1, true));
+            }
+        }
+        go(&r, vec![step(idx(6, 8), 10, 1, 0)]);
+        if !started {
+            assert_eq!(r.b().st().interacting, 0, "ride {ride}");
+        }
+    }
+    // an interaction already running on the same tile is not restarted
+    let r = u7_rig();
+    r.h.cit.set(it::DIG);
+    {
+        let mut f = r.b().bh.borrow_mut();
+        f.state.goal_interaction_type_while_walking = it::DIG;
+        f.state.interacting = 1;
+        f.interacting_tile = tile_at(&r.world, IntPair { x: 6, y: 8 });
+    }
+    go(&r, vec![step(idx(6, 8), 10, 1, 0)]);
+    // a path that was a fall or a bare move does not interact
+    let r = u7_rig();
+    r.h.cit.set(it::DIG);
+    r.b().bh.borrow_mut().last_path_was_falling = true;
+    go(&r, vec![step(idx(6, 8), 10, 1, 0)]);
+    assert_eq!(r.b().st().interacting, 0);
+    // using an item without a tile
+    let r = u7_rig();
+    r.b().bh.borrow_mut().using_item = true;
+    go(&r, vec![step(idx(6, 8), 10, 1, 0)]);
+    // an interaction at an elevator keeps the standing pose
+    let r = u7_rig();
+    r.h.cit.set(it::DIG);
+    {
+        let mut f = r.b().bh.borrow_mut();
+        f.state.goal_interaction_type_while_walking = it::DIG;
+        f.traverse_from_key_frame = kf::STAND_ELEVATOR as i32;
+    }
+    go(&r, vec![step(idx(6, 8), 10, 1, kf::STAND_ELEVATOR as i64)]);
+    // an inaccessible pose is reset on arrival
+    let r = u7_rig();
+    go(&r, vec![step(idx(5, 8), 10, 1, kf::INACCESSIBLE as i64)]);
+}
+
+#[test]
+fn u7_elevator_rides_and_the_elevator_achievement() {
+    // an elevator point after a normal one
+    let r = u7_rig();
+    go(&r, vec![step(idx(6, 9), 10, 27, kf::STAND_ELEVATOR as i64), step(idx(6, 8), 10, 1, 0)]);
+    assert!(r.h.take().contains(&"ach:grp.elevator_mj".to_string()));
+    // boarding: the shaft opens and the motor is powered; the counter powers it every tenth move
+    let r = u7_rig();
+    place_between(r.b(), &r.world, IntPair { x: 5, y: 8 }, IntPair { x: 6, y: 8 });
+    r.b().bh.borrow_mut().traverse_to_key_frame = kf::STAND as i32;
+    go(&r, vec![step(idx(7, 8), 10, 27, kf::STAND_ELEVATOR as i64)]);
+    let log = r.h.take();
+    assert!(log.contains(&"openelevator:7,8".to_string()), "{log:?}");
+    assert!(log.contains(&"elevpower:7,8".to_string()));
+    assert_eq!(r.b().bh.borrow().elevator_power_use_counter, 1);
+    // leaving: the shaft opens at the origin, doors there open too
+    let r = u7_rig();
+    place_between(r.b(), &r.world, IntPair { x: 5, y: 8 }, IntPair { x: 6, y: 8 });
+    tile(&r.world, 6, 8).set_background_contents(0x46);
+    {
+        let mut f = r.b().bh.borrow_mut();
+        f.traverse_to_key_frame = kf::STAND_ELEVATOR as i32;
+    }
+    go(&r, vec![step(idx(7, 8), 10, 1, kf::STAND as i64)]);
+    let log = r.h.take();
+    assert!(log.iter().any(|l| l.starts_with("openelevator:")), "{log:?}");
+    // the tenth ride tick powers the motor again, a normal move resets the counter
+    let r = u7_rig();
+    place_between(r.b(), &r.world, IntPair { x: 5, y: 8 }, IntPair { x: 6, y: 8 });
+    {
+        let mut f = r.b().bh.borrow_mut();
+        f.traverse_to_key_frame = kf::STAND_ELEVATOR as i32;
+        f.traverse_from_key_frame = kf::STAND_ELEVATOR as i32;
+        f.elevator_power_use_counter = 9;
+    }
+    go(&r, vec![step(idx(7, 8), 10, 27, kf::STAND_ELEVATOR as i64)]);
+    assert_eq!(r.b().bh.borrow().elevator_power_use_counter, 0);
+    assert!(r.h.take().contains(&"elevpower:7,8".to_string()));
+    let r = u7_rig();
+    place_between(r.b(), &r.world, IntPair { x: 5, y: 8 }, IntPair { x: 6, y: 8 });
+    r.b().bh.borrow_mut().elevator_power_use_counter = 4;
+    go(&r, vec![step(idx(7, 8), 10, 1, 0)]);
+    assert_eq!(r.b().bh.borrow().elevator_power_use_counter, 0);
+}
+
+#[test]
+fn u7_walk_speed_by_shoes_and_ground() {
+    let base = 40.0f32 / 10.0f32;
+    for (expert, shoes, snow, pcl, expect) in [
+        (false, 0x7cu16, false, 0u8, base * 1.2),
+        (false, 0x7f, false, 0, base * 1.2),
+        (false, 0x8f, false, 0, base * 1.5),
+        (true, 0x7c, false, 0, base * 1.1),
+        (true, 0x8f, false, 0, base * 1.2),
+        (false, 0, false, 0, base),
+        (false, 0x7f, true, 0, base * 1.2),
+        (false, 0x8f, true, 0, base * 1.5),
+        (false, 0, true, 255, base * (1.0f32 - 0.5)),
+    ] {
+        for ty in [1i64, 26] {
+            let r = u7_rig();
+            r.b().bh.borrow_mut().shoes_item_type = shoes;
+            if snow {
+                let t = tile(&r.world, 6, 8);
+                t.set_type_index(5);
+                t.set_partial_content_left(pcl);
+            }
+            r.b().bh.borrow_mut().path = Some(vec![step(idx(6, 8), 10, ty, 0)]);
+            run_u7(&r, &Ctx { expert, ..r.c() });
+            let got = r.b().bh.borrow().travel_speed;
+            assert!((got - expect).abs() < 0.001, "{expert} {shoes:#x} {snow}: {got} vs {expect}");
+        }
+    }
+}
+
+#[test]
+fn u7_animation_table_and_staircase_achievement() {
+    for (ty, anim) in [
+        (1i64, 1u32),
+        (26, 1),
+        (4, 4),
+        (27, 31),
+        (24, 26),
+        (3, 6),
+        (5, 2),
+        (6, 3),
+        (13, 9),
+        (14, 10),
+        (15, 11),
+        (16, 12),
+        (19, 13),
+        (8, 15),
+        (11, 16),
+        (12, 17),
+        (20, 18),
+        (21, 19),
+        (22, 20),
+        (23, 21),
+        (7, 22),
+        (2, 5),
+        (28, 32),
+    ] {
+        let r = u7_rig();
+        place_between(r.b(), &r.world, IntPair { x: 5, y: 8 }, IntPair { x: 6, y: 8 });
+        go(&r, vec![step(idx(7, 8), 10, ty, 0)]);
+        assert_eq!(r.b().st().animation_type, anim, "type {ty}");
+        if ty == 26 {
+            assert!(r.h.take().contains(&"ach:grp.staircase".to_string()));
+        }
+    }
+    // jumps: slow ones stand, fast ones use animation 25
+    for (td, anim) in [(5i64, 0u32), (20, 25)] {
+        let r = u7_rig();
+        go(&r, vec![step(idx(6, 8), td, 17, 0)]);
+        assert_eq!(r.b().st().animation_type, anim, "td {td}");
+    }
+    // an unknown traverse type keeps the animation
+    let r = u7_rig();
+    r.b().bh.borrow_mut().state.animation_type = 9;
+    go(&r, vec![step(idx(6, 8), 10, 99, 0)]);
+    assert_eq!(r.b().st().animation_type, 9);
+    // inaccessible: no move
+    let r = u7_rig();
+    go(&r, vec![step(idx(6, 8), 10, tt::INACCESSIBLE as i64, 0)]);
+}
+
+fn queue_replica(r: &Rig) {
+    let b = r.b();
+    b.base.borrow_mut().is_net = true;
+    let mut f = b.bh.borrow_mut();
+    f.next_action_delay = 1.0;
+    f.travel_fraction = 1.0;
+    f.current_net_queue_size = 2;
+    f.net_next_to_square = [IntPair { x: 6, y: 8 }, IntPair { x: 7, y: 8 }, IntPair { x: 8, y: 8 }, IntPair { x: 9, y: 8 }];
+    f.next_terrain_difficulty = [10; 4];
+    f.next_traverse_type = [1; 4];
+}
+
+fn netc(r: &Rig) -> Ctx<'_> {
+    Ctx { is_net: true, ..r.c() }
+}
+
+#[test]
+fn u7_replica_consumes_its_queue() {
+    // a move: the queue shifts down
+    let r = u7_rig();
+    queue_replica(&r);
+    run_u7(&r, &netc(&r));
+    {
+        let f = r.b().bh.borrow();
+        assert_eq!(f.current_net_queue_size, 1);
+        assert_eq!(f.net_next_to_square[0], IntPair { x: 7, y: 8 });
+        assert_eq!(f.to_square, IntPair { x: 6, y: 8 });
+    }
+    // the same square and the same interaction state: nothing moves
+    let r = u7_rig();
+    queue_replica(&r);
+    {
+        let mut f = r.b().bh.borrow_mut();
+        f.net_next_to_square[0] = f.to_square;
+        f.next_interacting[0] = false;
+    }
+    run_u7(&r, &netc(&r));
+    assert_eq!(r.b().bh.borrow().traverse_type, 0);
+    // the same square but a different interaction state: no move either, the types are taken over
+    let r = u7_rig();
+    queue_replica(&r);
+    {
+        let mut f = r.b().bh.borrow_mut();
+        f.net_next_to_square[0] = f.to_square;
+        f.next_interacting[0] = true;
+        f.next_interaction_type[0] = it::DIG as _;
+        f.next_traverse_type[0] = 1;
+    }
+    run_u7(&r, &netc(&r));
+    assert_eq!(r.b().st().interacting, 1);
+    // starting interactions with an interaction object, a workbench, or neither
+    for (ty, which) in [(it::USE_INTERACTIVE_OBJECT, 0), (it::CRAFT, 1), (it::DIG, 2)] {
+        let r = u7_rig();
+        queue_replica(&r);
+        r.h.set_obj("io_at", Some(stub(1, true)));
+        r.h.set_obj("wb_at", Some(stub(2, true)));
+        {
+            let mut f = r.b().bh.borrow_mut();
+            f.net_next_to_square[0] = f.to_square;
+            f.next_interacting[0] = true;
+            f.next_interaction_type[0] = ty as _;
+            f.next_interaction_square[0] = IntPair { x: 6, y: 7 };
+        }
+        run_u7(&r, &netc(&r));
+        let f = r.b().bh.borrow();
+        assert_eq!(f.state.interacting, 1);
+        assert_eq!(f.interaction_object.is_some(), which == 0);
+        assert_eq!(f.interaction_workbench.is_some(), which == 1);
+        drop(f);
+        assert!(r.h.take().contains(&"gatherspeed".to_string()));
+    }
+    // the interaction ended remotely
+    let r = u7_rig();
+    queue_replica(&r);
+    {
+        let mut f = r.b().bh.borrow_mut();
+        f.state.interacting = 1;
+        f.state.interaction_type = it::DIG;
+        f.next_interacting[0] = false;
+        f.tapped_npc = Some(stub(1, true));
+        f.chasing_npc = true;
+    }
+    run_u7(&r, &netc(&r));
+    let f = r.b().bh.borrow();
+    assert_eq!(f.state.interacting, 0);
+    assert!(f.tapped_npc.is_none() && !f.chasing_npc);
+    drop(f);
+    // the last queue entry: the following square is the same
+    let r = u7_rig();
+    queue_replica(&r);
+    r.b().bh.borrow_mut().current_net_queue_size = 1;
+    run_u7(&r, &netc(&r));
+    assert_eq!(r.b().bh.borrow().next_to_square, IntPair { x: 6, y: 8 });
+}
+
+fn npc_at(ty: i32, x: i32, y: i32) -> ObjRef {
+    let (o, _) = npc(ty, false);
+    o.base().borrow_mut().pos = IntPair { x, y };
+    o
+}
+
+#[test]
+fn u7_chasing_an_npc() {
+    // the npc went away
+    let r = u7_rig();
+    {
+        let mut f = r.b().bh.borrow_mut();
+        f.chasing_npc = true;
+        f.tapped_npc = None;
+    }
+    go(&r, vec![step(idx(6, 8), 10, 1, 0)]);
+    assert!(!r.b().bh.borrow().chasing_npc);
+    assert!(r.b().bh.borrow().path_needs_recalculated);
+    // the npc moved nearby: ask for a new path
+    let r = u7_rig();
+    {
+        let mut f = r.b().bh.borrow_mut();
+        f.chasing_npc = true;
+        f.tapped_npc = Some(npc_at(0x23, 8, 8));
+        f.last_known_npc_position = IntPair { x: 7, y: 8 };
+        f.state.goal_interaction_type_while_walking = it::STAB;
+    }
+    go(&r, vec![step(idx(6, 8), 10, 1, 0)]);
+    assert!(r.b().bh.borrow().path_needs_recalculated);
+    assert_eq!(r.b().bh.borrow().last_known_npc_position, IntPair { x: 8, y: 8 });
+    // too far away: ignored
+    let r = u7_rig();
+    {
+        let mut f = r.b().bh.borrow_mut();
+        f.chasing_npc = true;
+        f.tapped_npc = Some(npc_at(0x23, 200, 8));
+        f.last_known_npc_position = IntPair { x: 190, y: 8 };
+    }
+    go(&r, vec![step(idx(6, 8), 10, 1, 0)]);
+    assert!(!r.b().bh.borrow().path_needs_recalculated);
+    // an archer in range with a clear line shoots; blocked or out of range it keeps walking
+    for (tx, ty, crouch, shoot) in [(9, 8, false, true), (3, 8, true, true), (9, 30, false, false), (9, 8, false, false)] {
+        let r = u7_rig();
+        if !shoot && ty == 8 {
+            tile(&r.world, 7, 9).set_type_index(1);
+            tile(&r.world, 7, 8).set_type_index(1);
+            tile(&r.world, 8, 9).set_type_index(1);
+            tile(&r.world, 8, 8).set_type_index(1);
+        }
+        {
+            let mut f = r.b().bh.borrow_mut();
+            f.chasing_npc = true;
+            f.tapped_npc = Some(npc_at(0x23, tx, ty));
+            f.last_known_npc_position = IntPair { x: 5, y: 8 };
+            f.state.goal_interaction_type_while_walking = it::FIRE_RANGED_WEAPON;
+            if crouch {
+                f.state.animation_type = 23;
+            }
+        }
+        r.h.cit.set(it::FIRE_RANGED_WEAPON);
+        go(&r, vec![step(idx(6, 8), 10, 1, 0)]);
+        if shoot {
+            assert_eq!(r.b().st().interacting, 1, "{tx},{ty}");
+        }
+    }
+    // an interaction toward the same kind of goal: the npc position is not rechecked
+    let r = u7_rig();
+    {
+        let mut f = r.b().bh.borrow_mut();
+        f.chasing_npc = true;
+        f.tapped_npc = Some(npc_at(0x23, 8, 8));
+        f.last_known_npc_position = IntPair { x: 7, y: 8 };
+        f.state.goal_interaction_type_while_walking = it::STAB;
+        f.state.interacting = 1;
+    }
+    go(&r, vec![step(idx(6, 8), 10, 1, 0)]);
+    assert!(!r.b().bh.borrow().path_needs_recalculated);
+}
+
+#[test]
+fn u7_chasing_a_ride_object() {
+    let r = u7_rig();
+    {
+        let mut f = r.b().bh.borrow_mut();
+        f.chasing_ride_object = true;
+        f.tapped_ride_object = None;
+    }
+    go(&r, vec![step(idx(6, 8), 10, 1, 0)]);
+    assert!(!r.b().bh.borrow().chasing_ride_object);
+    let r = u7_rig();
+    {
+        let mut f = r.b().bh.borrow_mut();
+        f.chasing_ride_object = true;
+        f.tapped_ride_object = Some(npc_at(0x23, 8, 8));
+        f.last_known_ride_object_position = IntPair { x: 7, y: 8 };
+    }
+    go(&r, vec![step(idx(6, 8), 10, 1, 0)]);
+    assert!(r.b().bh.borrow().path_needs_recalculated);
+    assert_eq!(r.b().bh.borrow().last_known_ride_object_position, IntPair { x: 8, y: 8 });
+    // unchanged position, far away, or already interacting with it: skipped
+    for (x, lk, interacting) in [(8, 8, false), (200, 190, false), (8, 7, true)] {
+        let r = u7_rig();
+        {
+            let mut f = r.b().bh.borrow_mut();
+            f.chasing_ride_object = true;
+            f.tapped_ride_object = Some(npc_at(0x23, x, 8));
+            f.last_known_ride_object_position = IntPair { x: lk, y: 8 };
+            f.state.interacting = interacting as u8;
+            f.state.goal_interaction_type_while_walking = it::RIDE_BOAT;
+        }
+        go(&r, vec![step(idx(6, 8), 10, 1, 0)]);
+        assert!(!r.b().bh.borrow().path_needs_recalculated);
+    }
 }
