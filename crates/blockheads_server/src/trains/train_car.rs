@@ -1764,7 +1764,7 @@ fn _use_traits(_: &dyn RidableDynamicObject, _: &dyn TapChoiceDynamicObject) {}
 // ------------------------------------------------------------------------------------------------ tests
 
 #[cfg(test)]
-mod world_tests {
+pub(crate) mod world_tests {
     //! World-backed tests: a flat rail line on solid ground, cars placed through the
     //! real `DynamicWorld` placement path with the constructors installed as `DwOpsHooks`.
     use super::*;
@@ -1851,8 +1851,13 @@ mod world_tests {
         }
     }
 
-    fn setup(name: &str) -> (Rc<World>, Rc<DynamicWorld>) {
-        let dw = test_dw(name, 2);
+    pub(crate) fn setup(name: &str) -> (Rc<World>, Rc<DynamicWorld>) {
+        setup_wide(name, 2)
+    }
+
+    /// Like [`setup`] with a world `macro_width` macro tiles wide.
+    pub(crate) fn setup_wide(name: &str, macro_width: i32) -> (Rc<World>, Rc<DynamicWorld>) {
+        let dw = test_dw(name, macro_width);
         let world = dw.world.upgrade().unwrap();
         world.set_ops_hooks(Some(Rc::new(Loader)));
         set_ops_hooks(Rc::new(Ops));
@@ -1860,7 +1865,7 @@ mod world_tests {
     }
 
     /// Rails on `x0..=x1` at y = 10 (the rail tile holds foreground contents 98 and a Rail object).
-    fn lay_rails(world: &Rc<World>, dw: &Rc<DynamicWorld>, x0: i32, x1: i32) {
+    pub(crate) fn lay_rails(world: &Rc<World>, dw: &Rc<DynamicWorld>, x0: i32, x1: i32) {
         for x in x0..=x1 {
             tile_at_world_position_loaded(x, 10, world).unwrap().set_foreground_contents(CONTENTS_RAIL);
         }
@@ -1869,8 +1874,8 @@ mod world_tests {
         }
     }
 
-    fn find_car(dw: &Rc<DynamicWorld>, ty: i32) -> ObjRef {
-        for id in 0..64u64 {
+    pub(crate) fn find_car(dw: &Rc<DynamicWorld>, ty: i32) -> ObjRef {
+        for id in 0..1024u64 {
             if let Some(c) = dw.train_car_with_id(id) {
                 if c.object_type() == ty {
                     return c;
