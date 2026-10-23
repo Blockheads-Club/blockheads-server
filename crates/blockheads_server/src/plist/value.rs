@@ -331,9 +331,6 @@ impl PlistValue {
             // "%0.7g" for floats (`NSFloatNumber 0.1`, `1.5`).
             return super::xml_write::format_real(*value, *is_float);
         }
-        if let Some(n) = self.as_number() {
-            return n.description();
-        }
         match self {
             PlistValue::String(s) => s.s.clone(),
             PlistValue::Null => "<null>".to_string(),
@@ -361,7 +358,7 @@ impl PlistValue {
                 s.push('}');
                 s
             }
-            _ => String::new(),
+            _ => self.as_number().map(|n| n.description()).unwrap_or_default(),
         }
     }
 
@@ -481,5 +478,142 @@ mod tests {
         assert_eq!(PlistValue::string("12abc").int_value(), 12);
         assert_eq!(PlistValue::mutable_array().class_name(), "GSMutableArray");
         assert_eq!(PlistValue::array(vec![]).class_name(), "GSArray");
+    }
+
+    fn tag(origin: Origin, mutable: bool, alt: bool) -> ClassTag {
+        ClassTag { origin, mutable, alt }
+    }
+    fn st(s: &str, origin: Origin, mutable: bool, alt: bool) -> PlistValue {
+        PlistValue::String(PlistStr { s: s.to_string(), tag: tag(origin, mutable, alt) })
+    }
+    fn da(b: &[u8], origin: Origin, mutable: bool, alt: bool) -> PlistValue {
+        PlistValue::Data(PlistData { bytes: b.to_vec(), tag: tag(origin, mutable, alt) })
+    }
+
+    #[test]
+    fn wrapper_conversions() {
+        let s: PlistStr = "ab".into();
+        assert_eq!(&*s, "ab");
+        let s: PlistStr = String::from("cd").into();
+        assert_eq!(s.len(), 2);
+        let d = PlistData { bytes: vec![1, 2], tag: ClassTag::default() };
+        assert_eq!(&*d, &[1, 2]);
+        let mut a = PlistArray { items: vec![PlistValue::Null], tag: ClassTag::default() };
+        assert_eq!(a.len(), 1);
+        a.push(PlistValue::Null);
+        assert_eq!(a.items.len(), 2);
+        let mut pd = PlistDict { map: GsDict::new(), tag: ClassTag::default() };
+        pd.insert("k".to_string(), PlistValue::Null);
+        assert_eq!(pd.len(), 1);
+        assert_eq!(PlistValue::mutable_dict().class_name(), "GSMutableDictionary");
+        assert_eq!(PlistValue::dict(GsDict::new()).class_name(), "GSDictionary");
+    }
+
+    #[test]
+    fn float_conversions_follow_cvttsd2si() {
+        assert_eq!(f64_to_i32(3e10), i32::MIN);
+        assert_eq!(f64_to_i32(-2.5), -2);
+        assert_eq!(f64_to_i64(f64::NAN), i64::MIN);
+        assert_eq!(f64_to_i64(1e30), i64::MIN);
+        assert_eq!(f64_to_i64(-7.9), -7);
+        assert_eq!(f64_to_u64(5.0), 5);
+        assert_eq!(f64_to_u64(1.8446744073709552e19 / 2.0 + 4096.0), (1u64 << 63) + 4096);
+    }
+
+    #[test]
+    fn class_names_by_origin() {
+        use Origin::*;
+        assert_eq!(st("a", Xml, false, false).class_name(), "GSCInlineString");
+        assert_eq!(st("a", Xml, false, true).class_name(), "GSUnicodeInlineString");
+        assert_eq!(st("\u{20ac}", Xml, false, false).class_name(), "GSUnicodeInlineString");
+        assert_eq!(st("a", Binary, false, false).class_name(), "GSCBufferString");
+        assert_eq!(st("\u{e9}", Binary, false, false).class_name(), "GSCInlineString");
+        assert_eq!(st("\u{20ac}", Binary, false, false).class_name(), "GSUnicodeBufferString");
+        assert_eq!(st("a", Json, false, false).class_name(), "GSCBufferString");
+        assert_eq!(st("\u{20ac}", Json, false, false).class_name(), "GSUnicodeBufferString");
+        assert_eq!(st("a", OpenStep, false, false).class_name(), "GSMutableString");
+        assert_eq!(st("\u{20ac}", OpenStep, false, false).class_name(), "GSUnicodeBufferString");
+        assert_eq!(st("a", Built, false, false).class_name(), "GSCInlineString");
+        assert_eq!(st("\u{20ac}", Built, false, false).class_name(), "GSUnicodeInlineString");
+        assert_eq!(st("a", Built, true, false).class_name(), "GSMutableString");
+        assert_eq!(da(b"", OpenStep, false, false).class_name(), "NSMutableDataMalloc");
+        assert_eq!(da(b"", Xml, false, false).class_name(), "NSDataStatic");
+        assert_eq!(da(b"", Xml, false, true).class_name(), "NSDataMalloc");
+        assert_eq!(da(b"x", Xml, false, false).class_name(), "NSDataMalloc");
+        assert_eq!(PlistValue::date(1.0).class_name(), "NSGDate");
+        assert_eq!(PlistValue::UInt(u64::MAX).class_name(), "NSUnsignedLongLongNumber");
+        assert_eq!(PlistValue::real_f32(1.0).class_name(), "NSFloatNumber");
+        assert_eq!(PlistValue::real_f64(1.0).class_name(), "NSDoubleNumber");
+        assert_eq!(PlistValue::Bool(true).class_name(), "NSBoolNumber");
+        assert_eq!(PlistValue::Null.class_name(), "NSNull");
+    }
+
+    #[test]
+    fn equality_across_kinds() {
+        let a = PlistValue::array(vec![PlistValue::string("x"), PlistValue::data(vec![1])]);
+        let b = PlistValue::array(vec![PlistValue::string("x"), PlistValue::data(vec![1])]);
+        assert!(a.is_equal(&b));
+        assert!(!a.is_equal(&PlistValue::array(vec![])));
+        assert!(PlistValue::date(2.0).is_equal(&PlistValue::date(2.0)));
+        assert!(PlistValue::Null.is_equal(&PlistValue::Null));
+        assert!(!PlistValue::Null.is_equal(&PlistValue::string("x")));
+        assert!(PlistValue::UInt(u64::MAX).is_equal(&PlistValue::UInt(u64::MAX)));
+        let mut m1 = GsDict::new();
+        m1.insert("k".to_string(), PlistValue::int(1));
+        let mut m2 = GsDict::new();
+        m2.insert("k".to_string(), PlistValue::int(1));
+        let mut m3 = GsDict::new();
+        m3.insert("k".to_string(), PlistValue::int(2));
+        assert!(PlistValue::dict(m1.clone()).is_equal(&PlistValue::dict(m2)));
+        assert!(!PlistValue::dict(m1.clone()).is_equal(&PlistValue::dict(m3)));
+        assert!(!PlistValue::dict(m1).is_equal(&PlistValue::dict(GsDict::new())));
+    }
+
+    #[test]
+    fn descriptions() {
+        assert_eq!(PlistValue::real_f64(1.5).description(), "1.5");
+        assert_eq!(PlistValue::int(7).description(), "7");
+        assert_eq!(PlistValue::string("s").description(), "s");
+        assert_eq!(PlistValue::Null.description(), "<null>");
+        assert_eq!(PlistValue::date(2.0).description(), "2");
+        assert_eq!(PlistValue::data(vec![0, 1, 2, 3, 4]).description(), "<00010203 04>");
+        assert_eq!(PlistValue::array(vec![PlistValue::int(1), PlistValue::int(2)]).description(), "(1, 2)");
+        let mut m = GsDict::new();
+        m.insert("a".to_string(), PlistValue::int(1));
+        assert_eq!(PlistValue::dict(m).description(), "{a = 1; }");
+    }
+
+    #[test]
+    fn value_accessors_by_kind() {
+        let d = PlistValue::dict(GsDict::new());
+        assert!(d.object_for_key("k").is_none());
+        assert!(PlistValue::Null.object_for_key("k").is_none());
+        let u = PlistValue::UInt(7);
+        assert_eq!((u.int_value(), u.unsigned_int_value(), u.long_long_value()), (7, 7, 7));
+        assert_eq!(u.unsigned_long_value(), 7);
+        assert_eq!((u.float_value(), u.double_value(), u.bool_value()), (7.0, 7.0, true));
+        let r = PlistValue::real_f64(2.75);
+        assert_eq!((r.unsigned_int_value(), r.long_long_value(), r.unsigned_long_value()), (2, 2, 2));
+        assert_eq!((r.float_value(), r.double_value(), r.bool_value()), (2.75, 2.75, true));
+        assert_eq!(PlistValue::real_f32(0.5).long_long_value(), 0);
+        let s = PlistValue::string("42.5");
+        assert_eq!((s.unsigned_int_value(), s.long_long_value()), (42, 42));
+        assert_eq!((s.float_value(), s.double_value()), (42.5, 42.5));
+        assert!(s.bool_value() && !PlistValue::string("0").bool_value());
+        assert!(PlistValue::string("YES").bool_value());
+        let b = PlistValue::Bool(true);
+        assert_eq!((b.int_value(), b.long_long_value(), b.float_value(), b.double_value()), (1, 1, 1.0, 1.0));
+        let i = PlistValue::int(-3);
+        assert_eq!((i.float_value(), i.double_value(), i.bool_value()), (-3.0, -3.0, true));
+        assert_eq!(PlistValue::int(5).as_str(), None);
+        assert_eq!((PlistValue::int(5).int_value(), PlistValue::UInt(9).int_value(), b.bool_value()), (5, 9, true));
+        let n = PlistValue::Null;
+        assert_eq!(
+            (n.int_value(), n.long_long_value(), n.float_value(), n.double_value(), n.bool_value()),
+            (0, 0, 0.0, 0.0, false)
+        );
+        assert_eq!(n.unsigned_int_value(), 0);
+        assert_eq!(n.unsigned_long_value(), 0);
+        assert_eq!(PlistValue::Bool(true).unsigned_long_value(), 1);
     }
 }

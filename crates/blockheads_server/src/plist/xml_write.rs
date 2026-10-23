@@ -150,24 +150,6 @@ mod tests {
     use crate::foundation::gsdict::GsDict;
 
     #[test]
-    fn real_double_and_float_vectors() {
-        for (file, is_float) in [("xml_real_double.txt", false), ("xml_real_float.txt", true)] {
-            let Ok(txt) = std::fs::read_to_string(crate::testenv::plist_golden(&format!("{file}"))) else { return };
-            let mut n = 0;
-            for l in txt.lines().filter(|l| !l.starts_with('#') && !l.is_empty()) {
-                let mut it = l.split(' ');
-                let hex = it.next().unwrap();
-                let bits = u64::from_str_radix(hex, 16).unwrap();
-                let text = it.next().unwrap();
-                let v = if hex.len() == 8 { f32::from_bits(bits as u32) as f64 } else { f64::from_bits(bits) };
-                assert_eq!(format_real(v, is_float), text, "{l}");
-                n += 1;
-            }
-            assert!(n > 1000);
-        }
-    }
-
-    #[test]
     fn real_edge_cases() {
         assert_eq!(format_real(0.0, false), "0");
         assert_eq!(format_real(-0.0, false), "-0");
@@ -216,47 +198,28 @@ mod tests {
     }
 
     #[test]
-    fn key_order_pairs() {
-        let Ok(txt) = std::fs::read_to_string(crate::testenv::plist_golden("nscompare_pairs.txt")) else { return };
-        let dec = |s: &str| -> String {
-            let u: Vec<u16> =
-                s.split(' ').filter(|x| !x.is_empty()).map(|h| u16::from_str_radix(h, 16).unwrap()).collect();
-            String::from_utf16_lossy(&u)
-        };
-        let mut bad = 0;
-        let mut n = 0;
-        for l in txt.lines().filter(|l| !l.starts_with('#') && !l.is_empty()) {
-            let (r, rest) = l.split_once(' ').unwrap();
-            let (a, b) = rest.split_once('|').unwrap();
-            let (a, b) = (dec(a), dec(b));
-            if a.contains('\u{FFFD}') || b.contains('\u{FFFD}') {
-                continue;
-            }
-            n += 1;
-            let want: i32 = r.parse().unwrap();
-            let got = match ns_string_compare(&a, &b) {
-                std::cmp::Ordering::Less => -1,
-                std::cmp::Ordering::Equal => 0,
-                std::cmp::Ordering::Greater => 1,
-            };
-            if got != want {
-                bad += 1;
-            }
-        }
-        assert!(n > 10000);
-        assert_eq!(bad, 0);
-    }
-
-    #[test]
-    fn all_bmp_strings_file() {
-        let Ok(want) = std::fs::read(crate::testenv::plist_golden("xml_all_bmp_strings.xml")) else { return };
-        let mut items = Vec::new();
-        for c in 0u32..=0xFFFF {
-            if (0xD800..0xE000).contains(&c) || (0xFDD0..=0xFDEF).contains(&c) || c == 0xFFFE || c == 0xFFFF {
-                continue;
-            }
-            items.push(PlistValue::string(format!("X{}Y", char::from_u32(c).unwrap())));
-        }
-        assert_eq!(write_xml(&PlistValue::array(items)), want);
+    fn every_node_kind_and_key_order() {
+        let mut d: GsDict<String, PlistValue> = GsDict::new();
+        d.insert("\u{e9}".into(), PlistValue::UInt(u64::MAX));
+        d.insert("z".into(), PlistValue::real_f64(1.5));
+        d.insert("a".into(), PlistValue::date(0.0));
+        d.insert("m".into(), PlistValue::data(vec![1, 2, 3]));
+        d.insert("n".into(), PlistValue::string("x"));
+        d.insert("b".into(), PlistValue::Bool(false));
+        let s = String::from_utf8(write_xml(&PlistValue::dict(d))).unwrap();
+        let pos = |k: &str| s.find(&format!("<key>{k}</key>")).unwrap();
+        assert!(pos("a") < pos("b") && pos("b") < pos("m") && pos("m") < pos("n") && pos("n") < pos("z"));
+        assert!(s.contains("<integer>18446744073709551615</integer>"));
+        assert!(s.contains("<real>1.5</real>"));
+        assert!(s.contains("<date>2001-01-01T00:00:00Z</date>"));
+        assert!(s.contains("<data>\nAQID</data>"));
+        assert!(s.contains("<false/>"));
+        assert_eq!(ns_string_compare("\u{e9}", "e"), std::cmp::Ordering::Greater);
+        assert_eq!(ns_string_compare("e", "\u{e9}"), std::cmp::Ordering::Less);
+        assert_eq!(ns_string_compare("\u{e9}", "\u{e9}"), std::cmp::Ordering::Equal);
     }
 }
+
+#[cfg(test)]
+#[path = "xml_write_golden.rs"]
+mod golden;
