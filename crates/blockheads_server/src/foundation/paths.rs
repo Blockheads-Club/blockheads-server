@@ -147,4 +147,21 @@ mod tests {
         assert_eq!(saves_dir(), "/home/bh/GNUstep/Library/ApplicationSupport/TheBlockheads/saves/");
         assert_eq!(search_path_application_support(), "/home/bh/GNUstep/Library/ApplicationSupport");
     }
+
+    #[test]
+    fn data_dir_override_and_home_fallback() {
+        std::env::set_var("BLOCKHEADS_DATA_DIR", "/srv/bh/data/");
+        assert_eq!(appsup(), "/srv/bh/data");
+        assert_eq!(search_path_application_support(), "/srv/bh");
+        std::env::set_var("BLOCKHEADS_DATA_DIR", "relative");
+        assert_eq!(search_path_application_support(), "relative");
+        std::env::remove_var("BLOCKHEADS_DATA_DIR");
+        set_data_dir_override(Some("/thread/dir".to_string()));
+        assert_eq!(appsup(), "/thread/dir");
+        set_data_dir_override(None);
+        set_home_for_test("");
+        assert_eq!(home_dir(), crate::foundation::sys::passwd_home_dir().unwrap_or_else(|| "/".to_string()));
+        set_home_for_test("/home/bh");
+        assert_eq!(last_path_component(""), "");
+    }
 }

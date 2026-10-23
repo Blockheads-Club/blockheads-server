@@ -556,4 +556,22 @@ mod tests {
             assert_eq!(d.bucket_count(), m.buckets);
         }
     }
+
+    #[test]
+    fn defaults_and_small_paths() {
+        let mut d: GsDict<String, i32> = GsDict::default();
+        assert!(d.get_mut(&"x".to_string()).is_none());
+        d.insert("x".to_string(), 1);
+        *d.get_mut(&"x".to_string()).unwrap() += 1;
+        assert_eq!(d.get(&"x".to_string()), Some(&2));
+        let n = d.bucket_count();
+        d.resize(n);
+        assert_eq!(d.bucket_count(), n);
+        let mut s: GsSet<String> = GsSet::default();
+        s.insert("a".to_string());
+        s.insert("b".to_string());
+        assert_eq!(s.iter().count(), 2);
+        let c = GsSet::copy_from_set(&s);
+        assert_eq!(c.len(), s.len());
+    }
 }

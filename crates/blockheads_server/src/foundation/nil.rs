@@ -39,4 +39,15 @@ mod tests {
         assert_eq!(nil_count(Some(&vec![1, 2])), 2);
         assert_eq!(NIL_FLOAT, 0.0);
     }
+
+    #[test]
+    fn nil_helpers() {
+        assert_eq!(nil_or(Some(2), 9, |v| v * 2), 4);
+        assert_eq!(nil_or(None::<i32>, 9, |v| v * 2), 9);
+        assert_eq!(nil_or_default(Some(2), |v| v + 1), 3);
+        assert_eq!(nil_or_default(None::<i32>, |v| v + 1), 0);
+        assert_eq!(nil_count(Some(&vec![1, 2])), 2);
+        assert_eq!(nil_count::<i32>(None), 0);
+        assert_eq!(NIL_FLOAT, 0.0);
+    }
 }

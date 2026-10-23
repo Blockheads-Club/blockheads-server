@@ -644,6 +644,22 @@ pub fn data_from_hex_string(s: &str) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn small_edges() {
+        assert_eq!(gs_hash("jxtzig"), 0x0fff_ffff);
+        assert!(!bool_value("0") && bool_value("007") && !bool_value("00"));
+        let ex = crate::foundation::exception::catch_ns(|| substring_from_index("abc", 5)).unwrap_err();
+        assert_eq!(ex.name, "NSRangeException");
+        assert_eq!(substring_from_index("abc", 1), "bc");
+        assert!(bool_value("  5") && bool_value("\t+1") && !bool_value("-") && !bool_value("   "));
+        assert_eq!(double_value("  1.5"), 1.5);
+        assert_eq!(int_value("  12"), 12);
+        assert!(has_suffix("caf\u{e9}", "\u{e9}"));
+        assert!(!has_suffix("caf\u{e9}", "x\u{e9}"));
+        assert!(!has_suffix("abc", ""));
+        assert_eq!(components_separated_by_string("abc", ""), vec!["abc".to_string()]);
+    }
+
     use super::*;
     use crate::foundation::exception::catch_ns;
 

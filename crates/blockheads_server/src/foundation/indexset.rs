@@ -277,4 +277,32 @@ mod tests {
         big.add_index(0x1_0000_0005);
         assert_eq!(words(&big.serialized_data_raw()), vec![0x171e8f, 5, 1]);
     }
+
+    #[test]
+    fn range_edges_and_serialisation_merging() {
+        let mut s = IndexSet::new();
+        s.add_indexes_in_range(5, 3);
+        s.remove_indexes_in_range(6, 0);
+        s.add_indexes_in_range(20, 2);
+        s.remove_indexes_in_range(10, 5);
+        assert_eq!(s.ranges(), &[(5, 3), (20, 2)]);
+        assert!(!s.contains_index(2) && s.contains_index(6));
+        s.remove_indexes_in_range(20, 2);
+        assert_eq!(s.ranges(), &[(5, 3)]);
+        assert_eq!(s.index_greater_than_index(5), Some(6));
+        assert_eq!(s.index_greater_than_index(7), None);
+        assert_eq!(s.index_greater_than_index(0), Some(5));
+        // adjacent runs that were stored separately merge in the serialised word list
+        let mut t = IndexSet::new();
+        t.add_index(1);
+        t.add_index(3);
+        t.add_index(2);
+        assert_eq!(IndexSet::from_serialized_data(Some(&t.serialized_data_raw())).ranges(), t.ranges());
+        // 32-bit wrap of the stored words: runs one apart modulo 2^32 are written as one run
+        let mut w = IndexSet::new();
+        w.add_index(1);
+        w.add_index((1 << 32) + 2);
+        assert_eq!(w.serialized_data_raw().len(), 3 * 4);
+        assert_eq!(IndexSet::new().serialized_data(), IndexSet::new().serialized_data_raw());
+    }
 }

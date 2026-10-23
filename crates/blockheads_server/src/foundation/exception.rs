@@ -246,4 +246,22 @@ mod tests {
             "{e}"
         );
     }
+
+    #[test]
+    fn nil_reason_and_class_names() {
+        let ex = catch_ns(|| ns_raise_nil_reason("NSGenericException")).unwrap_err();
+        assert_eq!((ex.name.as_str(), ex.reason), ("NSGenericException", None));
+        try_catch_handler_perform("quiet", || {});
+        let name_reason = |f: fn()| {
+            let ex = catch_ns(f).unwrap_err();
+            (ex.name, ex.reason.unwrap())
+        };
+        assert_eq!(name_reason(|| range_exception_index(5, 2, "objectAtIndex:")).0, "NSRangeException");
+        assert_eq!(name_reason(|| range_exception_beyond_size("subdataWithRange:", 5, 0, 3)).0, "NSRangeException");
+        assert!(name_reason(|| unrecognized_selector("GSArray", "foo")).1.contains("does not recognize foo"));
+        assert!(name_reason(|| nil_argument("NSString", "length")).1.contains("nil string argument"));
+        assert_eq!(class_name_for_string("a", true, false), "GSMutableString");
+        assert_eq!(class_name_for_string("a", false, false), "GSCInlineString");
+        assert_eq!(class_name_for_string("\u{20ac}", false, true), "GSUnicodeBufferString");
+    }
 }

@@ -18,12 +18,12 @@ pub enum CArg<'a> {
 /// `%.Nf`. Rust's `{:.N}` is exact and equals glibc.
 pub fn fmt_f(v: f64, precision: usize) -> String {
     if !v.is_finite() {
-        return nonfinite(v, false);
+        return nonfinite(v);
     }
     format!("{:.*}", precision, v)
 }
 
-fn nonfinite(v: f64, upper: bool) -> String {
+fn nonfinite(v: f64) -> String {
     let s = if v.is_nan() {
         if v.is_sign_negative() {
             "-nan"
@@ -35,17 +35,13 @@ fn nonfinite(v: f64, upper: bool) -> String {
     } else {
         "inf"
     };
-    if upper {
-        s.to_uppercase()
-    } else {
-        s.to_string()
-    }
+    s.to_string()
 }
 
 /// `%.Ne`: at least two exponent digits.
 pub fn fmt_e(v: f64, precision: usize) -> String {
     if !v.is_finite() {
-        return nonfinite(v, false);
+        return nonfinite(v);
     }
     let s = format!("{:.*e}", precision, v);
     let (m, e) = s.split_once('e').unwrap();
@@ -55,7 +51,7 @@ pub fn fmt_e(v: f64, precision: usize) -> String {
 
 fn fmt_g_impl(v: f64, precision: usize, alt: bool) -> String {
     if !v.is_finite() {
-        return nonfinite(v, false);
+        return nonfinite(v);
     }
     let p = if precision == 0 { 1 } else { precision };
     if v == 0.0 {
@@ -510,6 +506,50 @@ mod tests {
             (0.0001, "0.0001"),
         ] {
             assert_eq!(ns_description_double(v), s);
+        }
+    }
+
+    #[test]
+    fn sprintf_edge_forms() {
+        use CArg::*;
+        let cases: Vec<(&str, Vec<CArg>, &str)> = vec![
+            ("100%", vec![], "100%"),
+            ("%5", vec![], ""),
+            ("%-*d|", vec![I32(-4), I32(7)], "7   |"),
+            ("%.*f", vec![I32(2), F64(1.0)], "1.00"),
+            ("%.*f", vec![I32(-1), F64(1.0)], "1.000000"),
+            ("%#X", vec![U32(255)], "0XFF"),
+            ("%hhu", vec![U32(300)], "44"),
+            ("%hu", vec![U32(70000)], "4464"),
+            ("%hhd", vec![I32(300)], "44"),
+            ("%s", vec![], "(null)"),
+            ("%d", vec![F64(1.0)], "0"),
+            ("%s", vec![I32(3)], "(null)"),
+            ("%.2s", vec![Str("h\u{e9}llo")], "h\u{fffd}"),
+            ("%f", vec![], "0.000000"),
+            ("%f", vec![I32(1)], "0.000000"),
+            ("%#.0e", vec![F64(5.0)], "5.e+00"),
+            ("%#g", vec![F64(1.0)], "1.00000"),
+            ("%#.3g", vec![F64(1e-10)], "1.00e-10"),
+            ("%E", vec![F64(f64::INFINITY)], "INF"),
+            ("%G", vec![F64(f64::NAN)], "NAN"),
+            ("%y", vec![], "%y"),
+            ("%ld %lld %zd", vec![I64(1), I64(2), I64(3)], "1 2 3"),
+            ("%p", vec![Ptr(255)], "0xff"),
+            ("%c", vec![Char(65)], "A"),
+            ("%d", vec![Ptr(5)], "5"),
+            ("%d", vec![Char(66)], "66"),
+            ("%u", vec![I64(-1)], "4294967295"),
+            ("%#.1g", vec![F64(1e10)], "1.e+10"),
+            ("%.2@", vec![Str("h\u{e9}llo")], "h\u{e9}"),
+            ("%p", vec![Ptr(0)], "(nil)"),
+            ("%f", vec![F64(-f64::NAN)], "-nan"),
+            ("%e", vec![F64(f64::NEG_INFINITY)], "-inf"),
+        ];
+        assert_eq!(ns_description_double(0.1), "0.1");
+        assert_eq!(ns_description_float(0.1), "0.1");
+        for (f, a, want) in cases {
+            assert_eq!(sprintf(f, &a), want, "{f}");
         }
     }
 }

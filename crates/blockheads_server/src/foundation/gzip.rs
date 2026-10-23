@@ -17,9 +17,9 @@ pub fn gzip_deflate(data: &[u8]) -> Vec<u8> {
         }
         let in_pos = c.total_in() as usize;
         match c.compress_vec(&data[in_pos..], &mut out, FlushCompress::Finish) {
-            Ok(Status::StreamEnd) => break,
+            // deflate's return code is ignored by the original
+            Ok(Status::StreamEnd) | Err(_) => break,
             Ok(_) => continue,
-            Err(_) => break, // deflate's return code is ignored by the original
         }
     }
     // The gzip header's OS byte is zlib's compile-time OS_CODE: 3 (Unix) in the original Linux server, but
@@ -52,13 +52,10 @@ pub fn gzip_inflate(data: &[u8]) -> Option<Vec<u8>> {
         let before_out = d.total_out();
         match d.decompress_vec(&data[in_pos.min(data.len())..], &mut out, FlushDecompress::Sync) {
             Ok(Status::StreamEnd) => return Some(out),
-            Ok(Status::Ok) => {
+            // No progress with room left in the output means the input ended early (zlib reports that as a buffer
+            // error); the output is grown before every call, so it is never full here.
+            Ok(Status::Ok | Status::BufError) => {
                 if d.total_in() == before_in && d.total_out() == before_out && out.capacity() != out.len() {
-                    return None; // no progress: truncated input
-                }
-            }
-            Ok(Status::BufError) => {
-                if out.capacity() != out.len() {
                     return None;
                 }
             }
@@ -130,5 +127,22 @@ mod tests {
         let z = [0x78, 0x9c, 0xcb, 0x48, 0xcd, 0xc9, 0xc9, 0x07, 0x00, 0x06, 0x2c, 0x02, 0x15];
         assert_eq!(gzip_inflate(&z).unwrap(), b"hello");
         assert_eq!(gzip_inflate(b"this is not compressed data"), None);
+    }
+
+    #[test]
+    fn corrupt_and_truncated_streams() {
+        let good = gzip_deflate(&vec![7u8; 5000]);
+        assert_eq!(gzip_inflate(&good).unwrap(), vec![7u8; 5000]);
+        for cut in 1..good.len() {
+            assert!(gzip_inflate(&good[..cut]).is_none(), "cut at {cut}");
+        }
+        assert!(gzip_inflate(&good[..good.len() / 2]).is_none());
+        assert!(gzip_inflate(&good[..good.len() - 4]).is_none());
+        let mut bad = good.clone();
+        bad[12] ^= 0xff;
+        bad[13] ^= 0xff;
+        assert!(gzip_inflate(&bad).is_none());
+        assert!(gzip_inflate(b"not compressed at all").is_none());
+        assert_eq!(gzip_inflate(&[]).unwrap(), Vec::<u8>::new());
     }
 }

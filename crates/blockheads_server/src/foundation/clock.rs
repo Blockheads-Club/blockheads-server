@@ -179,4 +179,25 @@ mod tests {
         set_virtual(None);
         assert!(!is_virtual());
     }
+
+    #[test]
+    fn real_clock_env_switch_and_sleep() {
+        let _g = L.lock().unwrap_or_else(|e| e.into_inner());
+        set_virtual(None);
+        let a = monotonic_seconds();
+        sleep_for(0.001);
+        sleep_for(-1.0);
+        assert!(monotonic_seconds() > a && !is_virtual());
+        std::env::set_var("BH_VIRTUAL_CLOCK", "not a number");
+        init_from_env();
+        assert!(!is_virtual());
+        std::env::set_var("BH_VIRTUAL_CLOCK", " 1000.5 ");
+        init_from_env();
+        std::env::remove_var("BH_VIRTUAL_CLOCK");
+        assert!(is_virtual());
+        sleep_for(2.0);
+        assert_eq!(monotonic_seconds(), 2.0);
+        assert_eq!(unix_time(), 1002);
+        set_virtual(None);
+    }
 }

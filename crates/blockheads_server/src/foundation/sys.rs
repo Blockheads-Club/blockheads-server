@@ -37,9 +37,26 @@ pub fn write_stderr(bytes: &[u8]) {
     let _ = e.flush();
 }
 
+/// A process that dies by a signal never writes its coverage counters; coverage builds write them first.
+#[cfg(coverage)]
+#[allow(unexpected_cfgs)]
+fn flush_coverage() {
+    extern "C" {
+        fn __llvm_profile_write_file() -> i32;
+    }
+    // SAFETY: the profiling runtime is linked into every coverage build; the call takes no arguments.
+    unsafe {
+        __llvm_profile_write_file();
+    }
+}
+#[cfg(not(coverage))]
+#[allow(unexpected_cfgs)]
+fn flush_coverage() {}
+
 /// Die like a NULL dereference in the original (SIGSEGV on Unix, abort elsewhere). Only used by the
 /// `faithful-crashes` paths.
 pub fn faithful_segv() -> ! {
+    flush_coverage();
     #[cfg(unix)]
     // SAFETY: restoring the default disposition (Rust's runtime installs a stack-overflow handler that would
     // swallow a raised SIGSEGV), then raising it.
@@ -52,6 +69,7 @@ pub fn faithful_segv() -> ! {
 
 /// `abort()`.
 pub fn abort() -> ! {
+    flush_coverage();
     std::process::abort()
 }
 
@@ -61,11 +79,12 @@ pub fn page_size() -> u64 {
     {
         // SAFETY: sysconf has no preconditions.
         let p = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
-        if p > 0 {
-            return p as u64;
-        }
+        u64::try_from(p).ok().filter(|p| *p > 0).unwrap_or(4096)
     }
-    4096
+    #[cfg(not(unix))]
+    {
+        4096
+    }
 }
 
 /// Process memory as `(total, resident, shared)` in bytes on hosts without `/proc/self/statm`: the
@@ -162,10 +181,7 @@ pub fn host_name() -> String {
         let mut buf = [0u8; 256];
         // SAFETY: buffer length passed.
         let rc = unsafe { libc::gethostname(buf.as_mut_ptr() as *mut libc::c_char, buf.len()) };
-        if rc != 0 {
-            return String::new();
-        }
-        let n = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+        let n = if rc != 0 { 0 } else { buf.iter().position(|&b| b == 0).unwrap_or(buf.len()) };
         String::from_utf8_lossy(&buf[..n]).into_owned()
     }
     #[cfg(not(unix))]
@@ -183,19 +199,25 @@ pub fn passwd_home_dir() -> Option<String> {
         let mut buf = vec![0u8; 4096];
         let mut res: *mut libc::passwd = std::ptr::null_mut();
         let rc = libc::getpwuid_r(libc::getuid(), &mut pwd, buf.as_mut_ptr() as *mut libc::c_char, buf.len(), &mut res);
-        if rc == 0 && !res.is_null() && !pwd.pw_dir.is_null() {
-            return Some(std::ffi::CStr::from_ptr(pwd.pw_dir).to_string_lossy().into_owned());
-        }
+        let found = rc == 0 && !res.is_null() && !pwd.pw_dir.is_null();
+        found.then(|| std::ffi::CStr::from_ptr(pwd.pw_dir).to_string_lossy().into_owned())
     }
-    None
+    #[cfg(not(unix))]
+    {
+        None
+    }
 }
 
 /// Wall clock as (unix seconds, microseconds).
 pub fn wall_time() -> (i64, u32) {
-    match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+    wall_parts(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|e| e.duration()))
+}
+
+/// Seconds and microseconds of a time `Ok(after the epoch)` or `Err(before the epoch)`.
+fn wall_parts(since_epoch: Result<std::time::Duration, std::time::Duration>) -> (i64, u32) {
+    match since_epoch {
         Ok(d) => (d.as_secs() as i64, d.subsec_micros()),
-        Err(e) => {
-            let d = e.duration();
+        Err(d) => {
             let (s, us) = (d.as_secs() as i64, d.subsec_micros());
             if us == 0 {
                 (-s, 0)
@@ -247,5 +269,101 @@ pub fn local_time(sec: i64) -> (i32, u32, u32, u32, u32, u32) {
             Some(t) => (t.year(), t.month(), t.day(), t.hour(), t.minute(), t.second()),
             None => (1970, 1, 1, 0, 0, 0),
         }
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+
+    /// Re-runs this test binary on the `child` test below with `BH_TEST_CHILD=kind`: the functions that end the
+    /// process cannot run in the test process itself.
+    pub(crate) fn run_child(kind: &str) -> std::process::Output {
+        std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "foundation::sys::tests::child", "--nocapture", "--test-threads=1"])
+            .env("BH_TEST_CHILD", kind)
+            .output()
+            .unwrap()
+    }
+
+    /// Does nothing in the test run; the process-ending checks below start it with `BH_TEST_CHILD` set.
+    #[test]
+    fn child() {
+        use crate::foundation::exception::*;
+        let ex = NsException { name: "NSRangeException".into(), reason: Some("r".into()) };
+        match std::env::var("BH_TEST_CHILD").as_deref() {
+            Ok("segv") => faithful_segv(),
+            Ok("abort") => abort(),
+            Ok("block") => gnustep_block_abort(),
+            Ok("exit") => exit(7),
+            Ok("uncaught") => uncaught_exception_exit(&ex, "./bh"),
+            Ok("trycatch") => try_catch_handler_perform("doIdle", || ns_raise("NSRangeException", "r")),
+            Ok("hook") => {
+                install_quiet_panic_hook();
+                assert!(catch_ns(|| ns_raise("X", "y")).is_err());
+                assert!(std::panic::catch_unwind(|| std::panic::panic_any(NsException {
+                    name: "Z".into(),
+                    reason: None
+                }))
+                .is_err());
+                exit(if std::panic::catch_unwind(|| panic!("other")).is_err() { 3 } else { 4 })
+            }
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn process_ending_functions() {
+        use std::os::unix::process::ExitStatusExt;
+        assert_eq!(run_child("segv").status.signal(), Some(libc::SIGSEGV));
+        assert_eq!(run_child("abort").status.signal(), Some(libc::SIGABRT));
+        let block = run_child("block");
+        assert_eq!(block.status.signal(), Some(libc::SIGABRT));
+        assert!(String::from_utf8_lossy(&block.stderr).contains("unknown type ?16"));
+        assert_eq!(run_child("exit").status.code(), Some(7));
+        let un = run_child("uncaught");
+        assert_eq!(un.status.code(), Some(1));
+        assert!(String::from_utf8_lossy(&un.stderr).contains("./bh: Uncaught exception NSRangeException, reason: r"));
+        let tc = run_child("trycatch");
+        assert_eq!(tc.status.code(), Some(0));
+        assert!(String::from_utf8_lossy(&tc.stderr).contains("Exiting due to exception in 'doIdle'"));
+        let hook = run_child("hook");
+        assert_eq!(hook.status.code(), Some(3));
+        assert!(String::from_utf8_lossy(&hook.stderr).contains("other"));
+        assert!(!String::from_utf8_lossy(&hook.stderr).contains("NSRangeException"));
+    }
+
+    #[test]
+    fn host_queries() {
+        assert!(page_size().is_power_of_two());
+        assert_eq!(process_memory(), None);
+        assert!(!host_name().is_empty());
+        assert!(passwd_home_dir().is_some());
+        assert!(monotonic() > 0.0);
+        let (y, m, d, ..) = local_time(0);
+        assert!((1969..=1970).contains(&y) && (1..=12).contains(&m) && (1..=31).contains(&d));
+        assert_eq!(os_str_bytes(std::ffi::OsStr::new("a b")), b"a b");
+        write_stderr(b"");
+        assert!(wall_time().0 > 1_600_000_000);
+    }
+
+    #[test]
+    fn hosted_exit_unwinds_instead_of_exiting() {
+        assert!(!is_hosted());
+        set_hosted(true);
+        let r = std::panic::catch_unwind(|| exit(3));
+        set_hosted(false);
+        assert_eq!(r.unwrap_err().downcast_ref::<HostExit>().map(|h| h.0), Some(3));
+        assert!(!is_hosted());
+    }
+
+    #[test]
+    fn error_text_and_pre_epoch_time() {
+        assert_eq!(strerror(&std::io::Error::from_raw_os_error(2)), "No such file or directory");
+        assert_eq!(strerror(&std::io::Error::other("plain")), "plain");
+        let d = std::time::Duration::new(5, 250_000_000);
+        assert_eq!(wall_parts(Ok(d)), (5, 250_000));
+        assert_eq!(wall_parts(Err(d)), (-6, 750_000));
+        assert_eq!(wall_parts(Err(std::time::Duration::from_secs(3))), (-3, 0));
     }
 }

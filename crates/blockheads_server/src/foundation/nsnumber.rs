@@ -229,4 +229,27 @@ mod tests {
         assert_eq!(order, want);
         assert_eq!(d.get(&NsNumberKey(NsNumber::Int(7))), Some(&7));
     }
+
+    #[test]
+    fn value_conversions_per_kind() {
+        assert!(NsNumber::Bool(true).is_equal(&NsNumber::UInt(1)));
+        assert!(NsNumber::Int(2).is_equal(&NsNumber::Double(2.0)));
+        assert!(!NsNumber::Float(0.5).is_equal(&NsNumber::Double(0.25)));
+        assert!(!NsNumber::Int(2).is_equal(&NsNumber::UInt(3)));
+        assert_eq!(NsNumber::Bool(true).int_value(), 1);
+        assert_eq!(NsNumber::Int(-5).int_value(), -5);
+        assert_eq!(NsNumber::UInt(7).int_value(), 7);
+        assert_eq!(NsNumber::Float(2.75).int_value(), 2);
+        assert_eq!(NsNumber::Double(-2.75).int_value(), -2);
+        assert_eq!(NsNumber::Bool(true).double_value(), 1.0);
+        assert_eq!(NsNumber::Int(-5).double_value(), -5.0);
+        assert_eq!(NsNumber::UInt(7).double_value(), 7.0);
+        assert_eq!(NsNumber::Float(0.5).double_value(), 0.5);
+        assert_eq!(NsNumber::Double(0.25).double_value(), 0.25);
+        assert_eq!(NsNumber::UInt(u64::MAX).description(), "18446744073709551615");
+        assert_eq!(NsNumber::Bool(false).description(), "0");
+        assert_eq!(NsNumber::Int(-3).description(), "-3");
+        assert_eq!(NsNumber::Double(1.5).description(), "1.5");
+        assert_eq!(NsNumber::Float(1.5).description(), "1.5");
+    }
 }
