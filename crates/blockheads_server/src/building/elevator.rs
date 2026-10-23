@@ -877,3 +877,183 @@ mod tests {
         assert!(!sh.solid_tile());
     }
 }
+
+#[cfg(test)]
+mod more_tests {
+    use super::super::column::testkit::*;
+    use super::*;
+    use crate::dynworld::lookups::{set_ops_hooks, DwOpsHooksStub, NullOpsHooks};
+    use crate::path::path_creator::{set_dynamic_world_hooks, PathDynamicWorldHooks};
+    use crate::path::wire_path::WirePowerSource;
+    use std::cell::Cell;
+
+    struct ElevOps;
+    impl DwOpsHooksStub for ElevOps {
+        fn elevator_motor_min_y(&self, m: &ObjRef) -> i32 {
+            handle::downcast::<ElevatorMotor>(m).unwrap().min_y()
+        }
+        fn elevator_motor_max_y(&self, m: &ObjRef) -> i32 {
+            handle::downcast::<ElevatorMotor>(m).unwrap().max_y()
+        }
+        fn elevator_shaft_last_known_motor_pos(&self, s: &ObjRef) -> IntPair {
+            handle::downcast::<ElevatorShaft>(s).unwrap().last_known_motor_pos()
+        }
+    }
+
+    struct Battery(Cell<u16>);
+    impl WirePowerSource for Battery {
+        fn available_electricity(&self) -> u16 {
+            self.0.get()
+        }
+        fn generates_electricity(&self) -> bool {
+            true
+        }
+        fn is_storage_device(&self) -> bool {
+            false
+        }
+        fn conducts_electricity(&self) -> bool {
+            true
+        }
+        fn subtract_electricty(&self, amount: u16) -> bool {
+            self.0.set(self.0.get() - amount);
+            true
+        }
+    }
+    struct Hooks(Rc<Battery>);
+    impl PathDynamicWorldHooks for Hooks {
+        fn has_lights_to_add(&self) -> bool {
+            false
+        }
+        fn blockhead_occupies_tile_at_pos_ignore_blockhead(&self, _p: IntPair, _i: Option<&ObjRef>) -> bool {
+            false
+        }
+        fn workbench_at_pos(&self, _pos: IntPair) -> Option<Rc<dyn WirePowerSource>> {
+            Some(self.0.clone())
+        }
+    }
+
+    fn add(d: &Rc<DynamicWorld>, x: i32, y: i32, ty: i32, item: i32) -> ObjRef {
+        d.add_standard_object_at_pos_object_type_item_type_save_dict_placed_by_client(pos(x, y), ty, item, None, None);
+        d.object_of_type_at_pos(ty, pos(x, y)).expect("registered")
+    }
+
+    #[test]
+    fn shafts_follow_their_motor() {
+        crate::objects::registry::install();
+        set_ops_hooks(Rc::new(ElevOps));
+        let (w, d) = env();
+        for y in 19..=22 {
+            tile(&w, 40, y).set_contents(CONTENTS_ELEVATOR_SHAFT);
+        }
+        let motor = add(&d, 40, 20, DYNAMIC_OBJECT_TYPE_ELEVATOR_MOTOR, 1088);
+        let shaft = add(&d, 40, 21, DYNAMIC_OBJECT_TYPE_ELEVATOR_SHAFT, 1087);
+        let s = handle::downcast::<ElevatorShaft>(&shaft).unwrap();
+        assert_eq!(s.last_known_motor_pos(), pos(40, 20));
+        let _ = shaft.class_info();
+        assert!(shaft.occupies_normal_contents());
+        assert_eq!(shaft.freeblock_creation_item_type(), 1087);
+        assert!(shaft.free_block_creation_save_dict(&shaft).is_some());
+        s.open();
+        // world changes: the first moves the solid flag, the second changes nothing
+        tile(&w, 40, 21).set_type_index(6);
+        shaft.world_changed(&shaft, &mut vec![pos(40, 21), pos(41, 21)]);
+        assert!(s.solid_tile());
+        shaft.world_changed(&shaft, &mut vec![pos(40, 21)]);
+        // net copies
+        let net = shaft.update_net_data_for_client(&shaft, None).unwrap();
+        shaft.remote_update(&shaft, &net);
+        let replica = ElevatorShaft::init_with_world_dynamic_world_cache_net_data(&w, &d, None, &net).unwrap();
+        replica.world_changed(&replica, &mut vec![pos(40, 21)]);
+        let mut lost = net.clone();
+        lost[12..16].copy_from_slice(&300u32.to_le_bytes());
+        assert!(ElevatorShaft::init_with_world_dynamic_world_cache_net_data(&w, &d, None, &lost).is_none());
+        // the motor's own odds and ends
+        let mo = handle::downcast::<ElevatorMotor>(&motor).unwrap();
+        let _ = motor.class_info();
+        assert!(motor.occupies_normal_contents());
+        assert_eq!(motor.freeblock_creation_item_type(), 1088);
+        assert!(motor.free_block_creation_save_dict(&motor).is_some());
+        let mnet = motor.update_net_data_for_client(&motor, None).unwrap();
+        let mut lost = mnet.clone();
+        lost[12..16].copy_from_slice(&300u32.to_le_bytes());
+        assert!(ElevatorMotor::init_with_world_dynamic_world_cache_net_data(&w, &d, None, &lost).is_none());
+        // remote updates: the server's own motor spends power, a replica takes the numbers
+        mo.st.borrow_mut().available_electricity = 12;
+        let mut upd = mnet.clone();
+        upd[0x20..0x22].copy_from_slice(&5u16.to_le_bytes());
+        motor.remote_update(&motor, &upd);
+        assert_eq!(mo.available_electricity(), 7);
+        upd[0x20..0x22].copy_from_slice(&50u16.to_le_bytes());
+        motor.remote_update(&motor, &upd);
+        assert_eq!(mo.available_electricity(), 0);
+        let rep = ElevatorMotor::init_with_world_dynamic_world_cache_net_data(&w, &d, None, &mnet).unwrap();
+        upd[0x1a..0x1c].copy_from_slice(&9u16.to_le_bytes());
+        rep.remote_update(&rep, &upd);
+        assert_eq!(handle::downcast::<ElevatorMotor>(&rep).unwrap().available_electricity(), 9);
+        rep.update_accurate_dt_is_simulation(&rep, 10.0, 10.0, false);
+        rep.world_changed(&rep, &mut vec![pos(40, 40)]);
+        set_ops_hooks(Rc::new(NullOpsHooks));
+    }
+
+    #[test]
+    fn a_motor_charges_from_the_wire_network() {
+        crate::objects::registry::install();
+        set_ops_hooks(Rc::new(ElevOps));
+        let (w, d) = env();
+        let motor = add(&d, 40, 20, DYNAMIC_OBJECT_TYPE_ELEVATOR_MOTOR, 1088);
+        let battery = Rc::new(Battery(Cell::new(100)));
+        set_dynamic_world_hooks(Some(Rc::new(Hooks(battery.clone()))));
+        tile(&w, 41, 20).set_contents(0x2e);
+        let mo = handle::downcast::<ElevatorMotor>(&motor).unwrap();
+        mo.st.borrow_mut().available_electricity = 0;
+        mo.st.borrow_mut().time_until_next_power_check = 0.0;
+        motor.update_accurate_dt_is_simulation(&motor, 1.0, 1.0, false);
+        assert!(mo.available_electricity() > 0);
+        assert!(motor.update_needs_to_be_sent());
+        set_dynamic_world_hooks(None);
+        set_ops_hooks(Rc::new(NullOpsHooks));
+    }
+
+    #[test]
+    fn the_shaft_range_follows_changes_on_both_sides() {
+        crate::objects::registry::install();
+        set_ops_hooks(Rc::new(ElevOps));
+        let (w, d) = env();
+        for y in 18..=22 {
+            tile(&w, 40, y).set_contents(CONTENTS_ELEVATOR_SHAFT);
+        }
+        let motor = add(&d, 40, 20, DYNAMIC_OBJECT_TYPE_ELEVATOR_MOTOR, 1088);
+        let mo = handle::downcast::<ElevatorMotor>(&motor).unwrap();
+        assert_eq!((mo.min_y(), mo.max_y()), (18, 22));
+        // changes at a different x, inside the range (still a shaft and no longer one), above and below, far away
+        motor.world_changed(&motor, &mut vec![pos(41, 21)]);
+        motor.world_changed(&motor, &mut vec![pos(40, 21)]);
+        tile(&w, 40, 22).set_contents(0);
+        motor.world_changed(&motor, &mut vec![pos(40, 22)]);
+        assert_eq!(mo.max_y(), 21);
+        tile(&w, 40, 18).set_contents(0);
+        motor.world_changed(&motor, &mut vec![pos(40, 18)]);
+        assert_eq!(mo.min_y(), 19);
+        // growing again by one tile each way, then by two (ignored)
+        tile(&w, 40, 22).set_contents(CONTENTS_ELEVATOR_SHAFT);
+        tile(&w, 40, 23).set_contents(CONTENTS_ELEVATOR_SHAFT);
+        motor.world_changed(&motor, &mut vec![pos(40, 22)]);
+        assert_eq!(mo.max_y(), 23);
+        tile(&w, 40, 18).set_contents(CONTENTS_ELEVATOR_SHAFT);
+        motor.world_changed(&motor, &mut vec![pos(40, 18)]);
+        assert_eq!(mo.min_y(), 18);
+        motor.world_changed(&motor, &mut vec![pos(40, 30), pos(40, 5), pos(40, 20)]);
+        // a range that reaches into blocks that are not there
+        mo.set_max_y(300);
+        mo.set_min_y(-5);
+        motor.world_changed(&motor, &mut vec![pos(40, 299), pos(40, -3)]);
+        // the test doubles themselves
+        let shaft = add(&d, 40, 21, DYNAMIC_OBJECT_TYPE_ELEVATOR_SHAFT, 1087);
+        assert_eq!(ElevOps.elevator_shaft_last_known_motor_pos(&shaft), pos(40, 20));
+        let b = Battery(Cell::new(1));
+        assert!(!b.is_storage_device() && b.conducts_electricity());
+        let h = Hooks(Rc::new(Battery(Cell::new(1))));
+        assert!(!h.has_lights_to_add() && !h.blockhead_occupies_tile_at_pos_ignore_blockhead(pos(0, 0), None));
+        set_ops_hooks(Rc::new(NullOpsHooks));
+    }
+}
