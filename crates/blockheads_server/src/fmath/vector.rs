@@ -364,6 +364,10 @@ mod tests {
         let b = Vector::new4(10.0, 11.0, 12.0, 13.0);
         assert_eq!(linear_interpolatev(a, b, 0.5), Vector::new4(5.0, 6.0, 7.0, 8.0));
         assert_eq!(Vector2::new(1.0, 2.0) * Vector2::new(3.0, 4.0), Vector2::new(3.0, 8.0));
+        assert_eq!(
+            Vector::new4(1.0, 2.0, 3.0, 4.0) * Vector::new4(2.0, 2.0, 0.5, 0.0),
+            Vector::new4(2.0, 4.0, 1.5, 0.0)
+        );
         assert_eq!(Vector::new4(1.0, 2.0, 3.0, 4.0) * 2.0, Vector::new4(2.0, 4.0, 6.0, 8.0));
         assert_eq!(make_intpair(3, -4), IntPair { x: 3, y: -4 });
     }
@@ -402,7 +406,8 @@ mod tests {
                     assert_eq!(smooth_step(h(f[1]), h(f[2]), h(f[3])).to_bits(), h(f[4]).to_bits(), "{line}");
                     counts[3] += 1;
                 }
-                "N" => {
+                _ => {
+                    assert_eq!(f[0], "N", "bad golden line");
                     let v = Vector::new(h(f[1]), h(f[2]), h(f[3]));
                     assert_eq!(v.length().to_bits(), h(f[4]).to_bits(), "{line}");
                     let n = v.normal();
@@ -414,7 +419,6 @@ mod tests {
                     assert_eq!(Vector2::new(v.x, v.y).length().to_bits(), h(f[8]).to_bits(), "{line}");
                     counts[4] += 1;
                 }
-                _ => panic!("bad golden line"),
             }
         }
         assert!(counts.iter().all(|&c| c >= 1500 || c == 0 || c >= 1000), "{counts:?}");

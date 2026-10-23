@@ -77,6 +77,8 @@ mod imp {
         #[test]
         fn records_once_per_primitive() {
             let p = std::env::temp_dir().join(format!("rngtrace_{}.log", std::process::id()));
+            std::env::remove_var("BH_RNG_TRACE");
+            super::init_from_env();
             std::env::set_var("BH_RNG_TRACE", &p);
             super::init_from_env();
             crate::rng::glibc_rand::srand_tagged("x", 5);
@@ -89,6 +91,13 @@ mod imp {
             assert_eq!(sx, 1, "tagged srand records exactly once");
             assert!(t.lines().any(|l| l.starts_with("R ") && l.ends_with(&format!(" rand {v}"))));
             assert!(t.lines().any(|l| l.starts_with("S ") && l.ends_with(" srand 0")));
+        }
+
+        #[test]
+        fn g17_integer_valued_large() {
+            assert_eq!(super::fmt_g17(1e16), "10000000000000000");
+            super::record_mt("m", 0.5);
+            assert_eq!(super::fmt_g17(-2.5e-5), "-2.5000000000000001e-05");
         }
 
         /// `fmt_g17` must equal C `printf("%.17g")`.

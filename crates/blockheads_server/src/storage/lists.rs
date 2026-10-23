@@ -121,10 +121,8 @@ pub fn parse_list(contents: Option<&str>, rule: ListRule) -> Option<Vec<String>>
             }
         }
         ListRule::Cloud => {
-            if let Some(l) = len0(&arr) {
-                if !(l <= 64 && l != 0) {
-                    arr.remove(0);
-                }
+            if len0(&arr).map_or(false, |l| !(l <= 64 && l != 0)) {
+                arr.remove(0);
             }
             if arr.is_empty() {
                 None
@@ -254,6 +252,7 @@ mod tests {
         assert_eq!(WHITE_HEADER.len(), 154);
         assert_eq!(file_type_name(9), "blacklist");
         assert_eq!(header_for(9), ADMIN_HEADER);
+        assert_eq!((header_for(0), header_for(1), header_for(3)), (BLACK_HEADER, WHITE_HEADER, MOD_HEADER));
     }
 
     #[test]
@@ -275,6 +274,25 @@ mod tests {
         assert_eq!(parse_list(Some("\nx"), ListRule::Cloud), s(&["x"]));
         assert_eq!(parse_list(Some("a\nb"), ListRule::Cloud), s(&["a", "b"]));
         assert_eq!(parse_list(Some("a\n"), ListRule::Curse), s(&["a", ""]));
+        let bare = h.trim_end_matches('\n');
+        assert_eq!(parse_list(Some(bare), ListRule::Plain), None);
+        assert_eq!(parse_list(Some(bare), ListRule::Cloud), None);
+        assert_eq!(parse_list(Some(&format!("{bare}\nx")), ListRule::White), s(&["x"]));
+    }
+
+    #[test]
+    fn atomic_write_in_cwd_and_failure() {
+        let name = format!(".bh-lists-test-{}.txt", std::process::id());
+        assert!(write_text_atomic(Path::new(&name), "hello"));
+        assert_eq!(std::fs::read_to_string(&name).unwrap(), "hello");
+        std::fs::remove_file(&name).unwrap();
+        assert!(!write_text_atomic(Path::new("/nonexistent-bh-dir/list.txt"), "x"));
+        let dir = std::env::temp_dir().join(format!("bh-lists-dir-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("target")).unwrap();
+        // renaming a file over a directory fails after the temp file was written, and the temp file is removed
+        assert!(!write_text_atomic(&dir.join("target"), "x"));
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

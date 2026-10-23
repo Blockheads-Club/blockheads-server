@@ -172,4 +172,14 @@ mod tests {
         srand(7);
         assert_eq!(a, rand());
     }
+
+    #[test]
+    fn raw_double_draw() {
+        srand(7);
+        let a = rand();
+        srand(7);
+        assert_eq!(rand_f64_raw(), a as f64);
+        assert!((0.0..=1.0).contains(&r01()));
+        assert!((0.0..=1.0).contains(&r01_tagged("t")));
+    }
 }

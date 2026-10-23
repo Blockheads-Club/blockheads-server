@@ -289,4 +289,25 @@ mod tests {
         fn_seed_rand(1);
         assert_eq!(genrand_int32(), 1791095845);
     }
+
+    #[test]
+    fn global_and_derived_draws() {
+        let mut a = Mt19937::default();
+        a.init_by_array(&[1, 2, 3]);
+        let mut b = Mt19937::default();
+        b.init_by_array(&[1, 2, 3]);
+        assert_eq!(a.genrand_int31(), (b.genrand_int32() >> 1) as i64);
+        let r2 = a.genrand_real2();
+        assert!((0.0..1.0).contains(&r2));
+        let r3 = a.genrand_real3();
+        assert!(r3 > 0.0 && r3 < 1.0);
+        super::init_by_array(&[5, 6]);
+        let g31 = super::genrand_int31();
+        assert!(g31 >= 0);
+        assert!((0.0..1.0).contains(&super::genrand_real2()));
+        assert!(super::genrand_real3() > 0.0);
+        assert!((0.0..1.0).contains(&super::genrand_res53()));
+        assert!((0.0..1.0).contains(&fn_rand()));
+        assert!((0.0..1.0).contains(&fn_rand_tagged("t")));
+    }
 }
