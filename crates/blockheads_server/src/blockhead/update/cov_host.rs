@@ -48,14 +48,7 @@ impl CovHost {
         self.kv(k) != 0
     }
     pub fn set_obj(&self, k: &'static str, o: Option<ObjRef>) {
-        match o {
-            Some(o) => {
-                self.objs.borrow_mut().insert(k, o);
-            }
-            None => {
-                self.objs.borrow_mut().remove(k);
-            }
-        }
+        self.objs.borrow_mut().extend(o.map(|o| (k, o)));
     }
     pub fn obj(&self, k: &str) -> Option<ObjRef> {
         self.objs.borrow().get(k).cloned()
@@ -573,5 +566,8 @@ impl BlockheadHostStub for CovHost {
     }
     fn die_for_good(&self, _b: &Blockhead) {
         self.rec("dieforgood".to_string());
+    }
+    fn current_interaction_requires_human_input(&self, _b: &Blockhead) -> bool {
+        self.flag("human")
     }
 }

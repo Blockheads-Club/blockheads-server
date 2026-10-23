@@ -501,6 +501,10 @@ fn remote_update_rides_and_fishing() {
     rep.remote_update(&rep, &u.to_vec());
     r.bh.borrow_mut().fishing_rod = None;
     rep.remote_update(&rep, &u.to_vec());
+    // a rod that is already out and no fish: nothing to do
+    u.fishing_rod_fish_unique_id = 0;
+    r.bh.borrow_mut().fishing_rod = Some(Rc::new(()));
+    rep.remote_update(&rep, &u.to_vec());
     // no cast any more: the rod is dropped
     r.bh.borrow_mut().fishing_rod = Some(Rc::new(()));
     u.fishing_rod_cast_x = 0;
@@ -833,4 +837,33 @@ impl crate::world::state::WorldOpsHooks for Protect {
     fn tile_is_protected_at_pos_against_blockhead(&self, _w: &World, _p: IntPair, _b: &ObjRef) -> bool {
         true
     }
+}
+
+#[test]
+fn simulation_stops_where_a_human_is_needed() {
+    let (_world, _d, _dw, o, h) = mk();
+    let b = bh_of(&o);
+    b.bh.borrow_mut().action_queue.push(Rc::new(()));
+    assert!(b.should_continue_simulating());
+    h.set("human", 1);
+    assert!(!b.should_continue_simulating());
+}
+
+#[test]
+fn the_same_pickup_is_registered_once() {
+    let (world, _d, _dw, o, h) = mk();
+    let b = bh_of(&o);
+    let tl = tile(&world, 6, 9);
+    h.cit.set(it::PICKUP);
+    {
+        let mut f = b.bh.borrow_mut();
+        f.unconfirmed_pickups = Some(Default::default());
+        f.this_frame_pickup_requests = Some(Default::default());
+    }
+    for _ in 0..2 {
+        tl.set_foreground_contents(b'B');
+        h.set_obj("ladder", Some(stub(3, true)));
+        b.pick_up_item_if_possible_in_tile_at_pos(Some(&tl), IntPair { x: 6, y: 9 });
+    }
+    assert_eq!(b.bh.borrow().unconfirmed_pickups.as_ref().unwrap().len(), 1);
 }

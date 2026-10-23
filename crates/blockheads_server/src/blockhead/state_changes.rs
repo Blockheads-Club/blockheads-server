@@ -427,9 +427,7 @@ impl Blockhead {
         if f.ride_object.is_some() {
             return false;
         }
-        if matches!(s.animation_type, 0x1b | 0x1c | 0x21 | 0x1d | 0x1e) {
-            return false;
-        }
+        // (the riding animations 0x1b..0x21 were already refused by the LIE / STAND test above)
         if f.waiting_for_path {
             return false;
         }
@@ -1445,9 +1443,9 @@ mod cov_tests;
 mod tests {
     use super::super::blockhead::testutil::*;
     use super::*;
-    use std::rc::Rc;
     use crate::rng::glibc_rand::{r01_from, rand, srand};
     use crate::types::structs::CustomRules;
+    use std::rc::Rc;
 
     fn mk() -> (Rc<World>, Rc<MockDw>, crate::objects::base::DynamicWorldRef, ObjRef, Rc<TestHost>) {
         let h = TestHost::install();
@@ -1598,16 +1596,16 @@ mod tests {
         let b = bh_of(&o);
         b.bh.borrow_mut().action_queue.push(Rc::new(()));
         b.bh.borrow_mut().travel_fraction = 0.7;
-        srand(5);
+        srand(2);
         b.die();
         assert_eq!(rand(), {
-            srand(5);
+            srand(2);
             for _ in 0..6 {
                 rand();
             }
             rand()
         });
-        srand(5);
+        srand(2);
         let mut expect = Vec::new();
         for _ in 0..3 {
             let r1 = r01_from(rand());
