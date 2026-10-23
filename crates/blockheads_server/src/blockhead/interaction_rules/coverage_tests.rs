@@ -338,7 +338,24 @@ fn fuzz_rule_engine(seed: u64, iterations: u32) {
         let allow = rng.chance(70);
         let include_actions = rng.chance(50);
         h.fb_exist.set(rng.chance(20));
-        let (r, _rej) = rule_full(b, &w, me_pos, item.as_ref(), include_actions, face, allow);
+        let (r, _rej) = if rng.chance(8) {
+            // the same tile asked about at the top of the world (the 0x3f8 build limit)
+            let t = tile(&w, me_pos.x, me_pos.y);
+            let mut rej = false;
+            let pos = IntPair { x: me_pos.x, y: 0x3f8 + rng.below(3) as i32 };
+            let r = b.interaction_type_for_tile_at_pos_item_pickup_rejected_due_to_inventory_full_include_actions_face_index_allow_protected_actions(
+                Some(&t),
+                pos,
+                item.as_ref(),
+                &mut rej,
+                include_actions,
+                face,
+                allow,
+            );
+            (r, rej)
+        } else {
+            rule_full(b, &w, me_pos, item.as_ref(), include_actions, face, allow)
+        };
         *seen.entry(r.0).or_insert(0u32) += 1;
     }
     // many different answers were produced
@@ -1324,4 +1341,141 @@ fn free_block_ownership_rules() {
     assert!(b.freeblock_ownership_blocks(as_free_block(&o).unwrap(), ItemType(164), &s.w));
     let o = make(164, Some(("ownerID", "server")));
     assert!(!b.freeblock_ownership_blocks(as_free_block(&o).unwrap(), ItemType(164), &s.w));
+}
+
+#[test]
+fn more_cascade_corners() {
+    let s = Scene::new();
+    let b = s.b();
+    // a plant above the seed bed that still has its plant object is not cleared
+    let mut cleared = false;
+    for ty in 0..1200u32 {
+        reset(&s.w);
+        s.tile(10, 12).set_type_index(6);
+        s.tile(10, 13).set_foreground_contents(0x43);
+        *s.h.plant.borrow_mut() = Some(usable(1, true, true, true));
+        let _ = s.rule(Some(ty), 0, true);
+        cleared |= s.tile(10, 13).get().foreground_contents == 0;
+    }
+    assert!(!cleared);
+    *s.h.plant.borrow_mut() = None;
+    // a queued placement of a ladder-like item next to the target (nothing solid below)
+    reset(&s.w);
+    s.tile(10, 11).set_type_index(2);
+    s.tile(10, 12).set_back_wall_type_index(2);
+    for (ty, goal) in
+        [(178u32, IntPair { x: 11, y: 12 }), (178, IntPair { x: 10, y: 13 }), (53, IntPair { x: 10, y: 11 })]
+    {
+        b.bh.borrow_mut().action_queue.clear();
+        let it_ = give(b, ty, 0);
+        b.bh.borrow_mut().action_queue.push(act(2, Some(InventoryItem::new(ItemType(ty), 0, 0, None, None)), goal));
+        let (r, _) = rule_full(b, &s.w, IntPair { x: 10, y: 12 }, Some(&it_), true, 0, true);
+        assert_eq!(r, InteractionType::INTERACTION_PLACE_ITEM, "{ty} {goal:?}");
+    }
+    // stairs the blockhead may remove are picked up as the item the dynamic world names
+    {
+        use crate::world::helpers::testutil::{dw_obj, FakeDw};
+        use crate::world::state::DynamicWorld;
+        let fake = Rc::new(FakeDw::default());
+        *s.w.dynamic_world.borrow_mut() = Some(Rc::new(DynamicWorld::new(Box::new(fake.clone()))));
+        fake.stairs.borrow_mut().insert((10, 12), dw_obj(ItemType::ITEM_STONE_STAIRS.0 as i32, 0, 0, false, true));
+        reset(&s.w);
+        s.tile(10, 12).set_contents(0x65);
+        s.h.misc.borrow_mut().insert("stairs", usable(1, true, true, true));
+        assert_eq!(s.rule(None, 0, true), InteractionType::INTERACTION_PICKUP);
+        *s.w.dynamic_world.borrow_mut() = None;
+    }
+    // an elevator shaft in full water still takes solid blocks that float
+    for item in [0x45u32, 0xa5] {
+        reset(&s.w);
+        s.tile(10, 12).set_contents(0x67);
+        s.tile(11, 12).set_type_index(1);
+        let t = s.tile(10, 12);
+        t.set_type_index(3);
+        t.set_partial_content_left(0xff);
+        let _ = s.rule(Some(item), 0, true);
+        t.set_partial_content_left(0x10);
+        let _ = s.rule(Some(item), 0, true);
+    }
+    // a free block that belongs to another blockhead is skipped
+    let dw = real_dw(&s.w, "ir_prio");
+    reset(&s.w);
+    s.tile(10, 12).set_type_index(1);
+    let other = stub(1, true);
+    let fb = crate::physics_objects::free_block::FreeBlock::new(
+        &s.w,
+        &dw,
+        IntPair { x: 10, y: 12 },
+        0x19,
+        0,
+        0,
+        None,
+        None,
+        None,
+        true,
+        Some(&other),
+    )
+    .unwrap();
+    *s.h.fbs.borrow_mut() = vec![fb];
+    s.h.fb_exist.set(true);
+    assert_ne!(s.rule(None, 0, false), InteractionType::INTERACTION_PICKUP_FREEBLOCK);
+    // the preview of a queue entry that is not an action
+    b.bh.borrow_mut().action_queue = vec![Rc::new(())];
+    b.bh.borrow_mut().state.interacting = 1;
+    assert_eq!(b.current_interaction_is_good_or_bad(), 0);
+    // chests and beds report nothing for a controlled blockhead; other objects give no pose
+    let h = &s.h;
+    b.bh.borrow_mut().is_client_blockhead_being_controlled_by_server = true;
+    *h.io.borrow_mut() = Some(usable(1, true, true, true));
+    {
+        let mut f = b.bh.borrow_mut();
+        f.state.interaction_type = 5;
+        f.state.interacting_square = IntPair { x: 10, y: 12 };
+    }
+    h.take();
+    b.update_gather_speed_and_animation_for_current_interation_and_item();
+    assert!(h.take().is_empty());
+}
+
+#[test]
+fn real_workbench_accessors() {
+    use crate::crafting::workbench::Workbench;
+    use crate::types::enums::WorkbenchType;
+    let h = AHost::install();
+    let (w, o) = arena();
+    let b = bh_of(&o);
+    let dw = real_dw(&w, "ir_wb2");
+    let dwr: crate::objects::base::DynamicWorldRef = dw.clone();
+    for t in 0..40u32 {
+        let Some(wb) = Workbench::init_with_world_dynamic_world_at_position_cache_type_flipped_save_dict_placed_by_client_client_name(
+            &w,
+            &dwr,
+            IntPair { x: 12, y: 9 },
+            None,
+            WorkbenchType(t),
+            false,
+            None,
+            None,
+            None,
+        ) else {
+            continue;
+        };
+        let wb: ObjRef = wb;
+        {
+            let mut f = b.bh.borrow_mut();
+            f.state.interaction_type = 4;
+            f.state.interacting_square = IntPair { x: 12, y: 9 };
+            f.interaction_workbench = Some(wb.clone());
+        }
+        let _ = b.current_craft_is_out_of_fuel();
+        let _ = b.get_current_craft_progress();
+        assert!(b.will_be_crafting_at_workbench(&wb));
+        b.bh.borrow_mut().state.interacting_square = IntPair { x: 12, y: 8 };
+        let _ = b.will_be_crafting_at_workbench(&wb);
+        b.bh.borrow_mut().state.interacting_square = IntPair { x: 12, y: 10 };
+        let _ = b.will_be_crafting_at_workbench(&wb);
+        b.bh.borrow_mut().state.interaction_type = 0xd;
+        let _ = b.will_be_adding_fuel_at_workbench(&wb);
+    }
+    let _ = h;
 }

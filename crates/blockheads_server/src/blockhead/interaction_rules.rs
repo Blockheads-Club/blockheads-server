@@ -722,15 +722,12 @@ impl Blockhead {
                         tl.contents == 0
                     };
                     let head_ok = |n: Option<TileRef>| -> bool {
-                        match tile_copy(&n) {
-                            Some(nt) => {
-                                nt.contents == 0
-                                    && nt.foreground_contents == 0
-                                    && nt.background_contents == 0
-                                    && tile_is_air_water_or_snow(n)
-                            }
-                            None => false,
-                        }
+                        tile_copy(&n).map_or(false, |nt| {
+                            nt.contents == 0
+                                && nt.foreground_contents == 0
+                                && nt.background_contents == 0
+                                && tile_is_air_water_or_snow(n)
+                        })
                     };
                     if contents_clear {
                         if is_portal_item(ty) {
@@ -958,11 +955,9 @@ impl Blockhead {
                 if has_item && item_type_is_placable_on_trees(item_t) && y < 0x3f8 {
                     return InteractionType::INTERACTION_PLACE_ITEM;
                 }
-                return if tile_is_plant(Some(tref)) {
-                    InteractionType::INTERACTION_DIG_FOREGROUND
-                } else {
-                    InteractionType::INTERACTION_DIG
-                };
+                // (a plant here would have been answered `DIG_FOREGROUND` by step H: this point needs `allow`, and
+                // the air path above only runs for air / water / snow tiles, which are never solid)
+                return InteractionType::INTERACTION_DIG;
             }
             // P3.5: contents is wire, shaft or motor
             if contents == 0x67 && has_item && item_type_is_solid(item_t) {
@@ -2556,10 +2551,11 @@ mod tests {
         let a = act(b, 15, it(0x67, 9), goal);
         a.set_interaction_test_result(b.good_or_bad_interaction_for_action(&a));
         let d = a.get_save_dict();
-        let bytes = match d.map.get(&"interactionTestResult".to_string()) {
-            Some(crate::plist::value::PlistValue::Data(x)) => x.bytes.clone(),
-            _ => panic!(),
-        };
+        let bytes = d
+            .map
+            .get(&"interactionTestResult".to_string())
+            .and_then(|v| if let crate::plist::value::PlistValue::Data(x) = v { Some(x.bytes.clone()) } else { None })
+            .expect("data");
         assert_eq!(bytes, vec![0, 0, 0, 0, 0x67, 0, 0, 0, 0, 0, 9, 0]);
     }
 
@@ -2878,15 +2874,6 @@ mod tests {
         });
         tile(&w, 13, 13).update(|t| t.type_index = 0x10);
         tile(&w, 19, 19).update(|t| t.artificial_light_b = 5);
-        for y in 12..21 {
-            for x in 12..21 {
-                tile(&w, x, y).update(|t| {
-                    if t.type_index == 1 {
-                        t.type_index = 2
-                    }
-                });
-            }
-        }
         tile(&w, 14, 17).update(|t| t.type_index = 2);
         tile(&w, 14, 18).update(|t| t.type_index = 6);
         h.take();
