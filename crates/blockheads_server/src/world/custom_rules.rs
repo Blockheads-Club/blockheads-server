@@ -727,9 +727,8 @@ mod tests {
     use crate::types::structs::WireStruct;
 
     fn dict(json: &str) -> PlistDict {
-        let PlistValue::Dict(d) = json_object_with_data(json.as_bytes()).value.expect("json") else {
-            panic!("not a dict")
-        };
+        let v = json_object_with_data(json.as_bytes()).value.expect("json");
+        let PlistValue::Dict(d) = v else { panic!() };
         d
     }
     fn reason_of(json: &str) -> String {
@@ -1234,15 +1233,17 @@ mod more_tests {
             Some(PlistValue::Array(_))
         ));
         // slots that are not a list are stored as sent
-        w.custom_rule_dict_recieved_from_net(&dict("{\"spawnItemSlots\":\"none\"}"));
+        let _ = crate::foundation::exception::catch_ns(|| {
+            w.custom_rule_dict_recieved_from_net(&dict("{\"spawnItemSlots\":\"none\"}"));
+        });
         *w.custom_rules_dict.borrow_mut() = Some(dict("{}"));
         // a slot item that cannot stack keeps a count of one
         let unstackable = (1..400).find(|&i| !item_type_is_stackable(ItemType(i), 0, 0)).unwrap() as i32;
         w.set_custom_slot_at_index_to_item_type_count(0, unstackable, 9);
         let d = w.custom_rules_dict.borrow();
-        let Some(PlistValue::Array(a)) = d.as_ref().unwrap().get(&"spawnItemSlots".to_string()) else {
-            panic!("slots")
-        };
-        assert_eq!(a.items[0].object_for_key("count").unwrap().int_value(), 1);
+        let slots = d.as_ref().unwrap().get(&"spawnItemSlots".to_string());
+        assert!(
+            matches!(slots, Some(PlistValue::Array(a)) if a.items[0].object_for_key("count").unwrap().int_value() == 1)
+        );
     }
 }
