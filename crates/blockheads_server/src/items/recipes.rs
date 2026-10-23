@@ -9219,4 +9219,24 @@ mod tests {
             assert_eq!(base_growth_rate_for_tree_type(TreeType(i as u32)).to_bits(), e.to_bits(), "{i}");
         }
     }
+
+    #[test]
+    fn row_builder_and_egg_extractor_levels() {
+        // `row` normally runs at compile time only
+        let r = row(5, 2, [1, 2, 3, 4, 5, 6, 7, 8], [8, 7, 6, 5, 4, 3, 2, 1], 8, 30, 1, 11, 12, 13, [-1; 8]);
+        assert_eq!((r.crafted_item_type, r.crafted_item_count, r.number_of_required_items), (5, 2, 8));
+        assert_eq!(r.required_items, [1, 2, 3, 4, 5, 6, 7, 8]);
+        assert_eq!(r.required_item_counts, [8, 7, 6, 5, 4, 3, 2, 1]);
+        assert_eq!(
+            (r.seconds_required, r.upgrade_level, r.crafted_item_data_a, r.crafted_item_data_b),
+            (30, 1, 11, 12)
+        );
+        assert_eq!(r.secondary_indicator_item, 13);
+        assert_eq!(r.required_item_data_bs, [-1; 8]);
+        // the egg extractor only has level 0
+        let lvl1 = craftable_items_for_workbench_type_and_level(w(30), 1, false, false);
+        assert_eq!(lvl1.len(), 32);
+        assert!(lvl1.iter().all(|r| r.crafted_item_type == 0));
+        assert_eq!(craftable_items_for_workbench_type_and_level(w(30), 0, false, false)[0].required_items[0], 91);
+    }
 }

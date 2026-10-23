@@ -1231,6 +1231,8 @@ mod tests {
         assert_eq!(u(I::ITEM_FISHING_ROD, 2, true, true), 2048);
         assert_eq!(u(I::ITEM_TITANIUM_PICKAXE, 1, false, false), 1);
         assert_eq!(u(I::ITEM_STEEL_PICKAXE, 1, true, false), 1);
+        // halved twice below one, clamped to the minimum of one
+        assert_eq!(u(I::ITEM_TITANIUM_PICKAXE, 1, true, false), 1);
         assert_eq!(u(I::ITEM_APPLE, 2, false, false), -1);
         assert_eq!(u(I::ITEM_APPLE, 0, false, false), 0);
         assert_eq!(u(I::ITEM_FISHING_ROD, 7, false, false), 512);
@@ -1254,5 +1256,123 @@ mod tests {
         assert_eq!(a(I::ITEM_IRON_PANTS, 3), 40.0);
         assert_eq!(a(I::ITEM_JETPACK, 1), 1.25);
         assert_eq!(a(I::ITEM_LINEN_SHIRT, 2), -1.0);
+    }
+
+    #[test]
+    fn cage_gem_and_head_tables() {
+        for (cage, npc) in [
+            (I::ITEM_DODO_CAGE, NPCType::NPC_DODO),
+            (I::ITEM_DONKEY_CAGE, NPCType::NPC_DONKEY),
+            (I::ITEM_YAK_CAGE, NPCType::NPC_YAK),
+            (I::ITEM_DROPBEAR_CAGE, NPCType::NPC_DROPBEAR),
+            (I::ITEM_SCORPION_CAGE, NPCType::NPC_SCORPION),
+            (I::ITEM_UNICORN_CAGE, NPCType::NPC_DONKEY),
+            (I::ITEM_APPLE, NPCType::NPC_NOTHING),
+        ] {
+            assert_eq!(npc_type_from_cage_item_type(cage), npc);
+        }
+        for g in [I::ITEM_AMETHYST, I::ITEM_SAPPHIRE, I::ITEM_EMERALD, I::ITEM_RUBY, I::ITEM_DIAMOND] {
+            assert!(item_type_is_gem(g));
+        }
+        assert!(!item_type_is_gem(I::ITEM_APPLE));
+        for h in [
+            I::ITEM_LINEN_CAP,
+            I::ITEM_LINEN_HAT,
+            I::ITEM_SANTA_HAT,
+            I::ITEM_TIN_FOIL_HAT,
+            I::ITEM_TIN_HELMET,
+            I::ITEM_IRON_HELMET,
+            I::ITEM_TITANIUM_HELMET,
+            I::ITEM_CARBON_FIBER_HELMET,
+            I::ITEM_ICE_HELMET,
+            I::ITEM_FRUIT_HAT,
+        ] {
+            assert!(item_type_can_be_worn_on_head(h));
+        }
+        assert!(!item_type_can_be_worn_on_head(I::ITEM_LINEN_SHIRT));
+    }
+
+    #[test]
+    fn overlay_offset_and_background_rock() {
+        assert_eq!(item_type_for_colored_overlay(I::ITEM_SOFT_BED), I::ITEM_BED_QUILT_TEXTURE);
+        assert_eq!(item_type_for_colored_overlay(I::ITEM_GOLD_BED), I::ITEM_BED_QUILT_TEXTURE);
+        assert_eq!(item_type_for_colored_overlay(I::ITEM_APPLE), I::ITEM_NONE);
+        assert_eq!(x_offset_for_item_type(I::ITEM_CARROT_STICK), -0.1875);
+        assert_eq!(x_offset_for_item_type(I::ITEM_FISHING_ROD), -0.1875);
+        assert_eq!(x_offset_for_item_type(I::ITEM_APPLE), 0.0);
+        assert!(!item_type_can_be_placed_on_background_rock(I::ITEM_WINDOW));
+        assert!(!item_type_can_be_placed_on_background_rock(I::ITEM_BLACK_WINDOW));
+        assert!(item_type_can_be_placed_on_background_rock(I::ITEM_DOOR));
+    }
+
+    #[test]
+    fn sowing_foreground_and_attachment() {
+        for t in [I::ITEM_APPLE, I::ITEM_CARROT, I::ITEM_CORN, I::ITEM_VINE] {
+            assert!(item_type_is_sowable_in_tile_type(t, TileType::TILE_DIRT), "{t:?}");
+            assert!(item_type_is_sowable_in_tile_type(t, TileType::TILE_COMPOST), "{t:?}");
+        }
+        for t in [
+            I::ITEM_FLAX_SEED,
+            I::ITEM_SUNFLOWER_SEED,
+            I::ITEM_CARROT,
+            I::ITEM_TULIP_BULB,
+            I::ITEM_TULIP_SEED,
+            I::ITEM_CORN,
+            I::ITEM_WHEAT,
+            I::ITEM_TOMATO,
+            I::ITEM_CHILLI,
+            I::ITEM_KELP,
+            I::ITEM_VINE,
+        ] {
+            assert!(sowable_item_type_occupies_foreground(t));
+        }
+        assert!(!sowable_item_type_occupies_foreground(I::ITEM_APPLE));
+        // workbenches attach beside half depth tiles except the listed ones, which behave like plain items
+        assert!(item_type_can_be_attached_next_to_to_half_depth_tiles(I::ITEM_WORKBENCH_KILN));
+        assert!(item_type_can_be_attached_next_to_to_half_depth_tiles(I::ITEM_CHEST));
+        assert!(!item_type_can_be_attached_next_to_to_half_depth_tiles(I::ITEM_CAMPFIRE));
+        assert!(!item_type_can_be_attached_next_to_to_half_depth_tiles(I::ITEM_APPLE));
+        assert!(!item_type_can_be_attached_next_to_to_half_depth_tiles(I::ITEM_EASEL));
+        for t in [I::ITEM_BASIC_TORCH, I::ITEM_SIGN, I::ITEM_RAIL, I::ITEM_DODO_EGG, I::ITEM_COBBLESTONE] {
+            assert!(item_type_can_be_placed_on_columns(t), "{t:?}");
+        }
+        assert!(!item_type_can_be_placed_on_columns(I::ITEM_APPLE));
+    }
+
+    #[test]
+    fn usage_increment_tiers() {
+        let u = |t| usage_increment_per_use(t, 2, false, false);
+        assert_eq!(u(I::ITEM_CARROT_STICK), 0x100);
+        assert_eq!(u(I::ITEM_MAGNET), 0x100);
+        assert_eq!(u(I::ITEM_RAZOR), 0x400);
+        assert_eq!(u(I::ITEM_COPPER_BOW), 0x29);
+        assert_eq!(u(I::ITEM_POISON_BOW), 0x29);
+        assert_eq!(u(I::ITEM_PAINT), 0x80);
+        assert_eq!(u(I::ITEM_FLINT_AXE), 0x40);
+        assert_eq!(u(I::ITEM_STONE_AXE), 0x20);
+        assert_eq!(u(I::ITEM_CROWBAR), 0x10);
+        assert_eq!(u(I::ITEM_IRON_AXE), 8);
+        assert_eq!(u(I::ITEM_STEEL_PICKAXE), 4);
+        assert_eq!(u(I::ITEM_TITANIUM_SWORD), 3);
+        assert!(usage_increment_applies_to_incorrect_use(I::ITEM_STONE_AXE));
+        assert!(!usage_increment_applies_to_incorrect_use(I::ITEM_MAGNET));
+    }
+
+    #[test]
+    fn clothing_and_armour_tiers() {
+        let c = |t| clothing_item_pasively_used_rate(t, 2, 0, false);
+        assert_eq!(c(I::ITEM_LEATHER_JACKET), 0.75);
+        assert_eq!(c(I::ITEM_FUR_COAT), 0.5);
+        assert_eq!(c(I::ITEM_TIN_PANTS), 0.25);
+        assert_eq!(c(I::ITEM_IRON_BOOTS), 0.125);
+        assert_eq!(c(I::ITEM_CARBON_FIBER_BOOTS), 0.1);
+        // inside the clothing id window but not a clothing item
+        assert_eq!(c(I::ITEM_STEEL_INGOT), -1.0);
+        assert_eq!(armour_item_damage_usage_rate(I::ITEM_ICE_HELMET, 2), 10.0);
+        assert_eq!(armour_item_damage_usage_rate(I::ITEM_CARBON_FIBER_PANTS, 2), 5.0);
+        // inside the armour id window but not armour
+        assert_eq!(armour_item_damage_usage_rate(I::ITEM_RAIL, 2), -1.0);
+        assert_eq!(armour_item_damage_usage_rate(I::ITEM_LINEN_SHIRT, 0), 0.0);
+        assert_eq!(armour_item_damage_usage_rate(I::ITEM_APPLE, 2), -1.0);
     }
 }
