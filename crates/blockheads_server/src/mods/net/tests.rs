@@ -192,6 +192,30 @@ fn download_window_resume_and_errors() {
 }
 
 #[test]
+fn ready_tells_which_optional_mods_run() {
+    let l = Fake::default();
+    let mut n = net();
+    n.packet(&l, "e", &hello(1), &[]);
+    // Before READY nothing is known: as before, the peer gets every channel.
+    assert!(n.runs_mod("e", "m") && n.runs_mod("e", "other"));
+    let ready = |ids: &[&str]| {
+        let loaded = ids.iter().map(|i| (i.to_string(), "1.0.0".to_string())).collect();
+        Message::Ready(Ready { accepted_hash: [1; 32], loaded }).encode()
+    };
+    n.packet(&l, "e", &ready(&["m"]), &[]);
+    assert!(n.runs_mod("e", "m") && !n.runs_mod("e", "opt"));
+    n.rekey("e", "p");
+    l.approved.borrow_mut().push("p".into());
+    l.take();
+    // A channel of a mod the player declined is not sent to them.
+    let peers = vec!["p".to_string()];
+    assert_eq!(n.send_channel(&l, &peers, "opt:x", b"1"), Ok(0));
+    assert_eq!(n.send_channel(&l, &peers, "m:x", b"1"), Ok(1));
+    let got = l.take();
+    assert_eq!(got.len(), 2, "one CHANNEL_REGISTER and one CHANNEL, nothing for opt:x");
+}
+
+#[test]
 fn busy_and_read_failures() {
     let l = Fake::default();
     let mut n = net();

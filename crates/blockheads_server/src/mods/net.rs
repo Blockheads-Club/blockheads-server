@@ -61,6 +61,8 @@ struct Peer {
     announced: BTreeSet<u16>,
     transfer: Option<Transfer>,
     ready: Option<Hash>,
+    /// The mods of `READY.loaded`: the required client mods plus the optional ones the player switched on.
+    loaded: Option<BTreeSet<String>>,
 }
 
 /// Protocol state of the server.
@@ -92,6 +94,12 @@ impl ModNet {
     /// The `acceptedHash` of the peer's `READY`.
     pub fn ready_hash(&self, peer: &str) -> Option<Hash> {
         self.peers.get(peer).and_then(|p| p.ready)
+    }
+
+    /// True when the client of `peer` runs mod `id`. A peer that never sent `READY` (all mods server-only) runs no
+    /// client mods; the server still sends it channel traffic, as before, so only a `READY` can say no.
+    pub fn runs_mod(&self, peer: &str, id: &str) -> bool {
+        self.peers.get(peer).and_then(|p| p.loaded.as_ref()).is_none_or(|l| l.contains(id))
     }
 
     /// The wire id of a channel, assigned on first use. `None` when all 65535 ids are taken.
@@ -183,8 +191,10 @@ impl ModNet {
         let id = self.wire_id(name).ok_or_else(|| ApiError::LimitExceeded("network channels".into()))?;
         let packet = Message::Channel(Channel { channel_id: id, payload: data.to_vec() }).encode();
         let mut n = 0;
+        // Channel names are `<mod-id>:<name>`; a player who declined that optional mod gets nothing.
+        let mod_id = name.split(':').next().unwrap_or(name);
         for peer in peers {
-            if !self.is_modded(peer) || !link.approved(peer) {
+            if !self.is_modded(peer) || !link.approved(peer) || !self.runs_mod(peer, mod_id) {
                 continue;
             }
             self.announce_to(link, peer, &[name.to_string()]);
@@ -296,6 +306,7 @@ impl ModNet {
             Message::Ready(r) => {
                 let p = self.peers.get_mut(peer).expect("modded");
                 p.ready = Some(r.accepted_hash);
+                p.loaded = Some(r.loaded.into_iter().map(|(id, _)| id).collect());
                 p.transfer = None;
             }
             Message::Channel(c) if link.approved(peer) => {
