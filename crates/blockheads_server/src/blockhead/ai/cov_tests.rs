@@ -4,7 +4,6 @@ use super::super::blockhead::testutil::{bh_of, tile};
 use super::super::interaction_rules::testhost::real_dw;
 use super::super::interaction_rules::testhost::*;
 use super::*;
-use crate::rng::glibc_rand::srand;
 use std::rc::Rc;
 
 struct Rng(u64);
@@ -390,7 +389,7 @@ fn no_path_corners() {
 
 #[test]
 fn flowering_plants_without_a_tool_and_the_other_corners() {
-    use crate::plants::plant::{new_plant_for_type, PlantLike};
+    use crate::plants::plant::new_plant_for_type;
     let (w, o, h, ai) = mk();
     let b = bh_of(&o);
     let rdw = real_dw(&w, "ai_cov_plant");

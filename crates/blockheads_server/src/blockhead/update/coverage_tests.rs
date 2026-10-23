@@ -1893,7 +1893,7 @@ fn u7_rig() -> Rig {
     Rig { world, o, h }
 }
 
-fn run_u7(r: &Rig, c: &Ctx) {
+fn run_u7(_r: &Rig, c: &Ctx) {
     let mut cd = DT;
     u7(c, &mut cd);
 }

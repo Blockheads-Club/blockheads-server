@@ -18,18 +18,10 @@ pub struct CovHost {
     pub cit: Cell<u32>,
     pub item_available: Cell<bool>,
     pub is_npc: Cell<bool>,
-    pub food_item: Cell<i32>,
-    pub capturable: Cell<bool>,
-    pub milkable: Cell<bool>,
-    pub shaveable: Cell<bool>,
     pub can_ride: Cell<bool>,
     pub belongs: Cell<bool>,
-    pub torch: RefCell<Option<ObjRef>>,
-    pub can_pick: Cell<bool>,
     pub plant: RefCell<Option<ObjRef>>,
     pub io_by_id: RefCell<Option<ObjRef>>,
-    pub adding_fuel: Cell<bool>,
-    pub light_index: Cell<Option<i32>>,
     /// Scripted integer / flag answers of the extra host methods (see `kv`).
     pub knobs: RefCell<std::collections::HashMap<&'static str, i64>>,
     /// Scripted object answers (see `obj`).
@@ -54,7 +46,7 @@ impl CovHost {
         self.objs.borrow().get(k).cloned()
     }
     pub fn install() -> Rc<CovHost> {
-        let h = Rc::new(CovHost { can_pick: Cell::new(true), ..Default::default() });
+        let h = Rc::new(CovHost::default());
         set_host(h.clone());
         h
     }

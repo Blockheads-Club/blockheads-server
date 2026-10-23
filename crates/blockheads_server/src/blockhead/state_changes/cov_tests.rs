@@ -33,7 +33,6 @@ struct Ride {
     base: RefCell<DynamicObjectBase>,
     class: &'static ClassInfo,
     proxy: RefCell<Option<ObjRef>>,
-    removable: Cell<bool>,
 }
 impl DynamicObject for Ride {
     fn base(&self) -> &RefCell<DynamicObjectBase> {
@@ -90,7 +89,6 @@ fn ride(class: &'static ClassInfo, proxy: Option<ObjRef>) -> ObjRef {
         base: RefCell::new(DynamicObjectBase::alloc_zeroed_with(w)),
         class,
         proxy: RefCell::new(proxy),
-        removable: Cell::new(true),
     })
 }
 

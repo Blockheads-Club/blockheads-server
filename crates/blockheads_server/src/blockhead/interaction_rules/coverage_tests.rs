@@ -263,11 +263,10 @@ fn fuzz_rule_engine(seed: u64, iterations: u32) {
     let b = bh_of(&o);
     let mut rng = Rng(seed);
     let others = [stub(1, true), stub(2, false)];
-    let mut me_pos = IntPair { x: 10, y: 12 };
     let mut seen = std::collections::BTreeMap::new();
     let interesting = interesting_items();
     for _ in 0..iterations {
-        me_pos = if rng.chance(40) {
+        let me_pos = if rng.chance(40) {
             IntPair { x: rng.pick(&[0, 1, 30, 31, 10]), y: rng.pick(&[0, 1, 30, 31, 12]) }
         } else {
             IntPair { x: 10, y: 12 }
@@ -1561,7 +1560,8 @@ fn build_limit_back_wall_edges_and_host_bridges() {
     );
     assert!(rej);
     // the host bridges of the test fixture
-    let a: Rc<dyn std::any::Any> = act(2, Some(InventoryItem::new(ItemType(8), 0, 0, None, None)), IntPair { x: 1, y: 2 });
+    let a: Rc<dyn std::any::Any> =
+        act(2, Some(InventoryItem::new(ItemType(8), 0, 0, None, None)), IntPair { x: 1, y: 2 });
     let ih: &dyn crate::blockhead::inventory_model::InventoryHost = &*s.h;
     assert_eq!(ih.action_goal_interaction(&a), 2);
     assert_eq!(ih.action_craft_count_or_extra_data(&a), 0);
@@ -1569,7 +1569,9 @@ fn build_limit_back_wall_edges_and_host_bridges() {
     assert_eq!(ih.action_interaction_item_index(&a), -1);
     assert_eq!(ih.action_interaction_item_sub_index(&a), -1);
     s.h.take();
-    crate::blockhead::blockhead::BlockheadHostStub::drop_inventory_items_at_index_sub_index_count_ignore_freeblocks(&*s.h, b, 1, 2, 3, false);
+    crate::blockhead::blockhead::BlockheadHostStub::drop_inventory_items_at_index_sub_index_count_ignore_freeblocks(
+        &*s.h, b, 1, 2, 3, false,
+    );
     assert_eq!(s.h.take(), vec!["drop:1:2:3:false".to_string()]);
 }
 
