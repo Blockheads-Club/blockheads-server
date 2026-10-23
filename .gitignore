@@ -18,3 +18,7 @@ dist/
 .next-version
 dist/
 docker-bin/
+
+# cargo-llvm-cov output of scripts/coverage-gate.sh
+/lcov.info
+/summary.txt

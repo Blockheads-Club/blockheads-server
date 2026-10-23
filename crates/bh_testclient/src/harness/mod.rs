@@ -484,6 +484,14 @@ mod tests {
     }
 
     #[test]
+    fn port_range_is_free_and_consecutive() {
+        let base = free_udp_port_range(4);
+        assert_ne!(base, 0);
+        let socks: Vec<_> = (base..base + 4).map(|p| std::net::UdpSocket::bind(("0.0.0.0", p)).unwrap()).collect();
+        assert_eq!(socks.len(), 4);
+    }
+
+    #[test]
     fn json_roundtrip() {
         let m = parse_flat_json_object(r#"{"seq":12,"t":2623,"dir":"rx","rel":true,"x":null,"s":"a\"b\\n\u00e9"}"#)
             .unwrap();

@@ -29,8 +29,12 @@ repository. They skip cleanly unless these environment variables are set:
 - `BH_REF_BINARY` - reference binary for gdb RNG traces
 - `BH_PARITY=1` - enable the docker-based parity tests
 
-Coverage: `cargo llvm-cov --workspace`. The mod host seam (with the 0xBC protocol) and the test client's modded mode
-have their own 100 % line gate: `scripts/mods-coverage.sh`.
+Coverage: `scripts/coverage-gate.sh` (what CI runs; needs cargo-llvm-cov). The policy is 100 % line coverage. The mod
+host seam (with the 0xBC protocol) and the test client's modded mode are gated at 100 %, file by file; the rest of the
+port is gated at per-crate floors (server 80 %, test client library 72 %, measured 81.0 % and 72.8 %) that only go up.
+The probe tools and the command-line mains of the test client are not measured; the docker-only parts of the harness
+count as they are (their tests skip without the reference environment). `scripts/mods-coverage.sh` is the quick local
+check of the 100 % part.
 
 ### Developing against a local mod-sdk
 

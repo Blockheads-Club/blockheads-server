@@ -233,6 +233,17 @@ mod tests {
             Err(HarnessError::Timeout(_))
         ));
         s.send_console("/help").unwrap();
+        // two clients on consecutive local ports, as the parity sessions run them
+        let addr: std::net::SocketAddr = format!("127.0.0.1:{}", s.port()).parse().unwrap();
+        let dir = TempDir::new("ports").unwrap();
+        let base = crate::harness::free_udp_port_range(4);
+        let ev = crate::harness::run_script_ports(
+            "client A\nclient B\nuse A\ndisconnect\nuse B\ndisconnect\n",
+            addr,
+            dir.path(),
+            Some(base),
+        );
+        assert!(ev.unwrap().iter().any(|e| e.client == "B"));
         assert!(s.is_running());
         assert_eq!(s.stop_sigint(Duration::from_secs(1)).unwrap(), Some(0));
         assert_eq!(s.stop_sigint(Duration::from_secs(1)).unwrap(), Some(0), "already stopped");
