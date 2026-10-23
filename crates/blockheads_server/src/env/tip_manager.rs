@@ -165,11 +165,9 @@ impl TipManager {
         force: bool,
         color: [f32; 4],
     ) {
-        // [[NSUserDefaults standardUserDefaults] boolForKey:@"dontDisplayTipsv2"]: always NO on the server (R7)
-        let dont_display_tips = false;
-        if !force && dont_display_tips {
-            return;
-        }
+        // `[[NSUserDefaults standardUserDefaults] boolForKey:@"dontDisplayTipsv2"]` is always NO on the server (R7),
+        // so `force` never changes anything here.
+        let _ = force;
         let mut st = self.st.borrow_mut();
         if st.current_tip_text.is_none() {
             st.current_tip_text = Some(text.to_string());
@@ -637,5 +635,93 @@ mod tests {
             Some("TIP: WARP IN ANOTHER BLOCKHEAD,\nEXPLORE & CRAFT AT THE SAME TIME!")
         );
         assert_eq!(t.st.borrow().timeout_timer, 10.0);
+    }
+
+    struct Provider;
+    impl TipBlockheadProvider for Provider {
+        fn tip_blockhead(&self, b: &ObjRef) -> Option<Rc<dyn TipBlockhead>> {
+            // Only the blockhead with unique id 1 has a tip view.
+            (b.base().borrow().unique_id == 1).then(|| {
+                let v = B::default();
+                v.tip.set(5);
+                Rc::new(v) as Rc<dyn TipBlockhead>
+            })
+        }
+    }
+
+    #[test]
+    fn the_installed_provider_turns_objects_into_tip_views() {
+        let t = TipManager::new_uninstanced();
+        t.update_tip_for_blockhead_severity_level(None, 1);
+        let (_d, dwr) = crate::lighting::artificial_light::testkit::test_dw();
+        let w = crate::lighting::artificial_light::testkit::world_with_blocks(4, &[(0, 0)]);
+        let make = |id: u64| -> ObjRef {
+            let o = crate::env::gather_block::GatherBlock::init_with_world_dynamic_world_at_position_cache(
+                &w,
+                &dwr,
+                crate::types::structs::IntPair { x: 3, y: 3 },
+                None,
+            )
+            .unwrap();
+            let o: ObjRef = o;
+            o.base().borrow_mut().unique_id = id;
+            o
+        };
+        // No provider installed: nothing.
+        t.update_tip_for_blockhead_severity_level(Some(&make(1)), 1);
+        assert_eq!(t.current_tip(), None);
+        install_tip_blockhead_provider(Rc::new(Provider));
+        t.update_tip_for_blockhead_severity_level(Some(&make(2)), 1); // not a blockhead
+        assert_eq!(t.current_tip(), None);
+        t.update_tip_for_blockhead_severity_level(Some(&make(1)), 1);
+        assert_eq!(t.current_tip().as_deref(), Some("BOB IS OUT OF FUEL."));
+        PROVIDER.with(|c| *c.borrow_mut() = None);
+    }
+
+    #[test]
+    fn the_singleton_and_idle_updates() {
+        let a = TipManager::instance();
+        assert!(Rc::ptr_eq(&a, &TipManager::instance()));
+        let t = TipManager::new_uninstanced();
+        t.update(1.0); // no timer running
+        let b = B::default();
+        t.update_tip_for_blockhead_view(Some(&b), 1); // nothing to report at level 1
+        assert_eq!(t.current_tip(), None);
+        // The environment is bad but no single cause stands out: no tip.
+        let b = B { happiness: 0.0, env: 0.0, ..B::default() };
+        t.update_tip_for_blockhead_view(Some(&b), 2);
+        assert_eq!(t.current_tip(), None);
+        // Unhappy with every need satisfied: nothing to blame either.
+        let b = B { happiness: 0.0, ..B::default() };
+        t.update_tip_for_blockhead_view(Some(&b), 2);
+        assert_eq!(t.current_tip(), None);
+    }
+
+    #[test]
+    fn exhaustion_and_the_second_blockhead_tip_by_world_rules() {
+        let t = TipManager::new_uninstanced();
+        let b = B { energy: 0.05, happiness: 0.0, ..B::default() };
+        t.update_tip_for_blockhead_view(Some(&b), 2);
+        assert_eq!(t.current_tip().as_deref(), Some("BOB IS MOVING SLOWLY\nBECAUSE HE IS EXHAUSTED."));
+        // Without a world the defaults apply (five blockheads allowed): the tip shows once per twenty minutes.
+        let long_ago =
+            |t: &TipManager| t.st.borrow_mut().time_last_second_blockhead_tip_displayed = reference_time() - 2000.0;
+        let t = TipManager::new_uninstanced();
+        long_ago(&t);
+        t.display_second_blockhead_tip_if_good_time();
+        assert!(t.current_tip().is_some());
+        // With a world the world's rules decide.
+        let w = crate::lighting::artificial_light::testkit::world_with_blocks(4, &[(0, 0)]);
+        let t = TipManager::new_uninstanced();
+        t.set_world(&w);
+        long_ago(&t);
+        t.display_second_blockhead_tip_if_good_time();
+        assert!(t.current_tip().is_some());
+        for (max, shown) in [(3, true), (9, true), (1, false)] {
+            let t = TipManager::new_uninstanced();
+            long_ago(&t);
+            t.second_blockhead_tip(false, true, max);
+            assert_eq!(t.current_tip().is_some(), shown, "{max}");
+        }
     }
 }

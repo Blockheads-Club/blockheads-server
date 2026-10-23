@@ -208,6 +208,10 @@ mod tests {
         let z = Vector::new(0.0, 0.0, 0.0);
         e.add_particle_at_pos_velocity_color_gravity_type_life_scale(z, z, z, 3, 8.0, 0.0);
         e.add_bonus_particle_at_pos_color_bonus_multiplier(z, z, 1.0);
+        let adds = e.noop_call_count();
+        e.add_particle_at_pos_velocity_color_gravity_type_life_scale_center(z, z, z, 3, 8.0, 0.0, z);
+        e.add_particle_at_pos_velocity_color_gravity_type_life_scale_center_connection_goal(z, z, z, 3, 8.0, 0.0, z, z);
+        assert_eq!(e.noop_call_count(), adds + 2);
         install_services(Rc::new(crate::lighting::artificial_light::NullServices));
     }
 }

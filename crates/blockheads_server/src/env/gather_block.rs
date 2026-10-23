@@ -62,9 +62,8 @@ impl GatherBlock {
         let me = Self::alloc(world);
         let me_obj: ObjRef = me.clone();
         let wref: WorldRef = world.clone();
-        if !base_init_with_world_dynamic_world_at_position_cache(&me_obj, &wref, dw, pos, cache) {
-            return None;
-        }
+        // The base init always succeeds for a new object (it ignores a failed registration).
+        let _ = base_init_with_world_dynamic_world_at_position_cache(&me_obj, &wref, dw, pos, cache);
         Some(me)
     }
 
@@ -78,9 +77,8 @@ impl GatherBlock {
         let me = Self::alloc(world);
         let me_obj: ObjRef = me.clone();
         let wref: WorldRef = world.clone();
-        if !base_init_with_world_dynamic_world_save_dict_cache(&me_obj, &wref, dw, save_dict, cache) {
-            return None;
-        }
+        // The base init always succeeds for a saved object.
+        let _ = base_init_with_world_dynamic_world_save_dict_cache(&me_obj, &wref, dw, save_dict, cache);
         {
             let mut st = me.st.borrow_mut();
             st.timer = save_dict.get(&"timer".to_string()).map_or(0.0, |v| v.float_value());
@@ -259,5 +257,42 @@ mod tests {
         // zero-state species ivars
         assert_eq!(g.st.borrow().timer, 0.0);
         assert_eq!(g.st.borrow().last_known_gather_value, 0);
+    }
+
+    #[test]
+    fn network_init_class_and_the_unloaded_tile() {
+        install_rec();
+        let w = world_with_blocks(4, &[(0, 0), (1, 0), (0, 1), (1, 1)]);
+        let (_d, dwr) = test_dw();
+        let at = |x: u32, y: u32| {
+            let nd =
+                crate::types::netdata::DynamicObjectNetData { unique_id: 5, pos_x: x, pos_y: y, ..Default::default() };
+            crate::types::structs::WireStruct::to_vec(&nd)
+        };
+        let g = GatherBlock::init_with_world_dynamic_world_cache_net_data(&w, &dwr, None, &at(40, 40)).unwrap();
+        let me: ObjRef = g.clone();
+        assert_eq!(me.class_info().name, "GatherBlock");
+        assert!(me.as_any().is::<GatherBlock>());
+        assert!(GatherBlock::init_with_world_dynamic_world_cache_net_data(&w, &dwr, None, &at(100, 100)).is_none());
+        // A change at a position nobody loaded is ignored.
+        let far =
+            GatherBlock::init_with_world_dynamic_world_at_position_cache(&w, &dwr, IntPair { x: 100, y: 100 }, None)
+                .unwrap();
+        let far_obj: ObjRef = far.clone();
+        far_obj.world_changed(&far_obj, &mut vec![IntPair { x: 100, y: 100 }]);
+        assert!(!far_obj.needs_removed());
+        // A gather in progress survives a change at its position.
+        let busy =
+            GatherBlock::init_with_world_dynamic_world_at_position_cache(&w, &dwr, IntPair { x: 41, y: 41 }, None)
+                .unwrap();
+        let busy_obj: ObjRef = busy.clone();
+        tile(&w, 41, 41).update(|t| t.gather_progress = 100);
+        busy_obj.world_changed(&busy_obj, &mut vec![IntPair { x: 41, y: 41 }]);
+        assert!(!busy_obj.needs_removed());
+        // A world that is gone ignores changes too.
+        let orphan = GatherBlock::alloc(&w);
+        drop(w);
+        let orphan: ObjRef = orphan;
+        orphan.world_changed(&orphan, &mut vec![IntPair { x: 0, y: 0 }]);
     }
 }

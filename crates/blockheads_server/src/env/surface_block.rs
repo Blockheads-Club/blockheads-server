@@ -89,9 +89,8 @@ impl SurfaceBlock {
         let me = Self::alloc(world);
         let me_obj: ObjRef = me.clone();
         let wref: WorldRef = world.clone();
-        if !base_init_with_world_dynamic_world_at_position_cache(&me_obj, &wref, dw, pos, cache) {
-            return None;
-        }
+        // The base init always succeeds for a new object (it ignores a failed registration).
+        let _ = base_init_with_world_dynamic_world_at_position_cache(&me_obj, &wref, dw, pos, cache);
         let mut st = me.st.borrow_mut();
         st.last_save_content = 0;
         st.ping_pong = crate::rng_rand!() > 0x3fffffff;
@@ -109,9 +108,8 @@ impl SurfaceBlock {
         let me = Self::alloc(world);
         let me_obj: ObjRef = me.clone();
         let wref: WorldRef = world.clone();
-        if !base_init_with_world_dynamic_world_save_dict_cache(&me_obj, &wref, dw, save_dict, cache) {
-            return None;
-        }
+        // The base init always succeeds for a saved object.
+        let _ = base_init_with_world_dynamic_world_save_dict_cache(&me_obj, &wref, dw, save_dict, cache);
         Some(me)
     }
 
@@ -551,5 +549,104 @@ mod tests {
         o.update_accurate_dt_is_simulation(&o, 0.1, 0.1, false);
         assert!(o.needs_removed());
         assert!(rec.take().contains(&"fill(40,40,0x414)".to_string()));
+    }
+
+    #[test]
+    fn a_full_pull_fills_the_tile_and_wakes_the_neighbours() {
+        let rec = install_rec();
+        let w = setup();
+        let (b, _o) = mk(&w, 40, 40);
+        water(&w, 40, 41, 255);
+        let t = tile(&w, 40, 40);
+        assert!(b.take_any_water_from_tile_at_pos_tile(IntPair { x: 40, y: 41 }, &t));
+        assert_eq!((t.type_index(), t.partial_content_left()), (3, 0xff));
+        assert!(b.st.borrow().remove_next_frame);
+        assert!(rec.take().contains(&"loadSurface(39,40)".to_string()));
+    }
+
+    #[test]
+    fn the_two_strike_removal_resets_when_water_is_near() {
+        install_rec();
+        let w = setup();
+        let strike = |b: &SurfaceBlock| {
+            b.st.borrow_mut().remove_next_frame_empty = true;
+            b.remove_if_floating_and_empty_of_water();
+            b.st.borrow().remove_next_frame_empty
+        };
+        // Water in the tile itself, above, or beside it with more than one unit resets the first strike.
+        let (b, _o) = mk(&w, 40, 40);
+        assert!(strike(&b)); // nothing near: the flag was already set, so this is the second strike and it removes
+        let (b, _o) = mk(&w, 41, 40);
+        water(&w, 41, 40, 5);
+        assert!(!strike(&b));
+        let (b, _o) = mk(&w, 42, 40);
+        water(&w, 42, 41, 5);
+        assert!(!strike(&b));
+        let (b, _o) = mk(&w, 43, 40);
+        water(&w, 42, 40, 5);
+        assert!(!strike(&b));
+        let (b, _o) = mk(&w, 45, 40);
+        water(&w, 46, 40, 5);
+        assert!(!strike(&b));
+        // A tile with a single unit of water does not wake its neighbours.
+        let (b1, _o1) = mk(&w, 47, 40);
+        let t1 = tile(&w, 47, 40);
+        water(&w, 47, 41, 1);
+        assert!(b1.take_any_water_from_tile_at_pos_tile(IntPair { x: 47, y: 41 }, &t1));
+        // Saved blocks start with the flip-flop off.
+        let (_d, dwr) = test_dw();
+        let saved = SurfaceBlock::init_with_world_dynamic_world_save_dict_cache(
+            &w,
+            &dwr,
+            &crate::objects::base::new_mutable_dict(),
+            None,
+        )
+        .unwrap();
+        assert!(!saved.st.borrow().ping_pong);
+        // At the edge of the loaded area the missing neighbour counts as something to keep the block for.
+        for (x, y) in [(40, 63), (0, 40), (63, 40)] {
+            let (b, _o) = mk(&w, x, y);
+            assert!(!strike(&b), "{x},{y}");
+        }
+    }
+
+    #[test]
+    fn side_flow_static_blocks_and_the_origin_marker() {
+        install_rec();
+        let w = setup();
+        // Water beside a tile with less water flows over; either neighbour order works.
+        for ping in [false, true] {
+            let (b, o) = mk(&w, 40, 40);
+            b.st.borrow_mut().ping_pong = ping;
+            water(&w, 41, 40, 200);
+            water(&w, 39, 40, 200);
+            o.update_accurate_dt_is_simulation(&o, 0.1, 0.1, false);
+            assert!(tile(&w, 40, 40).partial_content_left() > 0);
+            water(&w, 40, 40, 0);
+            water(&w, 41, 40, 0);
+            water(&w, 39, 40, 0);
+        }
+        // A tile holding exactly one unit of water with nothing to pull from dries up.
+        let (_b, o) = mk(&w, 50, 40);
+        water(&w, 50, 40, 1);
+        o.update_accurate_dt_is_simulation(&o, 0.1, 0.1, false);
+        assert_eq!(tile(&w, 50, 40).partial_content_left(), 0);
+        // The debug position toggles its flip-flop even when the block is already removed.
+        let (b0, o0) = mk(&w, 0, 0);
+        let before = b0.st.borrow().ping_pong;
+        o0.set_needs_removed(&o0, true);
+        o0.update_accurate_dt_is_simulation(&o0, 0.1, 0.1, false);
+        assert_ne!(b0.st.borrow().ping_pong, before);
+        // The class descriptor, the downcast hook and the network init.
+        assert_eq!(o.class_info().name, "SurfaceBlock");
+        assert!(o.as_any().is::<SurfaceBlock>());
+        let (_d, dwr) = test_dw();
+        let at = |x: u32, y: u32| {
+            let nd =
+                crate::types::netdata::DynamicObjectNetData { unique_id: 5, pos_x: x, pos_y: y, ..Default::default() };
+            crate::types::structs::WireStruct::to_vec(&nd)
+        };
+        assert!(SurfaceBlock::init_with_world_dynamic_world_cache_net_data(&w, &dwr, None, &at(40, 40)).is_some());
+        assert!(SurfaceBlock::init_with_world_dynamic_world_cache_net_data(&w, &dwr, None, &at(100, 100)).is_none());
     }
 }
