@@ -34,7 +34,7 @@ have their own 100 % line gate: `scripts/mods-coverage.sh`.
 
 ### Developing against a local mod-sdk
 
-`bhmod-core`, `bhmod-wasm`, `bhmod-manifest` and `bhmod-proto` come from `https://github.com/Blockheads-Club/mod-sdk` at the `rev` pinned in the
+`bhmod-core`, `bhmod-wasm`, `bhmod-manifest`, `bhmod-proto` and `bhmod-content` come from `https://github.com/Blockheads-Club/mod-sdk` at the `rev` pinned in the
 workspace `Cargo.toml`. To build against a local checkout instead (for example `../mod-sdk` next to this repository),
 patch the git source on the command line; nothing in the repository changes except `Cargo.lock`, which you must not
 commit in that state:
@@ -45,12 +45,13 @@ cargo test --workspace \
   --config "$P.bhmod-core.path=\"../mod-sdk/crates/bhmod-core\"" \
   --config "$P.bhmod-wasm.path=\"../mod-sdk/crates/bhmod-wasm\"" \
   --config "$P.bhmod-manifest.path=\"../mod-sdk/crates/bhmod-manifest\"" \
-  --config "$P.bhmod-proto.path=\"../mod-sdk/crates/bhmod-proto\""
+  --config "$P.bhmod-proto.path=\"../mod-sdk/crates/bhmod-proto\"" \
+  --config "$P.bhmod-content.path=\"../mod-sdk/crates/bhmod-content\""
 git checkout Cargo.lock   # before committing
 ```
 
-When a mod-sdk change lands, bump the four `rev`s to its commit and run
-`cargo update -p bhmod-core -p bhmod-wasm -p bhmod-manifest -p bhmod-proto`.
+When a mod-sdk change lands, bump the five `rev`s to its commit and run
+`cargo update -p bhmod-core -p bhmod-wasm -p bhmod-manifest -p bhmod-proto -p bhmod-content`.
 
 ### The 0xBC mod protocol (server side)
 

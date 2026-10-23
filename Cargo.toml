@@ -27,6 +27,7 @@ bhmod-core = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "3651df
 bhmod-wasm = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "3651df5" }
 bhmod-manifest = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "3651df5" }
 bhmod-proto = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "3651df5" }
+bhmod-content = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "3651df5" }
 
 # The original is a C/ObjC binary: unwinding is needed to emulate its exception catch sites.
 [profile.dev]

@@ -19,6 +19,8 @@ use crate::types::structs::IntPair;
 #[cfg(feature = "mods")]
 pub mod catalog;
 #[cfg(feature = "mods")]
+pub mod content;
+#[cfg(feature = "mods")]
 pub mod net;
 #[cfg(feature = "mods")]
 mod server_host;
