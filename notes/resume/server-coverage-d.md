@@ -52,3 +52,21 @@ Branch `test/coverage-d` (worktree `server-wt/coverage-d`), based on origin/dev 
   db_convertor.rs three impossible fallbacks; custom_rules.rs None arm; state.rs trim_free_physical_blocks `if let`.
 - Careful: tests that write save files must set a private HOME (`set_home_for_test` under `HOME_LOCK`), never the real one.
 - Next: building/*, lighting/*, worldgen/*, trees/* rest, plants rest.
+
+## Status (update 4, round 2 agent, end of run)
+- Full lib-only run (`~/.cache/bhcov/fulll.sh`, ~3 min incl. build): group D missed lines 3759 -> about 340 of 45 400.
+  Left (lib only): block_io 79, tree.rs 54, gem 47, plant.rs 31, pine 24, cactus 20, tulip 14, terrain 12, coconut 10,
+  apple 9, maple 7, features 7, light_archive 6, kelp 5, normal_plant 5, tile_loader 4, vine 3, bed 3 (a real
+  Blockhead in `dw.blockheads()`), simple_plants 3, lifecycle 2 (LMDB open failure of `blocks`), artificial_light 2,
+  sunlight 2 (the `minAge > 1.5 && peers != 0` early return is only reachable if the clock moves 1.5 s between two
+  consecutive reads), one line each in the fruit species.
+- building/*, lighting/*, world/* done (see commit log); worldgen/* mostly done through whole-world generation over
+  many rule sets (`worldgen::tile_loader::sweep_tests`) plus legacy block files and a self-made reference world.
+- trees/* and plants/* rest: extend `trees::tree::fuzz_tests` (random disturbances per species) and write per-species
+  scenarios for gem (branches, gem drops), pine/cactus (animals), plant.rs/tulip.
+- Dead code removed this round (proofs in commit messages): see update 3 plus: base-init failure arms of the
+  at-position / save-dict initialisers (building, trees, plants, lighting), `DynamicWorld::is_client()` branches
+  (constant false), bed.rs interaction-object init arms, tile_loader.rs `hasRefinedTerrain` write.
+- Helper scripts added: `iterl.sh <filter> <file suffix>` (lib-only, own llvm-cov dir `llvm-cov-target-dw`),
+  `showt.py <suffix> [ctx]`, `repl.py` / `fulll.sh` (full lib report), `genhooks.py` (generates calls of trait
+  defaults).

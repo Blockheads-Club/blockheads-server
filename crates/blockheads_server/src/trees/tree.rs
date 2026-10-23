@@ -3028,6 +3028,7 @@ mod fuzz_tests {
         )
         .unwrap();
         let uid = t.unique_id();
+        tl(&t).tree().borrow_mut().max_height_reached = 8;
         let tile = crate::world::tiles::tile_at_world_position_loaded(21, GROUND + 3, &w).unwrap();
         tile.update(|x| {
             x.dynamic_object_owner_old = uid as u32;
