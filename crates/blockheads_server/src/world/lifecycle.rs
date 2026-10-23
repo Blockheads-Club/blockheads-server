@@ -1456,6 +1456,7 @@ pub(crate) mod testkit {
         pub dw_load_results: RefCell<Vec<bool>>,
         pub sc_created: RefCell<Vec<(String, i32)>>,
         pub finish_light_block: Cell<bool>,
+        pub privacy_none: Cell<bool>,
     }
 
     impl Rec {
@@ -1481,7 +1482,11 @@ pub(crate) mod testkit {
             self.cloud.get()
         }
         fn server_privacy_string(&self) -> Option<String> {
-            Some("public".to_string())
+            if self.privacy_none.get() {
+                None
+            } else {
+                Some("public".to_string())
+            }
         }
         fn server_match_privacy(&self) -> u64 {
             self.privacy.get()
@@ -1967,10 +1972,8 @@ mod tests {
         let (wd, sd) = &saved[0];
         assert!(sd.is_none());
         let d = property_list_from_data(wd.as_ref().unwrap()).unwrap();
-        let mut keys: Vec<String> = match &d {
-            PlistValue::Dict(m) => m.map.keys_in_order(),
-            _ => panic!(),
-        };
+        let PlistValue::Dict(m) = &d else { panic!() };
+        let mut keys: Vec<String> = m.map.keys_in_order();
         keys.sort();
         let mut want: Vec<&str> = vec![
             "migrationComplete_1.7",
@@ -2013,14 +2016,10 @@ mod tests {
         assert!(g("pvpDisabled").bool_value());
         assert!(g("runAtLaunch").bool_value());
         assert!(!g("remoteGame").bool_value());
-        match g("distanceOrderedFoodTypes") {
-            PlistValue::Data(b) => assert_eq!(b.bytes.len(), 124),
-            _ => panic!(),
-        }
-        match g("blockheadDatasv2") {
-            PlistValue::Array(a) => assert_eq!(a.items.len(), 1),
-            _ => panic!(),
-        }
+        let PlistValue::Data(b) = g("distanceOrderedFoodTypes") else { panic!() };
+        assert_eq!(b.bytes.len(), 124);
+        let PlistValue::Array(a) = g("blockheadDatasv2") else { panic!() };
+        assert_eq!(a.items.len(), 1);
         // creationDate is set at the first save and kept
         assert!(w.creation_date().is_some());
     }
@@ -2231,7 +2230,11 @@ mod hook_default_tests {
         let _ = WorldCoreHooksStub::server_client_set_connected(&h, "x", false);
         let _ = WorldCoreHooksStub::server_client_reconnected(&h, "x");
         let _ = WorldCoreHooksStub::server_client_light_block_index(&h, "x");
-        let _ = WorldCoreHooksStub::server_client_request_for_block(&h, "x", ClientMacroBlockRequest { macro_index: 0, create_if_not_created: 0, padding: [0; 3] });
+        let _ = WorldCoreHooksStub::server_client_request_for_block(
+            &h,
+            "x",
+            ClientMacroBlockRequest { macro_index: 0, create_if_not_created: 0, padding: [0; 3] },
+        );
         let _ = WorldCoreHooksStub::server_client_block_removed(&h, "x", 0);
         let _ = WorldCoreHooksStub::server_client_block_is_wired(&h, "x", 0);
         let _ = WorldCoreHooksStub::server_client_paused(&h, "x");
@@ -2255,9 +2258,17 @@ mod hook_default_tests {
         let _ = WorldCoreHooksStub::path_creator_path_user(&h);
         let _ = WorldCoreHooksStub::path_creator_abort_path(&h);
         let _ = WorldCoreHooksStub::projectile_manager_init(&h, &w);
-        let _ = WorldCoreHooksStub::projectile_manager_fire(&h, Vector2 { x: 0.0, y: 0.0 }, Vector2 { x: 0.0, y: 0.0 }, None, 0, None);
+        let _ = WorldCoreHooksStub::projectile_manager_fire(
+            &h,
+            Vector2 { x: 0.0, y: 0.0 },
+            Vector2 { x: 0.0, y: 0.0 },
+            None,
+            0,
+            None,
+        );
         let _ = WorldCoreHooksStub::dynamic_world_create(&h, &w);
-        let _ = WorldCoreHooksStub::dynamic_world_load_dynamic_objects_reposition_blockhead_load_failures(&h, false, false);
+        let _ =
+            WorldCoreHooksStub::dynamic_world_load_dynamic_objects_reposition_blockhead_load_failures(&h, false, false);
         let _ = WorldCoreHooksStub::dynamic_world_set_server_server_clients(&h, false);
         let _ = WorldCoreHooksStub::dynamic_world_conversion_pump(&h);
         let _ = WorldCoreHooksStub::dynamic_world_send_lightblocks_to_clients(&h);
@@ -2271,7 +2282,11 @@ mod hook_default_tests {
         let _ = WorldCoreHooksStub::dynamic_world_client_disconnected_simulate(&h, "x", false);
         let _ = WorldCoreHooksStub::dynamic_world_stop_all_blockhead_actions_for_client_due_to_kick(&h, "x");
         let _ = WorldCoreHooksStub::dynamic_world_is_controlling_blockheads_for_client_player(&h, "x");
-        let _ = WorldCoreHooksStub::dynamic_world_light_changed_at_macro_pos_send_reliably(&h, IntPair { x: 0, y: 0 }, false);
+        let _ = WorldCoreHooksStub::dynamic_world_light_changed_at_macro_pos_send_reliably(
+            &h,
+            IntPair { x: 0, y: 0 },
+            false,
+        );
         let _ = WorldCoreHooksStub::dynamic_world_remote_create(&h, Vec::new(), 0, None);
         let _ = WorldCoreHooksStub::dynamic_world_remote_update(&h, Vec::new(), 0, None);
         let _ = WorldCoreHooksStub::dynamic_world_remote_creation_data_update(&h, Vec::new(), 0, None);
@@ -2297,9 +2312,15 @@ mod hook_default_tests {
         let _ = WorldCoreHooksStub::blockhead_cancel_simulate_due_to_collapse(&h, &obj);
         let _ = WorldCoreHooksStub::blockhead_current_interaction_requires_human_input(&h, &obj);
         let _ = WorldCoreHooksStub::world_helper_check_if_macro_tile_can_be_decommissioned(&h, &w, None, 0.0, None);
-        let _ = WorldCoreHooksStub::world_fully_load_if_needed_around_pos_client_light_block_index(&h, &w, IntPair { x: 0, y: 0 }, 0);
+        let _ = WorldCoreHooksStub::world_fully_load_if_needed_around_pos_client_light_block_index(
+            &h,
+            &w,
+            IntPair { x: 0, y: 0 },
+            0,
+        );
         let _ = WorldCoreHooksStub::world_place_workbench_of_type_at_pos(&h, &w, 0, IntPair { x: 0, y: 0 });
-        let _ = WorldCoreHooksStub::world_load_light_block_for_client_light_block_index_into_physical_block(&h, &w, 0, pb);
+        let _ =
+            WorldCoreHooksStub::world_load_light_block_for_client_light_block_index_into_physical_block(&h, &w, 0, pb);
         let _ = WorldCoreHooksStub::world_welcome_back_message_for_simulation_events(&h, &w);
         let _ = WorldCoreHooksStub::world_pause_button_tapped(&h, &w);
         let _ = WorldCoreHooksStub::world_path_request_pump(&h, &w);
@@ -2311,9 +2332,409 @@ mod hook_default_tests {
         let _ = WorldCoreHooksStub::tip_manager_current_tip(&h);
         assert!(log.is_empty());
         let q = NullQueries;
-        let _ = (q.door_can_be_used_by_path_user(None, IntPair { x: 0, y: 0 }), q.elevator_motor_for_shaft_at_pos(IntPair { x: 0, y: 0 }));
+        let _ = (
+            q.door_can_be_used_by_path_user(None, IntPair { x: 0, y: 0 }),
+            q.elevator_motor_for_shaft_at_pos(IntPair { x: 0, y: 0 }),
+        );
         let _ = (q.interaction_object_at_pos(IntPair { x: 0, y: 0 }), q.ladder_at_pos(IntPair { x: 0, y: 0 }));
         let _ = (q.column_at_pos(IntPair { x: 0, y: 0 }), q.stairs_at_pos(IntPair { x: 0, y: 0 }));
         let _ = (q.elevator_shaft_at_pos(IntPair { x: 0, y: 0 }), q.painting_at_pos(IntPair { x: 0, y: 0 }));
+    }
+}
+
+/// Odd inputs of the lifecycle: construction variants, server switching, camera wrap, helper functions, save
+/// files in all their shapes and the less travelled stages.
+#[cfg(test)]
+mod lifecycle_scenarios {
+    use super::testkit::*;
+    use super::*;
+
+    fn sandbox(tag: &str) -> (std::sync::MutexGuard<'static, ()>, String) {
+        let g = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let home = format!("{}/bhls_{}_{}", std::env::temp_dir().display(), tag, std::process::id());
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).unwrap();
+        crate::foundation::paths::set_home_for_test(&home);
+        (g, format!("{}/GNUstep/Library/ApplicationSupport/TheBlockheads/saves/sv", home))
+    }
+
+    fn encode(entries: Vec<(&str, PlistValue)>) -> Vec<u8> {
+        let mut d = new_mutable_dict();
+        for (k, v) in entries {
+            d.map.insert(k.to_string(), v);
+        }
+        data_from_property_list(&PlistValue::Dict(d)).unwrap()
+    }
+
+    #[test]
+    fn construction_and_server_switching() {
+        let f = fixture(32);
+        let del: Rc<dyn WorldDelegate> = f.delegate.clone();
+        let mk = |save_id: Option<&str>, server: bool, rules: Option<PlistDict>| {
+            World::init(WorldInitArgs {
+                window_info: f.world.window_info().unwrap(),
+                delegate: Rc::downgrade(&del),
+                save_id: save_id.map(|s| s.to_string()),
+                name: Some("n".to_string()),
+                server: if server { Some(Rc::new(BHServer { api: None })) } else { None },
+                server_host_data: None,
+                save_delay: 5,
+                world_width_macro: 32,
+                custom_rules: rules,
+                expert_mode: false,
+            })
+        };
+        let mut rules = new_mutable_dict();
+        rules.map.insert("seedType".to_string(), PlistValue::int(1));
+        let plain = mk(Some("b"), false, None).unwrap();
+        assert!(plain.server_clients.borrow().is_none());
+        let w = mk(Some("a"), true, Some(rules)).unwrap();
+        assert!(w.custom_rules_dict.borrow().is_some());
+        let log = capture_log(|| assert!(mk(None, false, None).is_none()));
+        assert!(log.contains("Attempting to load invalid world"));
+        // switching servers
+        let w = f.world.clone();
+        let same = w.server.borrow().clone();
+        w.set_server(same);
+        assert!(w.server.borrow().is_some());
+        with_dw(&w);
+        w.set_server(Some(Rc::new(BHServer { api: None })));
+        assert!(w.server_clients.borrow().is_some());
+        w.set_server(None);
+        assert!(w.server_clients.borrow().is_none());
+        w.set_server(None);
+        *w.dynamic_world.borrow_mut() = None;
+        w.set_server(Some(Rc::new(BHServer { api: None })));
+        // trivial entry points
+        w.delete_timers();
+        assert!(!w.tutorial_active());
+        let obj = crate::world::helpers::testutil::new_obj();
+        w.die_confirmation_confirmed(&obj);
+        let mut log = String::new();
+        w.append_debug_log(&mut log);
+        with_dw(&w);
+        w.append_debug_log(&mut log);
+        assert!(log.contains("loaded macro blocks:"));
+        let l = capture_log(|| w.file_write_failed("/x/y"));
+        assert!(l.contains("failed to write to file:/x/y"));
+        World::set_core_delegate_for_tests(None);
+        w.file_write_failed("/x/y");
+        // the loader is told to exit
+        *w.world_tile_loader.borrow_mut() = Some(Rc::new(WorldTileLoader {}));
+        let _ = capture_log(|| w.dealloc());
+        // server clients
+        w.send_to_peers(&[1, 2], None, true);
+        assert!(!w.has_server_client("nobody"));
+        assert!(!w.server_client_is_connected("nobody"));
+        assert!(w.server_client_keys().is_empty());
+        w.set_server(None);
+        w.send_to_peers(&[1], None, true);
+        assert!(w.server_client_keys().is_empty());
+        assert!(!w.has_server_client("x"));
+        // world info for iCloud with and without a dynamic world
+        *w.dynamic_world.borrow_mut() = None;
+        let info = w.world_info_for_i_cloud_save();
+        assert!(info.map.contains_key(&"portalLevel".to_string()));
+        with_dw(&w);
+        let _ = w.world_info_for_i_cloud_save();
+    }
+
+    #[test]
+    fn camera_wraps_in_both_directions_with_goals() {
+        let f = fixture(32);
+        let w = &f.world;
+        w.set_translation(Vector2 { x: 5.0, y: 1.0 });
+        assert_eq!(w.translation().x, 5.0);
+        w.set_translation_goal(Vector2 { x: -10.0, y: 0.0 });
+        w.set_translation(Vector2 { x: -5.0, y: 1.0 });
+        assert_eq!(w.translation_goal().x, 1014.0);
+        w.set_translation_goal(Vector2 { x: 1100.0, y: 0.0 });
+        w.set_translation(Vector2 { x: 1030.0, y: 1.0 });
+        assert_eq!(w.translation_goal().x, 76.0);
+        w.set_translation_goal(Vector2 { x: 5.0, y: 0.0 });
+        w.set_translation(Vector2 { x: 1030.0, y: 1.0 });
+        assert_eq!(w.translation_goal().x, 5.0);
+    }
+
+    #[test]
+    fn helper_functions() {
+        let arr = PlistValue::array(vec![PlistValue::int(1)]);
+        let PlistValue::Array(a) = mutable_copy_of_value(&arr) else { panic!() };
+        assert!(a.tag.mutable);
+        let mut d = new_mutable_dict();
+        d.map.insert("k".to_string(), PlistValue::int(1));
+        let PlistValue::Dict(c) = mutable_copy_of_value(&PlistValue::Dict(d)) else { panic!() };
+        assert_eq!(c.map.len(), 1);
+        assert_eq!(mutable_copy_of_value(&PlistValue::int(3)).int_value(), 3);
+        let dir = format!("{}/bhls_atomic_{}", std::env::temp_dir().display(), std::process::id());
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(write_file_atomically(&format!("{dir}/f"), b"abc"));
+        assert_eq!(std::fs::read(format!("{dir}/f")).unwrap(), b"abc");
+        // no directory: the temp file cannot be written
+        assert!(!write_file_atomically(&format!("{dir}/missing/f"), b"abc"));
+        // a directory in the way: the rename fails
+        std::fs::create_dir_all(format!("{dir}/d")).unwrap();
+        assert!(!write_file_atomically(&format!("{dir}/d"), b"abc"));
+        assert!(save_dir_for("abc").ends_with("/saves/abc"));
+        let o = crate::world::helpers::testutil::new_obj();
+        let p = crate::world::helpers::testutil::new_obj();
+        assert!(same_object(&o, &o.clone()) && !same_object(&o, &p));
+    }
+
+    #[test]
+    fn databases_that_cannot_be_opened_end_the_process() {
+        let (_g, _dir) = sandbox("nodb");
+        // a file where the saves directory should be
+        let appsup = crate::foundation::paths::appsup();
+        std::fs::create_dir_all(&appsup).unwrap();
+        std::fs::write(format!("{appsup}/saves"), b"x").unwrap();
+        let f = fixture(32);
+        crate::foundation::sys::set_hosted(true);
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = capture_log(|| f.world.initialize_databases());
+        }));
+        crate::foundation::sys::set_hosted(false);
+        assert!(r.is_err());
+        // a world without an id cannot start loading
+        *f.world.save_id.borrow_mut() = None;
+        crate::foundation::sys::set_hosted(true);
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f.world.incremental_load()));
+        crate::foundation::sys::set_hosted(false);
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn legacy_world_files_and_odd_save_contents() {
+        let (_g, dir) = sandbox("legacyfile");
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = fixture(32);
+        let w = f.world.clone();
+        let _ = capture_log(|| w.initialize_databases());
+        let xml = |seed: i64| {
+            let mut d = new_mutable_dict();
+            d.map.insert("randomSeed".to_string(), PlistValue::int(seed));
+            String::from_utf8(crate::plist::xml_write::write_xml(&PlistValue::Dict(d))).unwrap()
+        };
+        // binary plist, garbage and a non-dictionary root are refused with the NSLog warning
+        for bad in
+            [b"bplist00junk".to_vec(), b"garbage {{{".to_vec(), crate::plist::xml_write::write_xml(&PlistValue::int(1))]
+        {
+            std::fs::write(format!("{dir}/world"), &bad).unwrap();
+            let log = capture_log(|| assert!(!w.load_game()));
+            assert!(log.contains("does not contain a dictionary"), "{log}");
+        }
+        // a good XML legacy file
+        std::fs::write(format!("{dir}/world"), xml(77)).unwrap();
+        assert!(w.load_game());
+        assert_eq!(w.random_seed(), 77);
+        // new style file wins
+        std::fs::write(format!("{dir}/worldv2"), encode(vec![("randomSeed", PlistValue::int(88))])).unwrap();
+        assert!(w.load_game());
+        assert_eq!(w.random_seed(), 88);
+    }
+
+    #[test]
+    fn save_file_variants() {
+        let (_g, dir) = sandbox("variants");
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = fixture(32);
+        let w = f.world.clone();
+        let _ = capture_log(|| w.initialize_databases());
+        let main = w.main_database.borrow().clone().unwrap();
+        let blockheads = || PlistValue::array(vec![PlistValue::data(vec![1u8])]);
+        // blockheads of a named player, new format
+        main.set_data(
+            Some(&encode(vec![
+                ("randomSeed", PlistValue::int(1)),
+                ("playerID", PlistValue::string("p1")),
+                ("p1_blockheadDatasv2", blockheads()),
+                ("circumNavigateBooleansData", PlistValue::int(3)),
+                ("distanceOrderedFoodTypes", PlistValue::data(vec![0u8; 124])),
+            ])),
+            Some("worldv2"),
+        );
+        f.rec.cloud.set(true);
+        let log = capture_log(|| assert!(w.load_game()));
+        assert!(log.contains("CLOUD:SETTING:PASSWORD:OFF") && log.contains("CLOUD:SETTING:PVP:ON"));
+        assert!(w.found_items_list.borrow().as_ref().unwrap().contains_index(0));
+        // food types too short to use; found items archived (empty and not), no found items list
+        let mut set = IndexSet::new();
+        main.set_data(
+            Some(&encode(vec![
+                ("randomSeed", PlistValue::int(1)),
+                ("foundItems", PlistValue::data(archive_index_set(&set, "foundItems"))),
+                ("distanceOrderedFoodTypes", PlistValue::data(vec![0u8; 8])),
+                ("signOwnershipData", PlistValue::int(1)),
+            ])),
+            Some("worldv2"),
+        );
+        assert!(w.load_game());
+        set.add_index(5);
+        main.set_data(
+            Some(&encode(vec![
+                ("randomSeed", PlistValue::int(1)),
+                ("foundItems", PlistValue::data(archive_index_set(&set, "foundItems"))),
+            ])),
+            Some("worldv2"),
+        );
+        assert!(w.load_game());
+        assert!(w.found_items_list.borrow().as_ref().unwrap().contains_index(5));
+        let list = w.found_items_list.borrow_mut().take();
+        assert!(w.load_game());
+        *w.found_items_list.borrow_mut() = list;
+        // a world that already has its rules keeps them
+        main.set_data(
+            Some(&encode(vec![
+                ("randomSeed", PlistValue::int(1)),
+                ("customRulesDict", PlistValue::Dict(new_mutable_dict())),
+            ])),
+            Some("worldv2"),
+        );
+        *w.custom_rules_dict.borrow_mut() = Some(new_mutable_dict());
+        assert!(w.load_game());
+        *w.custom_rules_dict.borrow_mut() = None;
+        // a password and pvp off in the cloud
+        main.set_data(
+            Some(&encode(vec![
+                ("randomSeed", PlistValue::int(1)),
+                ("serverPassword", PlistValue::string("pw")),
+                ("pvpDisabled", PlistValue::boolean(true)),
+                ("playerID", PlistValue::string("p2")),
+                ("p2_blockheadDatas", blockheads()),
+            ])),
+            Some("worldv2"),
+        );
+        let log = capture_log(|| assert!(w.load_game()));
+        assert!(log.contains("CLOUD:SETTING:PASSWORD:ON") && log.contains("CLOUD:SETTING:PVP:OFF"), "{log}");
+        assert!(w.found_items_list.borrow().as_ref().unwrap().contains_index(0x12d));
+        f.rec.cloud.set(false);
+        // the oldest blockhead list, nothing for the player
+        main.set_data(
+            Some(&encode(vec![
+                ("randomSeed", PlistValue::int(1)),
+                ("playerID", PlistValue::string("p3")),
+                ("blockheadDatas", blockheads()),
+            ])),
+            Some("worldv2"),
+        );
+        assert!(w.load_game());
+        // circumnavigation from the legacy file
+        main.set_data(Some(&encode(vec![("randomSeed", PlistValue::int(1))])), Some("worldv2"));
+        std::fs::write(format!("{dir}/circumNavigateBooleans"), b"not an archive").unwrap();
+        assert!(w.load_game());
+        // sign ownership: legacy file only, then the database with the legacy file removed
+        let mut signs = new_mutable_dict();
+        signs.map.insert("1,2".to_string(), PlistValue::array(vec![PlistValue::int(1)]));
+        let mut inner = new_mutable_dict();
+        inner.map.insert("a".to_string(), PlistValue::int(1));
+        signs.map.insert("3,4".to_string(), PlistValue::Dict(inner));
+        let sign_bytes = data_from_property_list(&PlistValue::Dict(signs)).unwrap();
+        std::fs::write(format!("{dir}/signOwnershipData"), &sign_bytes).unwrap();
+        assert!(w.load_game());
+        assert_eq!(w.ownership_sign_positions.borrow().as_ref().unwrap().map.len(), 2);
+        main.set_data(Some(&sign_bytes), Some("signOwnershipData"));
+        assert!(w.load_game());
+        assert!(!std::path::Path::new(&format!("{dir}/signOwnershipData")).exists());
+        main.set_data(Some(&data_from_property_list(&PlistValue::int(1)).unwrap()), Some("signOwnershipData"));
+        assert!(w.load_game());
+        // an empty dictionary changes nothing
+        main.set_data(
+            Some(&data_from_property_list(&PlistValue::Dict(new_mutable_dict())).unwrap()),
+            Some("signOwnershipData"),
+        );
+        assert!(w.load_game());
+        // a directory at the legacy place is removed as well
+        std::fs::create_dir_all(format!("{dir}/signOwnershipData/sub")).unwrap();
+        assert!(w.load_game());
+    }
+
+    #[test]
+    fn a_new_world_clears_and_marks_the_start_portal() {
+        let (_g, _dir) = sandbox("portal");
+        let f = fixture(32);
+        f.rec.best_start.set((700, 100));
+        let w = f.world.clone();
+        let _ = capture_log(|| {
+            while w.incremental_load_count() < 13 {
+                w.incremental_load();
+            }
+        });
+        for i in [3 * 32 + 21, 3 * 32 + 22] {
+            let pb: PhysicalBlockRef = Box::leak(Box::new(crate::world::state::PhysicalBlock::new_fresh()));
+            pb.valid.set(true);
+            *w.macro_tiles().get(i).unwrap().physical_block.borrow_mut() = Some(pb);
+        }
+        w.incremental_load();
+        let t = tile_at_world_position_loaded(700, 99, &w).unwrap();
+        assert_eq!(t.type_index(), 0x19);
+        assert_eq!(tile_at_world_position_loaded(700, 100, &w).unwrap().type_index(), 2);
+        // the old database format without a tile loader
+        *w.world_tile_loader.borrow_mut() = None;
+        w.set_has_finished_database_migration_to17(false);
+        w.incremental_load();
+        assert!(w.load_complete());
+        // saving in the cloud without a privacy string
+        f.rec.cloud.set(true);
+        f.rec.privacy_none.set(true);
+        w.save_all();
+        // the helpers of the test kit
+        core_hooks().server_start_bulk_transaction();
+        assert!(core_hooks().server_finish_bulk_transaction());
+        core_hooks().server_client_set_connected("nobody", true);
+        let del: &dyn crate::world::state::WorldDelegate = &*f.delegate;
+        assert!(del.app_database().is_none());
+        f.delegate.set_paused(true);
+    }
+
+    #[test]
+    fn default_game_with_a_custom_seed_in_the_cloud() {
+        let f = fixture(32);
+        let mut cr = new_mutable_dict();
+        cr.map.insert("seed".to_string(), PlistValue::string("custom"));
+        cr.map.insert("custom_seed_value".to_string(), PlistValue::string("1234"));
+        *f.world.custom_rules_dict.borrow_mut() = Some(cr);
+        let rules = custom_rules_from_dict(f.world.custom_rules_dict.borrow().as_ref(), false);
+        f.world.set_custom_rules(rules);
+        f.rec.cloud.set(true);
+        let log = capture_log(|| f.world.load_default_game());
+        assert_eq!(f.world.random_seed(), f.world.custom_rules().custom_seed_value);
+        assert_eq!(f.world.custom_rules().seed_type, 1);
+        assert!(log.contains("CLOUD:SETTING:PVP:ON"));
+    }
+
+    #[test]
+    fn loading_an_existing_game_skips_the_refine_stages_and_converts_old_databases() {
+        let (_g, dir) = sandbox("existing");
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = fixture(32);
+        let w = f.world.clone();
+        let _ = capture_log(|| w.initialize_databases());
+        w.main_database
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .set_data(Some(&encode(vec![("randomSeed", PlistValue::int(9))])), Some("worldv2"));
+        *w.net_events_message_to_display_once_loaded.borrow_mut() = Some("welcome back".to_string());
+        let _ = capture_log(|| {
+            let mut n = 0;
+            while !w.load_complete() && n < 60 {
+                w.incremental_load();
+                n += 1;
+            }
+        });
+        assert!(w.did_load_game() && w.load_complete());
+        // the old database format asks for the convertor
+        assert!(w.database_convertor.borrow().is_some() || w.has_finished_database_migration_to17());
+        // saving: no delegate, a client password, the cloud privacy string, mods
+        World::set_core_delegate_for_tests(None);
+        *w.client_password.borrow_mut() = Some("cp".to_string());
+        f.rec.cloud.set(true);
+        w.save_all();
+        *w.custom_rules_dict.borrow_mut() = Some(new_mutable_dict());
+        let spy = Rc::new(crate::dynworld::state::testutil::ModSpy::default());
+        crate::mods::install(Some(spy));
+        w.save_all();
+        crate::mods::install(None);
     }
 }
