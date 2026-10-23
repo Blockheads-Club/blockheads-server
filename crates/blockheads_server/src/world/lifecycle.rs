@@ -1457,6 +1457,8 @@ pub(crate) mod testkit {
         pub sc_created: RefCell<Vec<(String, i32)>>,
         pub finish_light_block: Cell<bool>,
         pub privacy_none: Cell<bool>,
+        pub pc_in_progress: Cell<bool>,
+        pub pc_user: RefCell<Option<ObjRef>>,
     }
 
     impl Rec {
@@ -1477,6 +1479,30 @@ pub(crate) mod testkit {
         }
         fn server_credit(&self) -> f32 {
             self.credit.get()
+        }
+        fn path_creator_in_progress(&self) -> bool {
+            self.pc_in_progress.get()
+        }
+        fn path_creator_path_user(&self) -> Option<ObjRef> {
+            self.pc_user.borrow().clone()
+        }
+        fn path_creator_abort_path(&self) {
+            self.note("abort_path");
+        }
+        fn tip_manager_current_tip(&self) -> Option<String> {
+            Some("a tip".to_string())
+        }
+        fn dynamic_world_is_controlling_blockheads_for_client_player(&self, player_id: &str) -> bool {
+            player_id == "boss"
+        }
+        fn dynamic_world_players_changed(&self) {
+            self.note("players_changed");
+        }
+        fn dynamic_world_user_mute_changed(&self, player_id: &str) {
+            self.note(&format!("mute_changed {player_id}"));
+        }
+        fn loader_update_physical_block_to_latest_version(&self, _pb: PhysicalBlockRef) {
+            self.note("update_pb");
         }
         fn server_is_cloud_match(&self) -> bool {
             self.cloud.get()

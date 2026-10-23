@@ -936,10 +936,11 @@ mod tests {
         );
         assert!(w.ownership_sign_positions_need_saving());
         let entries = |w: &World| -> Vec<PlistValue> {
-            match w.ownership_sign_positions.borrow().as_ref().and_then(|d| d.map.get(&"1".to_string())) {
-                Some(PlistValue::Array(a)) => a.items.clone(),
-                _ => vec![],
-            }
+            let guard = w.ownership_sign_positions.borrow();
+            let Some(PlistValue::Array(a)) = guard.as_ref().and_then(|d| d.map.get(&"1".to_string())) else {
+                return vec![];
+            };
+            a.items.clone()
         };
         let e = entries(w);
         assert_eq!(e.len(), 1);
@@ -981,6 +982,7 @@ mod tests {
             true,
         );
         assert!(w.ownership_sign_positions.borrow().as_ref().unwrap().map.get(&"1".to_string()).is_none());
+        assert!(entries(w).is_empty());
         let sends = f.rec.sends.borrow();
         let last = &sends[sends.len() - 1].0;
         let d = crate::plist::helpers::property_list_from_data(&gzip_inflate(&last[1..]).unwrap()).unwrap();
@@ -1100,5 +1102,194 @@ mod tests {
         assert_eq!(w.muted_players.borrow().len(), 2);
         w.set_player_muted_with_id(false, "p1");
         assert!(!w.player_is_muted("p1"));
+    }
+}
+
+#[cfg(test)]
+mod more_tests {
+    use super::*;
+    use crate::world::lifecycle::testkit::*;
+
+    /// Own home directory: the mute list is written below it.
+    fn sandbox(tag: &str) -> std::sync::MutexGuard<'static, ()> {
+        let g = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let home = format!("{}/bhcn_{}_{}", std::env::temp_dir().display(), tag, std::process::id());
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(format!("{home}/GNUstep/Library/ApplicationSupport/TheBlockheads/saves/sv")).unwrap();
+        crate::foundation::paths::set_home_for_test(&home);
+        g
+    }
+
+    #[test]
+    fn stubs_and_forwards() {
+        let _g = sandbox("stubs");
+        let f = fixture(32);
+        let w = &f.world;
+        assert!(!w.requires_directional_swipes());
+        w.directional_swipe(Vector2 { x: 0.0, y: 0.0 });
+        assert_eq!(w.current_tip_text().as_deref(), Some("a tip"));
+        assert_eq!(w.current_tip_color(), [1.0; 4]);
+        w.show_double_time_prompt_if_good_time();
+        w.zoom_to_pos_pinch_zoom(IntPair { x: 0, y: 0 }, false);
+        w.water_moved_from_from_tile_to_to_tile_amount(IntPair { x: 0, y: 0 }, None, IntPair { x: 1, y: 0 }, None, 1);
+        assert!(w.world_ui().is_none());
+        w.report_achievement_with_identifier("x");
+        w.server_fill_reply(&[]);
+        // without a dynamic world
+        assert_eq!(w.current_total_blockhead_count_including_net(), 0);
+        assert!(!w.is_controlling_blockheads_for_client_player("boss"));
+        w.players_changed();
+        assert_eq!(f.rec.count("players_changed"), 0);
+        w.set_player_muted_with_id(true, "x");
+        assert_eq!(f.rec.count("mute_changed"), 0);
+        // with one
+        with_dw(w);
+        assert!(w.is_controlling_blockheads_for_client_player("boss"));
+        assert!(!w.is_controlling_blockheads_for_client_player("nobody"));
+        w.players_changed();
+        assert_eq!(f.rec.count("players_changed"), 1);
+        w.set_player_muted_with_id(true, "y");
+        assert_eq!(f.rec.count("mute_changed y"), 1);
+        w.remote_create_for_objects_of_type_client_id(vec![vec![1]], 3, "c");
+        w.remote_creation_data_update_for_objects_of_type_from_client(vec![vec![1]], 3, Some("c"));
+        assert_eq!(f.rec.count("dw_remote_create"), 1);
+        assert_eq!(f.rec.count("dw_remote_cdu"), 1);
+        // the loader
+        let pb: PhysicalBlockRef = Box::leak(Box::new(crate::world::state::PhysicalBlock::new_fresh()));
+        w.update_physical_block_to_latest_version(pb);
+        assert_eq!(f.rec.count("update_pb"), 0);
+        *w.world_tile_loader.borrow_mut() = Some(Rc::new(crate::world::state::WorldTileLoader {}));
+        w.update_physical_block_to_latest_version(pb);
+        assert_eq!(f.rec.count("update_pb"), 1);
+        // repair mode shows its own text
+        w.repair_mode.set(true);
+        assert_eq!(w.current_tip_text().as_deref(), Some("-- REPAIR MODE --"));
+    }
+
+    #[test]
+    fn aborting_the_path_of_a_blockhead() {
+        let f = fixture(32);
+        let w = &f.world;
+        let bh = crate::world::helpers::testutil::new_obj();
+        // no path creator yet
+        w.abort_in_progress_path_if_for_blockhead(&bh);
+        *w.path_creator.borrow_mut() = Some(Rc::new(crate::world::state::PathCreator {}));
+        w.abort_in_progress_path_if_for_blockhead(&bh);
+        f.rec.pc_in_progress.set(true);
+        w.abort_in_progress_path_if_for_blockhead(&bh);
+        *f.rec.pc_user.borrow_mut() = Some(crate::world::helpers::testutil::new_obj());
+        w.abort_in_progress_path_if_for_blockhead(&bh);
+        assert_eq!(f.rec.count("abort_path"), 0);
+        *f.rec.pc_user.borrow_mut() = Some(bh.clone());
+        w.abort_in_progress_path_if_for_blockhead(&bh);
+        assert_eq!(f.rec.count("abort_path"), 1);
+    }
+
+    #[test]
+    fn a_world_without_a_light_block_set_hands_out_index_zero_and_zoom_needs_a_dynamic_world() {
+        let f = fixture(32);
+        let w = &f.world;
+        *w.free_client_light_block_indices.borrow_mut() = None;
+        with_dw(w);
+        assert!(w.client_connected("solo"));
+        assert_eq!(f.rec.sc_created.borrow()[0].1, 0);
+        *w.dynamic_world.borrow_mut() = None;
+        let p = w.get_blockhead_zoom_pos_for_client_requester_client_cycle_index(Some("solo"), None, 0);
+        assert_eq!(p, IntPair { x: -1, y: -1 });
+    }
+
+    #[test]
+    fn light_lookup_wraps_around_the_world_and_tolerates_odd_blocks() {
+        let f = fixture(32);
+        let w = &f.world;
+        let pb = w.take_physical_block();
+        pb.valid.set(true);
+        *w.macro_tiles.get(0).unwrap().physical_block.borrow_mut() = Some(pb);
+        let t = TileRef::new(pb, 0);
+        assert!(w.client_connected("c"));
+        let idx = f.rec.sc_created.borrow()[0].1 as usize;
+        let mut lb = Box::new([0u8; 1024]);
+        lb[37] = 1;
+        pb.client_light_blocks.borrow_mut()[idx] = Some(lb);
+        // the block thinks it sits at the far end of the world: x wraps forward
+        pb.x_pos.set(31);
+        pb.y_pos.set(0);
+        assert!(w.tile_is_lit_for_client_at_pos_tile(Some("c"), IntPair { x: 5, y: 0 }, Some(t.clone())));
+        assert!(!w.tile_is_lit_for_client_at_pos_tile(Some("c"), IntPair { x: 6, y: 0 }, Some(t.clone())));
+        // and the other way round (a block at the start, a tile far to the east): out of range, so lit
+        *w.macro_tiles.get(18).unwrap().physical_block.borrow_mut() = Some(pb);
+        pb.x_pos.set(0);
+        assert!(w.tile_is_lit_for_client_at_pos_tile(Some("c"), IntPair { x: 600, y: 0 }, Some(t.clone())));
+        // an offset beyond the block is lit as well
+        assert!(w.tile_is_lit_for_client_at_pos_tile(Some("c"), IntPair { x: 5, y: 40 }, Some(t.clone())));
+        // an invalid block, a negative light block index
+        pb.valid.set(false);
+        assert!(w.tile_is_lit_for_client_at_pos_tile(Some("c"), IntPair { x: 5, y: 0 }, Some(t.clone())));
+        pb.valid.set(true);
+        f.rec.clients.borrow_mut().get_mut("c").unwrap().lbi = -1;
+        assert!(w.tile_is_lit_for_client_at_pos_tile(Some("c"), IntPair { x: 5, y: 0 }, Some(t)));
+    }
+
+    #[test]
+    fn circumnavigating_the_whole_world_reports_the_achievement() {
+        let f = fixture(1);
+        let w = &f.world;
+        *w.circum_navigate_booleans.borrow_mut() = Some(crate::foundation::indexset::IndexSet::new());
+        for x in (0..32).step_by(2) {
+            w.mark_circum_navigate_x(x);
+        }
+        w.mark_circum_navigate_x(31);
+        w.mark_circum_navigate_x(1);
+        assert!(w.circum_navigate_booleans.borrow().as_ref().unwrap().count() >= 24);
+    }
+
+    #[test]
+    fn messages_reports_mutes_and_signs_in_corners() {
+        let _g = sandbox("corners");
+        let f = fixture(32);
+        let w = &f.world;
+        // a world without a server keeps its welcome message and ignores reports and broadcasts
+        let local = World::alloc(32);
+        local.set_new_welcome_message(Some("hi"));
+        assert!(local.welcome_message.borrow().is_none());
+        local.report_user_with_name_reporter_name_reporter_message_reported_avatar_image_path(None, None, None, None);
+        local.ownership_sign_was_placed_or_changed_at_pos_with_land_owner_width_radius_height_radius_was_removed(
+            IntPair { x: 3, y: 3 },
+            None,
+            15,
+            9,
+            false,
+        );
+        assert!(local.ownership_sign_positions_need_saving());
+        // cloud reports with an empty avatar path, a path, and none
+        f.rec.cloud.set(true);
+        let log = capture_log(|| {
+            for avatar in [Some(""), Some("p.png"), None] {
+                w.report_user_with_name_reporter_name_reporter_message_reported_avatar_image_path(
+                    Some("bad"),
+                    None,
+                    Some("a\nb"),
+                    avatar,
+                );
+            }
+        });
+        assert!(log.contains("REPORTED-AVATAR:<<p.png>>"));
+        // signs with a non-default height, local and broadcast
+        let pos = IntPair { x: 40, y: 7 };
+        w.update_local_ownership_signs_due_to_sign_placed_or_changed_at_pos_with_land_owner_width_radius_height_radius_was_removed(pos, None, 15, 9, false);
+        w.ownership_sign_was_placed_or_changed_at_pos_with_land_owner_width_radius_height_radius_was_removed(
+            pos, None, 15, 7, false,
+        );
+        // a bucket that holds something other than a list is left alone
+        w.ownership_sign_positions.borrow_mut().as_mut().unwrap().map.insert("1".to_string(), PlistValue::int(1));
+        w.update_local_ownership_signs_due_to_sign_placed_or_changed_at_pos_with_land_owner_width_radius_height_radius_was_removed(pos, None, 15, 15, false);
+        // no macro tile at all
+        assert!(w.tile_is_lit_for_client_at_pos_tile(Some("nobody"), IntPair { x: 5, y: 5000 }, None));
+        // a mute list file that is not a list
+        let _ = w.player_is_muted("zed");
+        let dir = save_dir_for("sv");
+        std::fs::write(format!("{dir}/default_mutelist"), b"<plist version=\"1.0\"><dict/></plist>").unwrap();
+        w.muted_players.borrow_mut().clear();
+        assert!(!w.player_is_muted("zed"));
     }
 }
