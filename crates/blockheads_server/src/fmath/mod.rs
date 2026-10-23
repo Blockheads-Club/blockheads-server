@@ -3,3 +3,6 @@
 pub mod cconv;
 pub mod libm;
 pub mod vector;
+
+#[cfg(test)]
+mod parity_tests;

@@ -493,10 +493,8 @@ fn kernel_rem_pio2f(x: &[f32; 3], y: &mut [f32; 2], e0: i32, nx: i32) -> i32 {
     let jk = INIT_JK[2];
     let jp = jk;
     let jx = nx - 1;
-    let mut jv = (e0 - 3) / 8;
-    if jv < 0 {
-        jv = 0;
-    }
+    // callers pass e0 >= 0, so the quotient is never negative; the clamp only keeps the C expression's shape
+    let mut jv = ((e0 - 3) / 8).max(0);
     let mut q0 = e0 - 8 * (jv + 1);
     let mut j = jv - jx;
     let m = jx + jk;
@@ -561,8 +559,7 @@ fn kernel_rem_pio2f(x: &[f32; 3], y: &mut [f32; 2], e0: i32, nx: i32) -> i32 {
             if q0 > 0 {
                 match q0 {
                     1 => iq[(jz - 1) as usize] &= 0x7f,
-                    2 => iq[(jz - 1) as usize] &= 0x3f,
-                    _ => {}
+                    _ => iq[(jz - 1) as usize] &= 0x3f,
                 }
             }
             if ih == 2 {
@@ -608,15 +605,9 @@ fn kernel_rem_pio2f(x: &[f32; 3], y: &mut [f32; 2], e0: i32, nx: i32) -> i32 {
         }
     } else {
         z = scalbnf(z, -q0);
-        if z >= two8 {
-            let fwv = ((twon8 * z) as i32) as f32;
-            iq[jz as usize] = (z - two8 * fwv) as i32;
-            jz += 1;
-            q0 += 8;
-            iq[jz as usize] = fwv as i32;
-        } else {
-            iq[jz as usize] = z as i32;
-        }
+        // z < 1 here and q0 >= -8 for every caller, so z * 2^-q0 < 2^8: no second 8-bit chunk is ever needed
+        // (the C code splits it when z >= 2^8)
+        iq[jz as usize] = z as i32;
     }
     let mut fwv = scalbnf(one, q0);
     let mut i = jz;
@@ -1053,9 +1044,8 @@ fn ieee754_powf(x: f32, mut y: f32) -> f32 {
         }
     }
     if iy == 0x7f80_0000 {
-        if ix == 0x3f80_0000 {
-            return y - y;
-        } else if ix > 0x3f80_0000 {
+        // |x| == 1 returned above, so only |x| above or below 1 reach this point
+        if ix > 0x3f80_0000 {
             return if hy >= 0 { y } else { zero };
         } else {
             return if hy < 0 { -y } else { zero };
@@ -1376,9 +1366,7 @@ fn sincos_dd(x: f64, want_cos: bool) -> Option<f64> {
         hi = -hi;
         lo = -lo;
     }
-    if !(hi.abs() > 1.0e-24) {
-        return None;
-    }
+    Some(()).filter(|_| hi.abs() > 1.0e-24)?;
     // error bound: 2^-85 relative + 2^-97 absolute (reduction)
     let err = hi.abs() * 2.5849394142282115e-26 + 6.310887241768095e-30;
     let a = hi + (lo + err);
@@ -1884,9 +1872,6 @@ mod big {
         let mut k = 1u64;
         loop {
             term = ctx.div_u64(&term, n2);
-            if term.is_zero() {
-                break;
-            }
             let t = ctx.div_u64(&term, 2 * k + 1);
             sum = if k & 1 == 1 { ctx.sub(&sum, &t) } else { ctx.add(&sum, &t) };
             if term.top() < sum.top() - ctx.p as i64 - 8 {
@@ -1912,9 +1897,6 @@ mod big {
             let mut k = 1u64;
             loop {
                 term = ctx.div_u64(&term, n2);
-                if term.is_zero() {
-                    break;
-                }
                 let t = ctx.div_u64(&term, 2 * k + 1);
                 sum = ctx.add(&sum, &t);
                 if term.top() < sum.top() - ctx.p as i64 - 8 {
@@ -1942,9 +1924,6 @@ mod big {
         let mut i = 1u64;
         loop {
             term = ctx.div_u64(&ctx.mul(&term, &r2), (2 * i) * (2 * i + 1));
-            if term.is_zero() {
-                break;
-            }
             term.neg = !term.neg;
             s = ctx.add(&s, &term);
             if term.top() < s.top() - guard {
@@ -1958,9 +1937,6 @@ mod big {
         let mut i = 1u64;
         loop {
             term = ctx.div_u64(&ctx.mul(&term, &r2), (2 * i - 1) * (2 * i));
-            if term.is_zero() {
-                break;
-            }
             term.neg = !term.neg;
             c = ctx.add(&c, &term);
             if term.top() < c.top() - guard {
@@ -2025,9 +2001,6 @@ mod big {
             loop {
                 pw = ctx.mul(&pw, &s2);
                 let term = ctx.div_u64(&pw, 2 * k + 1);
-                if term.is_zero() {
-                    break;
-                }
                 sum = ctx.add(&sum, &term);
                 if term.top() < sum.top() - ctx.p as i64 - 12 {
                     break;
@@ -2116,9 +2089,6 @@ mod big {
         loop {
             pw = ctx.mul(&pw, &u2);
             let term = ctx.div_u64(&pw, 2 * k + 1);
-            if term.is_zero() {
-                break;
-            }
             sum = if k & 1 == 1 { ctx.sub(&sum, &term) } else { ctx.add(&sum, &term) };
             if term.top() < sum.top() - ctx.p as i64 - 12 {
                 break;
@@ -2173,6 +2143,129 @@ mod big {
         };
         Some(if v.neg { -r } else { r })
     }
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn f(m: u64, e: i64, neg: bool) -> F {
+            F { neg, e, m: if m == 0 { vec![] } else { vec![m] } }
+        }
+
+        #[test]
+        fn limb_helpers() {
+            assert_eq!(bitlen(&[]), 0);
+            assert_eq!(bitlen(&[0, 1]), 65);
+            assert!(bit(&[0b100], 2) && !bit(&[0b100], 3) && !bit(&[1], 64));
+            assert!(low_nonzero(&[0, 0b100], 67));
+            assert!(low_nonzero(&[1, 0], 70));
+            assert!(!low_nonzero(&[0, 0b100], 66));
+            assert!(!low_nonzero(&[0], 3));
+            assert!(shl(&[], 5).is_empty());
+            assert_eq!(shl(&[1u64 << 63], 1), vec![0, 1]);
+            assert_eq!(shl(&[3], 64), vec![0, 3]);
+            assert!(shr(&[1], 64).is_empty());
+            assert_eq!(shr(&[0, 1], 64), vec![1]);
+            assert_eq!(shr(&[0, 3], 1), vec![1 << 63, 1]);
+            assert!(mul_mag(&[], &[3]).is_empty());
+            assert_eq!(mul_mag(&[u64::MAX], &[u64::MAX]), vec![1, u64::MAX - 1]);
+            assert_eq!(mul_small(&[u64::MAX], 2), vec![u64::MAX - 1, 1]);
+            assert_eq!(divrem_small(&[7, 1], 10), (vec![0x1999_9999_9999_999A], 3));
+            assert!(divide(&[3], &[5]).is_empty());
+            assert_eq!(divide(&[0, 1], &[3]), vec![0x5555_5555_5555_5555]);
+            let q = u128::MAX / ((1u128 << 64) | u64::MAX as u128);
+            assert_eq!(
+                divide(&[u64::MAX, u64::MAX], &[u64::MAX, 1]),
+                vec![q as u64, (q >> 64) as u64].into_iter().filter(|w| *w != 0).collect::<Vec<_>>()
+            );
+            assert!(isqrt(&[]).is_empty());
+            assert_eq!(isqrt(&[1_000_000]), vec![1000]);
+            assert_eq!(isqrt(&[0, 1]), vec![1 << 32]);
+            assert_eq!(cmp_mag(&[1, 2], &[5]), Ordering::Greater);
+            assert_eq!(cmp_mag(&[5], &[1, 2]), Ordering::Less);
+            assert_eq!(cmp_mag(&[5, 2], &[7, 2]), Ordering::Less);
+        }
+
+        #[test]
+        fn float_values() {
+            assert!(F::zero().is_zero() && F::from_u64(0).is_zero() && !F::from_i64(0).neg);
+            assert!(F::from_i64(-3).neg && !F::from_i64(3).neg);
+            assert!(F::from_f64(0.0).is_zero());
+            let sub = F::from_f64(f64::from_bits(1));
+            assert_eq!((sub.e, sub.m.clone()), (-1074, vec![1]));
+            assert_eq!(F::from_f64(-1.5).approx(), -1.5);
+            assert_eq!(F::zero().top(), i64::MIN / 4);
+            assert_eq!(f(8, 0, false).top(), 4);
+            assert!(F::zero().neg().neg == false && f(1, 0, false).neg().neg);
+            assert!(!f(1, 0, true).abs().neg);
+            assert!(F::zero().ldexp(5).is_zero());
+            assert_eq!(f(1, 0, false).ldexp(3).e, 3);
+            assert_eq!(F::zero().approx(), 0.0);
+            assert_eq!(f(1, 2000, false).approx(), f64::INFINITY);
+            assert_eq!(f(1, 1500, false).ldexp(-1400).approx(), (1u128 << 100) as f64);
+            assert_eq!(f(1, -1500, false).ldexp(1400).approx(), 1.0 / (1u128 << 100) as f64);
+            let wide = F { neg: false, e: 0, m: vec![0, 1] };
+            assert_eq!(wide.approx(), (1u128 << 64) as f64);
+        }
+
+        #[test]
+        fn context_arithmetic() {
+            let c = Ctx { p: 64 };
+            let one = f(1, 0, false);
+            let three = f(3, 0, false);
+            assert_eq!(c.add(&F::zero(), &three).m, vec![3]);
+            assert_eq!(c.add(&three, &F::zero()).m, vec![3]);
+            // an addend far below the precision is dropped
+            assert_eq!(c.add(&three, &f(1, -400, false)).m, vec![3]);
+            assert_eq!(c.add(&f(1, -400, false), &three).m, vec![3]);
+            assert!(c.add(&three, &f(3, 0, true)).is_zero());
+            assert_eq!(c.add(&f(5, 0, false), &f(3, 0, true)).approx(), 2.0);
+            assert_eq!(c.add(&f(3, 0, false), &f(5, 0, true)).approx(), -2.0);
+            assert_eq!(c.sub(&three, &one).approx(), 2.0);
+            assert_eq!(c.sub(&three, &F::zero()).approx(), 3.0);
+            assert!(c.mul(&F::zero(), &three).is_zero());
+            assert_eq!(c.mul(&three, &f(2, 0, true)).approx(), -6.0);
+            assert!(c.div(&F::zero(), &three).is_zero());
+            assert_eq!(c.div(&f(6, 0, false), &three).approx(), 2.0);
+            assert!(c.mul_u64(&three, 0).is_zero() && c.mul_u64(&F::zero(), 5).is_zero());
+            assert_eq!(c.mul_u64(&three, 5).approx(), 15.0);
+            assert!(c.div_u64(&F::zero(), 3).is_zero());
+            assert_eq!(c.div_u64(&f(9, 0, false), 3).approx(), 3.0);
+            assert!(c.sqrt(&F::zero()).is_zero());
+            assert_eq!(c.sqrt(&f(16, 0, false)).approx(), 4.0);
+            assert_eq!(c.sqrt(&f(1, 1, false)).approx(), std::f64::consts::SQRT_2);
+            assert_eq!(c.sqrt(&f(1, -3, false)).approx(), (0.125f64).sqrt());
+            assert_eq!(c.cmp(&three, &one), Ordering::Greater);
+            assert_eq!(c.cmp(&one, &three), Ordering::Less);
+            assert_eq!(c.cmp(&three, &three), Ordering::Equal);
+            // normalisation keeps only p bits
+            let wide = F { neg: true, e: 0, m: vec![u64::MAX, u64::MAX] };
+            assert_eq!(bitlen(&c.norm(wide).m), 64);
+            assert!(c.norm(F { neg: true, e: 9, m: vec![] }).neg == false);
+        }
+
+        #[test]
+        fn rounding() {
+            assert_eq!(round_int(&F::zero()), (false, vec![]));
+            assert_eq!(round_int(&f(3, 2, true)), (true, vec![12]));
+            assert_eq!(round_int(&f(5, -1, false)), (false, vec![3]));
+            assert_eq!(round_int(&f(1, -5, true)), (false, vec![]));
+            assert_eq!(rne(&F::zero()), 0.0);
+            assert_eq!(rne(&f(1, 1100, false)), f64::INFINITY);
+            assert_eq!(rne(&f(1, -1200, false)), 0.0);
+            assert_eq!(rne(&f(1, 3, false)), 8.0);
+            assert_eq!(rne(&f(3, -1, false)), 1.5);
+            // ties go to even, above-half rounds up
+            let two53 = 1u64 << 53;
+            assert_eq!(rne(&F { neg: false, e: 0, m: vec![(two53 << 1) | 1] }), (two53 as f64) * 2.0);
+            assert_eq!(rne(&F { neg: false, e: 0, m: vec![(two53 << 1) | 3] }), (two53 as f64) * 2.0 + 4.0);
+            assert_eq!(
+                rne(&F { neg: false, e: -80, m: vec![(1u64 << 63) | 1] }),
+                (1u64 << 63) as f64 / (1u128 << 80) as f64
+            );
+            assert_eq!(rne(&f(1, -1074, false)), f64::from_bits(1));
+            assert_eq!(rne(&F { neg: false, e: -1100, m: vec![3] }), 0.0);
+        }
+    }
 }
 
 /// Result of one precision level of a slow path evaluation.
@@ -2186,17 +2279,14 @@ enum Eval {
 /// Correctly rounded evaluation helper: runs `g(p)` at increasing precision until the Ziv test passes.
 fn ziv<G: Fn(usize) -> Eval>(g: G) -> f64 {
     let levels = [256usize, 512, 1024];
-    for (i, &p) in levels.iter().enumerate() {
-        match g(p) {
-            Eval::Done(r) => return r,
-            Eval::Val(v, bias) => {
-                if let Some(r) = big::round_ziv(&v, p, i == levels.len() - 1, bias) {
-                    return r;
-                }
-            }
-        }
-    }
-    unreachable!("last Ziv level always decides")
+    levels
+        .iter()
+        .enumerate()
+        .find_map(|(i, &p)| match g(p) {
+            Eval::Done(r) => Some(r),
+            Eval::Val(v, bias) => big::round_ziv(&v, p, i == levels.len() - 1, bias),
+        })
+        .expect("last Ziv level always decides")
 }
 
 /// Exact (slow-path only) `sin`; exposed for the parity tests, equals [`sin`].
@@ -2381,27 +2471,19 @@ fn ieee754_pow(x: f64, y: f64) -> f64 {
     if qx == 0x7ff0_0000 {
         return if y > 0.0 { x } else { 0.0 };
     }
-    if qy > 0x45f0_0000 && qy < 0x7ff0_0000 {
-        if x == 1.0 {
-            return 1.0;
-        }
-        if y > 0.0 {
-            return if x > 1.0 { f64::INFINITY } else { 0.0 };
-        }
-        if y < 0.0 {
-            return if x < 1.0 { f64::INFINITY } else { 0.0 };
-        }
-    }
+    // Only finite |y| >= 2^128 reaches this point (smaller ones take the exact path above), so the result is
+    // 1, 0 or infinity.
     if x == 1.0 {
         return 1.0;
     }
     if y > 0.0 {
         return if x > 1.0 { f64::INFINITY } else { 0.0 };
     }
-    if y < 0.0 {
-        return if x < 1.0 { f64::INFINITY } else { 0.0 };
+    if x < 1.0 {
+        f64::INFINITY
+    } else {
+        0.0
     }
-    0.0
 }
 
 /// glibc 2.19 `pow` (correctly rounded; special values of `__ieee754_pow` plus the `_POSIX_` mode
@@ -2511,4 +2593,94 @@ pub fn tanf(x: f32) -> f32 {
 /// [`powf_port`] with x86-64's default NaN for NaNs it creates (see [`x86_nan`]).
 pub fn powf(x: f32, y: f32) -> f32 {
     x86_nanf(powf_port(x, y), x.is_nan() || y.is_nan())
+}
+
+#[cfg(test)]
+mod edge_tests {
+    use super::*;
+
+    #[test]
+    fn scalbnf_ranges() {
+        assert_eq!(scalbnf(0.0, 5), 0.0);
+        assert_eq!(scalbnf(-0.0, 5).to_bits(), (-0.0f32).to_bits());
+        assert_eq!(scalbnf(f32::from_bits(1), 1), f32::from_bits(2));
+        assert_eq!(scalbnf(1e-40, 30), 1e-40 * (1u64 << 30) as f32);
+        assert_eq!(scalbnf(f32::INFINITY, 1), f32::INFINITY);
+        assert!(scalbnf(f32::NAN, 1).is_nan());
+        assert_eq!(scalbnf(1.0, -60000), 0.0);
+        assert_eq!(scalbnf(-1.0, 60000), f32::NEG_INFINITY);
+        assert_eq!(scalbnf(1.0, 200), f32::INFINITY);
+        assert_eq!(scalbnf(1.0, -200), 0.0);
+        assert_eq!(scalbnf(3.0, 2), 12.0);
+    }
+
+    #[test]
+    fn float_reduction_edges() {
+        let mut y = [0.0f32; 2];
+        assert_eq!(ieee754_rem_pio2f(0.5, &mut y), 0);
+        assert_eq!(y, [0.5, 0.0]);
+        assert_eq!(ieee754_rem_pio2f(f32::INFINITY, &mut y), 0);
+        assert!(y[0].is_nan() && y[1].is_nan());
+        // every exponent: the large-argument reduction (kernel_rem_pio2f) with all its rounding cases
+        for e in 0..120 {
+            for m in [0x0000_0001u32, 0x0040_0000, 0x007f_ffff, 0x0012_3456] {
+                let x = f32::from_bits((((127 + e) as u32) << 23) | m);
+                let mut y = [0.0f32; 2];
+                let n = ieee754_rem_pio2f(x, &mut y);
+                assert!(y[0].is_finite(), "{x}");
+                assert!((0..4).contains(&(n & 3)) || n < 0);
+                let _ = (sinf_port(x), cosf_port(x), tanf_port(x));
+            }
+        }
+    }
+
+    #[test]
+    fn float_special_values() {
+        assert_eq!(kernel_tanf(0.0, 0.0, -1), f32::INFINITY);
+        assert_eq!(kernel_tanf(0.0, 0.0, 1), 0.0);
+        assert!(atanf(f32::NAN).is_nan());
+        assert_eq!(ieee754_powf(-1.0, f32::INFINITY), 1.0);
+        assert_eq!(powf_port(2.0, 128.0), f32::INFINITY);
+        assert_eq!(powf_port(2.0, -150.0), 0.0);
+        assert_eq!(powf_port(2.0, -149.0), f32::from_bits(1));
+        // just below the overflow threshold: the result rounds to the largest finite values, not infinity
+        let near = powf_port(4.8740753e25, 1.5);
+        assert!(near.is_finite() && near > 3.0e38);
+    }
+
+    #[test]
+    fn double_pow_special_values() {
+        assert_eq!(pow(2.0, 1e300), f64::INFINITY);
+        assert_eq!(pow(2.0, -1e300), 0.0);
+        assert_eq!(pow(0.5, 1e300), 0.0);
+        assert_eq!(pow(0.5, -1e300), f64::INFINITY);
+        assert_eq!(pow(1.0, 1e300), 1.0);
+        assert_eq!(checkint(4503599627370497.0), -1);
+        assert_eq!(checkint(4503599627370498.0), 1);
+        assert_eq!(checkint(1048577.0), -1);
+        assert_eq!(checkint(1048578.0), 1);
+        assert_eq!(checkint(2.5), 0);
+        assert_eq!(checkint(3.0), -1);
+        assert_eq!(checkint(4.0), 1);
+        assert_eq!(checkint(1.5), 0);
+    }
+
+    #[test]
+    fn exact_helpers_on_degenerate_input() {
+        assert_eq!(big::pow_pos(1.0, 2.0, 64).unwrap().approx(), 1.0);
+        assert!(big::atan(&big::Ctx { p: 64 }, &big::F::zero()).0.is_zero());
+        assert_eq!(big::round_ziv(&big::F::zero(), 64, false, 0), Some(0.0));
+        // a value on the midpoint of two doubles is undecided until the last level, then follows the bias
+        let ctx = big::Ctx { p: 400 };
+        let one_ulp_half = big::F::from_f64(1.0).ldexp(0);
+        let half_ulp = big::F { neg: false, e: -53, m: vec![1] };
+        let mid = ctx.add(&one_ulp_half, &half_ulp);
+        assert_eq!(big::round_ziv(&mid, 200, false, 0), None);
+        let up = 1.0 + f64::EPSILON;
+        assert_eq!(big::round_ziv(&mid, 200, true, 1), Some(up));
+        assert_eq!(big::round_ziv(&mid, 200, true, -1), Some(1.0));
+        assert_eq!(big::round_ziv(&mid, 200, true, 0), Some(1.0));
+        let mid_odd = ctx.add(&big::F::from_f64(up), &half_ulp);
+        assert_eq!(big::round_ziv(&mid_odd, 200, true, 0), Some(1.0 + 2.0 * f64::EPSILON));
+    }
 }
