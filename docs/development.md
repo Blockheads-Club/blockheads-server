@@ -73,6 +73,11 @@ installed) and the `bhcModLoader` argument of `ModHooks::pre_login` (the 0x1f ch
 - Channels: the server owns the wire ids (assigned on first use, never reused). `MOD_LIST` carries the open channels;
   later ones reach clients in the game as `CHANNEL_REGISTER` (before the first message on it, and on the next poll).
   A client `CHANNEL_REGISTER` is ignored. Server mods sending to a player without the loader are a silent no-op.
+  `SERVICE_CALL` / `SERVICE_RESULT` (API 0.3.1) are accepted from modded players in the game only (`Inbound` in
+  `net.rs`): a call goes to `ModHost::remote_call_in` (the caller mod must be in the player's `READY.loaded`; the provider's
+  `remote = true`, the per-player token bucket from `mods::remote_limits()` and the provider's time budget apply) and the
+  result is sent back at once; server mod calls to a player go out through `GameBridge::service_send` (`unavailable`
+  for a player without the loader). Tests: `crates/bh_testclient/tests/mods_services.rs`.
 - `bhcModLoader` is never stored: the player info keeps only the listed vanilla keys.
 - Rejections: modded clients get `REJECT_TEXT` before `0x26` for a protocol mismatch, missing or stale acceptance
   and `player-pre-login` refusals; vanilla clients never get a 0xBC byte.
