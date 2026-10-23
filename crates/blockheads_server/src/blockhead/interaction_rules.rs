@@ -2005,6 +2005,7 @@ pub(crate) mod testhost {
         pub io: RefCell<Option<ObjRef>>,
         pub npc: RefCell<Option<ObjRef>>,
         pub io_type: Cell<i32>,
+        pub torch: RefCell<Option<ObjRef>>,
     }
     impl AHost {
         pub fn install() -> Rc<AHost> {
@@ -2067,6 +2068,9 @@ pub(crate) mod testhost {
         }
         fn get_plant_at_pos(&self, _p: IntPair) -> Option<ObjRef> {
             self.plant.borrow().clone()
+        }
+        fn torch_at_pos(&self, _p: IntPair) -> Option<ObjRef> {
+            self.torch.borrow().clone()
         }
         fn free_blocks_at_pos(&self, _p: IntPair) -> Vec<ObjRef> {
             self.fbs.borrow().clone()

@@ -584,10 +584,8 @@ impl Blockhead {
         let Some(it) = self.jetpack_item() else { return 0 };
         let db = it.borrow().data_b;
         let f = 1.0f32 - (db as f32) / 16384.0f32;
-        let mut n = f32_to_i32(10.0f32 * f + 0.99f32);
-        if n > 10 {
-            n = 10;
-        }
+        // (`dataB` is unsigned, so `f` is at most 1.0 and `n` at most 10)
+        let n = f32_to_i32(10.0f32 * f + 0.99f32);
         if n < 1 {
             0
         } else {
@@ -1994,5 +1992,322 @@ mod tests {
             b.local_net_id(),
             Some("cf1e8c14e54505f60aa10ceb8d5d8ab3".to_string()).filter(|_| false).or(b.client_id())
         );
+    }
+
+    use crate::objects::base::DynamicObjectBase;
+    use crate::objects::class_info::{register_class_info, ClassInfo};
+    use crate::objects::handle;
+    use crate::objects::protocols::HarmableDynamicObject;
+    use std::cell::{Cell, RefCell};
+
+    /// An NPC-class mount that records the damage it is handed.
+    struct RideNpc {
+        base: RefCell<DynamicObjectBase>,
+        hits: Cell<i32>,
+    }
+    impl crate::objects::base::DynamicObject for RideNpc {
+        fn base(&self) -> &RefCell<DynamicObjectBase> {
+            &self.base
+        }
+        fn class_info(&self) -> &'static ClassInfo {
+            &crate::npc::npc::NPC_CLASS
+        }
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn as_harmable(&self) -> Option<&dyn HarmableDynamicObject> {
+            Some(self)
+        }
+    }
+    impl HarmableDynamicObject for RideNpc {
+        fn tap_is_within_body_radius(&self, _tap: Vector2) -> bool {
+            false
+        }
+        fn hit_with_force_blockhead(&self, _me: &ObjRef, force: i32, _b: Option<&ObjRef>) {
+            self.hits.set(force);
+        }
+        fn will_die_if_hit_by_force(&self, _force: i32) -> bool {
+            false
+        }
+        fn is_visible(&self) -> bool {
+            true
+        }
+        fn center(&self) -> Vector2 {
+            Vector2 { x: 0.0, y: 0.0 }
+        }
+    }
+
+    fn mount_obj_base_is_zero(m: &RideNpc) -> bool {
+        let any: &dyn Any = m.as_any();
+        any.downcast_ref::<RideNpc>().is_some() && m.base().borrow().unique_id == 0
+    }
+
+    #[test]
+    fn pure_helpers_and_trivial_accessors() {
+        assert_eq!(wrap_x_float(100.0, 1), 68.0);
+        assert_eq!(wrap_x_float(-100.0, 1), -68.0);
+        assert_eq!(wrap_x_float(5.0, 1), 5.0);
+        let (_w, _dw, o, _h) = setup_q();
+        let b = bh_of(&o);
+        assert!(b.is_visible() == b.bh.borrow().visible);
+        assert!(!b.interacting());
+        assert_eq!(b.save_item_slots_array().len(), b.bh.borrow().save_item_slots_array.len());
+        assert!(!b.is_currently_active_blockhead_according_to_net_data());
+        assert_eq!(b.current_temperature(), b.bh.borrow().current_temperature);
+        assert!(!b.cancel_simulate_due_to_collapse());
+        assert_eq!(b.render_pos(), b.bh.borrow().render_pos);
+        let _ = b.current_trade_mission();
+        assert!(b.is_double_height() && b.craft_progress_ui_requires_collect_button_when_completed());
+        b.set_paused(true);
+        b.set_paused(true);
+        assert!(b.paused());
+    }
+
+    #[test]
+    fn hits_pass_on_to_an_npc_mount() {
+        register_class_info(&crate::npc::npc::NPC_CLASS);
+        let (_w, _dw, o, _h) = setup_q();
+        let b = bh_of(&o);
+        let mount = handle::alloc_obj(|w| RideNpc {
+            base: RefCell::new(DynamicObjectBase::alloc_zeroed_with(w)),
+            hits: Cell::new(-1),
+        });
+        let mount_obj: ObjRef = mount.clone();
+        b.bh.borrow_mut().ride_object = Some(mount_obj);
+        b.hit_with_force_blockhead(40, None);
+        assert_eq!(mount.hits.get(), 10);
+        // the mount's other protocol methods
+        assert!(!mount.tap_is_within_body_radius(Vector2 { x: 0.0, y: 0.0 }));
+        assert!(!mount.will_die_if_hit_by_force(1));
+        assert!(mount.is_visible());
+        assert_eq!(mount.center(), Vector2 { x: 0.0, y: 0.0 });
+        assert!(mount_obj_base_is_zero(&mount));
+        // a mount that is not an NPC takes nothing; replicas pass nothing on
+        mount.hits.set(-1);
+        b.bh.borrow_mut().ride_object = Some(stub(1, true));
+        b.hit_with_force_blockhead(40, None);
+        b.base.borrow_mut().is_net = true;
+        b.bh.borrow_mut().ride_object = Some(mount.clone() as ObjRef);
+        b.hit_with_force_blockhead(40, None);
+        assert_eq!(mount.hits.get(), -1);
+    }
+
+    #[test]
+    fn human_input_rules_for_workbenches() {
+        let (_w, _dw, o, h) = setup_q();
+        let b = bh_of(&o);
+        let _ = &h;
+        // crafting without a workbench, or at one without fuel, needs a human
+        b.bh.borrow_mut().state.interaction_type = 4;
+        assert!(b.current_interaction_requires_human_input());
+        // a fuelled workbench and a rested blockhead do not
+        let f = crate::crafting::workbench::testkit::fixture();
+        let (wb, wme) = crate::crafting::workbench::testkit::make(&f, 2, 10, 10);
+        b.bh.borrow_mut().interaction_workbench = Some(wme.clone());
+        assert!(wb.has_required_fuel());
+        b.bh.borrow_mut().state.fullness = 1.0;
+        b.bh.borrow_mut().state.energy = 1.0;
+        assert!(!b.current_interaction_requires_human_input());
+        // ... unless the blockhead is too tired to work
+        b.bh.borrow_mut().state.energy = 0.0;
+        assert!(b.current_interaction_requires_human_input());
+        // other workbench-like objects ask the host
+        b.bh.borrow_mut().interaction_workbench = Some(stub(45, true));
+        b.bh.borrow_mut().state.energy = 1.0;
+        let _ = b.current_interaction_requires_human_input();
+        // interaction objects decide for themselves
+        b.bh.borrow_mut().state.interaction_type = 5;
+        b.bh.borrow_mut().interaction_object = None;
+        assert!(!b.current_interaction_requires_human_input());
+        b.bh.borrow_mut().state.interaction_type = 13;
+        assert!(b.current_interaction_requires_human_input());
+    }
+
+    #[test]
+    fn queue_action_predictions_for_objects_and_pickups() {
+        let (w, _dw, o, h) = setup_q();
+        let b = bh_of(&o);
+        // digging an interaction object's tile predicts its item
+        let tl = tile(&w, 10, 12);
+        tl.update(|t| t.contents = 48);
+        let chest = crate::interaction::chest::Chest::new(
+            &w,
+            &real_dw(&w, "aq_io"),
+            IntPair { x: 10, y: 12 },
+            None,
+            Some(&InventoryItem::new(ItemType(0x413), 0, 0, None, None).borrow()),
+            false,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        *h.io.borrow_mut() = Some(chest.clone() as ObjRef);
+        assert!(queue(b, IntPair { x: 10, y: 12 }, InteractionType::INTERACTION_DIG, None, 0, false));
+        assert_eq!(last_ic(b), vec![("1043".to_string(), 1)]);
+        // a queued non-dig action next to an enclosed dig does not count as a neighbour
+        b.bh.borrow_mut().action_queue.clear();
+        assert!(queue(
+            b,
+            IntPair { x: 11, y: 12 },
+            InteractionType::INTERACTION_USE_INTERACTIVE_OBJECT,
+            None,
+            0,
+            false
+        ));
+        b.bh.borrow_mut().action_queue.push(Rc::new(()));
+        assert!(!queue(b, IntPair { x: 11, y: 5 }, InteractionType::INTERACTION_DIG, None, 0, false));
+        b.bh.borrow_mut().action_queue.clear();
+        // a free block that is no FreeBlock is skipped when predicting a pickup
+        *h.fbs.borrow_mut() = vec![stub(14, true)];
+        assert!(queue(b, IntPair { x: 12, y: 12 }, InteractionType::INTERACTION_PICKUP_FREEBLOCK, None, 0, false));
+        assert!(last_ic(b).is_empty());
+        // picking up a torch predicts the torch item
+        tile(&w, 13, 12).update(|t| t.foreground_contents = b'1');
+        *h.torch.borrow_mut() = Some(stub(20, true));
+        assert!(queue(b, IntPair { x: 13, y: 12 }, InteractionType::INTERACTION_PICKUP, None, 0, false));
+        assert_eq!(last_ic(b), vec![("17".to_string(), 1)]);
+    }
+
+    #[test]
+    fn stopping_fishing_invalidates_the_rod() {
+        let (w, _dw, o, _h) = setup_q();
+        let b = bh_of(&o);
+        let rod = crate::physics_objects::fishing_rod::FishingRod::init_with_world_blockhead_cache(&w, &o, None);
+        rod.set_valid(true);
+        b.bh.borrow_mut().fishing_rod = Some(rod.clone());
+        b.bh.borrow_mut().fishing_rod_cast_x = 3;
+        b.stop_fishing();
+        assert!(b.bh.borrow().fishing_rod.is_none());
+        assert_eq!(b.bh.borrow().fishing_rod_cast_x, 0);
+    }
+
+    /// Puts the blockhead (always at tile (10,16), fully airborne) into free flight with the given inputs.
+    fn fly(b: &Blockhead, inc: (f32, f32), v: (f32, f32), fp: (f32, f32)) {
+        equip_jetpack(b, 0);
+        b.base.borrow_mut().pos = IntPair { x: 10, y: 16 };
+        b.base.borrow_mut().float_pos = Vector2 { x: fp.0, y: fp.1 };
+        let mut f = b.bh.borrow_mut();
+        f.is_in_jet_pack_free_flight_mode = true;
+        f.jet_pack_incoming_acceleration = Vector2 { x: inc.0, y: inc.1 };
+        f.jet_pack_velocity = Vector2 { x: v.0, y: v.1 };
+        f.smoothed_jet_pack_velocity = Vector2 { x: 0.0, y: 0.0 };
+        f.jetpack_send_update_timer = 0.0;
+    }
+
+    fn air_around(w: &World) {
+        for x in 6..15 {
+            for y in 12..22 {
+                tile(w, x, y).update(|t| t.type_index = 2);
+            }
+        }
+    }
+
+    #[test]
+    fn free_flight_control_shaping_and_walls() {
+        let (w, _dw, o, h) = setup_q();
+        h.dw_client.set(true);
+        let b = bh_of(&o);
+        air_around(&w);
+        let vel = |b: &Blockhead| b.bh.borrow().jet_pack_velocity;
+        // weak inputs are dead zones, mid-sized ones are shifted, large ones are boosted
+        fly(b, (0.05, 0.05), (0.0, 0.0), (10.5, 16.0));
+        b.update_jet_motion(0.05);
+        assert_eq!(vel(b), Vector2 { x: 0.0, y: 0.0 });
+        fly(b, (0.5, 0.3), (0.0, 0.0), (10.5, 16.0));
+        b.update_jet_motion(0.05);
+        assert!(vel(b).x > 0.0 && vel(b).y > 0.0);
+        fly(b, (-1.0, -1.0), (0.0, 0.0), (10.5, 16.0));
+        b.update_jet_motion(0.05);
+        assert!(vel(b).x < 0.0 && vel(b).y < 0.0);
+        // the update flag is raised once a second has passed
+        fly(b, (0.0, 0.0), (0.0, 0.0), (10.5, 16.0));
+        b.bh.borrow_mut().jetpack_send_update_timer = 0.95;
+        o.set_update_needs_to_be_sent(false);
+        b.update_jet_motion(0.1);
+        assert!(o.update_needs_to_be_sent());
+        // every wall is compared with the same push in open air
+        let step = |inc: (f32, f32), v: (f32, f32), fp: (f32, f32)| {
+            fly(b, inc, v, fp);
+            b.update_jet_motion(0.05);
+            vel(b)
+        };
+        let free_left = step((-1.0, 0.0), (-1.0, 0.0), (10.5, 16.0)).x;
+        let free_right = step((1.0, 0.0), (1.0, 0.0), (10.5, 16.0)).x;
+        let free_down = step((0.0, -1.0), (0.0, -1.0), (10.5, 16.8)).y;
+        let free_up = step((0.0, 1.0), (0.0, 1.0), (10.5, 16.4)).y;
+        // a wall on the left slows the push; right at the cell edge it is cancelled, nearer the middle it is reversed
+        tile(&w, 9, 16).update(|t| t.type_index = 1);
+        assert!(step((-1.0, 0.0), (-1.0, 0.0), (10.5, 16.0)).x > free_left);
+        assert!(step((-1.0, 0.0), (-1.0, 0.0), (10.3, 16.0)).x > free_left);
+        tile(&w, 9, 16).update(|t| t.type_index = 2);
+        // ... and one on the right the same way
+        tile(&w, 11, 16).update(|t| t.type_index = 1);
+        assert!(step((1.0, 0.0), (1.0, 0.0), (10.5, 16.0)).x < free_right);
+        assert!(step((1.0, 0.0), (1.0, 0.0), (10.8, 16.0)).x < free_right);
+        assert!(step((1.0, 0.0), (1.0, 0.0), (10.2, 16.0)).x < free_right);
+        // pushing into a low wall lifts the body over it
+        tile(&w, 11, 16).update(|t| t.type_index = 2);
+        tile(&w, 9, 16).update(|t| t.type_index = 1);
+        assert!(step((-1.0, 0.0), (0.0, 0.0), (10.5, 16.0)).y > 0.0);
+        tile(&w, 9, 16).update(|t| t.type_index = 2);
+        tile(&w, 11, 16).update(|t| t.type_index = 1);
+        assert!(step((1.0, 0.0), (0.0, 0.0), (10.5, 16.0)).y > 0.0);
+        tile(&w, 11, 16).update(|t| t.type_index = 2);
+        // ground below: sinking is damped near the cell edge and turned into a bounce lower down
+        tile(&w, 10, 15).update(|t| t.type_index = 1);
+        assert!(step((0.0, -1.0), (0.0, -1.0), (10.5, 16.8)).y > free_down);
+        assert!(step((0.0, -1.0), (0.0, -1.0), (10.5, 16.1)).y > free_down);
+        tile(&w, 10, 15).update(|t| t.type_index = 2);
+        // a ceiling one tile above, then two tiles above
+        tile(&w, 10, 17).update(|t| t.type_index = 1);
+        assert!(step((0.0, 1.0), (0.0, 1.0), (10.5, 16.0)).y < free_up);
+        assert!(step((0.0, 1.0), (0.0, 1.0), (10.5, 16.4)).y < free_up);
+        tile(&w, 10, 17).update(|t| t.type_index = 2);
+        tile(&w, 10, 18).update(|t| t.type_index = 1);
+        assert!(step((0.0, 1.0), (0.0, 1.0), (10.5, 16.4)).y < free_up);
+        tile(&w, 10, 18).update(|t| t.type_index = 2);
+        // the top of the world stops the climb
+        fly(b, (0.0, 1.0), (0.0, 1.0), (10.5, 1020.0));
+        b.base.borrow_mut().pos = IntPair { x: 10, y: 1020 };
+        b.update_jet_motion(0.05);
+        assert!(vel(b).y <= 0.0);
+        // a big step into solid rock is undone
+        fly(b, (1.0, 0.0), (0.0, 0.0), (10.5, 16.0));
+        tile(&w, 16, 16).update(|t| t.type_index = 1);
+        let before = b.float_pos();
+        b.update_jet_motion(0.5);
+        assert_eq!(b.float_pos(), before);
+        assert_eq!(b.pos(), IntPair { x: 10, y: 16 });
+        tile(&w, 16, 16).update(|t| t.type_index = 2);
+    }
+
+    #[test]
+    fn replica_flight_collisions() {
+        let (w, _dw, o, h) = setup_q();
+        h.dw_client.set(true);
+        let b = bh_of(&o);
+        air_around(&w);
+        b.base.borrow_mut().is_net = true;
+        tile(&w, 13, 16).update(|t| t.type_index = 1);
+        fly(b, (0.0, 0.0), (6.0, 0.0), (10.5, 16.0));
+        let before = b.float_pos();
+        b.update_jet_motion(0.5);
+        assert_eq!(b.float_pos(), before, "the replica does not enter rock either");
+        tile(&w, 13, 16).update(|t| t.type_index = 2);
+        fly(b, (0.0, 0.0), (6.0, 0.0), (10.5, 16.0));
+        b.update_jet_motion(0.5);
+        assert_eq!(b.pos().x, 13);
+    }
+
+    #[test]
+    fn jetpack_fuel_without_the_container() {
+        let (_w, _dw, o, _h) = setup_q();
+        let b = bh_of(&o);
+        // no clothing slot item with enough sub slots, or no jetpack in the fuel slot
+        b.bh.borrow().inventory_items[0].borrow_mut().clear();
+        assert_eq!(b.jetpack_fuel_count(), 0);
+        assert!(!b.add_to_jet_fuel());
+        assert!(!b.can_fly());
     }
 }
