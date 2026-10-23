@@ -1343,3 +1343,101 @@ mod default_tests {
         let _ = LightingServices::blockhead_view_radius(&s, &obj);
     }
 }
+
+#[cfg(test)]
+mod seam_tests {
+    use super::testkit::*;
+    use super::*;
+    use crate::objects::base::DynamicObject as _;
+
+    fn light(world: &Rc<World>, dwr: &DynamicWorldRef, x: i32, y: i32, r: i32, dir: i32) -> Rc<ArtificialLight> {
+        ArtificialLight::init_with_world_dynamic_world_at_position_cache_parent_object_color_r_color_g_color_b_heat_radius_light_direction(
+            world,
+            dwr,
+            IntPair { x, y },
+            None,
+            None,
+            253,
+            150,
+            55,
+            1,
+            r,
+            dir,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn lights_over_the_seam_of_a_narrow_world() {
+        let rec = install_rec();
+        let world = world_with_blocks(2, &[(0, 0), (1, 0), (0, 1), (1, 1)]);
+        let (_d, dwr) = test_dw();
+        // gems and chests inside the reach, and a tile that needs a glow block
+        for (i, fg) in [0x34u8, 0x36, 0x38, 0x3a, 0x3c].iter().enumerate() {
+            tile(&world, 1 + i as i32, 40).set_foreground_contents(*fg);
+        }
+        tile(&world, 3, 41).set_contents(0x5e);
+        tile(&world, 4, 41).set_contents(0x91);
+        tile(&world, 5, 41).set_contents(0x90);
+        tile(&world, 6, 41).set_type_index(0x10);
+        for (x, y, dir) in [(2, 40, LIGHT_DIRECTION_ALL), (62, 40, LIGHT_DIRECTION_DOWN), (30, 40, LIGHT_DIRECTION_UP)]
+        {
+            let l = light(&world, &dwr, x, y, 15, dir);
+            let o: ObjRef = l.clone();
+            // trait answers
+            let _ = o.class_info();
+            assert!(o.as_any().is::<ArtificialLight>());
+            o.world_changed(&o, &mut vec![IntPair { x, y: y + 1 }, IntPair { x: x + 1, y }]);
+            o.add_artificial_light_contribution_for_physical_block_loaded_at_x_pos_y_pos(&o, 0, 1);
+            o.add_artificial_light_contribution_for_physical_block_loaded_at_x_pos_y_pos(&o, 1, 0);
+            l.remove_from_tiles();
+            let mut open = VecDeque::from(vec![0u32]);
+            l.recursively_update_light_with_list(&mut open);
+            o.remove_from_macro_block(&o);
+            o.dealloc(&o);
+        }
+        let log = rec.take();
+        assert!(log.iter().any(|l| l.starts_with("addTorch")) && log.iter().any(|l| l.starts_with("chestOrTroll")));
+        assert!(log.iter().any(|l| l.starts_with("glow")));
+        // a light at the top of the loaded world reaches into blocks that are not there
+        let top = light(&world, &dwr, 20, 63, 15, LIGHT_DIRECTION_ALL);
+        top.remove_from_tiles();
+        // blocks that were lit and are gone when the light is removed
+        let l = light(&world, &dwr, 20, 40, 15, LIGHT_DIRECTION_ALL);
+        *world.macro_tiles().get(2).unwrap().physical_block.borrow_mut() = None;
+        l.remove_from_tiles();
+        // a net copy and one on an unloaded tile
+        let mut net = vec![0u8; 0x18];
+        net[8..12].copy_from_slice(&10u32.to_le_bytes());
+        net[12..16].copy_from_slice(&10u32.to_le_bytes());
+        assert!(ArtificialLight::init_with_world_dynamic_world_cache_net_data(&world, &dwr, None, &net).is_some());
+        net[12..16].copy_from_slice(&300u32.to_le_bytes());
+        assert!(ArtificialLight::init_with_world_dynamic_world_cache_net_data(&world, &dwr, None, &net).is_none());
+    }
+
+    #[test]
+    fn the_recorder_answers_every_call() {
+        let rec = Rc::new(Rec::default());
+        let w = World::alloc(2);
+        let pb: PhysicalBlockRef = Box::leak(Box::new(crate::world::state::PhysicalBlock::new_fresh()));
+        let tile = TileRef::new(pb, 0);
+        let p = IntPair { x: 1, y: 2 };
+        for it in [0x422, 0x423, 0x428, 0x414, 0x1] {
+            LightingServices::fill_tile_at_pos_with_type(&*rec, &w, tile, p, it);
+        }
+        let _ = LightingServices::get_weather_fraction_for_pos_at_world_time(&*rec, &w, p, 0.0);
+        LightingServices::load_light_block_for_client_light_block_index_into_physical_block(&*rec, &w, 1, pb);
+        rec.load_light.set(true);
+        LightingServices::load_light_block_for_client_light_block_index_into_physical_block(&*rec, &w, 99, pb);
+        LightingServices::remove_water_tile_at_pos(&*rec, &w, p);
+        LightingServices::water_moved_from_from_tile_to_to_tile_amount(&*rec, &w, p, tile, p, tile, 3);
+        LightingServices::snow_changed_at_macro_pos(&*rec, p);
+        LightingServices::water_changed_at_pos_full_block(&*rec, p, true);
+        LightingServices::load_surface_block_at_pos(&*rec, p);
+        let _ = LightingServices::blockheads(&*rec);
+        let (d, _r) = test_dw();
+        use crate::objects::base::DynamicWorldApi as _;
+        assert!(d.is_server() && d.blockheads().is_empty() && d.get_owner_name_for_object_owner_id("x").is_none());
+        assert!(rec.take().len() >= 8);
+    }
+}
