@@ -1,9 +1,10 @@
 //! What the server offers modded clients (0xBC `MOD_LIST`): every enabled package in the mods directory with a
 //! client half, plus the loaded server-only mods for information. Built once when the host loads.
 //!
-//! Rules: a client half whose server half did not load is not offered; a client half that needs `native` is never
-//! offered (a server cannot push native code; index-verified native mods come with the native tier); packages above
-//! [`MAX_PACKAGE`] or beyond [`MAX_TOTAL`] are not offered. Unpacked mod directories are packed with the
+//! Rules: a client half whose server half did not load is not offered; a client half that needs `native` is listed
+//! (with its hash, so a server can require it) but its bytes are never sent: a server cannot push native code, the
+//! player installs it from the public index (same SHA-256) after confirming; packages above [`MAX_PACKAGE`] or
+//! beyond [`MAX_TOTAL`] are not offered. Unpacked mod directories are packed with the
 //! deterministic `.bhmod` writer, so they have a hash and can be downloaded like zips.
 
 use std::collections::BTreeMap;
@@ -37,11 +38,16 @@ pub enum Bytes {
 pub struct Entry {
     /// The `MOD_LIST` entry.
     pub info: ModInfo,
-    /// Its package; `None` for listed-only (server-only) mods, which are never served.
+    /// Its package; `None` for listed-only mods (server-only, and native client mods), which are never served.
     pub bytes: Option<Bytes>,
 }
 
 impl Entry {
+    /// True when the entry has a client half (served, or native and installed by the player from the index).
+    pub fn is_client(&self) -> bool {
+        self.info.sides.iter().any(|s| s == "client")
+    }
+
     /// Reads `len` bytes at `offset` of the package.
     pub fn read(&self, offset: u64, len: usize) -> io::Result<Vec<u8>> {
         let mut buf = vec![0; len];
@@ -169,10 +175,6 @@ pub fn from_packages(
             log(format!("not offering {id} to clients: its server half is not loaded"));
             continue;
         }
-        if client && m.permissions.native {
-            log(format!("not offering {id} to clients: native client mods are never pushed by a server"));
-            continue;
-        }
         let (bytes, sha, size) = match package_bytes(&p) {
             Ok(x) => x,
             Err(e) => {
@@ -181,13 +183,18 @@ pub fn from_packages(
             }
         };
         let entry = if client {
-            if size > max_package || total + size > max_total {
+            // Native code is never sent: the entry only carries the hash the player's own install must match.
+            let native = m.permissions.native;
+            if native {
+                log(format!("listing {id} without bytes: native client mods are installed by players from the index"));
+            } else if size > max_package || total + size > max_total {
                 log(format!("not offering {id} to clients: package too large ({size} bytes)"));
                 continue;
+            } else {
+                total += size;
             }
-            total += size;
             let sides = if m.entry.server.is_some() { vec!["server", "client"] } else { vec!["client"] };
-            Entry { info: info(m, sides, m.client_required(), sha, size), bytes: Some(bytes) }
+            Entry { info: info(m, sides, m.client_required(), sha, size), bytes: (!native).then_some(bytes) }
         } else {
             Entry { info: info(m, vec!["server"], false, sha, size), bytes: None }
         };

@@ -43,8 +43,8 @@ fn builds_the_offer() {
         .unwrap()
         .replace("client = true", "client = true\nclient-required = false");
     fs::write(opt.join("mod.toml"), toml).unwrap();
-    // Server-only, loaded and not loaded; a client+server mod whose server half did not load; a native client mod;
-    // a disabled one.
+    // Server-only, loaded and not loaded; a client+server mod whose server half did not load; a native client mod
+    // (listed, never served); a disabled one.
     write_mod(mods, "srv", true, false, "[permissions]\nworld = \"read\"\n");
     write_mod(mods, "srv-off", true, false, "");
     write_mod(mods, "half", true, true, "");
@@ -56,10 +56,10 @@ fn builds_the_offer() {
     let mut logs = Vec::new();
     let c = build(mods, &loaded, &mut |m| logs.push(m));
     let ids: Vec<&str> = c.entries.iter().map(|e| e.info.id.as_str()).collect();
-    assert_eq!(ids, ["both", "cosmetic", "srv"]);
+    assert_eq!(ids, ["both", "cosmetic", "nat", "srv"]);
     assert_eq!(logs.len(), 2, "{logs:?}");
     assert!(logs[0].contains("half") && logs[0].contains("server half"));
-    assert!(logs[1].contains("nat") && logs[1].contains("native"));
+    assert!(logs[1].contains("nat") && logs[1].contains("without bytes") && logs[1].contains("index"));
 
     let b = &c.entries[0];
     assert_eq!(b.info.sides, ["server", "client"]);
@@ -81,16 +81,25 @@ fn builds_the_offer() {
     assert_eq!(o.read(0, packed.len()).unwrap(), packed);
     assert!(o.read(1, packed.len()).is_err());
 
-    let s = &c.entries[2];
+    // Native: a client mod with its hash in the list and the hash in `modsHash`, but no bytes to serve.
+    let n = &c.entries[2];
+    assert_eq!(n.info.sides, ["client"]);
+    assert!(n.info.permissions.native && n.info.client_required && n.is_client());
+    assert_eq!(hex(&n.info.sha256), sha256_hex(&zip_of(&mods.join("nat"))));
+    assert!(n.bytes.is_none() && n.read(0, 1).is_err());
+
+    let s = &c.entries[3];
+    assert!(!s.is_client());
     assert_eq!(s.info.sides, ["server"]);
     assert!(s.bytes.is_none() && !s.info.client_required);
     assert_eq!(s.info.permissions.world, "read");
     assert_eq!(s.info.permissions.world, "read");
 
-    // Only `both` is client-required.
+    // `both` and `nat` are client-required; the bytes of `nat` are never served.
     assert!(c.client_required);
-    assert_eq!(c.mods_hash, mods_hash([("both", "1.0.0", &b.info.sha256)]));
+    assert_eq!(c.mods_hash, mods_hash([("both", "1.0.0", &b.info.sha256), ("nat", "1.0.0", &n.info.sha256)]));
     assert!(c.served(&b.info.sha256).is_some() && c.served(&s.info.sha256).is_none());
+    assert!(c.served(&n.info.sha256).is_none());
     assert!(!c.is_empty());
 }
 
