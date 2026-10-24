@@ -67,7 +67,7 @@ impl ProjectileManager {
                 }
                 let p = &mut v[i];
                 let distance = 20.0f32 * dt;
-                p.distance_left = p.distance_left - distance;
+                p.distance_left -= distance;
                 if 0.0f32 < p.distance_left {
                     p.pos = p.pos.add(p.normal.mul_f(distance));
                     i += 1;
@@ -82,9 +82,9 @@ impl ProjectileManager {
             if p.item_type == ITEM_POISON || p.item_type == ITEM_POISON_ARROW {
                 force = 10.0f32;
             }
-            let expert = self.world.upgrade().map_or(false, |w| w.expert_mode());
+            let expert = self.world.upgrade().is_some_and(|w| w.expert_mode());
             if expert {
-                force = force / 2.0f32;
+                force /= 2.0f32;
             }
             let target_pos = match &p.at_object {
                 Some(o) => o.float_pos(),

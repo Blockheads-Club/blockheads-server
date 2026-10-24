@@ -128,4 +128,4 @@ Blockheads Server is licensed under **GNU GPLv3 or later** (GPL-3.0-or-later). T
 Third-party code ports are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 Unofficial, independent reimplementation for interoperability. It contains no original binaries or assets and is not
-affiliated with Majic Jungle or Noodlecake Studios.
+affiliated with Majic Jungle or Noodlecake Studios. Players join with their own copy of The Blockheads.

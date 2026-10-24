@@ -511,7 +511,7 @@ mod tests {
             title_for_item_type_and_count(ItemType(4), 0),
             format!("0 {}", plural_ns_string_from_item_type(ItemType(4)))
         );
-        assert_eq!(title_for_item_type_and_count(ItemType(4), 3).starts_with("3 "), true);
+        assert!(title_for_item_type_and_count(ItemType(4), 3).starts_with("3 "));
     }
 
     #[test]

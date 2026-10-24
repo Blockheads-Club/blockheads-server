@@ -644,7 +644,7 @@ mod tests {
         a.borrow_mut().insert("photo".into(), PlistValue::string("P"));
         node.info_arrived_for_player(&a, "Abc");
         let incoming = info("abc", false);
-        node.update_player_list(&[incoming.clone()]);
+        node.update_player_list(std::slice::from_ref(&incoming));
         let l = node.live_player_infos();
         assert_eq!(l.len(), 2);
         assert_eq!(dget(&incoming.borrow(), "photo").and_then(|v| v.as_str()), Some("P"));

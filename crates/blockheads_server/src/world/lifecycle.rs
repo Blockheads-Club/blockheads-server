@@ -628,7 +628,7 @@ impl World {
     /// Whether `serverClients[client_id]` is non-nil.
     pub(crate) fn has_server_client(&self, client_id: &str) -> bool {
         let map: Option<ServerClientMap> = self.server_clients.borrow().clone();
-        map.map_or(false, |m| m.borrow().contains_key(&client_id.to_string()))
+        map.is_some_and(|m| m.borrow().contains_key(&client_id.to_string()))
     }
 
     /// `[serverClients[id] connected]` (nil receiver gives NO).
@@ -903,7 +903,7 @@ impl World {
             return false;
         }
         let num = |k: &str| sd.object_for_key(k);
-        self.set_has_finished_database_migration_to17(num("migrationComplete_1.7").map_or(false, |v| v.bool_value()));
+        self.set_has_finished_database_migration_to17(num("migrationComplete_1.7").is_some_and(|v| v.bool_value()));
         *self.host_port.borrow_mut() = str_of(&sd, "hostPort");
         *self.max_players.borrow_mut() = str_of(&sd, "maxPlayers");
         self.set_random_seed(num("randomSeed").map_or(0, |v| v.unsigned_int_value()));
@@ -925,7 +925,7 @@ impl World {
         self.set_portal_level(num("portalLevel").map_or(0, |v| v.int_value()));
         self.set_loaded_version(num("saveVersion").map_or(0, |v| v.int_value()));
         *self.welcome_message.borrow_mut() = str_of(&sd, "welcomeMessage");
-        self.set_pvp_enabled(!num("pvpDisabled").map_or(false, |v| v.bool_value()));
+        self.set_pvp_enabled(!num("pvpDisabled").is_some_and(|v| v.bool_value()));
         *self.server_password.borrow_mut() = str_of(&sd, "serverPassword");
 
         // found items (client == nil)
@@ -1013,7 +1013,7 @@ impl World {
         }
         if let Some(b) = sd_bytes {
             if let Some(PlistValue::Dict(dict)) = property_list_from_data(&b) {
-                if dict.map.len() != 0 {
+                if !dict.map.is_empty() {
                     let mut out = new_mutable_dict();
                     for (k, v) in dict.map.iter() {
                         out.map.insert(k.clone(), mutable_copy_of_value(v));
@@ -1305,7 +1305,7 @@ impl World {
         // migrationComplete_1.7
         let mut flag = true;
         if !self.has_finished_database_migration_to17() {
-            flag = self.core_convertor().map_or(false, |c| c.migration_complete());
+            flag = self.core_convertor().is_some_and(|c| c.migration_complete());
         }
         self.set_has_finished_database_migration_to17(flag);
         put("migrationComplete_1.7", PlistValue::boolean(flag));
@@ -1563,7 +1563,7 @@ pub(crate) mod testkit {
             self.note("sc_create");
         }
         fn server_client_connected(&self, id: &str) -> bool {
-            self.clients.borrow().get(id).map_or(false, |c| c.connected)
+            self.clients.borrow().get(id).is_some_and(|c| c.connected)
         }
         fn server_client_set_connected(&self, id: &str, v: bool) {
             if let Some(c) = self.clients.borrow_mut().get_mut(id) {
@@ -1593,10 +1593,10 @@ pub(crate) mod testkit {
             }
         }
         fn server_client_block_is_wired(&self, id: &str, i: i32) -> bool {
-            self.clients.borrow().get(id).map_or(false, |c| c.wired.contains(&i))
+            self.clients.borrow().get(id).is_some_and(|c| c.wired.contains(&i))
         }
         fn server_client_paused(&self, id: &str) -> bool {
-            self.clients.borrow().get(id).map_or(false, |c| c.paused)
+            self.clients.borrow().get(id).is_some_and(|c| c.paused)
         }
         fn server_client_set_paused(&self, id: &str, p: bool) {
             if let Some(c) = self.clients.borrow_mut().get_mut(id) {
@@ -1809,7 +1809,7 @@ pub(crate) mod testkit {
     pub fn strip_log(s: &str) -> Vec<String> {
         s.lines()
             .map(|l| {
-                l.splitn(3, ' ').nth(2).map(|r| r.splitn(2, "] ").nth(1).unwrap_or(r).to_string()).unwrap_or_default()
+                l.splitn(3, ' ').nth(2).map(|r| r.split_once("] ").map_or(r, |p| p.1).to_string()).unwrap_or_default()
             })
             .collect()
     }

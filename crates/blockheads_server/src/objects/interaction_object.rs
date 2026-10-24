@@ -22,6 +22,7 @@ use crate::types::structs::{IntPair, WireStruct};
 pub const INTERACTION_OBJECT_OBJECT_TYPE: i32 = 15;
 
 /// Ivars 0x50..0x98 of `InteractionObject` (`shader`/`texture` are client-only and omitted).
+#[derive(Default)]
 pub struct InteractionObjectState {
     /// 0x50 retained
     pub current_blockhead: Option<ObjRef>,
@@ -41,22 +42,6 @@ pub struct InteractionObjectState {
     pub proxy_object_owner: Option<ObjWeak>,
     /// 0x98
     pub needs_to_be_removed_when_interaction_ends: bool,
-}
-
-impl Default for InteractionObjectState {
-    fn default() -> Self {
-        InteractionObjectState {
-            current_blockhead: None,
-            is_in_use: false,
-            flipped: false,
-            remote_blockhead_in_use_unique_id: 0,
-            saved_blockhead_index: 0,
-            owner_name: None,
-            paint_color: 0,
-            proxy_object_owner: None,
-            needs_to_be_removed_when_interaction_ends: false,
-        }
-    }
 }
 
 /// The overridable `InteractionObject` selectors; every InteractionObject subclass implements it (and returns
@@ -183,11 +168,11 @@ impl dyn DynamicObject {
     }
     /// `isInUse`
     pub fn is_in_use(&self) -> bool {
-        self.as_interaction_object().map_or(false, |s| s.borrow().is_in_use)
+        self.as_interaction_object().is_some_and(|s| s.borrow().is_in_use)
     }
     /// `flipped`
     pub fn flipped(&self) -> bool {
-        self.as_interaction_object().map_or(false, |s| s.borrow().flipped)
+        self.as_interaction_object().is_some_and(|s| s.borrow().flipped)
     }
     /// `ownerName`
     pub fn owner_name(&self) -> Option<String> {
@@ -258,8 +243,8 @@ pub fn interaction_object_init_with_world_dynamic_world_save_dict_cache(
     let mut owner_name = sd("ownerName").and_then(|v| v.as_str()).map(|s| s.to_string());
     {
         let mut s = io(me).borrow_mut();
-        s.is_in_use = sd("isInUse").map_or(false, |v| v.bool_value());
-        s.flipped = sd("flipped").map_or(false, |v| v.bool_value());
+        s.is_in_use = sd("isInUse").is_some_and(|v| v.bool_value());
+        s.flipped = sd("flipped").is_some_and(|v| v.bool_value());
         s.paint_color = sd("paintColor").map_or(0, |v| v.unsigned_int_value()) as u16;
         s.saved_blockhead_index = -1;
         if let Some(v) = sd("currentBlockheadIndex") {
@@ -407,7 +392,7 @@ pub fn interaction_object_update_accurate_dt_is_simulation(
         return;
     }
     let cur = io(me).borrow().current_blockhead.clone();
-    if cur.as_ref().map_or(false, |c| c.needs_removed()) {
+    if cur.as_ref().is_some_and(|c| c.needs_removed()) {
         {
             let mut s = io(me).borrow_mut();
             s.current_blockhead = None;
@@ -428,7 +413,7 @@ pub fn interaction_object_update_accurate_dt_is_simulation(
     if in_use {
         if let Some(c) = cur {
             if !c.is_net() {
-                let interacting = c.as_blockhead().map_or(false, |b| b.is_interacting_with_any_interaction_object());
+                let interacting = c.as_blockhead().is_some_and(|b| b.is_interacting_with_any_interaction_object());
                 if !interacting {
                     let flag = {
                         let mut s = io(me).borrow_mut();
@@ -566,7 +551,7 @@ pub fn interaction_object_blockhead_would_like_to_take_ownership_with_save_dict(
 
 /// `-[InteractionObject shouldAddToMacroBlock]` = `proxyObjectOwner == nil`.
 pub fn interaction_object_should_add_to_macro_block(me: &dyn DynamicObject) -> bool {
-    me.as_interaction_object().map_or(true, |s| s.borrow().proxy_object_owner.is_none())
+    me.as_interaction_object().is_none_or(|s| s.borrow().proxy_object_owner.is_none())
 }
 
 /// `-[InteractionObject setProxyObjectOwner:]`: a non-nil owner first removes self from its macro tile; then the
@@ -672,6 +657,7 @@ pub(crate) mod testutil {
         pub base: RefCell<DynamicObjectBase>,
         pub interacting: Cell<bool>,
         pub log: RefCell<Vec<String>>,
+        #[allow(dead_code)] // test fixture field
         pub net: bool,
         pub uid: u64,
     }

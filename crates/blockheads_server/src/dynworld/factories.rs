@@ -574,7 +574,7 @@ impl DynamicWorld {
         let mut troll_spawned = false;
         let at = |x: i32, y: i32| self.tile_at(x, y);
         let air_free = |t: Option<TileRef>| -> bool {
-            tile_is_air(t) && t.map_or(false, |t| t.back_wall_type_index() == 1 && t.contents() == 0)
+            tile_is_air(t) && t.is_some_and(|t| t.back_wall_type_index() == 1 && t.contents() == 0)
         };
 
         if load_troll && pos.y < 0x100 {
@@ -599,7 +599,7 @@ impl DynamicWorld {
                         troll_spawned = true; // regardless of loadNPC's return value
                         for side in [-1, 1] {
                             let t = at(troll_pos.x + side, troll_pos.y + 1);
-                            if air_free(t) && t.map_or(false, |t| t.foreground_contents() == 0) {
+                            if air_free(t) && t.is_some_and(|t| t.foreground_contents() == 0) {
                                 self.add_torch_at_pos_of_type_data_a_data_b_save_dict_placed_by_client(
                                     IntPair { x: troll_pos.x + side, y: troll_pos.y + 1 },
                                     183,
@@ -933,7 +933,7 @@ impl DynamicWorld {
                         IntPair { x: pos.x + offset, y: pos.y + 1 }
                     };
                     let rt2 = fg(rt_pos.x, rt_pos.y);
-                    if rt2.map_or(true, |t| t.foreground_contents() != RAIL) {
+                    if rt2.is_none_or(|t| t.foreground_contents() != RAIL) {
                         rail = false;
                     }
                 }
@@ -1143,6 +1143,7 @@ mod tests {
     /// Hooks with a fake tree / plant population.
     struct H {
         made: RefCell<Vec<String>>,
+        #[allow(dead_code)] // test fixture field
         next_id: Cell<u64>,
     }
     impl H {

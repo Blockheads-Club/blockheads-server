@@ -353,9 +353,9 @@ fn golden_cases() {
     };
     let cases: Vec<Value> = serde_json::from_str(&data).unwrap();
     let only = std::env::var("BH_GOLDEN_ONLY").ok();
-    let dynamic = std::env::var("BH_GOLDEN_DYNAMIC").map_or(false, |v| v == "1");
+    let dynamic = std::env::var("BH_GOLDEN_DYNAMIC").is_ok_and(|v| v == "1");
     let cases: Vec<Value> =
-        cases.into_iter().filter(|c| only.as_ref().map_or(true, |o| s(&c["id"]).contains(o.as_str()))).collect();
+        cases.into_iter().filter(|c| only.as_ref().is_none_or(|o| s(&c["id"]).contains(o.as_str()))).collect();
     let cases = Arc::new(cases);
     let next = Arc::new(AtomicUsize::new(0));
     let results: Arc<Mutex<BTreeMap<String, Result<bool, String>>>> = Arc::new(Mutex::new(BTreeMap::new()));

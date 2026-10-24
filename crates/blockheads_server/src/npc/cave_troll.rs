@@ -88,12 +88,12 @@ pub trait HostileHost, stub HostileHostStub {
     /// `[world expertMode]`
     #[provided]
     fn expert_mode(&self) -> bool {
-        self.world().map_or(false, |w| w.expert_mode())
+        self.world().is_some_and(|w| w.expert_mode())
     }
     /// `[world tutorialActive]`
     #[provided]
     fn tutorial_active(&self) -> bool {
-        self.world().map_or(false, |w| w.tutorial_active())
+        self.world().is_some_and(|w| w.tutorial_active())
     }
     /// `[world getDayNightFractionForX:atWorldTime:]`; 0 when there is no world.
     #[provided]
@@ -142,22 +142,22 @@ pub trait HostileHost, stub HostileHostStub {
     /// `[b paused]`
     #[provided]
     fn bh_paused(&self, b: &ObjRef) -> bool {
-        as_blockhead(b).map_or(false, |x| x.paused())
+        as_blockhead(b).is_some_and(|x| x.paused())
     }
     /// `[b regenerating]`
     #[provided]
     fn bh_regenerating(&self, b: &ObjRef) -> bool {
-        as_blockhead(b).map_or(false, |x| x.regenerating())
+        as_blockhead(b).is_some_and(|x| x.regenerating())
     }
     /// `[b onTradeMission]`
     #[provided]
     fn bh_on_trade_mission(&self, b: &ObjRef) -> bool {
-        as_blockhead(b).map_or(false, |x| x.on_trade_mission())
+        as_blockhead(b).is_some_and(|x| x.on_trade_mission())
     }
     /// `[b shouldContinueSimulating]`
     #[provided]
     fn bh_should_continue_simulating(&self, b: &ObjRef) -> bool {
-        as_blockhead(b).map_or(false, |x| x.should_continue_simulating())
+        as_blockhead(b).is_some_and(|x| x.should_continue_simulating())
     }
     /// `[b sufferDamage:dmg isSimulation:sim recoil:recoil]`.
     #[provided]
@@ -318,7 +318,7 @@ pub(crate) fn snap_float_pos(me: &ObjRef, sq: IntPair) {
 
 /// `x == obj` for an optional handle (`nil == obj` is false).
 pub(crate) fn is_same(a: &Option<ObjRef>, b: &ObjRef) -> bool {
-    a.as_ref().map_or(false, |a| ptr_eq(a, b))
+    a.as_ref().is_some_and(|a| ptr_eq(a, b))
 }
 
 /// Non-empty `[bh pos]` of an optional handle (nil gives (0,0)).
@@ -338,7 +338,7 @@ pub(crate) fn dict_float(d: &PlistDict, k: &str) -> f32 {
 
 /// NSNumber-style `boolValue` of a save dict key (NO if missing).
 pub(crate) fn dict_bool(d: &PlistDict, k: &str) -> bool {
-    d.map.get(&k.to_string()).map_or(false, |v| v.bool_value())
+    d.map.get(&k.to_string()).is_some_and(|v| v.bool_value())
 }
 
 /// Applies the custom-rules damage scaling shared by the troll punch and the scorpion bite:
@@ -349,7 +349,7 @@ pub(crate) fn scale_damage_for_difficulty(dmg: f32, cr: &CustomRules) -> f32 {
         if cr.npc_difficulty == CUSTOM_RULE_NPC_EASY {
             d = ((d as f64) * 0.25f64) as f32;
         } else if cr.npc_difficulty == CUSTOM_RULE_NPC_HARD {
-            d = 4.0f32 * d;
+            d *= 4.0f32;
         }
     }
     d
@@ -1374,7 +1374,7 @@ impl CaveTroll {
                 if t.state.drown_fraction > 0.0f32 {
                     if t.state.drown_fraction <= 1.0f32 {
                         t.state.drown_fraction -= 0.5f32 * dt;
-                        if t.state.drown_fraction <= 0.0f32 && t.state.drown_fraction != 0.0f32 {
+                        if t.state.drown_fraction < 0.0f32 {
                             t.state.drown_fraction = 0.0f32;
                         }
                     } else {
@@ -1479,7 +1479,7 @@ impl CaveTroll {
         if me.is_net() || chasing {
             return;
         }
-        if rider.as_ref().map_or(false, |r| r.is_net()) {
+        if rider.as_ref().is_some_and(|r| r.is_net()) {
             return;
         }
         let cr = host.custom_rules();
@@ -1751,7 +1751,7 @@ impl CaveTroll {
                                     let (inter, itile) = self.t(|t| (t.state.interacting != 0, t.interacting_tile));
                                     if !inter || !tile_eq(&itile, &next_tile) {
                                         let tapped = self.t(|t| t.tapped_npc.clone());
-                                        let paused = tapped.as_ref().map_or(false, |b| host.bh_paused(b));
+                                        let paused = tapped.as_ref().is_some_and(|b| host.bh_paused(b));
                                         if !paused {
                                             interact_tile = next_tile;
                                         }
@@ -2490,7 +2490,7 @@ pub fn register() {
 #[cfg(test)]
 pub(crate) mod test_support {
     use super::*;
-    use crate::npc::npc::{set_npc_env, NpcEnv};
+    use crate::npc::npc::set_npc_env;
     use crate::objects::base::testutil::MockDw;
     use crate::path::path_creator::testutil::{new_world, GridLoader};
     use std::cell::Cell;
@@ -2680,6 +2680,7 @@ pub(crate) mod test_support {
     pub struct Fx {
         pub world: Rc<World>,
         pub wref: WorldRef,
+        #[allow(dead_code)] // test fixture field
         pub dw: Rc<MockDw>,
         pub dwr: DynamicWorldRef,
         pub env: Rc<TestEnv>,

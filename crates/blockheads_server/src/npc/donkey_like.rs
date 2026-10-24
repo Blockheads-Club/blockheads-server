@@ -544,7 +544,7 @@ pub fn donkey_like_blockhead_can_ride_using_item(me: &ObjRef, b: &ObjRef, _item_
 
 /// `-[DonkeyLike blockheadUnloaded:]`.
 pub fn donkey_like_blockhead_unloaded(me: &ObjRef, b: &ObjRef) {
-    let is_rider = npc_state(me).borrow().rider.as_ref().map_or(false, |r| ptr_eq(r, b));
+    let is_rider = npc_state(me).borrow().rider.as_ref().is_some_and(|r| ptr_eq(r, b));
     if is_rider {
         let mut s = dl(me).donkey_like().borrow_mut();
         s.actual_x_speed = 0.0f32;
@@ -556,7 +556,7 @@ pub fn donkey_like_blockhead_unloaded(me: &ObjRef, b: &ObjRef) {
 /// `-[DonkeyLike setTargetVelocity:]`: only a local rider steers.
 pub fn donkey_like_set_target_velocity(me: &ObjRef, v: Vector2) {
     let rider = npc_state(me).borrow().rider.clone();
-    if rider.map_or(false, |r| !r.is_net()) {
+    if rider.is_some_and(|r| !r.is_net()) {
         let mv = dl(me).max_velocity();
         let cell = dl(me).donkey_like();
         let changed = {
@@ -796,11 +796,11 @@ fn run_steps(t: &mut Tick, dt: f32) {
         x_add = t.s.actual_x_speed * cdt * mult;
         if t_water(&tile0) {
             let full = (tile0.map_or(0, |x| x.partial_content_left) / 255) as i32;
-            x_add = (1.0f32 - 0.8f32 * (full as f32)) * x_add;
-            y_add = 0.5f32 * y_add;
+            x_add *= 1.0f32 - 0.8f32 * (full as f32);
+            y_add *= 0.5f32;
         }
     }
-    if t.fp.x <= 0.0f32 && t.fp.x != 0.0f32 {
+    if t.fp.x < 0.0f32 {
         t.fp.x += t.w as f32;
     }
     let old_fp = t.fp;
@@ -1019,7 +1019,7 @@ fn run_steps(t: &mut Tick, dt: f32) {
 
     // Step 7: remote control sanity
     let rider = t.rider();
-    let rider_is_net = rider.as_ref().map_or(false, |r| r.is_net());
+    let rider_is_net = rider.as_ref().is_some_and(|r| r.is_net());
     let controlled = t.being_controlled();
     if !rider_is_net {
         let active = t.env.dw_active_blockhead();
@@ -1035,10 +1035,8 @@ fn run_steps(t: &mut Tick, dt: f32) {
     let mut reset = false;
     if !t.s.falling || t.s.in_water {
         reset = true;
-    } else if me.is_net() || controlled {
-        if !(controlled && !rider_is_net) {
-            reset = true;
-        }
+    } else if (me.is_net() || controlled) && !(controlled && !rider_is_net) {
+        reset = true;
     }
     if !reset && t.s.y_speed >= 0.0f32 {
         reset = true;
@@ -1258,7 +1256,7 @@ fn run_steps(t: &mut Tick, dt: f32) {
         t.s.munch_motion_random_speed =
             0.5f32 * t.s.munch_motion_random_speed + 0.25f32 + r("DonkeyLike.munch.speed") * 0.75f32;
     }
-    let below_not_grass = below.map_or(false, |b| b.type_index != 27 && b.type_index != 49);
+    let below_not_grass = below.is_some_and(|b| b.type_index != 27 && b.type_index != 49);
     if fabsf(t.s.actual_x_speed) > 2.0f32 || t.s.falling || below_not_grass {
         t.s.target_head_down_fraction = 0.0f32;
     } else {

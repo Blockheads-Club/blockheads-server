@@ -245,7 +245,7 @@ impl FishingRod {
             if self.st.borrow().line_locations.len() > 1 {
                 let hook_pos = self.st.borrow().hook_pos;
                 let t = tile_at(hook_pos);
-                let water_below_fill = tile_is_water(t.clone())
+                let water_below_fill = tile_is_water(t)
                     && (t.as_ref().map_or(0u8, |t| t.partial_content_left()) as f32)
                         < (hook_pos.y - (f32_to_i32(hook_pos.y) as f32)) * 255.0f32;
                 if tile_is_air(t) || water_below_fill {
@@ -325,7 +325,7 @@ impl FishingRod {
             let pos = (f32_to_i32(hook_pos.x), f32_to_i32(hook_pos.y));
             let t = tile_at_world_position_loaded(pos.0, pos.1, &world);
             let mut new_hook_pos = hook_pos;
-            if !tile_is_solid(t.clone()) {
+            if !tile_is_solid(t) {
                 if tile_is_water(t) {
                     hv.x *= max0(1.0f32 - 2.0f32 * dt);
                     hv.x = clamp(hv.x, -1.0f32, 1.0f32);
@@ -367,9 +367,9 @@ impl FishingRod {
                 let old_y = e.y;
                 e.y -= 4.0f32 * dt;
                 let t = tile_at(e);
-                if tile_is_solid(t.clone()) {
+                if tile_is_solid(t) {
                     e.y = old_y;
-                } else if tile_is_water(t.clone())
+                } else if tile_is_water(t)
                     && ((e.y - (f32_to_i32(e.y) as f32)) * 255.0f32
                         <= (t.as_ref().map_or(0u8, |t| t.partial_content_left()) as f32))
                 {
@@ -440,7 +440,7 @@ impl FishingRod {
 
     /// `-blockheadUnloaded:`: clears the blockhead if it is the same object.
     pub fn blockhead_unloaded(&self, bh: &ObjRef) {
-        let same = self.blockhead().map_or(false, |b| ptr_eq(&b, bh));
+        let same = self.blockhead().is_some_and(|b| ptr_eq(&b, bh));
         if same {
             self.st.borrow_mut().blockhead = None;
         }

@@ -781,11 +781,11 @@ impl DynamicWorld {
     /// `dynamicObjects[t].insert({id, o})`: keeps an existing entry; returns whether inserted
     pub fn do_insert_new(&self, t: usize, id: u64, o: ObjRef) -> bool {
         let mut m = self.dynamic_objects.borrow_mut();
-        if m[t].contains_key(&id) {
-            false
-        } else {
-            m[t].insert(id, o);
+        if let std::collections::btree_map::Entry::Vacant(e) = m[t].entry(id) {
+            e.insert(o);
             true
+        } else {
+            false
         }
     }
     /// `dynamicObjects[t].erase(id)`
@@ -816,11 +816,11 @@ impl DynamicWorld {
     /// `dynamicObjectsToAdd[t].insert({id, o})`
     pub fn ta_insert_new(&self, t: usize, id: u64, o: ObjRef) -> bool {
         let mut m = self.dynamic_objects_to_add.borrow_mut();
-        if m[t].contains_key(&id) {
-            false
-        } else {
-            m[t].insert(id, o);
+        if let std::collections::btree_map::Entry::Vacant(e) = m[t].entry(id) {
+            e.insert(o);
             true
+        } else {
+            false
         }
     }
     /// `dynamicObjectsToAdd[t].erase(id)`
@@ -851,11 +851,11 @@ impl DynamicWorld {
     /// `dynamicObjectsByWorldPosIndex[t].insert({idx, o})`
     pub fn bp_insert_new(&self, t: usize, idx: u64, o: ObjRef) -> bool {
         let mut m = self.dynamic_objects_by_world_pos_index.borrow_mut();
-        if m[t].contains_key(&idx) {
-            false
-        } else {
-            m[t].insert(idx, o);
+        if let std::collections::btree_map::Entry::Vacant(e) = m[t].entry(idx) {
+            e.insert(o);
             true
+        } else {
+            false
         }
     }
     /// `dynamicObjectsByWorldPosIndex[t].erase(idx)`

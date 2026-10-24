@@ -284,19 +284,19 @@ fn tile_copy(t: &Tile) -> NpcTileCopy {
 }
 
 fn is_deep(t: &Option<Tile>) -> bool {
-    t.map_or(false, |x| x.partial_content_left >= LEVEL_DEEP)
+    t.is_some_and(|x| x.partial_content_left >= LEVEL_DEEP)
 }
 
 fn is_shallow(t: &Option<Tile>) -> bool {
-    t.map_or(false, |x| x.partial_content_left < LEVEL_DEEP)
+    t.is_some_and(|x| x.partial_content_left < LEVEL_DEEP)
 }
 
 /// `isNet ? (no rider or rider is remote) : (rider present and remote)`: the shark follows a remote driver.
 fn follows_remote(me: &ObjRef) -> bool {
     let rider = npc_state(me).borrow().rider.clone();
     match (me.is_net(), rider) {
-        (true, r) => r.map_or(true, |r| r.is_net()),
-        (false, r) => r.map_or(false, |r| r.is_net()),
+        (true, r) => r.is_none_or(|r| r.is_net()),
+        (false, r) => r.is_some_and(|r| r.is_net()),
     }
 }
 
@@ -440,9 +440,9 @@ impl Shark {
     pub fn is_under_local_control(&self) -> bool {
         let rider = self.npc.borrow().rider.clone();
         if self.base.borrow().is_net {
-            rider.map_or(false, |r| !r.is_net())
+            rider.is_some_and(|r| !r.is_net())
         } else {
-            !rider.map_or(false, |r| r.is_net())
+            !rider.is_some_and(|r| r.is_net())
         }
     }
     pub fn min_ridable_age(&self) -> f32 {
@@ -555,7 +555,7 @@ pub fn shark_do_remote_update(me: &ObjRef, u: SharkUpdateNetData) {
     let walk = (u.walk_speed as i32 as f32) / 255.0;
     let dir = u.movement_direction as i32;
     if !npc_env().is_client() {
-        if !rider.map_or(false, |r| r.is_net()) {
+        if !rider.is_some_and(|r| r.is_net()) {
             return;
         }
         {
@@ -569,9 +569,9 @@ pub fn shark_do_remote_update(me: &ObjRef, u: SharkUpdateNetData) {
         me.set_update_needs_to_be_sent(true);
         return;
     }
-    let local_rider = rider.map_or(false, |r| !r.is_net());
+    let local_rider = rider.is_some_and(|r| !r.is_net());
     if !local_rider {
-        let local_target = sh.shark.borrow().attack_blockhead.as_ref().map_or(false, |a| !a.is_net());
+        let local_target = sh.shark.borrow().attack_blockhead.as_ref().is_some_and(|a| !a.is_net());
         if !local_target {
             let mut s = sh.shark.borrow_mut();
             s.remote_goal_square = goal;
@@ -610,7 +610,7 @@ fn adopt_target(me: &ObjRef, sh: &Shark, wanted: u64) {
             continue;
         }
         let current = sh.shark.borrow().attack_blockhead.clone();
-        if current.map_or(false, |c| c.unique_id() == wanted) {
+        if current.is_some_and(|c| c.unique_id() == wanted) {
             continue;
         }
         {
@@ -682,7 +682,7 @@ impl<'a> Tick<'a> {
             return;
         }
         let rider = self.rider();
-        self.local_rider_in_control = rider.as_ref().map_or(false, |r| !r.is_net());
+        self.local_rider_in_control = rider.as_ref().is_some_and(|r| !r.is_net());
         let speed = self.effective_speed(&rider);
         let stationary = self.wander(rider.is_none());
         if self.is_frozen() {
@@ -781,7 +781,7 @@ impl<'a> Tick<'a> {
 
     // 4.3
     fn effective_speed(&self, rider: &Option<ObjRef>) -> f32 {
-        let rider_remote = rider.as_ref().map_or(false, |r| r.is_net());
+        let rider_remote = rider.as_ref().is_some_and(|r| r.is_net());
         if rider.is_some() && rider_remote {
             return self.s.remote_walk_speed;
         }
@@ -865,7 +865,7 @@ impl<'a> Tick<'a> {
         let env = penv();
         let pos = self.me.pos();
         let cell = env.tile_loaded(pos.x, pos.y);
-        let submerged = !t_air_snow(&cell) && cell.map_or(true, |c| c.partial_content_left >= LEVEL_WATER);
+        let submerged = !t_air_snow(&cell) && cell.is_none_or(|c| c.partial_content_left >= LEVEL_WATER);
         if submerged {
             self.float_up();
         } else {
@@ -1140,7 +1140,7 @@ impl<'a> Tick<'a> {
         if Npc::belongs_to_player_with_blockhead(self.sh, b) && (self.ns().borrow().fullness as f64) > 1350.0 {
             return false;
         }
-        if self.s.attack_blockhead.as_ref().map_or(false, |a| !ptr_eq(a, b)) {
+        if self.s.attack_blockhead.as_ref().is_some_and(|a| !ptr_eq(a, b)) {
             return false;
         }
         let bx = b.pos().x;
@@ -1150,7 +1150,7 @@ impl<'a> Tick<'a> {
     /// Within three cells: start biting a swimmer, or give up on someone on a boat.
     fn engage(&mut self, b: &ObjRef) {
         let env = penv();
-        let on_boat = env.bh_ride_object(b).map_or(false, |o| env.is_boat(&o));
+        let on_boat = env.bh_ride_object(b).is_some_and(|o| env.is_boat(&o));
         if !on_boat {
             if self.s.flee_timer <= 0.0 && !self.s.biting && self.s.attack_blockhead.is_none() {
                 self.s.biting = true;
@@ -1188,7 +1188,7 @@ impl<'a> Tick<'a> {
         let sim = self.sim;
         self.reentrant(|| {
             env.bh_suffer_damage(b, dmg, sim, true);
-            if rider.as_ref().map_or(false, |r| ptr_eq(r, b)) {
+            if rider.as_ref().is_some_and(|r| ptr_eq(r, b)) {
                 env.bh_stop_riding(b);
             }
         });
@@ -1231,7 +1231,7 @@ impl<'a> Tick<'a> {
 
     // 5.4
     fn read_rider_vertical(&mut self, plan: &mut Plan) {
-        let local_rider = self.rider().map_or(false, |r| !r.is_net());
+        let local_rider = self.rider().is_some_and(|r| !r.is_net());
         if !local_rider || self.s.attack_blockhead.is_some() || plan.want_up || plan.want_down {
             return;
         }
@@ -1422,11 +1422,11 @@ impl DynamicObject for Shark {
     }
 
     fn blockhead_unloaded(&self, me: &ObjRef, b: &ObjRef) {
-        let is_attack = self.shark.borrow().attack_blockhead.as_ref().map_or(false, |a| ptr_eq(a, b));
+        let is_attack = self.shark.borrow().attack_blockhead.as_ref().is_some_and(|a| ptr_eq(a, b));
         if is_attack {
             self.shark.borrow_mut().attack_blockhead = None;
         }
-        let is_rider = self.npc.borrow().rider.as_ref().map_or(false, |r| ptr_eq(r, b));
+        let is_rider = self.npc.borrow().rider.as_ref().is_some_and(|r| ptr_eq(r, b));
         if is_rider {
             self.shark.borrow_mut().rider_target_velocity = Vector2::ZERO;
         }
@@ -2065,7 +2065,7 @@ mod spec_tests {
     use super::*;
     use crate::npc::egg::test_support::TestPassiveEnv;
     use crate::npc::egg::{set_passive_env, PassiveEnv};
-    use crate::npc::npc::{set_npc_env, NpcEnv};
+    use crate::npc::npc::set_npc_env;
     use crate::objects::base::testutil::{setup, MockDw, MockWorld, TestObj};
     use crate::types::structs::CustomRules;
     use std::cell::Cell;
@@ -3967,7 +3967,7 @@ mod spec_tests {
         me.base().borrow_mut().creation_data_needs_to_be_sent = false;
         me.remote_creation_data_update(&me, &creation_bytes(&me, 0x55));
         let s = st(&me);
-        assert!(s.biting && s.attack_blockhead.as_ref().map_or(false, |a| a.unique_id() == 0x55));
+        assert!(s.biting && s.attack_blockhead.as_ref().is_some_and(|a| a.unique_id() == 0x55));
         assert_eq!(s.bite_timer, 1.0);
         assert!(me.update_needs_to_be_sent() && me.creation_data_needs_to_be_sent());
         // same target again: nothing new

@@ -197,7 +197,7 @@ impl BlockheadAI {
             s.found_tile[k] = true;
             s.found_tile_pos[k] = pos;
         };
-        let prev_hit = || self.st.borrow().previous_action_tiles.iter().any(|p| *p == pos);
+        let prev_hit = || self.st.borrow().previous_action_tiles.contains(&pos);
         // 2 GET_AIR
         if !found(2) && bh.drown_fraction() > 0.1f32 {
             if prev_hit() {
@@ -411,12 +411,10 @@ impl BlockheadAI {
         // 6 / 15 MINE_RESOURCE
         if !found(6) || !found(15) {
             let mut check = false;
-            if matches!(t.type_index, 6 | 0x1b | 0x1c) || t.type_index == 1 {
-                if t.contents != 0 {
-                    let it = item_type_from_tile_is_foregorund(tref, pos, false, &world);
-                    if bh.can_pick_up_item_of_type_sub_items(it, None) == 1 {
-                        check = true;
-                    }
+            if (matches!(t.type_index, 6 | 0x1b | 0x1c) || t.type_index == 1) && t.contents != 0 {
+                let it = item_type_from_tile_is_foregorund(tref, pos, false, &world);
+                if bh.can_pick_up_item_of_type_sub_items(it, None) == 1 {
+                    check = true;
                 }
             }
             if check {
@@ -631,7 +629,7 @@ impl BlockheadAI {
                 let t = tile_at_world_position_loaded(g.x, g.y - 1, &world);
                 let digable = tile_is_solid(t)
                     && (tile_is_unplaced_block_minable_with_pickaxe(t)
-                        || t.map_or(false, |t| matches!(t.get().type_index, 6 | 0x1b | 0x1c | 7 | 8 | 0x3a)));
+                        || t.is_some_and(|t| matches!(t.get().type_index, 6 | 0x1b | 0x1c | 7 | 8 | 0x3a)));
                 self.st.borrow_mut().goal_dig_tile =
                     if digable { IntPair { x: g.x, y: g.y - 1 } } else { IntPair { x: -1, y: -1 } };
             }

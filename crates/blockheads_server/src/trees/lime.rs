@@ -131,7 +131,7 @@ impl TreeLike for LimeTree {
         season == 0
     }
     fn tile_is_kind_of_self(&self, t: &Tile) -> bool {
-        matches!(t.contents, 0x59 | 0x5a | 0x5b | 0x5c | 0x5d)
+        matches!(t.contents, 0x59..=0x5d)
     }
     fn make_tile_dead(&self, t: &mut Tile) {
         if t.contents == 89 {

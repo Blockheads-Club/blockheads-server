@@ -106,6 +106,7 @@ pub fn static_mask_ranges(ty: u8, packet_len: usize) -> Vec<Range<usize>> {
 
 /// Tiny general JSON value, only used to read `types_structs_meta.json`.
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // the payloads mirror the JSON model even where this reader ignores them
 enum JV {
     Null,
     Bool(bool),

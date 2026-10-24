@@ -175,7 +175,7 @@ impl<'a> Ctx<'a> {
         crate::objects::base::BlockheadApi::local_net_id(self.b)
     }
     fn tile_protected(&self, pos: IntPair) -> bool {
-        self.world.as_ref().map_or(false, |w| WorldApi::tile_is_protected_at_pos_against_blockhead(&**w, pos, self.me))
+        self.world.as_ref().is_some_and(|w| WorldApi::tile_is_protected_at_pos_against_blockhead(&**w, pos, self.me))
     }
     /// `interactionTypeForTile:...` with the protected-tile recheck (`allowProtectedActions:NO`).
     fn interaction_type_checked(
@@ -253,7 +253,7 @@ pub fn update_accurate_dt_is_simulation(b: &Blockhead, me: &ObjRef, dt: f32, acc
     let world = b.world_rc();
     let ctl = b.is_client_blockhead_being_controlled_by_server();
     let rules = world.as_ref().map(|w| w.custom_rules()).unwrap_or_default();
-    let expert = world.as_ref().map_or(false, |w| w.expert_mode());
+    let expert = world.as_ref().is_some_and(|w| w.expert_mode());
     let c = Ctx {
         b,
         me,
@@ -391,7 +391,7 @@ fn u2(c: &Ctx) -> Flow {
         return Flow::Continue;
     }
     let mut a = c.dt;
-    if c.world.as_ref().map_or(false, |w| w.fast_forward()) {
+    if c.world.as_ref().is_some_and(|w| w.fast_forward()) {
         a = c.dt / 20.0f32;
     }
     let prog = {
@@ -533,7 +533,7 @@ fn u3(c: &Ctx, should_collapse: &mut bool) -> Flow {
                 }
                 let fullness = {
                     let mut f = b.bh.borrow_mut();
-                    f.state.fullness = f.state.fullness - (dt / 1800.0f32) * hunger_rate;
+                    f.state.fullness -= (dt / 1800.0f32) * hunger_rate;
                     f.state.fullness
                 };
                 if fullness < -0.1f32 && !(rules_on && c.rules.health == 4) {
@@ -639,7 +639,7 @@ fn u3(c: &Ctx, should_collapse: &mut bool) -> Flow {
                     *should_collapse = true;
                 }
             } else if !c.sim_or_ctl {
-                let a = if c.world.as_ref().map_or(false, |w| w.fast_forward()) { dt / 20.0f32 } else { dt };
+                let a = if c.world.as_ref().is_some_and(|w| w.fast_forward()) { dt / 20.0f32 } else { dt };
                 let over = {
                     let mut f = b.bh.borrow_mut();
                     f.state.meditation_progress += a / 900.0f32;
@@ -713,7 +713,7 @@ fn u3(c: &Ctx, should_collapse: &mut bool) -> Flow {
     }
     // ---- fire damage
     {
-        let on_fire = b.bh.borrow().from_tile.map_or(false, |t| t.on_fire() != 0);
+        let on_fire = b.bh.borrow().from_tile.is_some_and(|t| t.on_fire() != 0);
         if on_fire {
             let due = {
                 let mut f = b.bh.borrow_mut();
@@ -774,7 +774,7 @@ fn u3(c: &Ctx, should_collapse: &mut bool) -> Flow {
             };
         } else if sub == 2 {
             mult = 0.5f32;
-        } else if matches!(sub, 5 | 6 | 7) {
+        } else if matches!(sub, 5..=7) {
             mult = 0.0f32;
         }
         if regen {
@@ -798,19 +798,18 @@ fn u3(c: &Ctx, should_collapse: &mut bool) -> Flow {
             c.h.increment_usage_of_ice_clothing(b);
         }
         let jfu = b.bh.borrow().jet_fuel_usage;
-        if 0.1f32 < jfu {
-            if tick(|f| &mut f.fuel_usage_increment_timer, dt * (jfu - 0.1f32), 2.197265625f32) {
-                c.h.increment_fuel_usage(b);
-            }
+        if 0.1f32 < jfu && tick(|f| &mut f.fuel_usage_increment_timer, dt * (jfu - 0.1f32), 2.197265625f32) {
+            c.h.increment_fuel_usage(b);
         }
         let (item_ty, ride) = {
             let f = b.bh.borrow();
             (f.interaction_item.as_ref().map(|i| i.borrow().item_type.0), f.ride_object.clone())
         };
-        if item_ty == Some(0x4a) && ride.map_or(false, |r| c.h.is_donkey(&r)) {
-            if tick(|f| &mut f.passive_item_usage_increment_timer, dt, 10.0f32) {
-                c.h.increment_passive_item_usage(b);
-            }
+        if item_ty == Some(0x4a)
+            && ride.is_some_and(|r| c.h.is_donkey(&r))
+            && tick(|f| &mut f.passive_item_usage_increment_timer, dt, 10.0f32)
+        {
+            c.h.increment_passive_item_usage(b);
         }
     }
     Flow::Continue
@@ -998,7 +997,7 @@ fn u5(c: &Ctx) {
                 true,
                 &[],
             );
-            let path_empty = b.bh.borrow().path.as_ref().map_or(true, |p| p.is_empty());
+            let path_empty = b.bh.borrow().path.as_ref().is_none_or(|p| p.is_empty());
             let falling = {
                 let f = b.bh.borrow();
                 f.path.as_ref().map_or(0, |p| p.len()) != 0 && f.traverse_type as u32 == tt::FALL
@@ -1195,7 +1194,7 @@ fn u6b(c: &Ctx, coffee_dt: f32) {
             };
             let ok = item.is_some()
                 && c.h.has_interaction_inventory_item_available(b)
-                && c.world.as_ref().map_or(false, |w| tile_is_paintable(tile, sq, w, Some(c.me)));
+                && c.world.as_ref().is_some_and(|w| tile_is_paintable(tile, sq, w, Some(c.me)));
             if !ok {
                 b.stop_interacting();
             } else {
@@ -1222,7 +1221,7 @@ fn u6b(c: &Ctx, coffee_dt: f32) {
             let npc = b.bh.borrow().tapped_npc.clone();
             let ok = item.is_some()
                 && c.h.has_interaction_inventory_item_available(b)
-                && npc.as_ref().map_or(false, |n| c.h.npc_can_be_fed_by_blockhead(n, b));
+                && npc.as_ref().is_some_and(|n| c.h.npc_can_be_fed_by_blockhead(n, b));
             if !ok {
                 b.stop_interacting();
             } else {
@@ -1238,7 +1237,7 @@ fn u6b(c: &Ctx, coffee_dt: f32) {
         }
         it::SET_NPC_FREE => {
             let npc = b.bh.borrow().tapped_npc.clone();
-            if !npc.as_ref().map_or(false, |n| c.h.npc_belongs_to_player_with_blockhead(n, b)) {
+            if !npc.as_ref().is_some_and(|n| c.h.npc_belongs_to_player_with_blockhead(n, b)) {
                 b.stop_interacting();
             } else {
                 match t_rule(prev, timer, 0.15, 0.3) {
@@ -1253,7 +1252,7 @@ fn u6b(c: &Ctx, coffee_dt: f32) {
         it::CRAFT => u6_craft(c, coffee_dt),
         it::USE_INTERACTIVE_OBJECT => {
             let obj = b.bh.borrow().interaction_object.clone();
-            if obj.as_ref().map_or(false, |o| c.h.is_bed(o)) && 1.1f32 < b.bh.borrow().state.energy {
+            if obj.as_ref().is_some_and(|o| c.h.is_bed(o)) && 1.1f32 < b.bh.borrow().state.energy {
                 if c.sim_or_ctl {
                     c.event(0, SimulationEventExtra::None);
                 }
@@ -1321,7 +1320,7 @@ fn u6b(c: &Ctx, coffee_dt: f32) {
                             if ItemType(ity) == ItemType::ITEM_TULIP_SEED {
                                 c.achievement("grp.tulip");
                             }
-                            if tile.map_or(false, |t| matches!(t.type_index(), 0x30 | 0x31 | 0x32)) {
+                            if tile.is_some_and(|t| matches!(t.type_index(), 0x30..=0x32)) {
                                 c.achievement("grp.compost");
                             }
                         }
@@ -1409,7 +1408,7 @@ fn u6_dig(c: &Ctx, coffee_dt: f32) {
                 done = true;
             }
         }
-    } else if ity == 0xd1 && tile.map_or(false, |t| t.foreground_contents() == 0x62) {
+    } else if ity == 0xd1 && tile.is_some_and(|t| t.foreground_contents() == 0x62) {
         let io_type = h.interaction_object_at_pos(sq).map_or(0, |o| h.interaction_object_type(&o));
         is_removing_rail = !(tile_contents == 0x30 && io_type == 6);
         if is_removing_rail {
@@ -1476,7 +1475,7 @@ fn u6_dig(c: &Ctx, coffee_dt: f32) {
                             if (r as f64) < p {
                                 c.create_free_block(sq, 0x9b, 0, 0, 1, true);
                             }
-                        } else if matches!(ti, 0x30 | 0x31 | 0x32) {
+                        } else if matches!(ti, 0x30..=0x32) {
                             let r = r01_from(rand_tagged("blockhead/update/dig_trunk"));
                             let p = if ti == 0x30 { 0.0625f64 } else { 0.5f64 };
                             if (r as f64) < p {
@@ -1632,7 +1631,7 @@ fn u6_fill_bucket(c: &Ctx, itype: u32, prev: f32, timer: f32) {
                 match tapped {
                     Some(t) => Some(t.clone()),
                     None => {
-                        let pvp = c.world.as_ref().map_or(false, |w| w.pvp_enabled());
+                        let pvp = c.world.as_ref().is_some_and(|w| w.pvp_enabled());
                         h.check_for_harmable_dynamic_object_under_tap_ignore_local_blockheads_ignore_all_blockheads(
                             Vector2 { x: (sq.x as f32) + 0.5f32, y: (sq.y as f32) + 0.5f32 },
                             true,
@@ -1872,7 +1871,7 @@ fn u6_stab(c: &Ctx, prev: f32, timer: f32) {
             let ity = item.as_ref().map(|i| i.borrow().item_type.0);
             match ity {
                 None => {}
-                Some(t) if matches!(t, 0x67 | 0x68 | 0x2a | 0x101 | 0xaf) => {}
+                Some(0x67 | 0x68 | 0x2a | 0x101 | 0xaf) => {}
                 Some(t) => {
                     force = match t {
                         0x32 => 18,
@@ -1889,9 +1888,9 @@ fn u6_stab(c: &Ctx, prev: f32, timer: f32) {
             if let Some(n) = &npc {
                 let ot = n.object_type();
                 if !c.is_net && !c.ctl {
-                    if ot == 0x27 && n.as_harmable().map_or(false, |hm| hm.will_die_if_hit_by_force(force)) {
+                    if ot == 0x27 && n.as_harmable().is_some_and(|hm| hm.will_die_if_hit_by_force(force)) {
                         c.achievement("grp.troll");
-                    } else if ot == 0x33 && n.as_harmable().map_or(false, |hm| hm.will_die_if_hit_by_force(force)) {
+                    } else if ot == 0x33 && n.as_harmable().is_some_and(|hm| hm.will_die_if_hit_by_force(force)) {
                         c.achievement("grp.scorpion");
                     }
                 }
@@ -1941,9 +1940,9 @@ fn u6_fire(c: &Ctx, prev: f32, timer: f32) {
                     if let Some(n) = &npc {
                         let ot = n.object_type();
                         let fi = f32_to_i32(force);
-                        if ot == 0x27 && n.as_harmable().map_or(false, |hm| hm.will_die_if_hit_by_force(fi)) {
+                        if ot == 0x27 && n.as_harmable().is_some_and(|hm| hm.will_die_if_hit_by_force(fi)) {
                             c.achievement("grp.troll");
-                        } else if ot == 0x33 && n.as_harmable().map_or(false, |hm| hm.will_die_if_hit_by_force(fi)) {
+                        } else if ot == 0x33 && n.as_harmable().is_some_and(|hm| hm.will_die_if_hit_by_force(fi)) {
                             c.achievement("grp.scorpion");
                         }
                     }
@@ -2153,7 +2152,7 @@ fn u7_step(c: &Ctx, _coffee_dt: &mut f32, need_update: &mut bool) {
                         if goal == 20 {
                             let dy = np.y.wrapping_sub(pos.y);
                             let y_off = if crouching { 0 } else { 1 };
-                            let los = world.as_ref().map_or(false, |w| {
+                            let los = world.as_ref().is_some_and(|w| {
                                 clear_line_of_sight_between_tiles(
                                     IntPair { x: pos.x, y: pos.y.wrapping_add(y_off) },
                                     IntPair { x: np.x, y: np.y.wrapping_add(1) },
@@ -2285,7 +2284,7 @@ fn u7_step(c: &Ctx, _coffee_dt: &mut f32, need_update: &mut bool) {
                     }
                 }
             }
-            let path_empty = b.bh.borrow().path.as_ref().map_or(true, |p| p.is_empty());
+            let path_empty = b.bh.borrow().path.as_ref().is_none_or(|p| p.is_empty());
             if path_empty {
                 // final step
                 if next == c.pos() {
@@ -2476,7 +2475,7 @@ fn u7_step(c: &Ctx, _coffee_dt: &mut f32, need_update: &mut bool) {
                 let south = if c.expert { 1.2f32 } else { 1.5f32 };
                 let shoes = b.bh.borrow().shoes_item_type;
                 let mut f = b.bh.borrow_mut();
-                if next_tile.map_or(true, |t| t.type_index() != 5) {
+                if next_tile.is_none_or(|t| t.type_index() != 5) {
                     if shoes == 0x7c || shoes == 0x7f {
                         f.travel_speed *= fur;
                     } else if shoes == 0x8f {
@@ -3056,7 +3055,7 @@ mod tests {
         let rate_recurrence = |rate: f32| -> f32 {
             let mut full = 1.0f32;
             for _ in 0..5 {
-                full = full - (DT / 1800.0f32) * rate;
+                full -= (DT / 1800.0f32) * rate;
             }
             full
         };

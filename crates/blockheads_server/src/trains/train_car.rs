@@ -291,19 +291,19 @@ pub fn same_opt(a: &Option<ObjRef>, b: &Option<ObjRef>) -> bool {
 
 /// `[r needsRemoved]` (nil -> NO).
 pub fn rider_needs_removed(r: &Option<ObjRef>) -> bool {
-    r.as_ref().map_or(false, |r| r.needs_removed())
+    r.as_ref().is_some_and(|r| r.needs_removed())
 }
 /// `[r isNet]` (nil -> NO).
 pub fn rider_is_net(r: &Option<ObjRef>) -> bool {
-    r.as_ref().map_or(false, |r| r.is_net())
+    r.as_ref().is_some_and(|r| r.is_net())
 }
 /// `[r paused]` (nil -> NO).
 pub fn rider_paused(r: &Option<ObjRef>) -> bool {
-    r.as_ref().and_then(|r| as_blockhead(r)).map_or(false, |b| b.paused())
+    r.as_ref().and_then(|r| as_blockhead(r)).is_some_and(|b| b.paused())
 }
 /// `[r isClientBlockheadBeingControlledByServer]` (nil -> NO).
 pub fn rider_controlled_by_server(r: &Option<ObjRef>) -> bool {
-    r.as_ref().and_then(|r| r.as_blockhead()).map_or(false, |b| b.is_client_blockhead_being_controlled_by_server())
+    r.as_ref().and_then(|r| r.as_blockhead()).is_some_and(|b| b.is_client_blockhead_being_controlled_by_server())
 }
 /// `[r stopRiding]` (nil -> no-op). Goes through the blockhead host seam (`BlockheadHost::stop_riding`).
 pub fn rider_stop_riding(r: &ObjRef) {
@@ -411,7 +411,7 @@ pub fn classify_wheel_tile(world: &World, tile: TileRef, pos: IntPair) -> WheelT
         return WheelTile::Rail;
     }
     let above = tile_at_world_position_loaded(pos.x, pos.y.wrapping_add(1), world);
-    if above.map_or(true, |a| a.foreground_contents() != CONTENTS_RAIL) {
+    if above.is_none_or(|a| a.foreground_contents() != CONTENTS_RAIL) {
         if tile_is_solid(Some(tile)) {
             WheelTile::Solid
         } else {
@@ -503,10 +503,10 @@ pub fn refresh_wheel_rails(tcl: &dyn TrainCarLike, new_l: IntPair, new_r: IntPai
         let rchg = new_r != t.right_wheel_tile_pos;
         t.left_wheel_tile_pos = new_l;
         t.right_wheel_tile_pos = new_r;
-        if t.left_wheel_rail.as_ref().map_or(false, |r| r.needs_removed()) {
+        if t.left_wheel_rail.as_ref().is_some_and(|r| r.needs_removed()) {
             t.left_wheel_rail = None;
         }
-        if t.right_wheel_rail.as_ref().map_or(false, |r| r.needs_removed()) {
+        if t.right_wheel_rail.as_ref().is_some_and(|r| r.needs_removed()) {
             t.right_wheel_rail = None;
         }
         (lchg, rchg)
@@ -671,7 +671,7 @@ pub fn train_car_init_with_world_dynamic_world_save_dict_cache(
         if let Some(v) = get("engineCarID") {
             s.remote_engine_car_id = v.unsigned_long_value();
         }
-        s.engine_is_right = get("engineIsRight").map_or(false, |v| v.bool_value());
+        s.engine_is_right = get("engineIsRight").is_some_and(|v| v.bool_value());
     }
     me.set_owner_id(get("ownerID").and_then(|v| v.as_str()).map(|s| s.to_string()));
     t.load_derived_stuff(me);
@@ -863,7 +863,7 @@ pub fn train_car_remote_update(me: &ObjRef, net_data: &[u8]) {
             }
         } else {
             let cur = t.tc().borrow().riders[idx].clone();
-            if cur.as_ref().map_or(false, |c| c.unique_id() == rid) {
+            if cur.as_ref().is_some_and(|c| c.unique_id() == rid) {
                 continue;
             }
             for bh in dw.all_blockheads_including_net() {
@@ -931,7 +931,7 @@ pub fn train_car_remote_update(me: &ObjRef, net_data: &[u8]) {
                     _ => s.engine_car.clone(),
                 }
             };
-            if cur.as_ref().map_or(false, |c| c.unique_id() == id) {
+            if cur.as_ref().is_some_and(|c| c.unique_id() == id) {
                 continue;
             }
             let car = dw.train_car_with_id(id);
@@ -975,7 +975,7 @@ pub fn train_car_update_position(me: &ObjRef, new_position: IntPair) {
     if new_position.x != me.pos().x {
         for i in 0..t.max_number_of_riders().min(2) {
             let r = t.tc().borrow().riders[i as usize].clone();
-            if r.as_ref().map_or(false, |r| !r.is_net()) {
+            if r.as_ref().is_some_and(|r| !r.is_net()) {
                 t.tc_world().mark_circum_navigate_x(new_position.x);
             }
         }
@@ -1028,19 +1028,17 @@ pub fn train_car_update_accurate_dt_is_simulation(me: &ObjRef, _dt: f32, _accura
     let re = t.tc().borrow().remote_engine_car_id;
     if re != 0 {
         let has = t.tc().borrow().engine_car.is_some();
-        if !has {
-            if !t.is_engine() {
-                let c = dw.train_car_with_id(re);
-                let found = c.is_some();
-                t.tc().borrow_mut().engine_car = c;
-                if !found {
-                    return;
-                }
-                t.tc().borrow_mut().remote_engine_car_id = 0;
+        if !has && !t.is_engine() {
+            let c = dw.train_car_with_id(re);
+            let found = c.is_some();
+            t.tc().borrow_mut().engine_car = c;
+            if !found {
                 return;
             }
-            // isEngine: fall through
+            t.tc().borrow_mut().remote_engine_car_id = 0;
+            return;
         }
+        // isEngine: fall through
         t.tc().borrow_mut().remote_engine_car_id = 0;
     }
 }
@@ -1053,7 +1051,7 @@ pub fn train_car_add_rider(me: &ObjRef, rider: &ObjRef) {
     if rider_controlled_by_server(&some_rider) {
         rider_stop_riding(rider);
         for i in 0..max {
-            let is_it = t.tc().borrow().riders[i as usize].as_ref().map_or(false, |r| ptr_eq(r, rider));
+            let is_it = t.tc().borrow().riders[i as usize].as_ref().is_some_and(|r| ptr_eq(r, rider));
             if is_it {
                 t.tc().borrow_mut().riders[i as usize] = None;
                 // dynamicWorld isClient is NO
@@ -1068,7 +1066,7 @@ pub fn train_car_add_rider(me: &ObjRef, rider: &ObjRef) {
         let (is_it, is_nil) = {
             let s = t.tc().borrow();
             let r = &s.riders[i as usize];
-            (r.as_ref().map_or(false, |r| ptr_eq(r, rider)), r.is_none())
+            (r.as_ref().is_some_and(|r| ptr_eq(r, rider)), r.is_none())
         };
         if is_it {
             return;
@@ -1091,7 +1089,7 @@ pub fn train_car_remove_rider(me: &ObjRef, rider: &ObjRef) {
     let t = tcl(me);
     let mut hit = None;
     for i in 0..t.max_number_of_riders().min(2) {
-        if t.tc().borrow().riders[i as usize].as_ref().map_or(false, |r| ptr_eq(r, rider)) {
+        if t.tc().borrow().riders[i as usize].as_ref().is_some_and(|r| ptr_eq(r, rider)) {
             hit = Some(i as usize);
             break;
         }
@@ -1219,7 +1217,7 @@ pub fn train_car_set_engine_car(me: &ObjRef, engine: Option<&ObjRef>) {
             match next {
                 None => return,
                 Some(n) => {
-                    if train_car_of(&n).map_or(false, |c| c.is_engine()) {
+                    if train_car_of(&n).is_some_and(|c| c.is_engine()) {
                         break;
                     }
                     x = n;
@@ -1234,7 +1232,7 @@ pub fn train_car_set_engine_car(me: &ObjRef, engine: Option<&ObjRef>) {
 pub fn train_car_blockhead_unloaded(me: &ObjRef, b: &ObjRef) {
     let t = tcl(me);
     for i in 0..t.max_number_of_riders().min(2) {
-        let hit = t.tc().borrow().riders[i as usize].as_ref().map_or(false, |r| ptr_eq(r, b));
+        let hit = t.tc().borrow().riders[i as usize].as_ref().is_some_and(|r| ptr_eq(r, b));
         if hit {
             t.tc().borrow_mut().riders[i as usize] = None;
         }
@@ -1291,9 +1289,9 @@ pub fn rolling_car_update_after_super(me: &ObjRef, dtc: f32) {
     if !me.is_net() {
         // left
         let lc = t.tc().borrow().left_car.clone();
-        if lc.as_ref().map_or(false, |c| c.needs_removed()) {
+        if lc.as_ref().is_some_and(|c| c.needs_removed()) {
             let lc = lc.unwrap();
-            let mut engine_found = train_car_of(&lc).map_or(false, |c| c.is_engine());
+            let mut engine_found = train_car_of(&lc).is_some_and(|c| c.is_engine());
             if !engine_found {
                 let mut c = lc.clone();
                 loop {
@@ -1301,7 +1299,7 @@ pub fn rolling_car_update_after_super(me: &ObjRef, dtc: f32) {
                     match n {
                         None => break,
                         Some(n) => {
-                            if train_car_of(&n).map_or(false, |x| x.is_engine()) {
+                            if train_car_of(&n).is_some_and(|x| x.is_engine()) {
                                 engine_found = true;
                                 break;
                             }
@@ -1332,9 +1330,9 @@ pub fn rolling_car_update_after_super(me: &ObjRef, dtc: f32) {
         }
         // right
         let rc = t.tc().borrow().right_car.clone();
-        if rc.as_ref().map_or(false, |c| c.needs_removed()) {
+        if rc.as_ref().is_some_and(|c| c.needs_removed()) {
             let rc = rc.unwrap();
-            let mut engine_found = train_car_of(&rc).map_or(false, |c| c.is_engine());
+            let mut engine_found = train_car_of(&rc).is_some_and(|c| c.is_engine());
             if !engine_found {
                 let mut c = rc.clone();
                 loop {
@@ -1342,7 +1340,7 @@ pub fn rolling_car_update_after_super(me: &ObjRef, dtc: f32) {
                     match n {
                         None => break,
                         Some(n) => {
-                            if train_car_of(&n).map_or(false, |x| x.is_engine()) {
+                            if train_car_of(&n).is_some_and(|x| x.is_engine()) {
                                 engine_found = true;
                                 break;
                             }
@@ -1371,7 +1369,7 @@ pub fn rolling_car_update_after_super(me: &ObjRef, dtc: f32) {
         }
         // engine
         let ec = t.tc().borrow().engine_car.clone();
-        if ec.as_ref().map_or(false, |c| c.needs_removed()) {
+        if ec.as_ref().is_some_and(|c| c.needs_removed()) {
             t.tc().borrow_mut().engine_car = None;
             me.base().borrow_mut().update_needs_to_be_sent = true;
         }
@@ -1580,8 +1578,7 @@ pub fn neighbour_car_for_placement(me: &ObjRef, offset: i32) -> Option<ObjRef> {
             IntPair { x: pos.x.wrapping_add(offset), y: pos.y.wrapping_add(1) }
         };
         // UB-PARITY: no nil check in the original
-        ok =
-            tile_at_world_position_loaded(p.x, p.y, &world).map_or(false, |t| t.foreground_contents() == CONTENTS_RAIL);
+        ok = tile_at_world_position_loaded(p.x, p.y, &world).is_some_and(|t| t.foreground_contents() == CONTENTS_RAIL);
     }
     if !ok {
         return None;
@@ -1596,8 +1593,7 @@ pub fn neighbour_car_for_placement(me: &ObjRef, offset: i32) -> Option<ObjRef> {
             IntPair { x: p.x.wrapping_add(offset), y: p.y.wrapping_add(1) }
         };
         // UB-PARITY: no nil check in the original
-        if tile_at_world_position_loaded(rr.x, rr.y, &world).map_or(true, |t| t.foreground_contents() != CONTENTS_RAIL)
-        {
+        if tile_at_world_position_loaded(rr.x, rr.y, &world).is_none_or(|t| t.foreground_contents() != CONTENTS_RAIL) {
             rail = false;
         }
     }
@@ -1744,7 +1740,7 @@ pub(crate) mod world_tests {
     //! World-backed tests: a flat rail line on solid ground, cars placed through the
     //! real `DynamicWorld` placement path with the constructors installed as `DwOpsHooks`.
     use super::*;
-    use crate::dynworld::lookups::{set_ops_hooks, DwOpsHooks};
+    use crate::dynworld::lookups::set_ops_hooks;
     use crate::dynworld::state::testutil::dw as test_dw;
     use crate::objects::handle::ObjRef;
     use crate::trains::freight_car::FreightCar;
@@ -1823,7 +1819,7 @@ pub(crate) mod world_tests {
             }
         }
         fn tap_is_within_body_radius(&self, o: &ObjRef, tap: Vector2) -> bool {
-            train_car_of(o).map_or(false, |t| t.tap_is_within_body_radius(tap))
+            train_car_of(o).is_some_and(|t| t.tap_is_within_body_radius(tap))
         }
     }
 
@@ -1944,7 +1940,7 @@ pub(crate) mod world_tests {
         dw.place_train_car_at_pos_of_type_save_dict_placed_by_client(IntPair { x: 11, y: 10 }, 206, None, None);
         let freight = promote(43);
         let ft = train_car_of(&freight).unwrap();
-        assert!(ft.tc().borrow().engine_car.as_ref().map_or(false, |e| ptr_eq(e, &steam)));
+        assert!(ft.tc().borrow().engine_car.as_ref().is_some_and(|e| ptr_eq(e, &steam)));
         // save dict keys and number kinds
         let d = pass.get_save_dict(&pass);
         assert_eq!(d.map.get(&"leftCarID".to_string()).unwrap().int_value() as u64, steam.unique_id());

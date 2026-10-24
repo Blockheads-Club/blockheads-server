@@ -275,9 +275,9 @@ impl Scorpion {
     pub fn is_under_local_control(&self) -> bool {
         let rider = self.npc.borrow().rider.clone();
         if self.base.borrow().is_net {
-            rider.as_ref().map_or(false, |r| !r.is_net())
+            rider.as_ref().is_some_and(|r| !r.is_net())
         } else {
-            !rider.as_ref().map_or(false, |r| r.is_net())
+            !rider.as_ref().is_some_and(|r| r.is_net())
         }
     }
 
@@ -301,7 +301,7 @@ impl Scorpion {
         let ws = (u.walk_speed as i32 as f32) / 255.0f32;
         let goal = make_intpair(u.to_square_x as i32, u.to_square_y as i32);
         if !npc_env().is_client() {
-            if rider.as_ref().map_or(false, |r| r.is_net()) {
+            if rider.as_ref().is_some_and(|r| r.is_net()) {
                 self.s(|s| {
                     s.remote_goal_square = goal;
                     s.remote_walk_speed = ws;
@@ -311,9 +311,9 @@ impl Scorpion {
                 });
                 me.set_update_needs_to_be_sent(true);
             }
-        } else if !rider.as_ref().map_or(false, |r| !r.is_net()) {
+        } else if !rider.as_ref().is_some_and(|r| !r.is_net()) {
             let att = self.g(|s| s.attack_blockhead.clone());
-            if att.as_ref().map_or(false, |a| !a.is_net()) {
+            if att.as_ref().is_some_and(|a| !a.is_net()) {
                 return;
             }
             self.s(|s| {
@@ -386,7 +386,7 @@ impl Scorpion {
 
         // ---- 2. effective walk speed
         let rider = self.npc.borrow().rider.clone();
-        let rider_net = rider.as_ref().map_or(false, |r| r.is_net());
+        let rider_net = rider.as_ref().is_some_and(|r| r.is_net());
         let rider_local = rider.is_some() && !rider_net;
         let mut walk_speed_to_use = self.g(|s| s.walk_speed);
         let (fs, ts) = self.g(|s| (s.from_square, s.to_square));
@@ -713,7 +713,7 @@ impl Scorpion {
 
         let mut teleport = false;
         let rider = self.npc.borrow().rider.clone();
-        let rider_net = rider.as_ref().map_or(false, |r| r.is_net());
+        let rider_net = rider.as_ref().is_some_and(|r| r.is_net());
         let remote_driven = (is_net && !rider_local) || (rider.is_some() && rider_net);
         let pos = me.pos();
         if remote_driven {
@@ -885,9 +885,9 @@ impl Scorpion {
                 let cr = host.custom_rules();
                 if cr.custom_rules_enabled != 0 {
                     if cr.npc_difficulty == CUSTOM_RULE_NPC_EASY {
-                        self.s(|s| s.attack_delay = 4.0f32 * s.attack_delay);
+                        self.s(|s| s.attack_delay *= 4.0f32);
                     } else if cr.npc_difficulty == CUSTOM_RULE_NPC_HARD {
-                        self.s(|s| s.attack_delay = 0.25f32 * s.attack_delay);
+                        self.s(|s| s.attack_delay *= 0.25f32);
                     }
                 }
             }
@@ -1768,7 +1768,7 @@ mod tests {
         me.update_accurate_dt_is_simulation(&me, 0.1, 0.1, false);
         assert_eq!(draws_since(15), 1);
         let lt = s.npc.borrow().lay_timer;
-        assert!(lt >= 720.0 && lt <= 900.0, "{lt}");
+        assert!((720.0..=900.0).contains(&lt), "{lt}");
         // the timer then elapses and a baby is created
         s.npc.borrow_mut().lay_timer = 0.05;
         me.update_accurate_dt_is_simulation(&me, 0.1, 0.1, false);

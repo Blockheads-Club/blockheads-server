@@ -380,7 +380,7 @@ impl World {
                     if pb.valid.get() {
                         let slot = idx as usize;
                         let have = |pb: PhysicalBlockRef| {
-                            pb.client_light_blocks.borrow().get(slot).map_or(false, |s| s.is_some())
+                            pb.client_light_blocks.borrow().get(slot).is_some_and(|s| s.is_some())
                         };
                         if !have(pb) {
                             core_hooks()
@@ -806,7 +806,7 @@ mod tests {
         let calls = f.rec.calls.borrow().clone();
         assert!(calls.contains(&"dw_stop_actions a".to_string()));
         assert!(calls.contains(&"dw_client_disconnected a false".to_string()));
-        assert!(crate::world::simulation::with_away_client_simulation_events(|a| a.as_ref().unwrap().len() == 0));
+        assert!(crate::world::simulation::with_away_client_simulation_events(|a| a.as_ref().unwrap().is_empty()));
         // kick of an unknown client still clears and calls the dynamic world with simulate = NO
         w.client_disconnected_was_kick("ghost", true);
         assert!(f.rec.calls.borrow().contains(&"dw_client_disconnected ghost false".to_string()));

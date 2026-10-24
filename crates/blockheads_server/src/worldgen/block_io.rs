@@ -331,8 +331,7 @@ impl WorldTileLoader {
                 let (r, d) = self.t.get_rock_and_dirt_height(&p, world_x);
                 let local_rock = r - y_pos * 32;
                 let local_dirt = d - y_pos * 32;
-                if 0 <= local_rock
-                    && local_rock < 32
+                if (0..32).contains(&local_rock)
                     && r > 0x1f0
                     && world_x != 0
                     && world_x != wall_w / 4

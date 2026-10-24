@@ -271,7 +271,7 @@ impl FreightCar {
     /// `-[FreightCar updateNeedsToBeSent]`: `[super updateNeedsToBeSent] || [chest updateNeedsToBeSent]`
     /// (R7 / 3.9: `DynamicWorld` net-send code must call this instead of the base accessor).
     pub fn update_needs_to_be_sent_virtual(&self) -> bool {
-        self.base.borrow().update_needs_to_be_sent || self.chest().map_or(false, |c| c.update_needs_to_be_sent())
+        self.base.borrow().update_needs_to_be_sent || self.chest().is_some_and(|c| c.update_needs_to_be_sent())
     }
     /// `-[FreightCar setUpdateNeedsToBeSent:]`: `[super set...]`; if NO also clears the chest's flag.
     pub fn set_update_needs_to_be_sent_virtual(&self, v: bool) {
@@ -381,7 +381,7 @@ impl DynamicObject for FreightCar {
     }
     /// : the chest data is only included when the chest has pending changes.
     fn update_net_data_for_client(&self, me: &ObjRef, client_id: Option<&str>) -> Option<Vec<u8>> {
-        if self.chest().map_or(false, |c| c.update_needs_to_be_sent()) {
+        if self.chest().is_some_and(|c| c.update_needs_to_be_sent()) {
             return self.creation_net_data_for_client(me, client_id);
         }
         Some(self.net_data_with_dict(me, None))

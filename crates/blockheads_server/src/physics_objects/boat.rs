@@ -106,7 +106,7 @@ fn same_opt(a: &Option<ObjRef>, b: &Option<ObjRef>) -> bool {
 
 /// `[rider isNet]` with nil messaging (NO).
 fn rider_is_net(r: &Option<ObjRef>) -> bool {
-    r.as_ref().map_or(false, |r| r.is_net())
+    r.as_ref().is_some_and(|r| r.is_net())
 }
 
 /// `[rider stopRiding]` (nil-safe; only a real Blockhead can ride).
@@ -306,7 +306,7 @@ impl Boat {
         let controlled = r
             .as_ref()
             .and_then(|b| b.as_blockhead())
-            .map_or(false, |b| b.is_client_blockhead_being_controlled_by_server());
+            .is_some_and(|b| b.is_client_blockhead_being_controlled_by_server());
         if controlled {
             stop_riding(&r);
             self.st.borrow_mut().rider = None; // [self.rider autorelease]
@@ -341,7 +341,7 @@ impl Boat {
         }
         // (1) drop a dead rider (no stopRiding)
         let rider = self.rider();
-        if rider.as_ref().map_or(false, |r| r.needs_removed()) {
+        if rider.as_ref().is_some_and(|r| r.needs_removed()) {
             if !rider_is_net(&rider) {
                 self.set_update_needs_to_be_sent(true);
             }
@@ -404,7 +404,7 @@ impl Boat {
         {
             let fpy = self.fp().y;
             let mut st = self.st.borrow_mut();
-            if tile_is_water(tile.clone()) {
+            if tile_is_water(tile) {
                 let surface = (fpy + (-0.5f32)) - pos.y as f32;
                 let pcl = tile.as_ref().map_or(0u8, |t| t.partial_content_left());
                 if surface <= (pcl as f32) / 255.0f32 || pcl == 0xff {
@@ -531,7 +531,7 @@ impl Boat {
                     new_x_speed = target * (-frac) * 2.0f32;
                 }
                 let t = tile_at_world_position_loaded(pos.x + dir, pos.y, &world);
-                if tile_is_air_water_or_snow(t.clone()) {
+                if tile_is_air_water_or_snow(t) {
                     new_x_speed = target;
                 } else if tile_is_solid(t) {
                     new_x_speed = 0.0;
@@ -588,7 +588,7 @@ impl DynamicObject for Boat {
             let controlled = rider
                 .as_ref()
                 .and_then(|r| r.as_blockhead())
-                .map_or(false, |b| b.is_client_blockhead_being_controlled_by_server());
+                .is_some_and(|b| b.is_client_blockhead_being_controlled_by_server());
             if controlled {
                 stop_riding(&rider);
                 {
@@ -730,7 +730,7 @@ impl DynamicObject for Boat {
     /// `-blockheadUnloaded:` (no stopRiding, no flag).
     fn blockhead_unloaded(&self, _me: &ObjRef, b: &ObjRef) {
         let r = self.rider();
-        if r.as_ref().map_or(false, |r| ptr_eq(r, b)) {
+        if r.as_ref().is_some_and(|r| ptr_eq(r, b)) {
             {
                 let mut st = self.st.borrow_mut();
                 st.rider = None;
@@ -783,7 +783,7 @@ impl RidableDynamicObject for Boat {
         if st.target_x_speed > 2.0f32 {
             return 1;
         }
-        if st.target_x_speed <= -2.0f32 && st.target_x_speed != -2.0f32 {
+        if st.target_x_speed < -2.0f32 {
             return -1;
         }
         0
@@ -795,7 +795,7 @@ impl RidableDynamicObject for Boat {
     /// `-removeRider:` (server branch)
     fn remove_rider(&self, _me: &ObjRef, b: &ObjRef) {
         let cur = self.rider();
-        if cur.as_ref().map_or(false, |c| ptr_eq(c, b)) {
+        if cur.as_ref().is_some_and(|c| ptr_eq(c, b)) {
             self.set_update_needs_to_be_sent(true); // !isClient
             self.st.borrow_mut().rider = None;
             self.notify_changed();
@@ -848,8 +848,8 @@ impl TapChoiceDynamicObject for Boat {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::blockhead::blockhead::{set_host, Blockhead, BlockheadHost};
-    use crate::dynworld::state::{DwHooks, FreeBlockInit};
+    use crate::blockhead::blockhead::{set_host, Blockhead};
+    use crate::dynworld::state::FreeBlockInit;
     use crate::lighting::artificial_light::testkit::tile;
     use crate::physics_objects::free_block::testkit::flat;
 
@@ -858,7 +858,7 @@ mod tests {
     }
 
     fn blockhead(id: u64, is_net: bool) -> ObjRef {
-        let b = alloc_obj(|w| Blockhead::alloc(w));
+        let b = alloc_obj(Blockhead::alloc);
         b.base.borrow_mut().unique_id = id;
         b.base.borrow_mut().is_net = is_net;
         b

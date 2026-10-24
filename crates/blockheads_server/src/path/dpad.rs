@@ -12,8 +12,8 @@ use crate::world::tiles::tile_at_world_position_loaded;
 use super::can_enter::{check_can_enter_tile, FromProps};
 use super::path_creator::{user_pos, wrap_dx};
 
-const TT_FALL: u32 = TileTraverseType::TRAVERSE_FALL.0 as u32;
-const TT_INACCESSIBLE: u32 = TileTraverseType::TRAVERSE_INACCESSIBLE.0 as u32;
+const TT_FALL: u32 = TileTraverseType::TRAVERSE_FALL.0;
+const TT_INACCESSIBLE: u32 = TileTraverseType::TRAVERSE_INACCESSIBLE.0;
 
 /// `dpadFindPath(fromDerived, fromPos, desiredPos, pathUser, world)`. Every check is
 /// `checkCanEnterTile(T(target), T(fromPos), from, fromPos, target, pathUser, world, isFallPath=NO,

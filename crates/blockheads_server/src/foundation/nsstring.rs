@@ -642,293 +642,6 @@ pub fn data_from_hex_string(s: &str) -> Vec<u8> {
     out
 }
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn small_edges() {
-        assert_eq!(gs_hash("jxtzig"), 0x0fff_ffff);
-        assert!(!bool_value("0") && bool_value("007") && !bool_value("00"));
-        let ex = crate::foundation::exception::catch_ns(|| substring_from_index("abc", 5)).unwrap_err();
-        assert_eq!(ex.name, "NSRangeException");
-        assert_eq!(substring_from_index("abc", 1), "bc");
-        assert!(bool_value("  5") && bool_value("\t+1") && !bool_value("-") && !bool_value("   "));
-        assert_eq!(double_value("  1.5"), 1.5);
-        assert_eq!(int_value("  12"), 12);
-        assert!(has_suffix("caf\u{e9}", "\u{e9}"));
-        assert!(!has_suffix("caf\u{e9}", "x\u{e9}"));
-        assert!(!has_suffix("abc", ""));
-        assert_eq!(components_separated_by_string("abc", ""), vec!["abc".to_string()]);
-    }
-
-    use super::*;
-    use crate::foundation::exception::catch_ns;
-
-    #[test]
-    fn hash_vectors() {
-        assert_eq!(gs_hash(""), 268435454);
-        assert_eq!(gs_hash("a"), 97);
-        assert_eq!(gs_hash("hello world"), 166199516);
-        assert_eq!(gs_hash("caf\u{e9}"), 3666995);
-        assert_eq!(gs_hash("cafe\u{301}"), 121007248);
-        assert_eq!(gs_hash("\u{65e5}\u{672c}\u{8a9e}"), 29313647);
-        assert_eq!(gs_hash("x\u{1f600}y"), 66471790);
-        for (n, h) in [(63, 16782335), (64, 16946240), (65, 22355105), (200, 150451016)] {
-            assert_eq!(gs_hash(&"a".repeat(n)), h, "{n}");
-        }
-    }
-
-    #[test]
-    fn case_mapping() {
-        assert_eq!(lowercase_string("\u{c9}COLE"), "\u{c9}cole"); // ASCII path: E-acute stays
-        assert_eq!(lowercase_string("\u{c9}\u{1c6}"), "\u{e9}\u{1c6}"); // Unicode path
-        assert_eq!(uppercase_string("\u{e9}\u{e0}\u{fc}"), "\u{e9}\u{e0}\u{fc}");
-        assert_eq!(lowercase_string("\u{130}"), "i");
-        assert_eq!(uppercase_string("stra\u{df}e"), "STRA\u{df}E");
-        assert_eq!(uppercase_string("mixed \u{c9}\u{c0} x"), "MIXED \u{c9}\u{c0} X");
-        assert_eq!(lowercase_string("\u{416}"), "\u{436}");
-        assert_eq!(uppercase_string("\u{1f80}"), "\u{1f88}");
-        assert_eq!(uppercase_string("\u{3f2}"), "\u{3a3}");
-        assert_eq!(lowercase_string("\u{391}\u{3a3}"), "\u{3b1}\u{3c3}");
-        assert_eq!(uppercase_string("\u{1f600}x"), "\u{1f600}X");
-        assert_eq!(capitalized_string("hello wORLD"), "Hello World");
-    }
-
-    /// observed capitalizedString.
-    #[test]
-    fn capitalized_observed() {
-        assert_eq!(capitalized_string("foo-bar baz_qux"), "Foo-bar Baz_qux");
-        assert_eq!(capitalized_string("(paren) [br]"), "(paren) [br]");
-        assert_eq!(capitalized_string("it's mine"), "It's Mine");
-        assert_eq!(capitalized_string("3rd place"), "3rd Place");
-        assert_eq!(capitalized_string("\u{e9}clair \u{e0}la"), "\u{c9}clair \u{c0}la");
-        assert_eq!(capitalized_string("\u{c9}CLAIR"), "\u{c9}clair");
-        assert_eq!(capitalized_string("a\u{a0}b"), "A\u{a0}b");
-        assert_eq!(capitalized_string("a\tb\nc"), "A\tB\nC");
-    }
-
-    /// observed GNUstep table compare: no Hangul decomposition.
-    #[test]
-    fn gnustep_table_compare() {
-        assert_eq!(compare("\u{ac00}", "\u{1100}\u{1161}"), 1);
-        assert_eq!(compare("\u{622}", "\u{627}\u{653}"), -1);
-        assert_eq!(compare("\u{958}", "\u{915}\u{93c}"), 0);
-        // canonical reordering: marks sort by combining class (301 is 230, 323 is 220)
-        assert_eq!(compare("a\u{301}\u{323}", "a\u{323}\u{301}"), 0);
-        assert_eq!(compare("\u{1f71}", "\u{3b1}\u{301}"), 0);
-        assert_eq!(compare("\u{2126}", "\u{3a9}"), 0);
-        assert_eq!(compare("\u{30ac}", "\u{30ab}\u{3099}"), 0);
-        assert_eq!(compare("\u{c5}", "A\u{30a}"), 0);
-        assert_eq!(compare("\u{212a}", "K"), 1);
-        assert_eq!(case_insensitive_compare("\u{130}", "i"), 1);
-        assert_eq!(case_insensitive_compare("\u{130}", "I"), 1);
-        assert_eq!(case_insensitive_compare("\u{130}", "j"), -1);
-        assert_eq!(case_insensitive_compare("\u{212a}", "k"), 1);
-        assert_eq!(case_insensitive_compare("\u{212a}", "l"), -1);
-    }
-
-    #[test]
-    fn comparisons() {
-        for (a, b, r) in [
-            ("\u{e9}", "z", -1),
-            ("\u{e9}", "e", 1),
-            ("\u{e9}", "ea", 1),
-            ("\u{eb}", "\u{e9}", 1),
-            ("\u{fc}", "v", -1),
-            ("\u{f1}", "o", -1),
-            ("\u{e6}", "b", 1),
-            ("\u{e9}", "\u{c9}", 1),
-            ("a\u{301}", "\u{e1}", 0),
-            ("\u{65e5}", "\u{672c}", -1),
-            ("\u{1c4}", "a", 1),
-        ] {
-            assert_eq!(compare(a, b), r, "{a:?} {b:?}");
-        }
-        assert!(!is_equal("a\u{301}", "\u{e1}"));
-        for (a, b, r) in [
-            ("A", "a", 0),
-            ("Z", "a", 1),
-            ("\u{e9}", "\u{c9}", 0),
-            ("\u{3c3}", "\u{3c2}", 1),
-            ("\u{1c6}", "\u{1c4}", 0),
-            ("stra\u{df}e", "STRASSE", 1),
-            ("a", "", 1),
-            ("", "a", -1),
-            ("\u{130}", "i", 1),
-        ] {
-            assert_eq!(case_insensitive_compare(a, b), r, "{a:?} {b:?}");
-        }
-        assert_eq!(safe_case_insensitive_compare(None, Some("x")), 0);
-        assert_eq!(safe_case_insensitive_compare(Some("x"), None), 1);
-        assert_eq!(safe_case_insensitive_compare(Some("X"), Some("x")), 0);
-    }
-
-    #[test]
-    fn int_parsing() {
-        for (s, v) in [
-            ("42", 42),
-            ("  42abc", 42),
-            ("-7", -7),
-            ("+5", 5),
-            ("2147483647", 2147483647),
-            ("2147483648", -2147483648),
-            ("4294967296", 0),
-            ("4294967297", 1),
-            ("99999999999999999999", -1),
-            ("-2147483649", 2147483647),
-            ("-99999999999999999999", 0),
-            ("12345678901", -539222987),
-            ("1e3", 1),
-            ("0x10", 0),
-            ("", 0),
-            ("abc", 0),
-            ("3.9", 3),
-            ("- 5", 0),
-            ("--5", 0),
-            ("0012", 12),
-            ("1_000", 1),
-            ("\u{663}", 0),
-            ("12\u{a0}34", 12),
-        ] {
-            assert_eq!(int_value(s), v, "{s:?}");
-        }
-        assert_eq!(integer_value("99999999999999999999"), i64::MAX);
-        assert_eq!(long_long_value("-99999999999999999999"), i64::MIN);
-        for (s, b) in [
-            ("abc", false),
-            ("0x10", false),
-            ("3.9", true),
-            ("- 5", true),
-            ("-0", false),
-            ("1e3", true),
-            ("YES", true),
-            ("no", false),
-        ] {
-            assert_eq!(bool_value(s), b, "{s:?}");
-        }
-    }
-
-    #[test]
-    fn double_parsing() {
-        for (s, v) in [
-            ("0.3", 0.30000000000000004),
-            ("0.7", 0.7000000000000001),
-            ("3.3", 3.3000000000000003),
-            ("4.35", 4.3500000000000005),
-            ("0.57", 0.5700000000000001),
-            ("9.6", 9.600000000000001),
-            ("123456789.123456789", 123456789.1234568),
-            ("1e23", 1e23),
-            ("5e-324", 0.0),
-            ("1e", 0.0),
-            ("1e+", 0.0),
-            ("1e-", 0.0),
-            ("1.0e", 0.0),
-            ("1e 2", 0.0),
-            (".e2", 0.0),
-            (".", 0.0),
-            ("-", 0.0),
-            ("--5", 0.0),
-            ("e5", 0.0),
-            ("inf", 0.0),
-            ("nan", 0.0),
-            ("0x1p3", 0.0),
-            ("1e2", 100.0),
-            ("1.e2", 100.0),
-            ("1.2.3", 1.2000000000000002),
-            ("1e2.5", 100.0),
-            ("1e2e3", 100.0),
-            ("1d2", 1.0),
-            ("2.5x", 2.5),
-            ("1,5", 1.0),
-            (".5", 0.5),
-            ("5.", 5.0),
-            ("+.5", 0.5),
-            ("-.5e-1", -0.05),
-        ] {
-            assert_eq!(double_value(s).to_bits(), (v as f64).to_bits(), "{s:?} -> {}", double_value(s));
-        }
-        assert_eq!(double_value("1e309"), f64::INFINITY);
-        assert_eq!(double_value("1e5000"), f64::INFINITY);
-        assert_eq!(float_value("0.1"), 0.1f32);
-        assert_eq!(float_value("1E-2").to_bits(), 0.01f32.to_bits());
-    }
-
-    #[test]
-    fn categories() {
-        assert_eq!(get_sub_string_between(Some("abc[def]ghi"), "[", "]").as_deref(), Some("def"));
-        assert_eq!(get_sub_string_between(Some("abcdef"), "[", "]"), None);
-        assert_eq!(get_sub_string_between(Some("a[bc"), "[", "]"), None);
-        assert_eq!(get_sub_string_between(Some("a[]c"), "[", "]").as_deref(), Some(""));
-        assert_eq!(get_sub_string_between(None, "[", "]"), None);
-        assert_eq!(string_by_removing_non_ascii_chars("a\tb\u{e9}\u{65e5}c\u{7f}\nd"), "abcd");
-        let h = |s: &str| data_from_hex_string(s);
-        assert_eq!(h("00ff10"), vec![0x00, 0xff, 0x10]);
-        assert_eq!(h("abc"), vec![0xab, 0x0c]);
-        assert_eq!(h("zz"), vec![0]);
-        assert_eq!(h("0x1f"), vec![0, 0x1f]);
-        assert_eq!(h("  12"), vec![0, 0x12]);
-        assert_eq!(h("-1"), vec![0xff]);
-        assert_eq!(h("fG"), vec![0x0f]);
-        assert_eq!(h("+5"), vec![5]);
-        assert_eq!(h("100"), vec![0x10, 0x00]);
-        assert_eq!(h(""), Vec::<u8>::new());
-    }
-
-    #[test]
-    fn ranges() {
-        assert_eq!(length("x\u{1f600}y"), 4);
-        assert_eq!(length("caf\u{e9}"), 4);
-        assert_eq!(range_of_string("hello world", "o w"), Some((4, 3)));
-        assert_eq!(range_of_string("hello", ""), None);
-        assert_eq!(range_of_string("x\u{1f600}yz", "yz"), Some((3, 2)));
-        assert_eq!(range_of_string_in("hello hello", "hello", 1, 10), Some((6, 5)));
-        assert!(has_prefix("a\u{301}b", "\u{e1}"));
-        assert!(has_prefix("hello", "he") && !has_prefix("hello", "") && has_suffix("hello", "llo"));
-        assert_eq!(substring_with_range("x\u{1f600}y", 1, 2), "\u{1f600}");
-        assert_eq!(components_separated_by_string("a,b,,c", ","), vec!["a", "b", "", "c"]);
-        assert_eq!(components_separated_by_string("x\u{e9}y\u{e9}", "\u{e9}"), vec!["x", "y", ""]);
-        assert_eq!(components_separated_by_string("ae\u{301}b", "\u{e9}"), vec!["a", "b"]);
-        assert_eq!(character_at_index("abc", 1), b'b' as u16);
-    }
-
-    fn reason(f: impl FnOnce()) -> (String, String) {
-        let e = catch_ns(f).unwrap_err();
-        (e.name, e.reason.unwrap())
-    }
-
-    #[test]
-    fn exceptions() {
-        assert_eq!(
-            reason(|| {
-                substring_from_index("hello", 9);
-            }),
-            (
-                "NSRangeException".into(),
-                "in substringWithRange:, range { 9, 4294967292 } extends beyond size (5)".into()
-            )
-        );
-        assert_eq!(
-            reason(|| {
-                substring_to_index("hello", 9);
-            }),
-            ("NSRangeException".into(), "in substringWithRange:, range { 0, 9 } extends beyond size (5)".into())
-        );
-        assert_eq!(
-            reason(|| {
-                range_of_string_in("hello", "l", 2, 9);
-            })
-            .1,
-            "in rangeOfString:options:range:, range { 2, 9 } extends beyond size (5)"
-        );
-        assert_eq!(
-            reason(|| {
-                character_at_index("abc", 3);
-            }),
-            ("NSRangeException".into(), "Invalid index.".into())
-        );
-    }
-}
-
 // ---- generated data tables (see tools note in module docs) ----
 /// Old GNUstep per-UTF-16-unit case table: (code, upper, lower), 0 = unchanged. Source: GNUstep-base 1.24 Unicode tables.
 static CASE_TABLE: &[(u16, u16, u16)] = &[
@@ -2700,3 +2413,290 @@ static CCC_FLAT: &[u32] = &[
     0x1E8D1, 220, 0x1E8D2, 220, 0x1E8D3, 220, 0x1E8D4, 220, 0x1E8D5, 220, 0x1E8D6, 220, 0x1E944, 230, 0x1E945, 230,
     0x1E946, 230, 0x1E947, 230, 0x1E948, 230, 0x1E949, 230, 0x1E94A, 7,
 ];
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn small_edges() {
+        assert_eq!(gs_hash("jxtzig"), 0x0fff_ffff);
+        assert!(!bool_value("0") && bool_value("007") && !bool_value("00"));
+        let ex = crate::foundation::exception::catch_ns(|| substring_from_index("abc", 5)).unwrap_err();
+        assert_eq!(ex.name, "NSRangeException");
+        assert_eq!(substring_from_index("abc", 1), "bc");
+        assert!(bool_value("  5") && bool_value("\t+1") && !bool_value("-") && !bool_value("   "));
+        assert_eq!(double_value("  1.5"), 1.5);
+        assert_eq!(int_value("  12"), 12);
+        assert!(has_suffix("caf\u{e9}", "\u{e9}"));
+        assert!(!has_suffix("caf\u{e9}", "x\u{e9}"));
+        assert!(!has_suffix("abc", ""));
+        assert_eq!(components_separated_by_string("abc", ""), vec!["abc".to_string()]);
+    }
+
+    use super::*;
+    use crate::foundation::exception::catch_ns;
+
+    #[test]
+    fn hash_vectors() {
+        assert_eq!(gs_hash(""), 268435454);
+        assert_eq!(gs_hash("a"), 97);
+        assert_eq!(gs_hash("hello world"), 166199516);
+        assert_eq!(gs_hash("caf\u{e9}"), 3666995);
+        assert_eq!(gs_hash("cafe\u{301}"), 121007248);
+        assert_eq!(gs_hash("\u{65e5}\u{672c}\u{8a9e}"), 29313647);
+        assert_eq!(gs_hash("x\u{1f600}y"), 66471790);
+        for (n, h) in [(63, 16782335), (64, 16946240), (65, 22355105), (200, 150451016)] {
+            assert_eq!(gs_hash(&"a".repeat(n)), h, "{n}");
+        }
+    }
+
+    #[test]
+    fn case_mapping() {
+        assert_eq!(lowercase_string("\u{c9}COLE"), "\u{c9}cole"); // ASCII path: E-acute stays
+        assert_eq!(lowercase_string("\u{c9}\u{1c6}"), "\u{e9}\u{1c6}"); // Unicode path
+        assert_eq!(uppercase_string("\u{e9}\u{e0}\u{fc}"), "\u{e9}\u{e0}\u{fc}");
+        assert_eq!(lowercase_string("\u{130}"), "i");
+        assert_eq!(uppercase_string("stra\u{df}e"), "STRA\u{df}E");
+        assert_eq!(uppercase_string("mixed \u{c9}\u{c0} x"), "MIXED \u{c9}\u{c0} X");
+        assert_eq!(lowercase_string("\u{416}"), "\u{436}");
+        assert_eq!(uppercase_string("\u{1f80}"), "\u{1f88}");
+        assert_eq!(uppercase_string("\u{3f2}"), "\u{3a3}");
+        assert_eq!(lowercase_string("\u{391}\u{3a3}"), "\u{3b1}\u{3c3}");
+        assert_eq!(uppercase_string("\u{1f600}x"), "\u{1f600}X");
+        assert_eq!(capitalized_string("hello wORLD"), "Hello World");
+    }
+
+    /// observed capitalizedString.
+    #[test]
+    fn capitalized_observed() {
+        assert_eq!(capitalized_string("foo-bar baz_qux"), "Foo-bar Baz_qux");
+        assert_eq!(capitalized_string("(paren) [br]"), "(paren) [br]");
+        assert_eq!(capitalized_string("it's mine"), "It's Mine");
+        assert_eq!(capitalized_string("3rd place"), "3rd Place");
+        assert_eq!(capitalized_string("\u{e9}clair \u{e0}la"), "\u{c9}clair \u{c0}la");
+        assert_eq!(capitalized_string("\u{c9}CLAIR"), "\u{c9}clair");
+        assert_eq!(capitalized_string("a\u{a0}b"), "A\u{a0}b");
+        assert_eq!(capitalized_string("a\tb\nc"), "A\tB\nC");
+    }
+
+    /// observed GNUstep table compare: no Hangul decomposition.
+    #[test]
+    fn gnustep_table_compare() {
+        assert_eq!(compare("\u{ac00}", "\u{1100}\u{1161}"), 1);
+        assert_eq!(compare("\u{622}", "\u{627}\u{653}"), -1);
+        assert_eq!(compare("\u{958}", "\u{915}\u{93c}"), 0);
+        // canonical reordering: marks sort by combining class (301 is 230, 323 is 220)
+        assert_eq!(compare("a\u{301}\u{323}", "a\u{323}\u{301}"), 0);
+        assert_eq!(compare("\u{1f71}", "\u{3b1}\u{301}"), 0);
+        assert_eq!(compare("\u{2126}", "\u{3a9}"), 0);
+        assert_eq!(compare("\u{30ac}", "\u{30ab}\u{3099}"), 0);
+        assert_eq!(compare("\u{c5}", "A\u{30a}"), 0);
+        assert_eq!(compare("\u{212a}", "K"), 1);
+        assert_eq!(case_insensitive_compare("\u{130}", "i"), 1);
+        assert_eq!(case_insensitive_compare("\u{130}", "I"), 1);
+        assert_eq!(case_insensitive_compare("\u{130}", "j"), -1);
+        assert_eq!(case_insensitive_compare("\u{212a}", "k"), 1);
+        assert_eq!(case_insensitive_compare("\u{212a}", "l"), -1);
+    }
+
+    #[test]
+    fn comparisons() {
+        for (a, b, r) in [
+            ("\u{e9}", "z", -1),
+            ("\u{e9}", "e", 1),
+            ("\u{e9}", "ea", 1),
+            ("\u{eb}", "\u{e9}", 1),
+            ("\u{fc}", "v", -1),
+            ("\u{f1}", "o", -1),
+            ("\u{e6}", "b", 1),
+            ("\u{e9}", "\u{c9}", 1),
+            ("a\u{301}", "\u{e1}", 0),
+            ("\u{65e5}", "\u{672c}", -1),
+            ("\u{1c4}", "a", 1),
+        ] {
+            assert_eq!(compare(a, b), r, "{a:?} {b:?}");
+        }
+        assert!(!is_equal("a\u{301}", "\u{e1}"));
+        for (a, b, r) in [
+            ("A", "a", 0),
+            ("Z", "a", 1),
+            ("\u{e9}", "\u{c9}", 0),
+            ("\u{3c3}", "\u{3c2}", 1),
+            ("\u{1c6}", "\u{1c4}", 0),
+            ("stra\u{df}e", "STRASSE", 1),
+            ("a", "", 1),
+            ("", "a", -1),
+            ("\u{130}", "i", 1),
+        ] {
+            assert_eq!(case_insensitive_compare(a, b), r, "{a:?} {b:?}");
+        }
+        assert_eq!(safe_case_insensitive_compare(None, Some("x")), 0);
+        assert_eq!(safe_case_insensitive_compare(Some("x"), None), 1);
+        assert_eq!(safe_case_insensitive_compare(Some("X"), Some("x")), 0);
+    }
+
+    #[test]
+    fn int_parsing() {
+        for (s, v) in [
+            ("42", 42),
+            ("  42abc", 42),
+            ("-7", -7),
+            ("+5", 5),
+            ("2147483647", 2147483647),
+            ("2147483648", -2147483648),
+            ("4294967296", 0),
+            ("4294967297", 1),
+            ("99999999999999999999", -1),
+            ("-2147483649", 2147483647),
+            ("-99999999999999999999", 0),
+            ("12345678901", -539222987),
+            ("1e3", 1),
+            ("0x10", 0),
+            ("", 0),
+            ("abc", 0),
+            ("3.9", 3),
+            ("- 5", 0),
+            ("--5", 0),
+            ("0012", 12),
+            ("1_000", 1),
+            ("\u{663}", 0),
+            ("12\u{a0}34", 12),
+        ] {
+            assert_eq!(int_value(s), v, "{s:?}");
+        }
+        assert_eq!(integer_value("99999999999999999999"), i64::MAX);
+        assert_eq!(long_long_value("-99999999999999999999"), i64::MIN);
+        for (s, b) in [
+            ("abc", false),
+            ("0x10", false),
+            ("3.9", true),
+            ("- 5", true),
+            ("-0", false),
+            ("1e3", true),
+            ("YES", true),
+            ("no", false),
+        ] {
+            assert_eq!(bool_value(s), b, "{s:?}");
+        }
+    }
+
+    #[test]
+    fn double_parsing() {
+        for (s, v) in [
+            ("0.3", 0.30000000000000004),
+            ("0.7", 0.7000000000000001),
+            ("3.3", 3.3000000000000003),
+            ("4.35", 4.3500000000000005),
+            ("0.57", 0.5700000000000001),
+            ("9.6", 9.600000000000001),
+            ("123456789.123456789", 123456789.1234568),
+            ("1e23", 1e23),
+            ("5e-324", 0.0),
+            ("1e", 0.0),
+            ("1e+", 0.0),
+            ("1e-", 0.0),
+            ("1.0e", 0.0),
+            ("1e 2", 0.0),
+            (".e2", 0.0),
+            (".", 0.0),
+            ("-", 0.0),
+            ("--5", 0.0),
+            ("e5", 0.0),
+            ("inf", 0.0),
+            ("nan", 0.0),
+            ("0x1p3", 0.0),
+            ("1e2", 100.0),
+            ("1.e2", 100.0),
+            ("1.2.3", 1.2000000000000002),
+            ("1e2.5", 100.0),
+            ("1e2e3", 100.0),
+            ("1d2", 1.0),
+            ("2.5x", 2.5),
+            ("1,5", 1.0),
+            (".5", 0.5),
+            ("5.", 5.0),
+            ("+.5", 0.5),
+            ("-.5e-1", -0.05),
+        ] {
+            assert_eq!(double_value(s).to_bits(), f64::to_bits(v), "{s:?} -> {}", double_value(s));
+        }
+        assert_eq!(double_value("1e309"), f64::INFINITY);
+        assert_eq!(double_value("1e5000"), f64::INFINITY);
+        assert_eq!(float_value("0.1"), 0.1f32);
+        assert_eq!(float_value("1E-2").to_bits(), 0.01f32.to_bits());
+    }
+
+    #[test]
+    fn categories() {
+        assert_eq!(get_sub_string_between(Some("abc[def]ghi"), "[", "]").as_deref(), Some("def"));
+        assert_eq!(get_sub_string_between(Some("abcdef"), "[", "]"), None);
+        assert_eq!(get_sub_string_between(Some("a[bc"), "[", "]"), None);
+        assert_eq!(get_sub_string_between(Some("a[]c"), "[", "]").as_deref(), Some(""));
+        assert_eq!(get_sub_string_between(None, "[", "]"), None);
+        assert_eq!(string_by_removing_non_ascii_chars("a\tb\u{e9}\u{65e5}c\u{7f}\nd"), "abcd");
+        let h = |s: &str| data_from_hex_string(s);
+        assert_eq!(h("00ff10"), vec![0x00, 0xff, 0x10]);
+        assert_eq!(h("abc"), vec![0xab, 0x0c]);
+        assert_eq!(h("zz"), vec![0]);
+        assert_eq!(h("0x1f"), vec![0, 0x1f]);
+        assert_eq!(h("  12"), vec![0, 0x12]);
+        assert_eq!(h("-1"), vec![0xff]);
+        assert_eq!(h("fG"), vec![0x0f]);
+        assert_eq!(h("+5"), vec![5]);
+        assert_eq!(h("100"), vec![0x10, 0x00]);
+        assert_eq!(h(""), Vec::<u8>::new());
+    }
+
+    #[test]
+    fn ranges() {
+        assert_eq!(length("x\u{1f600}y"), 4);
+        assert_eq!(length("caf\u{e9}"), 4);
+        assert_eq!(range_of_string("hello world", "o w"), Some((4, 3)));
+        assert_eq!(range_of_string("hello", ""), None);
+        assert_eq!(range_of_string("x\u{1f600}yz", "yz"), Some((3, 2)));
+        assert_eq!(range_of_string_in("hello hello", "hello", 1, 10), Some((6, 5)));
+        assert!(has_prefix("a\u{301}b", "\u{e1}"));
+        assert!(has_prefix("hello", "he") && !has_prefix("hello", "") && has_suffix("hello", "llo"));
+        assert_eq!(substring_with_range("x\u{1f600}y", 1, 2), "\u{1f600}");
+        assert_eq!(components_separated_by_string("a,b,,c", ","), vec!["a", "b", "", "c"]);
+        assert_eq!(components_separated_by_string("x\u{e9}y\u{e9}", "\u{e9}"), vec!["x", "y", ""]);
+        assert_eq!(components_separated_by_string("ae\u{301}b", "\u{e9}"), vec!["a", "b"]);
+        assert_eq!(character_at_index("abc", 1), b'b' as u16);
+    }
+
+    fn reason(f: impl FnOnce()) -> (String, String) {
+        let e = catch_ns(f).unwrap_err();
+        (e.name, e.reason.unwrap())
+    }
+
+    #[test]
+    fn exceptions() {
+        assert_eq!(
+            reason(|| {
+                substring_from_index("hello", 9);
+            }),
+            (
+                "NSRangeException".into(),
+                "in substringWithRange:, range { 9, 4294967292 } extends beyond size (5)".into()
+            )
+        );
+        assert_eq!(
+            reason(|| {
+                substring_to_index("hello", 9);
+            }),
+            ("NSRangeException".into(), "in substringWithRange:, range { 0, 9 } extends beyond size (5)".into())
+        );
+        assert_eq!(
+            reason(|| {
+                range_of_string_in("hello", "l", 2, 9);
+            })
+            .1,
+            "in rangeOfString:options:range:, range { 2, 9 } extends beyond size (5)"
+        );
+        assert_eq!(
+            reason(|| {
+                character_at_index("abc", 3);
+            }),
+            ("NSRangeException".into(), "Invalid index.".into())
+        );
+    }
+}

@@ -46,7 +46,6 @@ use crate::items::inventory_item::InventoryItem;
 use crate::npc::npc::register_npc_ctor;
 use crate::plist::value::PlistDict;
 use crate::trees::tree::NoiseRef;
-use crate::types::enums::WorkbenchType;
 use crate::types::structs::IntPair;
 use crate::world::state::World;
 
@@ -760,7 +759,7 @@ pub fn install() {
     }
     crate::building::wire::set_workbench_uses_electricity_hook(|o| {
         downcast::<crate::crafting::workbench::Workbench>(o)
-            .map_or(false, |w| w.uses_stores_conducts_or_produces_electricity())
+            .is_some_and(|w| w.uses_stores_conducts_or_produces_electricity())
     });
     // 1. ClassInfo
     for ci in all_classes() {

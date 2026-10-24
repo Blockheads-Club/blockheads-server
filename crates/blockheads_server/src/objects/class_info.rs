@@ -33,7 +33,7 @@ impl ClassInfo {
 
     /// `[cls conformsToProtocol:]`, walking superclasses.
     pub fn conforms_to(&self, protocol: &str) -> bool {
-        if self.protocols.iter().any(|p| *p == protocol) {
+        if self.protocols.contains(&protocol) {
             return true;
         }
         match self.superclass {

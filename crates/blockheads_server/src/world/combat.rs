@@ -156,12 +156,12 @@ impl World {
         let b = path.last().expect("len > 2").index as i32;
         let mut interested: Vec<String> = Vec::new();
         for id in self.server_client_keys() {
-            if Some(id.as_str()) != ignore_client && self.server_client_is_connected(&id) {
-                if hooks.server_client_block_is_wired(&id, macro_index_at_world_index(a, self))
-                    || hooks.server_client_block_is_wired(&id, macro_index_at_world_index(b, self))
-                {
-                    interested.push(id);
-                }
+            if Some(id.as_str()) != ignore_client
+                && self.server_client_is_connected(&id)
+                && (hooks.server_client_block_is_wired(&id, macro_index_at_world_index(a, self))
+                    || hooks.server_client_block_is_wired(&id, macro_index_at_world_index(b, self)))
+            {
+                interested.push(id);
             }
         }
         if interested.is_empty() {

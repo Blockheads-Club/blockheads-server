@@ -472,11 +472,11 @@ pub(crate) fn tap_within(o: &ObjRef, tap: Vector2) -> bool {
 
 /// `[o twoBlocksWide]` (nil/non-interaction object: NO).
 fn two_blocks_wide(o: &ObjRef) -> bool {
-    o.as_interaction_like().map_or(false, |i| i.two_blocks_wide())
+    o.as_interaction_like().is_some_and(|i| i.two_blocks_wide())
 }
 /// `[o isDoubleHeight]`
 fn is_double_height(o: &ObjRef) -> bool {
-    o.as_interaction_like().map_or(false, |i| i.is_double_height())
+    o.as_interaction_like().is_some_and(|i| i.is_double_height())
 }
 
 /// C integer wrap rule shared by the NPC queries: `d < W/2 ? (d < -W/2 ? d + W: d): d - W`.
@@ -1003,7 +1003,7 @@ impl DynamicWorld {
     /// `-freeBlocksExistAtPos:`.
     pub fn free_blocks_exist_at_pos(&self, pos: IntPair) -> bool {
         let key = self.world_index_key(pos);
-        self.free_blocks_by_position.borrow().get(&key).map_or(false, |s| !s.is_empty())
+        self.free_blocks_by_position.borrow().get(&key).is_some_and(|s| !s.is_empty())
     }
 
     /// `-freeBlocksAtPos:`: ascending uid (DECISION synthesis); `None` when the filtered list is empty.

@@ -132,8 +132,8 @@ impl Action {
     /// `-initWithSaveDict:inventoryItems:`. May raise `NSRangeException` (`objectAtIndex:` out of range);
     /// index 0 is never resolved (strictly `> 0`), `complete` is never restored (trap 17), `animationTimer = 1.0`.
     pub fn init_with_save_dict_inventory_items(save: &PlistDict, inventory_items: &[SubSlot]) -> ActionRef {
-        let in_progress = dict_get(save, "inProgress").map_or(false, |v| v.bool_value());
-        let is_ai = dict_get(save, "isAI").map_or(false, |v| v.bool_value());
+        let in_progress = dict_get(save, "inProgress").is_some_and(|v| v.bool_value());
+        let is_ai = dict_get(save, "isAI").is_some_and(|v| v.bool_value());
         let goal_tile_pos =
             IntPair { x: int_of(dict_get(save, "goalTilePos.x")), y: int_of(dict_get(save, "goalTilePos.y")) };
         let mut item_index = int_of(dict_get(save, "interactionItemIndex")) as i16;
@@ -495,7 +495,7 @@ impl BlockheadHostStub for ActionBridge {
     }
     // ---- the Action accessors ----
     fn action_in_progress(&self, a: &Rc<dyn Any>) -> bool {
-        action_of(a).map_or(false, |a| a.in_progress())
+        action_of(a).is_some_and(|a| a.in_progress())
     }
     fn action_set_in_progress(&self, a: &Rc<dyn Any>, v: bool) {
         if let Some(a) = action_of(a) {

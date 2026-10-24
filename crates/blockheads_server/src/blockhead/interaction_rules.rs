@@ -205,7 +205,7 @@ fn tat(world: &World, x: i32, y: i32) -> Option<TileRef> {
 /// `[o canBeUsedByBlockhead:b]` (nil or non-interaction object gives NO).
 fn can_be_used_by(o: &Option<ObjRef>, b: &ObjRef) -> bool {
     match o {
-        Some(o) => o.as_interaction_like().map_or(false, |i| i.can_be_used_by_blockhead(o, b)),
+        Some(o) => o.as_interaction_like().is_some_and(|i| i.can_be_used_by_blockhead(o, b)),
         None => false,
     }
 }
@@ -403,7 +403,7 @@ impl Blockhead {
                     if ty.0 == 0x90 {
                         if tile_is_solid(Some(tref)) {
                             let a = tat(&world, x, y + 1);
-                            if tile_is_water(a) && tile_copy(&a).map_or(false, |a| a.foreground_contents == 0) {
+                            if tile_is_water(a) && tile_copy(&a).is_some_and(|a| a.foreground_contents == 0) {
                                 return InteractionType::INTERACTION_SOW;
                             }
                         }
@@ -451,15 +451,14 @@ impl Blockhead {
                     }
                 }
                 // G7 signs
-                if allow && (ty.0 == 0xa3 || (ty.0 == 0x12d && world.is_admin())) {
-                    if tile_is_solid(Some(tref))
-                        && t().foreground_contents == 0
-                        && sign_connection_type_and_offset_for_pos(tile_pos, None, &*world, SignConnectionType(0)).0
-                            != 0
-                        && y < 0x3f8
-                    {
-                        return InteractionType::INTERACTION_PLACE_ITEM;
-                    }
+                if allow
+                    && (ty.0 == 0xa3 || (ty.0 == 0x12d && world.is_admin()))
+                    && tile_is_solid(Some(tref))
+                    && t().foreground_contents == 0
+                    && sign_connection_type_and_offset_for_pos(tile_pos, None, &*world, SignConnectionType(0)).0 != 0
+                    && y < 0x3f8
+                {
+                    return InteractionType::INTERACTION_PLACE_ITEM;
                 }
             }
         }
@@ -547,7 +546,7 @@ impl Blockhead {
                         ignore_rail = false;
                         if tl.contents == 0x30 {
                             let o = h.interaction_object_at_pos(tile_pos);
-                            if o.as_ref().map_or(false, |o| o.object_type() == 0x31) {
+                            if o.as_ref().is_some_and(|o| o.object_type() == 0x31) {
                                 ignore_rail = true;
                             }
                         }
@@ -814,7 +813,7 @@ impl Blockhead {
                                     qscan_taken = true;
                                     let solid_or_col = |n: Option<TileRef>| {
                                         tile_is_solid(n)
-                                            || tile_copy(&n).map_or(false, |nt| nt.foreground_contents == 0x64)
+                                            || tile_copy(&n).is_some_and(|nt| nt.foreground_contents == 0x64)
                                     };
                                     let empty5 = |n: Option<TileRef>| -> bool {
                                         match tile_copy(&n) {
@@ -907,11 +906,11 @@ impl Blockhead {
             // ---- P3: tile.contents != 0
             if tile_is_workbench(Some(tref)) {
                 let o = h.interaction_object_at_pos(tile_pos);
-                let can_use_expert = o.as_ref().map_or(false, |o| {
-                    o.as_interaction_like().map_or(false, |i| i.can_be_used_in_expert_mode_when_not_owned())
+                let can_use_expert = o.as_ref().is_some_and(|o| {
+                    o.as_interaction_like().is_some_and(|i| i.can_be_used_in_expert_mode_when_not_owned())
                 });
                 let local = h.dynamic_world_local_net_id();
-                let owner_is_local = o.as_ref().map_or(false, |o| o.owner_id() == Some(local));
+                let owner_is_local = o.as_ref().is_some_and(|o| o.owner_id() == Some(local));
                 let cant_use = !world.is_admin() && world.expert_mode() && !can_use_expert && !owner_is_local;
                 if !cant_use {
                     return InteractionType::INTERACTION_CRAFT;
@@ -1289,7 +1288,7 @@ impl Blockhead {
                     r.render_item_type = 1;
                     if let Some(npc) = npc {
                         let is_donkey = crate::objects::class_info::class_info_by_name("Donkey")
-                            .map_or(false, |c| is_kind_of_class(&npc, c));
+                            .is_some_and(|c| is_kind_of_class(&npc, c));
                         if is_donkey && h.ridable_blockhead_can_ride_using_item(&npc, self, t.0 as i32) {
                             r.render_item_type = t.0;
                             r.good_or_bad = 1;
@@ -1429,14 +1428,14 @@ impl Blockhead {
             4 => sub = Some(2),
             5 => {
                 let o = h.interaction_object_at_pos(isq);
-                let is_bed = o.as_ref().map_or(false, |o| is_kind_of_class(o, &BED_CLASS));
+                let is_bed = o.as_ref().is_some_and(|o| is_kind_of_class(o, &BED_CLASS));
                 if !is_bed {
                     sub = Some(0);
                     if plain {
                         if let Some(o) = &o {
                             let is_gold_chest =
-                                o.as_interaction_like().map_or(false, |i| i.interaction_object_type() == 2)
-                                    && downcast::<Chest>(o).map_or(false, |c| c.chest_type() == 3);
+                                o.as_interaction_like().is_some_and(|i| i.interaction_object_type() == 2)
+                                    && downcast::<Chest>(o).is_some_and(|c| c.chest_type() == 3);
                             if is_gold_chest {
                                 h.report_achievement_with_identifier("grp.treasure");
                             }
@@ -1457,7 +1456,7 @@ impl Blockhead {
                     self.update_position(isq);
                     if plain {
                         h.report_achievement_with_identifier("grp.bed");
-                        if o.as_ref().and_then(|o| downcast::<Bed>(o)).map_or(false, |b| b.item_type() == 0xaa) {
+                        if o.as_ref().and_then(|o| downcast::<Bed>(o)).is_some_and(|b| b.item_type() == 0xaa) {
                             h.report_achievement_with_identifier("grp.golden_bed");
                         }
                     }
@@ -1622,7 +1621,7 @@ impl Blockhead {
         // world loading
         let is_net = self.is_net();
         let mut light_block_index: i32 = -1;
-        let dw_is_server = self.dw().map_or(false, |d| d.is_server());
+        let dw_is_server = self.dw().is_some_and(|d| d.is_server());
         if dw_is_server && is_net {
             let cid = self.client_id();
             // `[[world serverClients] objectForKey:clientID]` then `-lightBlockIndex` (seam: ServerClient is a placeholder)
@@ -1766,7 +1765,7 @@ impl Blockhead {
         if sq.x == op.x {
             return true;
         }
-        let two_wide = o.as_interaction_like().map_or(false, |i| i.two_blocks_wide());
+        let two_wide = o.as_interaction_like().is_some_and(|i| i.two_blocks_wide());
         if sq.x == op.x + 1 && two_wide && !o.flipped() {
             return true;
         }
@@ -1949,7 +1948,7 @@ fn object_is_double_height(o: &ObjRef) -> bool {
     if let Some(w) = downcast::<Workbench>(o) {
         return w.is_double_height();
     }
-    o.as_interaction_like().map_or(false, |i| i.is_double_height())
+    o.as_interaction_like().is_some_and(|i| i.is_double_height())
 }
 
 /// `[wb type]` as the raw `WorkbenchType`.

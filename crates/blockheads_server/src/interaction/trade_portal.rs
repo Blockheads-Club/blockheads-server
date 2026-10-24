@@ -451,7 +451,7 @@ impl TradePortal {
             crate::nslog!("Error trying to subtract items to sell.");
             return;
         }
-        let controlled = bh.as_blockhead().map_or(false, |b| b.is_client_blockhead_being_controlled_by_server());
+        let controlled = bh.as_blockhead().is_some_and(|b| b.is_client_blockhead_being_controlled_by_server());
         if !self.base.borrow().is_net && !controlled {
             self.links.world().report_achievement_with_identifier("grp.trade");
         }
@@ -518,7 +518,7 @@ impl TradePortal {
         }
         let cash = api.total_cash(&bh);
         if listed_price <= cash {
-            let controlled = bh.as_blockhead().map_or(false, |b| b.is_client_blockhead_being_controlled_by_server());
+            let controlled = bh.as_blockhead().is_some_and(|b| b.is_client_blockhead_being_controlled_by_server());
             if !self.base.borrow().is_net && !controlled {
                 self.links.world().report_achievement_with_identifier("grp.trade");
             }
@@ -604,7 +604,7 @@ impl TradePortal {
     pub fn take_items_from_blockhead_for_upgrade_to_next_level(&self, me: &ObjRef) -> bool {
         let c = self.upgrade_craftable_item();
         let Some(bh) = me.current_blockhead() else { return false };
-        let controlled = bh.as_blockhead().map_or(false, |b| b.is_client_blockhead_being_controlled_by_server());
+        let controlled = bh.as_blockhead().is_some_and(|b| b.is_client_blockhead_being_controlled_by_server());
         let cm = CrystalManager::instance();
         for i in 0..c.number_of_required_items.max(0) as usize {
             if c.required_items[i] != ITEM_TIME_CRYSTAL as u32 {
@@ -946,7 +946,7 @@ impl InteractionObjectLike for TradePortal {
             (io.is_in_use, io.current_blockhead.clone(), io.remote_blockhead_in_use_unique_id)
         };
         if in_use {
-            if cur.as_ref().map_or(false, |c| c.is_net()) || remote != 0 {
+            if cur.as_ref().is_some_and(|c| c.is_net()) || remote != 0 {
                 self.io.borrow_mut().needs_to_be_removed_when_interaction_ends = true;
                 return;
             }
@@ -1204,7 +1204,7 @@ mod tests {
     #[test]
     fn titles_and_choice_option() {
         let (w, _d, p) = mk("tpo_d", None);
-        let mut set = |enabled: u8, mode: u8| {
+        let set = |enabled: u8, mode: u8| {
             let mut r = w.custom_rules();
             r.custom_rules_enabled = enabled;
             r.trade_portals = mode as i8;

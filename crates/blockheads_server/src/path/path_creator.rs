@@ -115,7 +115,7 @@ pub(crate) fn dw_has_lights_to_add(user: Option<&ObjRef>) -> bool {
     if let Some(h) = dw_hooks() {
         return h.has_lights_to_add();
     }
-    real_dw(user).map_or(false, |d| d.has_lights_to_add())
+    real_dw(user).is_some_and(|d| d.has_lights_to_add())
 }
 
 /// `[dynamicWorld blockheadOccupiesTileAtPos:ignoreBlockhead:]`
@@ -123,7 +123,7 @@ pub(crate) fn dw_blockhead_occupies_tile(user: Option<&ObjRef>, pos: IntPair, ig
     if let Some(h) = dw_hooks() {
         return h.blockhead_occupies_tile_at_pos_ignore_blockhead(pos, ignore);
     }
-    real_dw(user).map_or(false, |d| d.blockhead_occupies_tile_at_pos_ignore_blockhead(pos, ignore))
+    real_dw(user).is_some_and(|d| d.blockhead_occupies_tile_at_pos_ignore_blockhead(pos, ignore))
 }
 
 /// `[dynamicWorld workbenchAtPos:]` as a `WirePowerSource`.
@@ -682,10 +682,8 @@ impl PathCreator {
 
         let (found, dig_found) = self.expand(&world, &q, lists);
 
-        if found || (dig_found && self.st.borrow().path.is_none()) {
-            if self.extract(&world, &q, found) {
-                return true;
-            }
+        if (found || (dig_found && self.st.borrow().path.is_none())) && self.extract(&world, &q, found) {
+            return true;
         }
 
         if !found && !lists.open.is_empty() {

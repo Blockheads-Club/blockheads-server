@@ -231,9 +231,9 @@ impl Terrain {
             let mut h = linear_interpolate(h_a, h_b, mix);
             h = (h - 0.5f32) * 2.0f32;
             if r.oceans == 1 {
-                h = 0.06f32 + h;
+                h += 0.06f32;
             } else if r.oceans == 3 {
-                h = h - 0.06f32;
+                h -= 0.06f32;
             }
             let neg = h < 0.0f32;
             h = fabsf(h);
@@ -475,7 +475,7 @@ impl Terrain {
         if 0.0f32 < sf && p.rules.rainfall != 0 {
             let f = fmodf(((pos.x as f32) / 32.0f32) / (p.w as f32), 0.5f32);
             let m = clamp((1.0f32 - fabsf(f - 0.25f32) / 0.25f32) * 3.0f32 - 0.5f32, 0.0f32, 1.0f32);
-            sf = m * sf;
+            sf *= m;
         }
         sf
     }
@@ -573,8 +573,8 @@ impl Terrain {
                 clay_t = -0.15f32;
             }
             if p.expert {
-                flint_t = 0.5f32 * flint_t;
-                clay_t = 0.5f32 * clay_t;
+                flint_t *= 0.5f32;
+                clay_t *= 0.5f32;
             }
             if fr > flint_t {
                 tile.contents = 1;
@@ -626,7 +626,7 @@ impl Terrain {
     #[allow(dead_code)]
     pub fn recursively_flow_out_dirt_from_tile(&self, p: &GenParams, world: &World, tile: &TileRef, mut wp: IntPair) {
         let wt = p.wt();
-        if wp.y - 1 >= 0 {
+        if wp.y > 0 {
             let step = |this: &Terrain, pp: IntPair| {
                 if let Some(t) = tile_at_world_position_loaded(pp.x, pp.y, world) {
                     let ty = t.type_index();
@@ -735,11 +735,9 @@ impl Terrain {
             {
                 let fo = self.fault_offset(p, x, top);
                 let mut skip = false;
-                if top < 0x200 || top < lake_x {
-                    if self.is_cave(p, x, top, fo) {
-                        self.make_water_and_flow_out(world, x, top);
-                        skip = true;
-                    }
+                if (top < 0x200 || top < lake_x) && self.is_cave(p, x, top, fo) {
+                    self.make_water_and_flow_out(world, x, top);
+                    skip = true;
                 }
                 if !skip {
                     if l_open < 0x200 || l_open < lake_l {

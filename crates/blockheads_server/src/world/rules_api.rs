@@ -27,7 +27,7 @@ impl World {
     pub fn send_updated_found_items_list_to_server(&self) {}
 
     fn found_contains(&self, i: u64) -> bool {
-        self.found_items_list.borrow().as_ref().map_or(false, |s| s.contains_index(i))
+        self.found_items_list.borrow().as_ref().is_some_and(|s| s.contains_index(i))
     }
 
     fn found_add(&self, i: u64) {
@@ -129,10 +129,10 @@ mod tests {
         let inner = InventoryItem::new(ItemType::ITEM_FLINT, 0, 0, None, None);
         let basket = InventoryItem::new(ItemType::ITEM_BASKET, 0, 0, Some(&[vec![inner.clone()]]), None);
         assert!(w.private_add_item_to_found_list_add_basket_contents(&basket.borrow(), true));
-        let s = w.found_items_list.borrow();
-        let s = s.as_ref().unwrap();
+        let sb = w.found_items_list.borrow();
+        let s = sb.as_ref().unwrap();
         assert!(s.contains_index(ItemType::ITEM_BASKET.0 as u64) && s.contains_index(ItemType::ITEM_FLINT.0 as u64));
-        drop(s);
+        drop(sb);
         // add_basket == false does not descend
         let w2 = world();
         assert!(w2.private_add_item_to_found_list_add_basket_contents(&basket.borrow(), false));

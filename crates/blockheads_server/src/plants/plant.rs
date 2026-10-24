@@ -257,7 +257,7 @@ pub fn dict_double(d: &PlistDict, k: &str) -> f64 {
 }
 /// `[[d objectForKey:k] boolValue]` (missing -> NO).
 pub fn dict_bool(d: &PlistDict, k: &str) -> bool {
-    d.get(&k.to_string()).map_or(false, |v| v.bool_value())
+    d.get(&k.to_string()).is_some_and(|v| v.bool_value())
 }
 /// `d[k] = [NSNumber numberWithInt:v]`
 pub fn put_int(d: &mut PlistDict, k: &str, v: i32) {
@@ -898,7 +898,7 @@ mod tests {
 #[cfg(test)]
 mod integration_tests {
     use super::*;
-    use crate::dynworld::state::{testutil, DwHooks, DynamicWorldInit, FreeBlockInit};
+    use crate::dynworld::state::{testutil, DynamicWorldInit, FreeBlockInit};
     use crate::lighting::artificial_light::testkit::world_with_blocks;
     use crate::plants::kelp::KelpPlant;
     use crate::plants::normal_plant::NormalPlant;
@@ -1251,7 +1251,7 @@ mod integration_tests {
         assert_eq!(tile_raw(&e.world, 20, 10).unwrap().foreground_contents(), 0x51);
         assert!(!me.needs_removed());
         // 2 draws for the harvested block; then 2 stalk tiles: 1 coin each (+2 when it drops)
-        assert!(e.rec.blocks.borrow().len() >= 1);
+        assert!(!e.rec.blocks.borrow().is_empty());
         // getPlantAtPos-style occupancy
         assert_eq!(k.number_of_occupied_tiles_above(), 0);
     }

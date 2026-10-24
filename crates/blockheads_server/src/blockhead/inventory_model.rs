@@ -1148,7 +1148,7 @@ impl Blockhead {
         );
         if interaction_type_disallowed_on_protected_tiles(InteractionType(g)) {
             let protected =
-                world.as_ref().map_or(false, |w| w.tile_is_protected_at_pos_against_blockhead(goal_pos, &self.me()));
+                world.as_ref().is_some_and(|w| w.tile_is_protected_at_pos_against_blockhead(goal_pos, &self.me()));
             if protected {
                 g = ih.current_interaction_type_for_tile_at_pos_pickup_rejected_due_to_inventory_full_include_actions_face_index_allow_protected_actions(
                     self, tile, goal_pos, &mut flag, false, 0, false,
@@ -1241,9 +1241,7 @@ impl Blockhead {
             let action = queue0.expect("non-empty queue");
             let goal_pos = h.action_goal_tile_pos(&action);
             let tile = world.as_ref().and_then(|w| tile_at_world_position_loaded(goal_pos.x, goal_pos.y, w));
-            if tile.is_none() {
-                return None; // flag stays set, no sound
-            }
+            tile?;
             let in_progress = h.action_in_progress(&action);
             let g0 = ih.action_goal_interaction(&action);
             'branches: {
@@ -1305,13 +1303,13 @@ impl Blockhead {
                             ih.action_interaction_item_index(&action),
                             ih.action_interaction_item_sub_index(&action),
                         );
-                        let same = held.as_ref().map_or(false, |x| Rc::ptr_eq(x, item_ref));
+                        let same = held.as_ref().is_some_and(|x| Rc::ptr_eq(x, item_ref));
                         if !same {
                             let held_type = held.as_ref().map_or(0, |x| x.borrow().item_type.0);
-                            let ok;
-                            if held_type == item_type.0 {
+
+                            let ok = if held_type == item_type.0 {
                                 ih.action_set_interaction_item(&action, held.as_ref());
-                                ok = true;
+                                true
                             } else {
                                 let alt = self.inventory_location_of_first_instance_of_item_type(item_type);
                                 let mut ok2 = false;
@@ -1324,8 +1322,8 @@ impl Blockhead {
                                     ih.action_set_interaction_item_sub_index(&action, alt.y as i16 as i32);
                                     ok2 = true;
                                 }
-                                ok = ok2;
-                            }
+                                ok2
+                            };
                             if !ok {
                                 return no_path_fail(self);
                             }
@@ -1419,7 +1417,7 @@ impl Blockhead {
                         if interaction_type_disallowed_on_protected_tiles(InteractionType(cur_g))
                             && world
                                 .as_ref()
-                                .map_or(false, |w| w.tile_is_protected_at_pos_against_blockhead(goal_square, &me))
+                                .is_some_and(|w| w.tile_is_protected_at_pos_against_blockhead(goal_square, &me))
                         {
                             cur_g = h.interaction_type_for_tile_at_pos_item_pickup_rejected_due_to_inventory_full_include_actions_face_index_allow_protected_actions(
                                 self, goal_tile, goal_square, cur_item.as_ref(), &mut scratch, false, face_idx, false,
@@ -1540,7 +1538,7 @@ impl Blockhead {
             }
         } else {
             let n = nourishment_fraction_for_food_type(food);
-            let expert = self.world_rc().map_or(false, |w| w.expert_mode());
+            let expert = self.world_rc().is_some_and(|w| w.expert_mode());
             let pos = self.pos();
             let me = self.me();
             let mut create: Option<ItemType> = None;
@@ -1848,8 +1846,8 @@ fn piece_fields(f: &mut BlockheadFields, p: usize) -> (&mut u16, &mut u16, &mut 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::blockhead::blockhead::set_host;
     use crate::blockhead::blockhead::testutil::*;
-    use crate::blockhead::blockhead::{set_host, BlockheadHost};
     use crate::fmath::cconv::f32_to_i32;
     use crate::items::inventory_item::InventoryItem;
     use crate::items::predicates::{

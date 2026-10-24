@@ -298,7 +298,7 @@ impl Wire {
             has = true;
         } else if tile.contents == CONTENTS_WORKBENCH || tile.contents == CONTENTS_WORKBENCH_SPRITE {
             let wb = self.links.dw().workbench_at_pos(IntPair { x: nx, y: ny });
-            has = wb.map_or(false, |w| workbench_uses_electricity(&w));
+            has = wb.is_some_and(|w| workbench_uses_electricity(&w));
         }
         let req_z = has && !tile_is_solid(t);
         (has, req_z)
@@ -367,13 +367,13 @@ impl DynamicObject for Wire {
     fn occupies_foreground_contents(&self) -> bool {
         let pos = self.base.borrow().pos;
         tile_at_world_position_loaded(pos.x, pos.y, &self.links.world())
-            .map_or(false, |t| t.foreground_contents() == CONTENTS_COPPER_WIRE)
+            .is_some_and(|t| t.foreground_contents() == CONTENTS_COPPER_WIRE)
     }
     /// `-[Wire occupiesNormalContents]`. UB-PARITY as above.
     fn occupies_normal_contents(&self) -> bool {
         let pos = self.base.borrow().pos;
         tile_at_world_position_loaded(pos.x, pos.y, &self.links.world())
-            .map_or(false, |t| t.contents() == CONTENTS_COPPER_WIRE)
+            .is_some_and(|t| t.contents() == CONTENTS_COPPER_WIRE)
     }
 
     fn get_save_dict(&self, me: &ObjRef) -> PlistDict {
@@ -443,7 +443,7 @@ impl DynamicObject for Wire {
                 // UB-PARITY: the original does not NULL-check the wire's own tile; NULL gives false here.
                 if no_conn
                     && tile_at_world_position_loaded(pos.x, pos.y, &world)
-                        .map_or(false, |t| t.back_wall_type_index() == 2)
+                        .is_some_and(|t| t.back_wall_type_index() == 2)
                 {
                     let free = |nx: i32, ny: i32| -> bool {
                         match tile_at_world_position_loaded(nx, ny, &world) {

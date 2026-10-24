@@ -66,7 +66,7 @@ fn is_column(t: Option<PTile>) -> bool {
 pub fn torch_connection_type_for_pos(pos: IntPair, world: &dyn PlacementWorld, item: ItemType) -> i32 {
     let (x, y) = (pos.x, pos.y);
     let at = |dx: i32, dy: i32| world.tile_at_loaded(x.wrapping_add(dx), y.wrapping_add(dy));
-    let chandelier = matches!(item.0, 148 | 147 | 146 | 145 | 149);
+    let chandelier = matches!(item.0, 145..=149);
     let gem = matches!(item.0, 75 | 76 | 86 | 87 | 88);
     let mut conn: i32 = -99;
     if chandelier || item.0 == 157 {

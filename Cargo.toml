@@ -42,13 +42,43 @@ debug = 1
 # Faithful float expressions (`x - x`, `x / x`, literal PI/TAU constants, `* 0`) are game behaviour, not mistakes.
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(coverage)"] }
-
-[workspace.lints.clippy]
 # `for x in option { .. }` is how the coverage-tested code avoids an uncovered closing brace after an `if let` without
 # else (see notes/resume/server-coverage.md).
 for_loops_over_fallibles = "allow"
-# `Some(x).filter(..)` likewise keeps a test helper free of a never-run closure.
+
+[workspace.lints.clippy]
+# `Some(x).filter(..)` keeps a test helper free of a never-run closure.
 some_filter = "allow"
 approx_constant = "allow"
 eq_op = "allow"
 erasing_op = "allow"
+
+# Style lints that are pure noise for a line-by-line port of a C/ObjC binary: the shapes mirror the original, and the
+# "simpler" forms either change float/NaN semantics or lose the one-to-one correspondence with the reference.
+too_many_arguments = "allow"
+type_complexity = "allow"
+many_single_char_names = "allow"
+cognitive_complexity = "allow"
+# `!(a < b)` is not `a >= b` for NaN; the original compiles the negated compare.
+neg_cmp_op_on_partial_ord = "allow"
+# Identical branches mirror distinct branches of the original.
+if_same_then_else = "allow"
+# Float literals carry the digits of the original's constants.
+excessive_precision = "allow"
+# `x + 0`, `x * 1` and friends mirror the original's expressions.
+identity_op = "allow"
+# `new` constructors mirror the original's `init` methods that return other types.
+new_ret_no_self = "allow"
+# Rewrites of these would restructure ported control flow (and its coverage regions) for no behavioural gain.
+field_reassign_with_default = "allow"
+module_inception = "allow"
+new_without_default = "allow"
+len_without_is_empty = "allow"
+large_enum_variant = "allow"
+unnecessary_unwrap = "allow"
+explicit_counter_loop = "allow"
+needless_range_loop = "allow"
+ptr_arg = "allow"
+single_range_in_vec_init = "allow"
+# `clamp` panics on min > max and treats NaN differently from the original's `if x < lo {..} else if x > hi {..}`.
+manual_clamp = "allow"

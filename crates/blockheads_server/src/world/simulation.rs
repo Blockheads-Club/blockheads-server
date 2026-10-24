@@ -542,7 +542,7 @@ mod tests {
         w.add_simulation_event_of_type_for_blockhead_extra_data(SE_SLEEP, Some(&done), SimulationEventExtra::None);
         with_away_client_simulation_events(|a| {
             let m = a.as_ref().unwrap().get(&"cl".to_string()).unwrap();
-            assert!(matches!(m.get(&43).unwrap().events.get(&SE_DAMAGE), None));
+            assert!(m.get(&43).unwrap().events.get(&SE_DAMAGE).is_none());
             assert!(m.get(&43).unwrap().events.get(&SE_SLEEP).is_some());
         });
         // a blockhead without a client id allocates the dictionary and returns

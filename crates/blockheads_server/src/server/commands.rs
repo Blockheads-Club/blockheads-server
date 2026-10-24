@@ -716,7 +716,7 @@ mod tests {
         h.srv.handle_command_issue_client("/kick pam", None);
         assert!(h.m.packets_to(&p).iter().any(|x| x == &[0x26, 0x0b]));
         h.run_delayed();
-        assert_eq!(h.m.disconnected.borrow().as_slice(), &[p.clone()]);
+        assert_eq!(h.m.disconnected.borrow().as_slice(), std::slice::from_ref(&p));
         assert!(h.w.calls.borrow().contains(&format!("client_disconnected {} true", p)));
     }
 

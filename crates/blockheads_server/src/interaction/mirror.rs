@@ -7,7 +7,6 @@ use std::rc::Rc;
 
 use crate::dynworld::state::DynamicWorld;
 use crate::interaction::chest::{dict_str, gunzip_plist, gz_plist_bytes, subdata_from, Links};
-use crate::items::predicates::*;
 use crate::objects::base::{padded_bytes, DynamicObject, DynamicObjectBase};
 use crate::objects::class_info::{ClassInfo, INTERACTION_OBJECT_CLASS};
 use crate::objects::handle::{self, CacheRef, ObjRef};
@@ -303,7 +302,7 @@ impl InteractionObjectLike for Mirror {
             (io.is_in_use, io.current_blockhead.clone(), io.remote_blockhead_in_use_unique_id)
         };
         if in_use {
-            if cur.as_ref().map_or(false, |c| c.is_net()) || remote != 0 {
+            if cur.as_ref().is_some_and(|c| c.is_net()) || remote != 0 {
                 self.io.borrow_mut().needs_to_be_removed_when_interaction_ends = true;
                 return;
             }
