@@ -381,7 +381,7 @@ impl HandCar {
         let vvx = self.tc.borrow().visual_velocity.x;
         let _ = &dw;
         let mut st = self.st.borrow_mut();
-        st.rider_animation_timer = ((st.external_x_acceleration + vvx) * dt) * 0.75f32 + st.rider_animation_timer;
+        st.rider_animation_timer += ((st.external_x_acceleration + vvx) * dt) * 0.75f32;
     }
 }
 

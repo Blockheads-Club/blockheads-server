@@ -357,7 +357,7 @@ impl InteractionObjectLike for TrainStation {
         if in_use {
             let cur = self.io.borrow().current_blockhead.clone();
             let remote = self.io.borrow().remote_blockhead_in_use_unique_id;
-            if cur.as_ref().map_or(false, |c| c.is_net()) || remote != 0 {
+            if cur.as_ref().is_some_and(|c| c.is_net()) || remote != 0 {
                 self.io.borrow_mut().needs_to_be_removed_when_interaction_ends = true;
                 return;
             }
@@ -398,14 +398,14 @@ impl InteractionObjectLike for TrainStation {
     }
     /// : admin shortcut, else the base rule plus the owner check on `localNetID`.
     fn can_be_used_by_blockhead(&self, me: &ObjRef, b: &ObjRef) -> bool {
-        let controlled = b.as_blockhead().map_or(false, |x| x.is_client_blockhead_being_controlled_by_server());
+        let controlled = b.as_blockhead().is_some_and(|x| x.is_client_blockhead_being_controlled_by_server());
         if self.world().is_admin() && !controlled {
             return true;
         }
         let mut ok = interaction_object_can_be_used_by_blockhead(me, b);
         if ok {
             if let Some(owner) = me.owner_id() {
-                ok = b.as_blockhead().and_then(|x| x.local_net_id()).map_or(false, |l| l == owner);
+                ok = b.as_blockhead().and_then(|x| x.local_net_id()).is_some_and(|l| l == owner);
             }
         }
         ok

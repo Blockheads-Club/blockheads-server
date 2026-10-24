@@ -147,7 +147,7 @@ impl SteamTrain {
             st.has_fuel = true;
             if let Some(d) = save_dict {
                 st.fuel_fraction = d.map.get(&"fuelFraction".to_string()).map_or(0.0, |v| v.float_value());
-                st.has_fuel = d.map.get(&"hasFuel".to_string()).map_or(false, |v| v.bool_value());
+                st.has_fuel = d.map.get(&"hasFuel".to_string()).is_some_and(|v| v.bool_value());
             }
         }
         let t: &dyn TrainCarLike = &*me;
@@ -184,9 +184,9 @@ impl SteamTrain {
         let get = |k: &str| save_dict.map.get(&k.to_string());
         let mut st = me.st.borrow_mut();
         st.fuel_fraction = get("fuelFraction").map_or(0.0, |v| v.float_value());
-        st.has_fuel = get("hasFuel").map_or(false, |v| v.bool_value());
-        st.going_right = get("goingRight").map_or(false, |v| v.bool_value());
-        st.stopped = get("stopped").map_or(false, |v| v.bool_value());
+        st.has_fuel = get("hasFuel").is_some_and(|v| v.bool_value());
+        st.going_right = get("goingRight").is_some_and(|v| v.bool_value());
+        st.stopped = get("stopped").is_some_and(|v| v.bool_value());
         drop(st);
         Some(o)
     }
@@ -295,30 +295,28 @@ impl SteamTrain {
             }
             if tile.foreground_contents() == CONTENTS_RAIL {
                 let mut found = false;
-                if tile.contents() == CONTENTS_INTERACTION_OBJECT {
-                    if iabs(wrap_dx_int(sp.x)) > 4 {
-                        let obj = dw.interaction_object_at_pos(sp);
-                        let Some(obj) = obj else { break };
-                        let is_station = obj
-                            .as_interaction_like()
-                            .map_or(false, |l| l.interaction_object_type() == INTERACTION_OBJECT_TYPE_TRAIN_STATION);
-                        if is_station {
-                            found = true;
-                            let title = obj.as_interaction_like().map(|l| l.title());
-                            let mut st = self.st.borrow_mut();
-                            if left {
-                                st.left_station_name = title;
-                                st.searching_for_left_station_name = false;
-                                st.left_station_goal_pos = sp;
-                            } else {
-                                st.right_station_name = title;
-                                st.searching_for_right_station_name = false;
-                                st.right_station_goal_pos = sp;
-                            }
-                            st.needs_to_update_choice_ui = true;
-                            drop(st);
-                            me.base().borrow_mut().update_needs_to_be_sent = true;
+                if tile.contents() == CONTENTS_INTERACTION_OBJECT && iabs(wrap_dx_int(sp.x)) > 4 {
+                    let obj = dw.interaction_object_at_pos(sp);
+                    let Some(obj) = obj else { break };
+                    let is_station = obj
+                        .as_interaction_like()
+                        .is_some_and(|l| l.interaction_object_type() == INTERACTION_OBJECT_TYPE_TRAIN_STATION);
+                    if is_station {
+                        found = true;
+                        let title = obj.as_interaction_like().map(|l| l.title());
+                        let mut st = self.st.borrow_mut();
+                        if left {
+                            st.left_station_name = title;
+                            st.searching_for_left_station_name = false;
+                            st.left_station_goal_pos = sp;
+                        } else {
+                            st.right_station_name = title;
+                            st.searching_for_right_station_name = false;
+                            st.right_station_goal_pos = sp;
                         }
+                        st.needs_to_update_choice_ui = true;
+                        drop(st);
+                        me.base().borrow_mut().update_needs_to_be_sent = true;
                     }
                 }
                 if !found {
@@ -499,11 +497,11 @@ impl SteamTrain {
         // ---- coupled car bookkeeping
         if !me.is_net() {
             let lc = self.tc.borrow().left_car.clone();
-            if lc.as_ref().map_or(false, |c| c.needs_removed()) {
+            if lc.as_ref().is_some_and(|c| c.needs_removed()) {
                 self.tc.borrow_mut().left_car = None;
             }
             let rc = self.tc.borrow().right_car.clone();
-            if rc.as_ref().map_or(false, |c| c.needs_removed()) {
+            if rc.as_ref().is_some_and(|c| c.needs_removed()) {
                 self.tc.borrow_mut().right_car = None;
             }
         } else {
@@ -687,7 +685,7 @@ impl SteamTrain {
                                 }
                             }
                         }
-                        if t.map_or(false, |t| t.foreground_contents() != CONTENTS_RAIL) {
+                        if t.is_some_and(|t| t.foreground_contents() != CONTENTS_RAIL) {
                             self.st.borrow_mut().stopped = true;
                             me.base().borrow_mut().update_needs_to_be_sent = true;
                             break;

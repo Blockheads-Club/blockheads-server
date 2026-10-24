@@ -105,12 +105,12 @@ fn tile_is_burnable(t: Option<TileRef>, dw: &Rc<DynamicWorld>, pos: IntPair) -> 
     }
     match &t {
         Some(tile) => {
-            !tile_is_water(t.clone())
-                && (tile_is_tree(t.clone())
-                    || tile_is_dead_tree(t.clone())
-                    || tile_is_burnable_block(tile.clone())
+            !tile_is_water(t)
+                && (tile_is_tree(t)
+                    || tile_is_dead_tree(t)
+                    || tile_is_burnable_block(*tile)
                     || tile.foreground_contents() == 0x42
-                    || tile_is_plant(t.clone()))
+                    || tile_is_plant(t))
         }
         None => false,
     }
@@ -274,11 +274,11 @@ impl FireObject {
                     st.spread_timers[i]
                 };
                 // `t <= 0.0f && t != 0.0f` (equals `t < 0` for non-NaN)
-                if t <= 0.0f32 && t != 0.0f32 {
+                if t < 0.0f32 {
                     let u = r01_tagged("fire::spread_reset");
                     self.st.borrow_mut().spread_timers[i] = u * *scale + *add;
                     let n = tile_at_world_position(np.x, np.y, &macro_tiles, &world);
-                    if tile_is_burnable(n.clone(), &dw, *np) {
+                    if tile_is_burnable(n, &dw, *np) {
                         // UB-PARITY: the original dereferences a NULL `n` here; None is treated as `on_fire == 0`.
                         if !*needs_not_on_fire || n.as_ref().map_or(0, |t| t.on_fire()) == 0 {
                             let _ = dw.place_fire_at_position(*np);
@@ -377,7 +377,7 @@ impl DynamicObject for FireObject {
             if fg != 0 {
                 if fg == CONTENTS_LADDER {
                     let _ = dw.remove_ladder_at_pos(p);
-                } else if tile_is_plant(Some(tile.clone())) {
+                } else if tile_is_plant(Some(tile)) {
                     if let Some(plant) = dw.get_plant_at_pos(p) {
                         fire_host().remove_plant_without_creating_freeblocks(&plant);
                     }
@@ -394,7 +394,7 @@ impl DynamicObject for FireObject {
                     }
                 }
             }
-            if tile_is_tree(Some(tile.clone())) || tile_is_burnable_block(tile.clone()) {
+            if tile_is_tree(Some(tile)) || tile_is_burnable_block(tile) {
                 world.remove_tile_at_world_x_world_y_create_contents_freeblock_count_create_foreground_contents_freeblock_count_remove_blockhead_only_remove_c_ontents_only_remove_foreground_contents(
                     p.x, p.y, 0, 0, None, false, false,
                 );

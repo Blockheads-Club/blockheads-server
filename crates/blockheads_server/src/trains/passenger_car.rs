@@ -124,7 +124,7 @@ impl TrainCarLike for PassengerCar {
     ///  (R1): `ox = blockhead == riders[0] ? -0.4f: 0.4f`.
     fn rider_pos_for_blockhead(&self, b: &ObjRef) -> [f32; 4] {
         let s = self.tc.borrow();
-        let is_first = s.riders[0].as_ref().map_or(false, |r| ptr_eq(r, b));
+        let is_first = s.riders[0].as_ref().is_some_and(|r| ptr_eq(r, b));
         let ox = if is_first { -0.4f32 } else { 0.4f32 };
         rider_pos_common(self.base.borrow().float_pos, s.left_wheel_pos, s.right_wheel_pos, ox)
     }
