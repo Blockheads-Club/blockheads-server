@@ -407,7 +407,11 @@ impl Core {
             } else {
                 vec![format!("/set-password {}", o.password)]
             },
-            mods: blockheads_server::mods::ModsConfig { dir: Some(self.mods_dir()), disabled: false },
+            mods: blockheads_server::mods::ModsConfig {
+                dir: Some(self.mods_dir()),
+                disabled: false,
+                variant_blocks: false,
+            },
             ..HostConfig::default()
         };
         let handle = host::start(cfg, Arc::new(move |l: &str| lock(&shared).push(l))).map_err(|e| e.to_string())?;
