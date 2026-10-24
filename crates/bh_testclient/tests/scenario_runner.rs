@@ -280,3 +280,12 @@ fn a_server_that_hangs_up_or_stays_silent_after_the_handshake() {
         run(&mute.cfg(), "client A\nuid\n", &RunOptions { default_timeout_ms: 300, ..Default::default() }).unwrap_err();
     assert!(e.to_string().contains("unique id reply (0x0f)"), "{e}");
 }
+
+/// Steps that are not a single send do nothing in `send_step` (the runner handles them itself).
+#[test]
+fn non_send_steps_do_nothing_in_send_step() {
+    let (_s, cfg) = start();
+    let mut c = bh_testclient::Session::connect(cfg, bh_testclient::Identity::new("Nop")).unwrap();
+    bh_testclient::scenario::send_step(&mut c, 1, &bh_testclient::Step::Sleep(1)).unwrap();
+    bh_testclient::scenario::send_step(&mut c, 1, &bh_testclient::Step::InitialData).unwrap();
+}

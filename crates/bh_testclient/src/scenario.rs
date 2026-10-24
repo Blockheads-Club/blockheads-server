@@ -495,7 +495,8 @@ impl<'a> Runner<'a> {
 }
 
 /// Steps that are a single send on a client; every other step does nothing here.
-fn send_step(s: &mut Session, line: usize, step: &Step) -> Result<(), ScenarioError> {
+#[doc(hidden)]
+pub fn send_step(s: &mut Session, line: usize, step: &Step) -> Result<(), ScenarioError> {
     match step {
         Step::InitialData => s.request_initial_data()?,
         Step::RequestBlocks { idx, create } => {
@@ -553,7 +554,7 @@ fn take_word(s: &str) -> (&str, &str) {
     }
 }
 
-fn num<T: TryFrom<i64>>(s: &str, what: &str) -> Result<T, String> {
+fn num_i64(s: &str, what: &str) -> Result<i64, String> {
     let (neg, body) = match s.strip_prefix('-') {
         Some(r) => (true, r),
         None => (false, s),
@@ -564,8 +565,15 @@ fn num<T: TryFrom<i64>>(s: &str, what: &str) -> Result<T, String> {
         body.parse::<i64>()
     }
     .map_err(|_| format!("bad {} '{}'", what, s))?;
-    let v = if neg { -v } else { v };
-    T::try_from(v).map_err(|_| format!("{} '{}' out of range", what, s))
+    Ok(if neg { -v } else { v })
+}
+
+fn num<T: TryFrom<i64>>(s: &str, what: &str) -> Result<T, String> {
+    let v = num_i64(s, what)?;
+    match T::try_from(v) {
+        Ok(t) => Ok(t),
+        Err(_) => Err(format!("{} '{}' out of range", what, s)),
+    }
 }
 
 fn hex_type(s: &str) -> Result<u8, String> {
@@ -862,6 +870,16 @@ pub fn builtin(name: &str) -> Option<Scenario> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn num_parses_every_form() {
+        assert_eq!(num::<u8>("12", "n"), Ok(12));
+        assert_eq!(num::<u8>("0x1f", "n"), Ok(31));
+        assert_eq!(num::<u8>("0X1F", "n"), Ok(31));
+        assert_eq!(num::<i8>("-5", "n"), Ok(-5));
+        assert_eq!(num::<u8>("300", "n"), Err("n '300' out of range".to_string()));
+        assert_eq!(num::<u8>("zz", "n"), Err("bad n 'zz'".to_string()));
+    }
 
     /// r2_session_1: block_requests probes an in-range never-generated block (index 1), and all
     /// indices stay below W*32 = 16384 (w1).

@@ -47,7 +47,7 @@ impl Fx {
         crate::blockhead::blockhead::as_blockhead(&self.bh_obj).unwrap()
     }
     pub fn obj(&self, name: &str) -> &ObjRef {
-        &self.objs.iter().find(|(n, _)| *n == name).unwrap_or_else(|| panic!("fixture object {name}")).1
+        &self.objs.iter().find(|(n, _)| *n == name).unwrap().1
     }
     pub fn dwr(&self) -> DynamicWorldRef {
         self.dw.clone()
@@ -211,5 +211,5 @@ fn make_objects(
         .map(|d| d as ObjRef);
     v.push(("gate", door));
     let _ = bh;
-    v.into_iter().map(|(n, o)| (n, o.unwrap_or_else(|| panic!("fixture: no {n}")))).collect()
+    v.into_iter().map(|(n, o)| (n, o.unwrap())).collect()
 }

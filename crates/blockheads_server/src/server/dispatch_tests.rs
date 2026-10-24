@@ -728,7 +728,7 @@ fn enet_client() -> enet::Host<UdpSocket> {
 }
 
 /// Pump the server's poll and the client until `done` or three seconds; returns what the client received.
-fn pump(h: &RealMatchHarness, c: &mut enet::Host<UdpSocket>, mut done: impl FnMut() -> bool) -> Vec<Vec<u8>> {
+fn pump(h: &RealMatchHarness, c: &mut enet::Host<UdpSocket>, done: &mut dyn FnMut() -> bool) -> Vec<Vec<u8>> {
     let mut got = Vec::new();
     let end = std::time::Instant::now() + std::time::Duration::from_secs(3);
     while std::time::Instant::now() < end && !done() {
@@ -747,7 +747,7 @@ fn connect_client(h: &RealMatchHarness) -> enet::Host<UdpSocket> {
     let mut c = enet_client();
     c.connect(SocketAddr::from(([127, 0, 0, 1], h.m.local_port().unwrap())), 8, 0).unwrap();
     let waiting = h.srv.unapproved_clients.borrow().len() + 1;
-    pump(h, &mut c, || h.srv.unapproved_clients.borrow().len() == waiting);
+    pump(h, &mut c, &mut || h.srv.unapproved_clients.borrow().len() == waiting);
     c
 }
 
@@ -769,13 +769,13 @@ fn a_cloud_player_joins_over_a_real_connection() {
     // The wrong cloud key is refused with reason 9.
     let mut bad = connect_client(&h);
     send_handshake(&mut bad, "Mallory", "wrong");
-    let got = pump(&h, &mut bad, || false);
-    assert!(got.iter().any(|p| p == &[0x26, 9]), "{:?}", got.iter().map(|p| p[0]).collect::<Vec<_>>());
+    let got = pump(&h, &mut bad, &mut || false);
+    assert!(got.iter().any(|p| p == &[0x26, 9]));
     // The right one is approved, gets the summary, and shows up as connected.
     let mut c = connect_client(&h);
     send_handshake(&mut c, "Remote", &string_from_md5("SALTRemote"));
-    let got = pump(&h, &mut c, || false);
-    assert!(got.iter().any(|p| p[0] == 0x01), "{:?}", got);
+    let got = pump(&h, &mut c, &mut || false);
+    assert!(got.iter().any(|p| p[0] == 0x01));
     assert_eq!(h.srv.connected_client_ids().len(), 1);
     // The owner is the only one who may change the privacy; the change reaches the transport.
     let peer = c.connected_peers_mut().next().unwrap();
@@ -785,6 +785,6 @@ fn a_cloud_player_joins_over_a_real_connection() {
     )
     .unwrap();
     c.flush();
-    pump(&h, &mut c, || h.srv.privacy_string().as_deref() == Some("private"));
+    pump(&h, &mut c, &mut || h.srv.privacy_string().as_deref() == Some("private"));
     assert_eq!(h.srv.privacy_string().as_deref(), Some("private"));
 }

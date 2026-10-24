@@ -712,6 +712,8 @@ mod tests {
         assert_eq!(compare("\u{ac00}", "\u{1100}\u{1161}"), 1);
         assert_eq!(compare("\u{622}", "\u{627}\u{653}"), -1);
         assert_eq!(compare("\u{958}", "\u{915}\u{93c}"), 0);
+        // canonical reordering: marks sort by combining class (301 is 230, 323 is 220)
+        assert_eq!(compare("a\u{301}\u{323}", "a\u{323}\u{301}"), 0);
         assert_eq!(compare("\u{1f71}", "\u{3b1}\u{301}"), 0);
         assert_eq!(compare("\u{2126}", "\u{3a9}"), 0);
         assert_eq!(compare("\u{30ac}", "\u{30ab}\u{3099}"), 0);

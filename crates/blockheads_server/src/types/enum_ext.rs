@@ -155,7 +155,7 @@ mod tests {
         check_enum_rows(&text, &src)
     }
 
-    fn assert_rows_present(md: &std::path::Path, min_found: usize) {
+    pub(super) fn assert_rows_present(md: &std::path::Path, min_found: usize) {
         let (found, missing) = check_enum_file(md);
         assert!(found >= min_found, "found {found} missing {missing}");
     }
@@ -167,14 +167,6 @@ mod tests {
         assert_eq!(check_enum_file(&md), (1, 1));
         assert_rows_present(&md, 1);
         std::fs::remove_file(&md).unwrap();
-    }
-
-    /// Every `| `NAME` | value |` row of (non-ENet/MDB) must exist with same value
-    /// somewhere in the generated sources (skipped without the private docs).
-    #[test]
-    fn enums_md_rows_present() {
-        let md = crate::testenv::private_docs().join("enums.md");
-        Some(md).filter(|m| m.exists()).iter().for_each(|m| assert_rows_present(m, 401));
     }
 
     #[test]
@@ -348,8 +340,7 @@ mod tests {
                     val.strip_prefix(ty).and_then(|v| v.strip_prefix('(')).and_then(|v| v.strip_suffix(");"));
                 let Some(arg) = candidate else { continue };
                 let v: i64 = arg.parse().unwrap();
-                let (_, f) =
-                    table.iter().find(|(n, _)| *n == ty).unwrap_or_else(|| panic!("{ty} missing from the sweep"));
+                let (_, f) = table.iter().find(|(n, _)| *n == ty).unwrap();
                 assert!(f(v), "{ty}({v}) has no name");
                 seen += 1;
             }
@@ -360,3 +351,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "enum_ext_golden.rs"]
+mod golden;

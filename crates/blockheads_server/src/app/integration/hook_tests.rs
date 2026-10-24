@@ -182,6 +182,12 @@ fn dwopshooks_adapters_forward_and_are_inert_without_targets() {
         let _ = crate::dynworld::lookups::DwOpsHooks::tap_is_within_body_radius(&*f.g, f.obj("hand_car"), f.v);
         let _ = crate::dynworld::lookups::DwOpsHooks::tap_is_within_body_radius(&*f.dead, &f.stub, f.v);
         let _ = crate::dynworld::lookups::DwOpsHooks::blockhead_current_item_type(&*f.g, &f.stub);
+        {
+            // a blockhead that carries something: the selected tool resolves to its type
+            f.bh().add_item_to_inventory(&f.item);
+            f.bh().set_current_item_to_item_at_index(crate::types::structs::IntPair { x: 1, y: -1 });
+            let _ = crate::dynworld::lookups::DwOpsHooks::blockhead_current_item_type(&*f.g, &f.bh_obj);
+        }
         let _ = crate::dynworld::lookups::DwOpsHooks::blockhead_current_item_type(&*f.g, &f.bh_obj);
         let _ = crate::dynworld::lookups::DwOpsHooks::blockhead_current_item_type(&*f.g, f.obj("gate"));
         let _ = crate::dynworld::lookups::DwOpsHooks::blockhead_current_item_type(&*f.g, f.obj("painting"));
@@ -2253,6 +2259,15 @@ fn blockheadhost_adapters_forward_and_are_inert_without_targets() {
         let _ = crate::blockhead::blockhead::BlockheadHost::fishing_rod_hooked_fish_unique_id(&f.bg, &f.rod);
         let _ = crate::blockhead::blockhead::BlockheadHost::fishing_rod_hooked_fish_unique_id(&f.dead_bg, &f.rod);
         let _ = crate::blockhead::blockhead::BlockheadHost::fishing_rod_hooked_fish_unique_id(&f.gone, &f.rod);
+        {
+            let hooked = crate::physics_objects::fishing_rod::FishingRod::init_with_world_blockhead_cache(
+                &f.world, &f.bh_obj, None,
+            );
+            hooked.directional_swipe(crate::types::structs::Vector2 { x: 400.0, y: 300.0 });
+            hooked.set_hooked_fish(Some(f.obj("clownfish").clone()));
+            let rod: crate::blockhead::blockhead::FishingRodRef = hooked;
+            let _ = crate::blockhead::blockhead::BlockheadHost::fishing_rod_hooked_fish_unique_id(&f.bg, &rod);
+        }
         let _ = crate::blockhead::blockhead::BlockheadHost::fishing_rod_new_with_swipe(&f.bg, f.bh(), f.v);
         let _ = crate::blockhead::blockhead::BlockheadHost::fishing_rod_new_with_swipe(&f.bg, f.bh(), f.v);
         let _ = crate::blockhead::blockhead::BlockheadHost::fishing_rod_new_with_swipe(&f.bg, f.bh(), f.v);

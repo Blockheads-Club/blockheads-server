@@ -220,6 +220,9 @@ fn adapters_with_objects_of_every_class() {
             let mut avoid = std::collections::VecDeque::new();
             t("freeblock_from_net_data", || drop(g.freeblock_from_net_data(&[0u8; 32], Some(&mut avoid))));
             t("construct_from_net_data", || drop(g.construct_from_net_data(1, Some(1), &[0u8; 32])));
+            for ty in [1, 2, 53, 9999] {
+                t("construct_from_net_data_plain", || drop(g.construct_from_net_data(ty, None, &[0u8; 32])));
+            }
             t("tile_is_lit_for_client", || drop(g.tile_is_lit_for_client(Some("cid"), f.p, f.tile)));
         }
         for b in [&f.bg, &f.dead_bg, &f.gone] {}

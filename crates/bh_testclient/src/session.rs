@@ -1171,8 +1171,7 @@ mod tests {
                                     })
                                 })
                             }
-                            0x0e => Some(messages::unique_id_reply(0x106)),
-                            _ => None,
+                            _ => Some(messages::unique_id_reply(0x106)),
                         };
                         if let Some(r) = reply {
                             host.peer_mut(peer).send(0, &enet::Packet::reliable(r)).unwrap();

@@ -541,6 +541,7 @@ mod tests {
             let mut d = GsDict::with_capacity(cap);
             let mut m = Model { buckets: 0, chains: vec![], count: 0 };
             m.resize(3 * cap / 4 + 1);
+            m.resize(3 * cap / 4 + 1); // same size: no rebuild
             for _ in 0..n * 2 {
                 let k = format!("key{}", rnd(n as u64 + 5));
                 if rnd(4) == 0 {

@@ -55,8 +55,7 @@ impl EnetHost {
             seed: None,
             ..Default::default()
         };
-        let host = enet::Host::new(socket, settings)
-            .map_err(enet_io_error)?;
+        let host = enet::Host::new(socket, settings).map_err(enet_io_error)?;
         Ok(EnetHost { host })
     }
 

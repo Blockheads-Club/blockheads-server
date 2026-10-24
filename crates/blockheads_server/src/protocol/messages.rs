@@ -1032,11 +1032,8 @@ mod tests {
         assert!(bare.object_for_key("privacy").is_none() && bare.object_for_key("minorVersion").is_some());
         let mut food = [0i32; 31];
         food[3] = 9;
-        let ServerMsg::InitialData { food_types, plist } =
-            sm(initial_data_reply(&food, Some(b"<?xml version=\"1.0\"?><plist><dict/></plist>")))
-        else {
-            panic!()
-        };
+        let reply = sm(initial_data_reply(&food, Some(b"<?xml version=\"1.0\"?><plist><dict/></plist>")));
+        let ServerMsg::InitialData { food_types, plist } = reply else { unreachable!() };
         assert_eq!((food_types[3], plist.is_some()), (9, true));
         assert!(matches!(sm(initial_data_reply(&food, None)), ServerMsg::InitialData { plist: None, .. }));
         assert!(matches!(sm(unique_id_reply(77)), ServerMsg::UniqueId(77)));

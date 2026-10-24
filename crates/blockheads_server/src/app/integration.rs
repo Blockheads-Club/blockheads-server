@@ -1162,15 +1162,13 @@ impl WorldOpsDeps for Glue {
         let unexplored = mt.as_ref().map_or(false, |m| m.unexplored.get() != 0);
         let out =
             l.load_physical_block_at_x_pos_y_pos_create_if_not_created(pb, x, y, create_if_not_created, unexplored);
-        if let Some(m) = mt {
-            match out {
-                LoadOutcome::Skipped => {}
-                LoadOutcome::NotFound => m.unexplored.set(1),
-                LoadOutcome::Loaded | LoadOutcome::Generated => {
-                    *m.physical_block.borrow_mut() = Some(pb);
-                    m.unexplored.set(0);
-                    m.dynamic_objects_loaded.set(false);
-                }
+        for m in mt {
+            if matches!(out, LoadOutcome::NotFound) {
+                m.unexplored.set(1);
+            } else if matches!(out, LoadOutcome::Loaded | LoadOutcome::Generated) {
+                *m.physical_block.borrow_mut() = Some(pb);
+                m.unexplored.set(0);
+                m.dynamic_objects_loaded.set(false);
             }
         }
     }
