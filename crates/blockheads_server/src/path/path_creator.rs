@@ -1393,13 +1393,7 @@ mod tests {
         let pc = PathCreator::init_with_world(&world);
         let user = new_user(ip(100, 21));
         pc.create_path_with_dict(&req(&user, 105, 21, 0, 0));
-        let mut calls = 0;
-        while pc.in_progress() {
-            assert!(!pc.has_path() || pc.path().is_some() || calls == 0);
-            pc.update_path();
-            calls += 1;
-            assert!(calls < 50);
-        }
+        run_to_end(&pc);
         assert!(pc.has_path());
         let path = pc.path().expect("path");
         let w = 32 * 32;
@@ -1456,9 +1450,7 @@ mod tests {
         let pc = PathCreator::init_with_world(&world);
         let user = new_user(ip(100, 21));
         pc.create_path_with_dict(&req(&user, 103, 21, 0, 0));
-        while pc.in_progress() {
-            pc.update_path();
-        }
+        run_to_end(&pc);
         assert!(pc.path().is_some());
         pc.abort_path();
         assert!(pc.path().is_some() && !pc.in_progress() && !pc.has_path());
@@ -1514,12 +1506,7 @@ mod tests {
             }
             let user = new_user(ip(300, 21));
             pc.create_path_with_dict(&req(&user, 300, goal_y, 0, 0));
-            let mut n = 0;
-            while pc.in_progress() {
-                pc.update_path();
-                n += 1;
-                assert!(n < 200);
-            }
+            run_to_end(&pc);
             let path = pc.path().expect("path");
             let has_elev = path.iter().any(|s| s.traverse_type == 27 || s.traverse_to_key_frame == 10);
             assert_eq!(has_elev, expect_elevator, "goal_y {goal_y}: {path:?}");
@@ -1956,7 +1943,7 @@ mod tests {
         seed(&pc, idx(200, 22), idx(200, 21), 1, 0);
         // without the above probe the scan walks down: (200, 20) is solid ground and a landing cell
         let path = pc.calculate_fall_path();
-        assert!(path.is_none_or(|p| p[0].index != idx(200, 22)));
+        assert!(path.is_none() || path.unwrap()[0].index != idx(200, 22));
     }
 
     #[test]
@@ -2072,6 +2059,105 @@ mod tests {
         let r = PathRequest::from_plist_dict(&d);
         assert_eq!((r.path_type, r.goal_x, r.goal_y, r.goal_interaction), (3, -4, 0, 0));
         assert!(r.path_user.is_none() && r.extra_data.is_none());
+    }
+
+    /// A long walk takes several `updatePath` calls; the result is the same flat line.
+    #[test]
+    fn long_walk_needs_several_updates() {
+        let (world, _l, _d) = new_world(32, 20);
+        let pc = PathCreator::init_with_world(&world);
+        let user = new_user(ip(100, 21));
+        pc.create_path_with_dict(&req(&user, 600, 21, 0, 0));
+        assert!(pc.in_progress());
+        run_to_end(&pc);
+        assert!(pc.has_path());
+        assert_eq!(pc.path().expect("path").len(), 500);
+    }
+
+    /// Accessors, `setHasPath:`, `dealloc` and the dictionary form of a sub-path step.
+    #[test]
+    fn accessors_and_teardown() {
+        let (world, _l, _d) = new_world(32, 20);
+        let pc = PathCreator::init_with_world(&world);
+        let user = new_user(ip(100, 21));
+        pc.create_path_with_dict(&PathRequest {
+            path_type: 3,
+            goal_x: 104,
+            goal_y: 21,
+            goal_interaction: 2,
+            extra_data: Some(PlistValue::int(7)),
+            path_user: Some(user.clone()),
+        });
+        run_to_end(&pc);
+        assert!(pc.path_user().map_or(false, |u| crate::objects::handle::ptr_eq(&u, &user)));
+        assert_eq!((pc.goal_x(), pc.goal_y(), pc.goal_interaction(), pc.path_type()), (104, 21, 2, 3));
+        assert!(pc.extra_data().is_some());
+        pc.set_has_path(false);
+        assert!(!pc.has_path());
+        let step = PathStep {
+            index: 4,
+            terrain_difficulty: 1,
+            traverse_type: 2,
+            traverse_to_key_frame: 3,
+            parent_index: Some(5),
+            properties_g: Some(60),
+        };
+        let PlistValue::Dict(d) = step.to_plist_dict() else { panic!("dictionary expected") };
+        assert_eq!(d.map.len(), 6);
+        pc.dealloc();
+        assert!(pc.path_user().is_none() && pc.path().is_none() && pc.extra_data().is_none());
+    }
+
+    /// The stand-in user and loader answer their questions.
+    #[test]
+    fn test_doubles_answer() {
+        use crate::objects::protocols::PathUserDynamicObject;
+        use crate::world::state::WorldOpsHooks;
+        let (world, _l, _d) = new_world(32, 20);
+        let user = new_user(ip(1, 2));
+        let hooks = _l.clone();
+        assert!(!hooks.tile_is_protected_at_pos_against_blockhead(&world, ip(0, 0), &user));
+        assert_eq!(user.class_info().name, "DynamicObject");
+        let pu = user.as_path_user().unwrap();
+        assert!(pu.info_for_path_recalculation().is_none());
+        pu.set_path_type_goal_interaction_extra_data(&user, None, 0, 0, None);
+        pu.set_waiting_for_path_to_pos(ip(0, 0));
+        pu.set_no_longer_waiting_for_path();
+        assert!(!pu.waiting_for_path());
+        assert!(!pu.path_needs_recalculated());
+        pu.set_path_needs_recalculated(true);
+    }
+
+    /// The real workbench behind a `WirePowerSource` view of the path user's DynamicWorld.
+    #[test]
+    fn real_workbench_as_power_source() {
+        use crate::crafting::workbench::{Workbench, WB_STEAM_GENERATOR};
+        use crate::interaction::sign::testkit::world_with_block;
+        use crate::objects::base::DynamicWorldRef;
+        use crate::objects::type_tables::DYNAMIC_OBJECT_TYPE_WORKBENCH;
+        use crate::types::enums::WorkbenchType;
+        set_dynamic_world_hooks(None);
+        let (w, dw, _pb) = world_with_block("pc_workbench");
+        let pos = ip(10, 10);
+        let dwr: DynamicWorldRef = dw.clone();
+        let wb = Workbench::init_with_world_dynamic_world_at_position_cache_type_flipped_save_dict_placed_by_client_client_name(
+            &w, &dwr, pos, None, WorkbenchType(WB_STEAM_GENERATOR as _), false, None, None, None,
+        )
+        .unwrap();
+        let wbo: ObjRef = wb.clone();
+        dw.by_pos_set(DYNAMIC_OBJECT_TYPE_WORKBENCH, dw.world_index(pos), &wbo);
+        let user = new_user(ip(11, 10));
+        user.base().borrow_mut().dynamic_world = Some(Rc::downgrade(&dwr));
+        let src = dw_workbench_at_pos(Some(&user), pos).expect("the workbench");
+        assert_eq!(src.available_electricity(), 0x7f);
+        assert!(src.generates_electricity());
+        assert!(!src.is_storage_device());
+        let _ = src.conducts_electricity();
+        let _ = src.subtract_electricty(5);
+        assert_eq!(src.available_electricity(), 0x7f - 5);
+        assert!(dw_workbench_at_pos(Some(&user), ip(30, 10)).is_none());
+        let _ = dw_has_lights_to_add(Some(&user));
+        let _ = dw_blockhead_occupies_tile(Some(&user), pos, None);
     }
 }
 

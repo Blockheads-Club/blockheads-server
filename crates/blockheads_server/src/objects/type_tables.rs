@@ -416,5 +416,10 @@ mod tests {
         let g = ClassFactory { class: &INTERACTION_OBJECT_CLASS, ..f };
         register_interaction_class(2, g);
         assert!(std::ptr::eq(class_for_interaction_object_type(2).unwrap().class, &INTERACTION_OBJECT_CLASS));
+        // out-of-range types are ignored
+        register_interaction_class(0, g);
+        register_interaction_class(10, g);
+        assert!(class_for_interaction_object_type(0).is_none());
+        assert!(class_for_interaction_object_type(10).is_none());
     }
 }

@@ -61,3 +61,20 @@ pub fn is_kind_of_class(o: &ObjRef, c: &'static ClassInfo) -> bool {
 pub fn is_member_of_class(o: &ObjRef, c: &'static ClassInfo) -> bool {
     o.class_info().is_member_of(c)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::objects::base::testutil::TestObj;
+
+    /// `ptr_eq_self` compares the receiver of a trait method with the handle it came from.
+    #[test]
+    fn identity_of_the_receiver() {
+        let a = TestObj::new();
+        let b = TestObj::new();
+        let (ma, mb): (ObjRef, ObjRef) = (a.clone(), b.clone());
+        assert!(ptr_eq_self(&*a, &ma));
+        assert!(!ptr_eq_self(&*a, &mb));
+        assert!(ptr_eq(&ma, &ma) && !ptr_eq(&ma, &mb));
+    }
+}

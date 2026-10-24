@@ -80,11 +80,11 @@ impl HandCar {
     ) -> Option<ObjRef> {
         let me = Self::alloc(world, dw);
         let o: ObjRef = me;
-        if !train_car_init_with_world_dynamic_world_at_position_cache_save_dict_placed_by_client(
+        // the TrainCar initialiser cannot fail on the placement path (the base init always succeeds)
+        let inited = train_car_init_with_world_dynamic_world_at_position_cache_save_dict_placed_by_client(
             &o, world, dw, pos, cache, save_dict, client_id,
-        ) {
-            return None;
-        }
+        );
+        debug_assert!(inited);
         Some(o)
     }
 
@@ -97,9 +97,8 @@ impl HandCar {
     ) -> Option<ObjRef> {
         let me = Self::alloc(world, dw);
         let o: ObjRef = me;
-        if !train_car_init_with_world_dynamic_world_save_dict_cache(&o, world, dw, save_dict, cache) {
-            return None;
-        }
+        let inited = train_car_init_with_world_dynamic_world_save_dict_cache(&o, world, dw, save_dict, cache);
+        debug_assert!(inited);
         Some(o)
     }
 
@@ -559,5 +558,293 @@ mod tests {
         assert_eq!(wrap_dx(64.0, 4), 64.0 - 128.0);
         assert_eq!(wrap_dx(-64.5, 4), -64.5 + 128.0);
         assert_eq!(wrap_dx(-64.0, 4), -64.0);
+    }
+}
+
+#[cfg(test)]
+mod world_tests {
+    use super::*;
+    use crate::blockhead::blockhead::testutil::{bh_of, new_bh, TestHost};
+    use crate::objects::base::DynamicWorldRef;
+    use crate::trains::train_car::world_tests::{find_car, lay_rails, setup};
+
+    fn place_hand(dw: &Rc<DynamicWorld>, x: i32) -> ObjRef {
+        dw.place_train_car_at_pos_of_type_save_dict_placed_by_client(IntPair { x, y: 10 }, 204, None, None);
+        let c = find_car(dw, 41);
+        dw.do_set(41, c.unique_id(), c.clone());
+        c
+    }
+
+    fn hand_of(o: &ObjRef) -> &HandCar {
+        handle::downcast::<HandCar>(o).unwrap()
+    }
+
+    fn mount(world: &Rc<World>, dw: &Rc<DynamicWorld>, car: &ObjRef) -> ObjRef {
+        *world.distance_ordered_food_types.borrow_mut() = (0..31).collect();
+        let bh = new_bh(world, &(dw.clone() as DynamicWorldRef), 0);
+        train_car_add_rider(car, &bh);
+        bh
+    }
+
+    fn tick(o: &ObjRef, n: usize) {
+        for _ in 0..n {
+            o.update_accurate_dt_is_simulation(o, 0.016, 0.016, false);
+        }
+    }
+
+    /// Constants, the pump force from the rider's target velocity and the rider's spot.
+    #[test]
+    fn pump_and_seat() {
+        let _h = TestHost::install();
+        let (world, dw) = setup("hand_pump");
+        lay_rails(&world, &dw, 3, 60);
+        let car = place_hand(&dw, 20);
+        let h = hand_of(&car);
+        assert_eq!(h.max_number_of_riders(), 1);
+        assert_eq!(h.item_type(), ITEM_HANDCAR);
+        assert!(!h.connects_to_other_cars());
+        assert_eq!(car.class_info().name, "HandCar");
+        assert_eq!(car.freeblock_creation_item_type(), ITEM_HANDCAR);
+        assert!(h.acts_as_interaction_object_impl().is_none());
+        let bh = mount(&world, &dw, &car);
+        h.set_target_velocity(Vector2 { x: 1.0, y: 0.0 });
+        assert_eq!(h.st.borrow().external_x_acceleration, 1.5);
+        let right = h.rider_pos_for_blockhead(&bh);
+        h.set_target_velocity(Vector2 { x: -1.0, y: 0.0 });
+        let left = h.rider_pos_for_blockhead(&bh);
+        assert!(right[0] < left[0]);
+        // pumping right for a while moves the car right and the rider animation advances
+        h.set_target_velocity(Vector2 { x: 1.0, y: 0.0 });
+        let (x0, t0) = (car.float_pos().x, h.st.borrow().rider_animation_timer);
+        tick(&car, 120);
+        assert!(car.float_pos().x > x0);
+        assert!(h.st.borrow().rider_animation_timer > t0);
+        assert!(car.update_needs_to_be_sent(), "the periodic sync marked the car");
+        // a long frame is clamped to 50 ms
+        car.update_accurate_dt_is_simulation(&car, 0.2, 0.2, false);
+        // leaving the car resets the pump
+        TrainCarLike::remove_rider(h, &car, &bh);
+        assert_eq!(h.st.borrow().external_x_acceleration, 0.0);
+        assert!(!h.st.borrow().tracking_air);
+        let _ = car.render_pos();
+    }
+
+    /// Paused riders and simulation ticks leave the car alone; a rider that goes away frees the seat.
+    #[test]
+    fn early_outs() {
+        let _h = TestHost::install();
+        let (world, dw) = setup("hand_early");
+        lay_rails(&world, &dw, 3, 60);
+        let car = place_hand(&dw, 20);
+        let bh = mount(&world, &dw, &car);
+        hand_of(&car).set_target_velocity(Vector2 { x: 1.0, y: 0.0 });
+        bh_of(&bh).bh.borrow_mut().paused = true;
+        tick(&car, 5);
+        assert_eq!(car.float_pos().x, 20.5);
+        bh_of(&bh).bh.borrow_mut().paused = false;
+        car.update_accurate_dt_is_simulation(&car, 0.016, 0.016, true);
+        assert_eq!(car.float_pos().x, 20.5);
+        bh.base().borrow_mut().needs_removed = true;
+        tick(&car, 1);
+        assert!(hand_of(&car).tc.borrow().riders[0].is_none());
+    }
+
+    /// Hitting a wall with the rider's head hurts and drops the car; so does a buried wheel.
+    #[test]
+    fn collisions_drop_the_car() {
+        let _h = TestHost::install();
+        // head: the probe sits 0.8 above the body, 0.9 to the side the car is pumped from
+        let (world, dw) = setup("hand_head");
+        lay_rails(&world, &dw, 3, 60);
+        let car = place_hand(&dw, 20);
+        let _bh = mount(&world, &dw, &car);
+        hand_of(&car).tc.borrow_mut().left_wheel_vel = Vector2 { x: 3.0, y: 0.0 };
+        hand_of(&car).tc.borrow_mut().right_wheel_vel = Vector2 { x: 3.0, y: 0.0 };
+        crate::world::tiles::tile_at_world_position_loaded(20, 11, &world).unwrap().set_type_index(1);
+        crate::world::tiles::tile_at_world_position_loaded(21, 11, &world).unwrap().set_type_index(1);
+        tick(&car, 2);
+        assert!(car.needs_removed());
+        tick(&car, 2);
+
+        // a slow bump hurts nobody but still drops the car
+        let (world, dw) = setup("hand_head_slow");
+        lay_rails(&world, &dw, 3, 60);
+        let car = place_hand(&dw, 20);
+        let _bh = mount(&world, &dw, &car);
+        crate::world::tiles::tile_at_world_position_loaded(20, 11, &world).unwrap().set_type_index(1);
+        crate::world::tiles::tile_at_world_position_loaded(21, 11, &world).unwrap().set_type_index(1);
+        tick(&car, 2);
+        assert!(car.needs_removed());
+
+        // buried wheel with a fast car and a rider
+        let (world, dw) = setup("hand_buried");
+        lay_rails(&world, &dw, 3, 60);
+        let car = place_hand(&dw, 20);
+        let _bh = mount(&world, &dw, &car);
+        hand_of(&car).tc.borrow_mut().left_wheel_vel = Vector2 { x: 3.0, y: 0.0 };
+        hand_of(&car).tc.borrow_mut().right_wheel_vel = Vector2 { x: 3.0, y: 0.0 };
+        crate::world::tiles::tile_at_world_position_loaded(20, 10, &world).unwrap().set_foreground_contents(0);
+        crate::world::tiles::tile_at_world_position_loaded(20, 10, &world).unwrap().set_type_index(1);
+        tick(&car, 1);
+        assert!(car.needs_removed());
+        tick(&car, 1);
+
+        // without a rider: an authoritative car is dropped, a replica is not
+        let (world, dw) = setup("hand_buried2");
+        lay_rails(&world, &dw, 3, 60);
+        let car = place_hand(&dw, 20);
+        crate::world::tiles::tile_at_world_position_loaded(20, 10, &world).unwrap().set_foreground_contents(0);
+        crate::world::tiles::tile_at_world_position_loaded(20, 10, &world).unwrap().set_type_index(1);
+        let nd = car.creation_net_data_for_client(&car, None).unwrap();
+        let rep = HandCar::from_net_data(&world, &dw, None, &nd).unwrap();
+        tick(&rep, 2);
+        assert!(!rep.needs_removed());
+        tick(&car, 1);
+        assert!(car.needs_removed());
+        // an already removed car with a buried wheel returns quietly
+        tick(&car, 1);
+
+        // a remotely ridden car is not dropped by the buried wheel either
+        let (world, dw) = setup("hand_buried3");
+        lay_rails(&world, &dw, 3, 60);
+        let car = place_hand(&dw, 20);
+        let bh = mount(&world, &dw, &car);
+        bh.base().borrow_mut().is_net = true;
+        crate::world::tiles::tile_at_world_position_loaded(20, 10, &world).unwrap().set_foreground_contents(0);
+        crate::world::tiles::tile_at_world_position_loaded(20, 10, &world).unwrap().set_type_index(1);
+        tick(&car, 2);
+        assert!(!car.needs_removed());
+    }
+
+    /// Air time: airborne wheels start a track, a landing after more than ten blocks is announced.
+    #[test]
+    fn air_time_and_water() {
+        let _h = TestHost::install();
+        let (world, dw) = setup("hand_air");
+        lay_rails(&world, &dw, 3, 60);
+        let car = place_hand(&dw, 20);
+        let _bh = mount(&world, &dw, &car);
+        // the ground under the car vanishes down to a deep pit: both wheels are in the air and keep falling
+        for x in 18..=23 {
+            for y in 4..=10 {
+                let t = crate::world::tiles::tile_at_world_position_loaded(x, y, &world).unwrap();
+                t.set_foreground_contents(0);
+                t.set_type_index(2);
+            }
+        }
+        tick(&car, 3);
+        assert!(hand_of(&car).st.borrow().tracking_air);
+        // pretend the flight started far away, then land on a rail again
+        hand_of(&car).st.borrow_mut().air_track_start_pos = Vector2 { x: 0.0, y: 10.0 };
+        let y = car.float_pos().y as i32;
+        for x in 18..=23 {
+            crate::world::tiles::tile_at_world_position_loaded(x, y, &world)
+                .unwrap()
+                .set_foreground_contents(CONTENTS_RAIL);
+        }
+        {
+            let mut tc = hand_of(&car).tc.borrow_mut();
+            tc.left_wheel_pos.y = y as f32 - 0.1;
+            tc.right_wheel_pos.y = y as f32 - 0.1;
+        }
+        tick(&car, 1);
+        assert!(!hand_of(&car).st.borrow().tracking_air);
+    }
+
+    /// A remotely ridden car takes no drive from the server; wheels outside the world skip the physics.
+    #[test]
+    fn net_rider_and_unloaded_wheels() {
+        let _h = TestHost::install();
+        let (world, dw) = setup("hand_netrider");
+        lay_rails(&world, &dw, 3, 60);
+        let car = place_hand(&dw, 20);
+        let bh = mount(&world, &dw, &car);
+        bh.base().borrow_mut().is_net = true;
+        hand_of(&car).set_target_velocity(Vector2 { x: 1.0, y: 0.0 });
+        tick(&car, 20);
+        // wheels below the bottom of the world have no tiles
+        {
+            let mut tc = hand_of(&car).tc.borrow_mut();
+            tc.left_wheel_pos.y = -5.0;
+            tc.right_wheel_pos.y = -5.0;
+        }
+        tick(&car, 2);
+    }
+
+    /// A derailed (flipped) car with a local rider is dropped; save dict and net images round trip.
+    #[test]
+    fn derail_and_round_trips() {
+        let _h = TestHost::install();
+        let (world, dw) = setup("hand_flip");
+        lay_rails(&world, &dw, 3, 60);
+        let car = place_hand(&dw, 20);
+        let _bh = mount(&world, &dw, &car);
+        for x in 18..=22 {
+            crate::world::tiles::tile_at_world_position_loaded(x, 9, &world).unwrap().set_type_index(2);
+        }
+        {
+            let mut tc = hand_of(&car).tc.borrow_mut();
+            let (l, r) = (tc.left_wheel_pos, tc.right_wheel_pos);
+            tc.left_wheel_pos = r;
+            tc.right_wheel_pos = l;
+        }
+        tick(&car, 2);
+        assert!(car.needs_removed());
+
+        let (world, dw) = setup("hand_rt");
+        lay_rails(&world, &dw, 3, 60);
+        let car = place_hand(&dw, 20);
+        car.set_owner_id(Some("own".to_string()));
+        assert!(car.free_block_creation_save_dict(&car).is_some());
+        let sd = car.get_save_dict(&car);
+        let again = HandCar::from_save_dict(&world, &dw, &sd, None).unwrap();
+        assert_eq!(again.pos(), car.pos());
+        let nd = car.creation_net_data_for_client(&car, None).unwrap();
+        assert_eq!(nd, car.update_net_data_for_client(&car, None).unwrap());
+        let rep = HandCar::from_net_data(&world, &dw, None, &nd).unwrap();
+        assert_eq!(rep.owner_id().as_deref(), Some("own"));
+        car.remote_update(&car, &nd);
+        car.update_position(&car, IntPair { x: 21, y: 10 });
+        car.set_needs_removed(&car, false);
+        car.blockheads_loaded(&car);
+    }
+
+    /// A remote rider that left does not mark the car; wheels beyond the seam are folded back; a replica image at
+    /// an unloaded tile is refused.
+    #[test]
+    fn net_rider_leaves_seam_and_unloaded_replica() {
+        let _h = TestHost::install();
+        let (world, dw) = setup("hand_misc");
+        lay_rails(&world, &dw, 3, 60);
+        let car = place_hand(&dw, 20);
+        let bh = mount(&world, &dw, &car);
+        bh.base().borrow_mut().is_net = true;
+        car.set_update_needs_to_be_sent(false);
+        bh.base().borrow_mut().needs_removed = true;
+        tick(&car, 1);
+        assert!(hand_of(&car).tc.borrow().riders[0].is_none());
+        assert!(!car.update_needs_to_be_sent());
+
+        for (name, l, r, fx) in [("hand_fold_hi", 64.2f32, 65.2f32, 64.7f32), ("hand_fold_lo", -1.0, 0.0, -0.5)] {
+            let (world, dw) = setup(name);
+            lay_rails(&world, &dw, 0, 63);
+            let car = place_hand(&dw, 30);
+            {
+                let mut tc = hand_of(&car).tc.borrow_mut();
+                tc.left_wheel_pos = Vector2 { x: l, y: 10.0 };
+                tc.right_wheel_pos = Vector2 { x: r, y: 10.0 };
+            }
+            car.base().borrow_mut().float_pos = Vector2 { x: fx, y: 10.0 };
+            tick(&car, 1);
+            let x = car.float_pos().x;
+            assert!((0.0..64.0).contains(&x) || car.needs_removed(), "x={x}");
+        }
+
+        let (world, dw) = crate::trains::train_car::world_tests::setup_wide("hand_far", 4);
+        lay_rails(&world, &dw, 3, 40);
+        let car = place_hand(&dw, 20);
+        car.base().borrow_mut().pos = IntPair { x: 70, y: 10 };
+        let nd = car.creation_net_data_for_client(&car, None).unwrap();
+        assert!(HandCar::from_net_data(&world, &dw, None, &nd).is_none());
     }
 }

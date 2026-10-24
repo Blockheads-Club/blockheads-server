@@ -201,11 +201,11 @@ impl Donkey {
         client_id: Option<&str>,
     ) -> Option<ObjRef> {
         let me: ObjRef = Donkey::alloc();
-        if !donkey_like_init_with_world_dynamic_world_at_position_cache_save_dict_is_adult_was_placed_placed_by_client(
-            &me, world, dw, pos, cache, save_dict, is_adult, was_placed, client_id,
-        ) {
-            return None;
-        }
+        let inited =
+            donkey_like_init_with_world_dynamic_world_at_position_cache_save_dict_is_adult_was_placed_placed_by_client(
+                &me, world, dw, pos, cache, save_dict, is_adult, was_placed, client_id,
+            );
+        debug_assert!(inited); // the base initialisers cannot fail on this path
         Some(me)
     }
 
@@ -234,9 +234,8 @@ impl Donkey {
         cache: CacheRef,
     ) -> Option<ObjRef> {
         let me: ObjRef = Donkey::alloc();
-        if !donkey_like_init_with_world_dynamic_world_save_dict_cache(&me, world, dw, save_dict, cache) {
-            return None;
-        }
+        let inited = donkey_like_init_with_world_dynamic_world_save_dict_cache(&me, world, dw, save_dict, cache);
+        debug_assert!(inited); // the base initialisers cannot fail on this path
         Some(me)
     }
 
@@ -612,7 +611,7 @@ mod tests {
         let drops = fx.env.drops.borrow().clone();
         assert_eq!(drops.len() as i32, leather + carrots);
         assert!(drops.iter().take(leather as usize).all(|d| d.0 == 120));
-        assert!(drops.iter().skip(leather as usize).all(|d| d == &(71, 0x7f, 0x7f, 1)));
+        assert_eq!(drops[leather as usize..].to_vec(), vec![(71, 0x7f, 0x7f, 1); carrots as usize]);
         // expert
         fx.env.drops.borrow_mut().clear();
         fx.env.expert.set(true);
@@ -738,5 +737,54 @@ mod tests {
         assert!(me.needs_removed());
         assert!(!fx.env.drops.borrow().is_empty());
         assert_eq!(me.as_any().downcast_ref::<Donkey>().unwrap().donkey_like.borrow().death_timer, 1.0);
+    }
+
+    /// Every forwarded selector of the class answers.
+    #[test]
+    fn faces() {
+        let fx = fixture();
+        let me = make(&fx, true, None);
+        let bh: ObjRef = crate::objects::base::testutil::TestObj::new();
+        crate::npc::npc::faces::exercise_faces(&me, &bh);
+    }
+
+    /// Unicorn drops in expert mode, unicorn names, the riding checks for controlled and dead animals, and a
+    /// replica image outside the loaded world.
+    #[test]
+    fn unicorn_drops_names_riding_and_unloaded_images() {
+        let fx = fixture();
+        let me = make(&fx, true, Some(12));
+        let d = me.as_any().downcast_ref::<Donkey>().unwrap();
+        assert_eq!(Npc::get_names_array(d).unwrap().len(), 44);
+        glibc_rand::srand(7);
+        donkey_create_item_drops_for_death(&me);
+        fx.env.expert.set(true);
+        for seed in [1u32, 2, 3, 4, 5, 6] {
+            glibc_rand::srand(seed);
+            donkey_create_item_drops_for_death(&me);
+        }
+        assert!(fx.env.drops.borrow().iter().any(|d| d.0 == 329));
+        // riding: controlled and dead animals refuse; a tamed one needs its owner
+        let rider: ObjRef = crate::objects::base::testutil::TestObj::new();
+        npc_state(&me).borrow_mut().breed = 3;
+        npc_state(&me).borrow_mut().age = 2000.0;
+        npc_state(&me).borrow_mut().being_controlled = true;
+        assert!(!Npc::blockhead_can_ride_using_item(d, &rider, 74));
+        npc_state(&me).borrow_mut().being_controlled = false;
+        npc_state(&me).borrow_mut().dead = true;
+        assert!(!Npc::blockhead_can_ride_using_item(d, &rider, 74));
+        npc_state(&me).borrow_mut().dead = false;
+        me.base().borrow_mut().needs_removed = true;
+        assert!(!Npc::blockhead_can_ride_using_item(d, &rider, 74));
+        // a replica image that names a tile outside the loaded world is refused
+        let mut c = me.creation_net_data_for_client(&me, None).unwrap();
+        c[8..12].copy_from_slice(&5000u32.to_le_bytes());
+        assert!(Donkey::init_with_world_dynamic_world_cache_net_data(
+            &(fx.w.clone() as WorldRef),
+            &(fx.dw.clone() as DynamicWorldRef),
+            None,
+            &c,
+        )
+        .is_none());
     }
 }

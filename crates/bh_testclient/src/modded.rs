@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use bhmod_proto::{
     hex, Channel, FileError, FileRequest, Hash, Hello, Message, ModInfo, ModList, Ready, RejectText, ServerHello,
-    CHUNK_SIZE, HELLO_TIMEOUT_MS, PACKET_TYPE, PROTO,
+    ServiceCall, ServiceFailure, ServiceResult, CHUNK_SIZE, HELLO_TIMEOUT_MS, PACKET_TYPE, PROTO,
 };
 use blockheads_server::protocol::codec::t;
 use sha2::{Digest, Sha256};
@@ -310,5 +310,30 @@ impl ModClient {
         self.learn_channels(s);
         let name = self.channels.iter().find(|(_, id)| **id == c.channel_id).map(|(n, _)| n.clone());
         Ok(Some((name.ok_or_else(|| bad(format!("unknown channel id {}", c.channel_id)))?, c.payload)))
+    }
+
+    /// Sends a `SERVICE_CALL` (a client mod calls a service of a server mod).
+    pub fn call_service(&mut self, s: &mut Session, call: ServiceCall) -> io::Result<()> {
+        s.client.send(&Message::ServiceCall(call).encode())
+    }
+
+    /// Waits for the next `SERVICE_RESULT` (the answer to a call of this client).
+    pub fn wait_service_result(&mut self, s: &mut Session, timeout_ms: u64) -> io::Result<Option<ServiceResult>> {
+        let Some(rx) = s.wait_for_matching(timeout_ms, &mut |rx| is_op(rx, 0x14))? else { return Ok(None) };
+        let Message::ServiceResult(r) = decode(&rx)? else { return Err(bad("not a SERVICE_RESULT".into())) };
+        Ok(Some(r))
+    }
+
+    /// Waits for the next `SERVICE_CALL` (a server mod calls a service of this client).
+    pub fn wait_service_call(&mut self, s: &mut Session, timeout_ms: u64) -> io::Result<Option<ServiceCall>> {
+        let Some(rx) = s.wait_for_matching(timeout_ms, &mut |rx| is_op(rx, 0x13))? else { return Ok(None) };
+        let Message::ServiceCall(c) = decode(&rx)? else { return Err(bad("not a SERVICE_CALL".into())) };
+        Ok(Some(c))
+    }
+
+    /// Answers a `SERVICE_CALL` of the server: the result value (canonical CBOR) or a failure `(code, message)`.
+    pub fn answer_service(&mut self, s: &mut Session, id: u32, outcome: Result<Vec<u8>, (u8, &str)>) -> io::Result<()> {
+        let outcome = outcome.map_err(|(code, message)| ServiceFailure { code, message: message.to_string() });
+        s.client.send(&Message::ServiceResult(ServiceResult { id, outcome }).encode())
     }
 }

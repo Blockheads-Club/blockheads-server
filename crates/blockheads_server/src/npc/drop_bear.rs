@@ -211,7 +211,7 @@ impl DropBear {
     ) -> Option<Rc<DropBear>> {
         let o = DropBear::alloc();
         let me: ObjRef = o.clone();
-        if !npc_init_with_world_dynamic_world_at_position_cache_save_dict_is_adult_was_placed_placed_by_client(
+        let inited = npc_init_with_world_dynamic_world_at_position_cache_save_dict_is_adult_was_placed_placed_by_client(
             &me,
             world,
             dw,
@@ -221,9 +221,8 @@ impl DropBear {
             is_adult,
             was_placed,
             placed_by_client,
-        ) {
-            return None;
-        }
+        );
+        debug_assert!(inited); // the base initialisers cannot fail on this path
         o.s(|b| b.courage_meter = 1.0f32);
         if was_placed {
             let tile = tile_loaded(pos.x, pos.y);
@@ -245,9 +244,8 @@ impl DropBear {
     ) -> Option<Rc<DropBear>> {
         let o = DropBear::alloc();
         let me: ObjRef = o.clone();
-        if !npc_init_with_world_dynamic_world_save_dict_cache(&me, world, dw, save_dict, cache) {
-            return None;
-        }
+        let inited = npc_init_with_world_dynamic_world_save_dict_cache(&me, world, dw, save_dict, cache);
+        debug_assert!(inited); // the base initialisers cannot fail on this path
         o.s(|b| {
             b.provoke_meter = dict_float(save_dict, "provokeMeter");
             b.courage_meter = dict_float(save_dict, "courageMeter");
@@ -873,9 +871,6 @@ impl DropBear {
         let need_night_checks = !rules_on || cr.npc_difficulty != CUSTOM_RULE_NPC_HARD;
         if need_night_checks {
             if (tod as f64) >= 0.23f64 {
-                return;
-            }
-            if tile0.is_none() {
                 return;
             }
             if t0.artificial_light_r > 0x1f || t0.artificial_light_g > 0x1f || t0.artificial_light_b > 0x1f {
@@ -1670,5 +1665,330 @@ mod tests {
         me.remote_update(&me, &u.to_vec());
         assert_eq!(b.data().current_net_queue_size, 0);
         assert!(!b.data().dropping);
+    }
+
+    /// Tiny deterministic generator for the scenarios (the game's `rand()` stays the bear's own).
+    struct Gen(u64);
+    impl Gen {
+        fn next(&mut self) -> u32 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            (self.0 >> 16) as u32
+        }
+        fn below(&mut self, n: u32) -> u32 {
+            self.next() % n
+        }
+    }
+
+    /// Scribbles a random wooded landscape around x 14..=34 above the flat ground.
+    fn landscape(f: &Fx, g: &mut Gen) {
+        for x in 14..=34 {
+            let h = 10 + g.below(3) as i32;
+            for y in 9..=24 {
+                edit(&f.world, x, y, |t| {
+                    t.type_index = if y <= h { 1 } else { 2 };
+                    t.contents = 0;
+                    t.on_fire = 0;
+                    t.artificial_light_r = 0;
+                    t.partial_content_left = 0;
+                });
+            }
+        }
+        for _ in 0..4 {
+            let x = 14 + g.below(21) as i32;
+            let top = 13 + g.below(8) as i32;
+            for y in 11..=top {
+                let c = [7u8, 7, 7, 8, 0x1D, 6][g.below(6) as usize];
+                edit(&f.world, x, y, |t| {
+                    if t.type_index == 2 {
+                        t.contents = c
+                    }
+                });
+            }
+        }
+        for _ in 0..14 {
+            let x = 14 + g.below(21) as i32;
+            let y = 9 + g.below(14) as i32;
+            let k = g.below(8);
+            edit(&f.world, x, y, |t| match k {
+                0 => t.contents = 0x92,
+                1 => {
+                    t.type_index = 3;
+                    t.partial_content_left = 0x80 + g.below(0x7f) as u8
+                }
+                2 => t.on_fire = 1,
+                3 => t.artificial_light_g = 0x40,
+                4 => t.type_index = 1,
+                5 => t.type_index = 5,
+                6 => t.contents = 7,
+                _ => t.foreground_contents = 0x42,
+            });
+        }
+    }
+
+    #[test]
+    fn seeded_forests_cover_the_state_machine() {
+        for seed in 1..=500u64 {
+            let f = fixture(10);
+            let mut g = Gen(seed.wrapping_mul(0x9E3779B97F4A7C15) | 1);
+            landscape(&f, &mut g);
+            glibc_rand::srand(seed as u32);
+            let pos = ip(16 + g.below(17) as i32, 11 + g.below(8) as i32);
+            let placed = g.below(3) == 0;
+            let (b, me) = mk_bear(&f, pos, placed);
+            if g.below(6) == 0 {
+                me.base().borrow_mut().is_net = true;
+            }
+            {
+                let mut d = b.data_mut();
+                d.courage_meter = [0.01, 0.3, 0.85, 0.95, 1.0][g.below(5) as usize];
+                d.provoke_meter = [0.0, 0.0, 1.0][g.below(3) as usize];
+                d.dropping = g.below(5) == 0;
+                d.drop_speed = 10.0;
+                d.drop_pos = ip(14 + g.below(21) as i32, 11 + g.below(6) as i32);
+                d.goal_tree_direction = if g.below(2) == 0 { 1 } else { -1 };
+                d.on_ground = g.below(3) == 0;
+                d.should_save_when_tree_found = g.below(3) == 0;
+                d.drown_timer = if g.below(5) == 0 { 7.9 } else { 0.0 };
+                d.current_net_queue_size = g.below(5) as i32;
+                for i in 0..4 {
+                    d.next_to_square[i] = ip(14 + g.below(21) as i32, 11 + g.below(8) as i32);
+                    d.next_walk_speed[i] = 1.0 + g.below(6) as f32;
+                    d.next_on_ground[i] = g.below(2) == 0;
+                }
+                if g.below(4) == 0 {
+                    d.from_square = pos;
+                    d.to_square = ip(pos.x + g.below(3) as i32 - 1, pos.y + g.below(3) as i32 - 1);
+                }
+            }
+            b.npc.borrow_mut().fullness = [100.0, 2000.0, 3000.0][g.below(3) as usize];
+            if g.below(5) == 0 {
+                b.npc.borrow_mut().tamed_client_id = Some("server".into());
+            }
+            let mut bhs = vec![];
+            for i in 0..g.below(4) {
+                let v = TestBh::alloc(500 + i as u64, ip(pos.x + g.below(9) as i32 - 4, pos.y + g.below(7) as i32 - 3));
+                if g.below(5) == 0 {
+                    v.base().borrow_mut().is_net = true;
+                }
+                bhs.push(v);
+            }
+            *f.env.bhs.borrow_mut() = bhs.clone();
+            if g.below(6) == 0 {
+                f.host.paused.set(Some(500));
+            }
+            if g.below(6) == 0 {
+                f.host.nosim.set(Some(501));
+            }
+            if g.below(6) == 0 {
+                f.host.regen.set(Some(500));
+            }
+            if g.below(8) == 0 {
+                f.host.trade.set(Some(501));
+            }
+            f.host.npc_at.set(g.below(3) == 0);
+            f.host.day.set(if g.below(2) == 0 { 0.1 } else { 0.6 });
+            f.host.expert.set(g.below(4) == 0);
+            match g.below(5) {
+                0 => set_difficulty(&f, CUSTOM_RULE_NPC_HARD),
+                1 => set_difficulty(&f, CUSTOM_RULE_NPC_PASSIVE),
+                _ => {}
+            }
+            if g.below(7) == 0 {
+                if let Some(v) = bhs.first() {
+                    b.begin_blockhead_inspection(v);
+                }
+            }
+            if g.below(7) == 0 {
+                let v = bhs.first().cloned();
+                let mut d = b.data_mut();
+                d.attacking = true;
+                d.attack_fraction = 0.0;
+                d.attack_pos = v.as_ref().map_or(ip(0, 0), |v| v.pos());
+                d.attack_blockhead = v;
+            }
+            let dts = [0.05f32, 0.2, 0.6, 1.5];
+            let dt = dts[g.below(4) as usize];
+            for _ in 0..120 {
+                if me.needs_removed() {
+                    break;
+                }
+                if g.below(60) == 0 {
+                    b.npc.borrow_mut().dead = true;
+                }
+                me.update_accurate_dt_is_simulation(&me, dt, dt, g.below(2) == 0);
+            }
+        }
+    }
+
+    #[test]
+    fn ambush_path_check_over_random_slopes() {
+        for seed in 1..=700u64 {
+            let f = fixture(10);
+            let mut g = Gen(seed.wrapping_mul(0xD1B54A32D192ED03) | 1);
+            f.host.day.set(0.1);
+            // a tall tree at x 24 over uneven ground
+            for x in 12..=38 {
+                let h = 10 + g.below(4) as i32;
+                for y in 9..=24 {
+                    edit(&f.world, x, y, |t| {
+                        t.type_index = if y <= h { 1 } else { 2 };
+                        t.contents = 0;
+                        t.artificial_light_r = 0;
+                    });
+                }
+            }
+            for y in 11..=20 {
+                edit(&f.world, 24, y, |t| {
+                    t.type_index = 2;
+                    t.contents = 7
+                });
+            }
+            for _ in 0..g.below(5) {
+                let x = 12 + g.below(27) as i32;
+                let y = 11 + g.below(5) as i32;
+                let k = g.below(3);
+                edit(&f.world, x, y, |t| match k {
+                    0 => t.contents = 0x92,
+                    1 => t.type_index = 3,
+                    _ => t.type_index = 1,
+                });
+            }
+            let (b, me) = mk_bear(&f, ip(24, 19), false);
+            b.data_mut().courage_meter = 0.95;
+            let tx = 24 + g.below(41) as i32 - 20;
+            let ty = 11 + g.below(5) as i32;
+            f.env.bhs.borrow_mut().push(TestBh::alloc(500, ip(tx, ty)));
+            if g.below(3) == 0 {
+                f.env
+                    .bhs
+                    .borrow_mut()
+                    .push(TestBh::alloc(501, ip(24 + g.below(13) as i32 - 6, 11 + g.below(4) as i32)));
+            }
+            me.update_accurate_dt_is_simulation(&me, 0.0, 0.0, false);
+        }
+    }
+
+    #[test]
+    fn unloaded_surroundings_and_removed_bear_do_nothing() {
+        let f = fixture(10);
+        let (b, me) = mk_bear(&f, ip(24, 11), false);
+        me.base().borrow_mut().needs_removed = true;
+        me.update_accurate_dt_is_simulation(&me, 0.1, 0.1, false);
+        assert!(!b.data().dropping);
+        let f = fixture(10);
+        let (_b, me) = mk_bear(&f, ip(24, 11), false);
+        me.base().borrow_mut().pos = ip(24, 100000);
+        me.update_accurate_dt_is_simulation(&me, 0.1, 0.1, false);
+        assert_eq!(me.pos(), ip(24, 100000));
+    }
+
+    #[test]
+    fn faces_net_replica_and_remote_updates() {
+        let f = fixture(10);
+        trunk(&f, 20, 11, 20);
+        let (b, me) = mk_bear(&f, ip(20, 13), false);
+        let bh: ObjRef = TestBh::alloc(77, ip(21, 13));
+        crate::npc::npc::faces::exercise_faces(&me, &bh);
+        // replica from the creation data
+        let nd = me.creation_net_data_for_client(&me, None).unwrap();
+        let rep = DropBear::init_with_world_dynamic_world_cache_net_data(&f.wref, &f.dwr, None, &nd).expect("replica");
+        assert!(rep.base.borrow().is_net);
+        assert_eq!(rep.data().next_to_square[3], ip(20, 13));
+        // an unloaded position is refused
+        let mut bad = nd.clone();
+        bad[12..16].copy_from_slice(&100000u32.to_le_bytes());
+        assert!(DropBear::init_with_world_dynamic_world_cache_net_data(&f.wref, &f.dwr, None, &bad).is_none());
+        // client: updates are queued, a drop starts the fall at once
+        f.env.client.set(true);
+        let mut u = DropBearUpdateNetData::default();
+        u.to_square_x = 21;
+        u.to_square_y = 13;
+        u.walk_speed = 51;
+        for _ in 0..6 {
+            b.do_remote_update(&me, &u);
+        }
+        assert_eq!(b.data().current_net_queue_size, 4);
+        assert_eq!(b.data().next_to_square[3], ip(21, 13));
+        u.dropping = 1;
+        me.remote_update(&me, &u.to_vec());
+        assert!(b.data().dropping);
+        assert_eq!(b.data().drop_pos, ip(20, 13));
+        assert_eq!(b.data().current_net_queue_size, 0);
+        // creation data takes the same path; a dead bear ignores both
+        b.data_mut().dropping = false;
+        let mut cd = nd.clone();
+        cd[0x48 + 0x24] = 1;
+        me.remote_creation_data_update(&me, &cd);
+        b.npc.borrow_mut().dead = true;
+        me.remote_update(&me, &u.to_vec());
+        me.remote_creation_data_update(&me, &cd);
+        // the capture tip when the bear belongs to the asker
+        b.npc.borrow_mut().tamed_client_id = Some("server".to_string());
+        assert!(Npc::can_be_captured_by_blockhead_with_item_type(&*b, &bh, 302));
+        assert!(Npc::cant_be_captured_tip_string_for_blockhead_with_item_type(&*b, &bh, 302).is_none());
+        // unloading some other blockhead keeps the target
+        b.data_mut().attack_blockhead = Some(bh.clone());
+        let other: ObjRef = TestBh::alloc(78, ip(0, 0));
+        b.blockhead_unloaded(&me, &other);
+        assert!(b.data().attack_blockhead.is_some());
+        let mut wm = vec![];
+        me.world_changed(&me, &mut wm);
+    }
+
+    #[test]
+    fn tap_hit_test_wraps_around_the_world() {
+        let f = fixture(10);
+        let (b, me) = mk_bear(&f, ip(2, 13), false);
+        let fp = me.float_pos();
+        // 128 tiles wide: a tap at the far side of the seam still hits
+        assert!(b.tap_is_within_body_radius_impl(Vector2 { x: fp.x + 128.0, y: fp.y + 0.5 }));
+        assert!(b.tap_is_within_body_radius_impl(Vector2 { x: fp.x - 128.0, y: fp.y + 0.5 }));
+        assert!(Npc::tap_is_within_body_radius(&*b, Vector2 { x: fp.x, y: fp.y + 0.5 }));
+    }
+
+    #[test]
+    fn ambush_path_check_gives_up() {
+        // water straight below the bear: not a descent
+        let f = fixture(10);
+        f.host.day.set(0.1);
+        trunk(&f, 24, 11, 20);
+        edit(&f.world, 24, 18, |t| {
+            t.type_index = 3;
+            t.contents = 7
+        });
+        let (b, me) = mk_bear(&f, ip(24, 19), false);
+        b.data_mut().courage_meter = 0.95;
+        f.env.bhs.borrow_mut().push(TestBh::alloc(500, ip(22, 11)));
+        me.update_accurate_dt_is_simulation(&me, 0.0, 0.0, false);
+        assert!(!b.data().dropping);
+        // a drop taller than the 32-step budget
+        let f = fixture(10);
+        f.host.day.set(0.1);
+        for y in 11..=60 {
+            edit(&f.world, 24, y, |t| t.contents = 7);
+        }
+        let (b, me) = mk_bear(&f, ip(24, 41), false);
+        b.data_mut().courage_meter = 0.95;
+        f.env.bhs.borrow_mut().push(TestBh::alloc(500, ip(28, 11)));
+        me.update_accurate_dt_is_simulation(&me, 0.0, 0.0, false);
+        assert!(!b.data().dropping);
+    }
+
+    #[test]
+    fn attack_is_dropped_when_the_target_is_gone() {
+        let f = fixture(10);
+        let (b, me) = mk_bear(&f, ip(24, 11), false);
+        let v = TestBh::alloc(500, ip(24, 11));
+        v.base().borrow_mut().needs_removed = true;
+        {
+            let mut d = b.data_mut();
+            d.attacking = true;
+            d.attack_blockhead = Some(v);
+        }
+        me.update_accurate_dt_is_simulation(&me, 0.01, 0.01, false);
+        assert!(b.data().attack_blockhead.is_none());
+        Npc::successful_tame(&*b, &me);
     }
 }

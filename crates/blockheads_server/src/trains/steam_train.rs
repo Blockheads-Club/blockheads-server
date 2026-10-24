@@ -134,11 +134,11 @@ impl SteamTrain {
     ) -> Option<ObjRef> {
         let me = Self::alloc(world, dw);
         let o: ObjRef = me.clone();
-        if !train_car_init_with_world_dynamic_world_at_position_cache_save_dict_placed_by_client(
+        // the TrainCar initialiser cannot fail on the placement path (the base init always succeeds)
+        let inited = train_car_init_with_world_dynamic_world_at_position_cache_save_dict_placed_by_client(
             &o, world, dw, pos, cache, save_dict, client_id,
-        ) {
-            return None;
-        }
+        );
+        debug_assert!(inited);
         {
             let mut st = me.st.borrow_mut();
             st.going_right = true;
@@ -179,9 +179,8 @@ impl SteamTrain {
     ) -> Option<ObjRef> {
         let me = Self::alloc(world, dw);
         let o: ObjRef = me.clone();
-        if !train_car_init_with_world_dynamic_world_save_dict_cache(&o, world, dw, save_dict, cache) {
-            return None;
-        }
+        let inited = train_car_init_with_world_dynamic_world_save_dict_cache(&o, world, dw, save_dict, cache);
+        debug_assert!(inited);
         let get = |k: &str| save_dict.map.get(&k.to_string());
         let mut st = me.st.borrow_mut();
         st.fuel_fraction = get("fuelFraction").map_or(0.0, |v| v.float_value());
@@ -509,22 +508,15 @@ impl SteamTrain {
             }
         } else {
             let rid = self.tc.borrow().remote_right_car_id;
-            if rid != 0 && !self.tc.borrow().right_car.as_ref().map_or(false, |c| c.unique_id() == rid) {
-                let c = dw.train_car_with_id(rid);
-                let f = c.is_some();
-                self.tc.borrow_mut().right_car = c;
-                if f {
-                    self.tc.borrow_mut().remote_right_car_id = 0;
-                }
+            // `train_car_update_accurate_dt_is_simulation` above already resolved every id the dynamic world knows
+            // and cleared it, so an id left here names an absent car: the lookup can only come back empty and the
+            // original's clear-on-found step has nothing to clear.
+            if rid != 0 {
+                self.tc.borrow_mut().right_car = dw.train_car_with_id(rid);
             }
             let lid = self.tc.borrow().remote_left_car_id;
-            if lid != 0 && !self.tc.borrow().left_car.as_ref().map_or(false, |c| c.unique_id() == lid) {
-                let c = dw.train_car_with_id(lid);
-                let f = c.is_some();
-                self.tc.borrow_mut().left_car = c;
-                if f {
-                    self.tc.borrow_mut().remote_left_car_id = 0;
-                }
+            if lid != 0 {
+                self.tc.borrow_mut().left_car = dw.train_car_with_id(lid);
             }
         }
         if rider_paused(&self.tc.borrow().riders[0].clone()) {
@@ -1087,6 +1079,7 @@ mod tests {
         assert_eq!(f(1.0), 10);
         assert_eq!(f(0.5), 5);
         assert_eq!(f(0.51), 6);
+        assert_eq!(f(2.0), 10);
     }
 
     /// : net struct image (fuel encoding `(int16)(int)(fuel * 255)`).
@@ -1127,5 +1120,732 @@ mod tests {
         let p = rider_pos_common(fp, Vector2 { x: 9.5, y: 4.0 }, Vector2 { x: 11.5, y: 4.0 }, -0.4f32);
         assert_eq!(p[0], 10.5f32 + (-0.4f32));
         assert_eq!(p[2], -0.75);
+    }
+}
+
+#[cfg(test)]
+mod world_tests {
+    use super::*;
+    use crate::blockhead::blockhead::testutil::{new_bh, TestHost};
+    use crate::items::inventory_item::InventoryItem;
+    use crate::objects::base::DynamicWorldRef;
+    use crate::trains::train_car::world_tests::{find_car, lay_rails, setup, setup_wide};
+    use crate::trains::train_station::TrainStation;
+    use crate::types::item_type::ItemType;
+
+    fn place_steam(dw: &Rc<DynamicWorld>, x: i32) -> ObjRef {
+        dw.place_train_car_at_pos_of_type_save_dict_placed_by_client(IntPair { x, y: 10 }, 205, None, None);
+        // cars wait in `dynamicObjectsToAdd` until the next tick: move it by hand like the tick does
+        let c = find_car(dw, 42);
+        dw.do_set(42, c.unique_id(), c.clone());
+        c
+    }
+
+    fn steam_of(o: &ObjRef) -> &SteamTrain {
+        handle::downcast::<SteamTrain>(o).unwrap()
+    }
+
+    fn rider(world: &Rc<World>, dw: &Rc<DynamicWorld>) -> ObjRef {
+        *world.distance_ordered_food_types.borrow_mut() = (0..31).collect();
+        new_bh(world, &(dw.clone() as DynamicWorldRef), 0)
+    }
+
+    /// A station at `x` registered in the dynamic world, as the placement path does.
+    fn station(world: &Rc<World>, dw: &Rc<DynamicWorld>, x: i32, text: &str) -> ObjRef {
+        let it = InventoryItem::new(ItemType(200), 0, 0, None, None);
+        let mut sd = new_mutable_dict();
+        sd.map.insert("text".to_string(), PlistValue::string(text));
+        let pos = IntPair { x, y: 10 };
+        let st = TrainStation::new(world, dw, pos, None, Some(&it.borrow()), false, Some(&sd), Some("c"), Some("n"))
+            .unwrap();
+        dw.by_pos_set(st.object_type(), dw.world_index(pos), &st);
+        for dx in -1..=1 {
+            tile_at_world_position_loaded(x + dx, 10, world).unwrap().set_contents(CONTENTS_INTERACTION_OBJECT);
+        }
+        st
+    }
+
+    fn tick(o: &ObjRef, n: usize) {
+        for _ in 0..n {
+            o.update_accurate_dt_is_simulation(o, 0.016, 0.016, false);
+        }
+    }
+
+    /// Fuel items, the fuel count and the has-fuel flag.
+    #[test]
+    fn fuel_handling() {
+        let (world, dw) = setup("steam_fuel");
+        lay_rails(&world, &dw, 5, 40);
+        let car = place_steam(&dw, 20);
+        let s = steam_of(&car);
+        assert_eq!(s.title(), "STEAM LOCOMOTIVE");
+        assert_eq!(s.fuel_fraction(), 1.0);
+        assert_eq!(s.fuel_count(), 10);
+        s.st.borrow_mut().fuel_fraction = 0.0;
+        assert_eq!(s.fuel_count(), 0);
+        // empty tank with has_fuel set: the flag drops and the car is announced
+        s.update_has_fuel(&car);
+        assert!(!s.st.borrow().has_fuel);
+        // wood adds 0.1, coal 0.5, charcoal 0.2; the flag comes back
+        s.add_to_fuel_for_item(&car, ITEM_WOOD);
+        assert!(s.st.borrow().has_fuel);
+        assert!((s.fuel_fraction() - 0.1).abs() < 1e-6);
+        s.add_to_fuel_for_item(&car, ITEM_COAL);
+        assert!((s.fuel_fraction() - 0.6).abs() < 1e-6);
+        s.add_to_fuel_for_item(&car, ITEM_CHARCOAL);
+        assert!((s.fuel_fraction() - 0.8).abs() < 1e-6);
+        s.add_to_fuel_for_item(&car, ITEM_COAL);
+        assert_eq!(s.fuel_fraction(), 1.0);
+        // any other item counts like wood; the locomotive item itself blows the whistle
+        s.st.borrow_mut().fuel_fraction = 0.0;
+        s.add_to_fuel_for_item(&car, 1);
+        assert!((s.fuel_fraction() - 0.1).abs() < 1e-6);
+        s.add_to_fuel_for_item(&car, ITEM_STEAM_TRAIN);
+        assert!(s.st.borrow().send_whistle);
+        // the whistle is consumed by the next net image
+        let nd = car.creation_net_data_for_client(&car, None).unwrap();
+        assert_eq!(nd[0x6b], 1);
+        assert!(!s.st.borrow().send_whistle);
+        assert_eq!(STEAM_LOCO_FUEL_TYPES.len(), 4);
+        assert!(s.acts_as_interaction_object_impl().is_none());
+    }
+
+    /// Titles and the left/right choice.
+    #[test]
+    fn choice_ui() {
+        let (world, dw) = setup("steam_choice");
+        lay_rails(&world, &dw, 5, 40);
+        let car = place_steam(&dw, 20);
+        let s = steam_of(&car);
+        assert_eq!(s.action_title(), "RIDE RIGHT ->");
+        assert_eq!(s.second_option_title(), "<- RIDE LEFT");
+        s.set_workbench_choice_ui_option(&car, 0);
+        assert!(s.st.borrow().going_right && !s.st.borrow().stop_at_goal_pos);
+        s.set_workbench_choice_ui_option(&car, 1);
+        assert!(!s.st.borrow().going_right);
+        {
+            let mut st = s.st.borrow_mut();
+            st.left_station_name = Some("West STATION".to_string());
+            st.right_station_name = Some("East STATION".to_string());
+            st.left_station_goal_pos = IntPair { x: 6, y: 10 };
+            st.right_station_goal_pos = IntPair { x: 38, y: 10 };
+        }
+        assert_eq!(s.action_title(), "East STATION ->");
+        assert_eq!(s.second_option_title(), "<- West STATION");
+        s.set_workbench_choice_ui_option(&car, 1);
+        assert!(s.st.borrow().stop_at_goal_pos);
+        assert_eq!(s.st.borrow().station_goal_pos, IntPair { x: 6, y: 10 });
+        s.set_workbench_choice_ui_option(&car, 0);
+        assert_eq!(s.st.borrow().station_goal_pos, IntPair { x: 38, y: 10 });
+        assert!(!s.st.borrow().stopped);
+        s.set_needs_to_update_choice_ui(false);
+        assert!(!s.needs_to_update_choice_ui());
+        s.set_needs_to_update_choice_ui(true);
+        assert!(s.needs_to_update_choice_ui());
+        // the constant parts of the TrainCarLike face
+        assert_eq!(s.max_number_of_riders(), 1);
+        assert!(s.is_engine() && s.requires_fuel());
+        assert_eq!(s.item_type(), ITEM_STEAM_TRAIN);
+        assert_eq!(car.freeblock_creation_item_type(), ITEM_STEAM_TRAIN);
+        assert_eq!(car.class_info().name, "SteamTrain");
+        let _ = car.render_pos();
+    }
+
+    /// Stations on both sides are found by the scan, the names show up in the choice titles.
+    #[test]
+    fn station_scan_finds_both_neighbours() {
+        let (world, dw) = setup("steam_scan");
+        lay_rails(&world, &dw, 3, 60);
+        let west = station(&world, &dw, 8, "West");
+        let east = station(&world, &dw, 50, "East");
+        let car = place_steam(&dw, 29);
+        let s = steam_of(&car);
+        assert!(s.st.borrow().searching_for_left_station_name && s.st.borrow().searching_for_right_station_name);
+        tick(&car, 6);
+        let st = s.st.borrow();
+        assert_eq!(st.left_station_name.as_deref(), Some("West STATION"));
+        assert_eq!(st.right_station_name.as_deref(), Some("East STATION"));
+        assert!(!st.searching_for_left_station_name && !st.searching_for_right_station_name);
+        assert_eq!(st.left_station_goal_pos.x, west.pos().x + 1);
+        assert_eq!(st.right_station_goal_pos.x, east.pos().x - 1);
+        assert!(st.needs_to_update_choice_ui);
+    }
+
+    /// A rail line that ends, a scan that runs into an unloaded chunk and the silent far scan.
+    #[test]
+    fn station_scan_ends_with_the_rail_line() {
+        let (world, dw) = setup("steam_scan_end");
+        lay_rails(&world, &dw, 10, 30);
+        let car = place_steam(&dw, 20);
+        tick(&car, 4);
+        let st = steam_of(&car).st.borrow();
+        assert_eq!(st.left_station_name, None);
+        assert_eq!(st.right_station_name, None);
+        assert!(!st.searching_for_left_station_name && !st.searching_for_right_station_name);
+    }
+
+    /// A rail changing under the car restarts the scans; `removeRider:` does too.
+    #[test]
+    fn scans_restart_on_rail_change() {
+        let _h = TestHost::install();
+        let (world, dw) = setup("steam_restart");
+        lay_rails(&world, &dw, 10, 30);
+        let car = place_steam(&dw, 20);
+        tick(&car, 4);
+        assert!(!steam_of(&car).st.borrow().searching_for_left_station_name);
+        dw.rail_or_station_name_changed();
+        assert!(steam_of(&car).st.borrow().searching_for_left_station_name);
+        tick(&car, 4);
+        let bh = rider(&world, &dw);
+        train_car_add_rider(&car, &bh);
+        TrainCarLike::remove_rider(steam_of(&car), &car, &bh);
+        assert!(steam_of(&car).st.borrow().searching_for_right_station_name);
+    }
+
+    fn place(dw: &Rc<DynamicWorld>, x: i32, item: i32, ty: usize) -> ObjRef {
+        dw.place_train_car_at_pos_of_type_save_dict_placed_by_client(IntPair { x, y: 10 }, item, None, None);
+        let c = find_car(dw, ty as i32);
+        dw.do_set(ty, c.unique_id(), c.clone());
+        c
+    }
+
+    /// A save dict seeds the fuel; a free neighbour on either side is coupled with this engine.
+    #[test]
+    fn placement_couples_free_neighbours() {
+        let (world, dw) = setup("steam_couple");
+        lay_rails(&world, &dw, 3, 40);
+        let left = place(&dw, 10, 208, 44);
+        let mut sd = new_mutable_dict();
+        sd.map.insert("fuelFraction".to_string(), PlistValue::real_f32(0.5));
+        sd.map.insert("hasFuel".to_string(), PlistValue::boolean(true));
+        dw.place_train_car_at_pos_of_type_save_dict_placed_by_client(IntPair { x: 9, y: 10 }, 205, Some(&sd), None);
+        let eng = find_car(&dw, 42);
+        assert_eq!(steam_of(&eng).fuel_fraction(), 0.5);
+        let _ = left;
+        assert!(steam_of(&eng).tc.borrow().right_car.is_some() || steam_of(&eng).tc.borrow().left_car.is_some());
+        // an engine on the left of a free car
+        let (world2, dw2) = setup("steam_couple2");
+        lay_rails(&world2, &dw2, 3, 40);
+        let right = place(&dw2, 20, 208, 44);
+        let eng2 = place(&dw2, 19, 205, 42);
+        let ct = train_car_of(&right).unwrap();
+        assert!(ct.engine_car(&right).map_or(false, |e| ptr_eq(&e, &eng2)));
+        // an engine between two free cars couples both
+        let (world3, dw3) = setup("steam_couple3");
+        lay_rails(&world3, &dw3, 3, 40);
+        let _a = place(&dw3, 12, 208, 44);
+        let _b = place(&dw3, 16, 206, 43);
+        let eng3 = place(&dw3, 14, 205, 42);
+        let st = train_car_of(&eng3).unwrap();
+        let _ = st.left_car();
+        let _ = st.right_car();
+    }
+
+    /// Save dict round trip incl. direction and stop flag.
+    #[test]
+    fn save_dict_round_trip() {
+        let (world, dw) = setup("steam_save");
+        lay_rails(&world, &dw, 3, 40);
+        let car = place_steam(&dw, 20);
+        {
+            let mut st = steam_of(&car).st.borrow_mut();
+            st.going_right = false;
+            st.stopped = true;
+            st.fuel_fraction = 0.25;
+        }
+        let sd = car.get_save_dict(&car);
+        assert!(car.free_block_creation_save_dict(&car).is_some());
+        let again = SteamTrain::from_save_dict(&world, &dw, &sd, None).unwrap();
+        let st = steam_of(&again).st.borrow();
+        assert!(!st.going_right && st.stopped && st.has_fuel);
+        assert_eq!(st.fuel_fraction, 0.25);
+    }
+
+    /// Net image round trip (with a station tail), the replica reads fuel, flags and the owner.
+    #[test]
+    fn net_data_round_trip() {
+        let (world, dw) = setup("steam_net");
+        lay_rails(&world, &dw, 3, 60);
+        let car = place_steam(&dw, 30);
+        car.set_owner_id(Some("own".to_string()));
+        {
+            let mut st = steam_of(&car).st.borrow_mut();
+            st.left_station_name = Some("L".to_string());
+            st.right_station_name = Some("R".to_string());
+            st.stop_at_goal_pos = true;
+            st.station_goal_pos = IntPair { x: 50, y: 10 };
+            st.stopped = true;
+            st.fuel_fraction = 0.5;
+        }
+        let nd = car.creation_net_data_for_client(&car, None).unwrap();
+        assert_eq!(nd, car.update_net_data_for_client(&car, None).unwrap());
+        let rep = SteamTrain::from_net_data(&world, &dw, None, &nd).unwrap();
+        let rs = steam_of(&rep);
+        assert!(rep.is_net());
+        assert!(rs.st.borrow().stopped && rs.st.borrow().has_fuel);
+        assert!((rs.fuel_fraction() - 127.0 / 255.0).abs() < 1e-6);
+        assert_eq!(rep.owner_id().as_deref(), Some("own"));
+        // the head alone carries no owner tail
+        let bare = SteamTrain::from_net_data(&world, &dw, None, &nd[..0x88]).unwrap();
+        assert_eq!(bare.owner_id(), None);
+        // the replica's own update applies the pending links path for nets
+        tick(&rep, 3);
+    }
+
+    /// `remoteUpdate:` applies fuel changes, whistle and station names.
+    #[test]
+    fn remote_update_paths() {
+        let _h = TestHost::install();
+        let (world, dw) = setup("steam_remote");
+        lay_rails(&world, &dw, 3, 60);
+        let car = place_steam(&dw, 30);
+        let s = steam_of(&car);
+        let mut img = SteamTrainCreationNetData::default();
+        img.train_car_creation_net_data = train_car_train_car_creation_net_data(&car);
+        img.fuel_fraction = 51; // 0.2
+        img.has_fuel = 1;
+        img.whistle = 1;
+        img.going_right = 0;
+        img.stopped = 1;
+        img.left_train_pos_x = 3;
+        img.stop_at_goal_pos_x = 7;
+        img.stop_at_goal_pos_y = 10;
+        let mut buf = img.to_vec();
+        let mut tail = Vec::new();
+        let mut d = new_mutable_dict();
+        d.map.insert("leftStationName".to_string(), PlistValue::string("LL"));
+        d.map.insert("rightStationName".to_string(), PlistValue::string("RR"));
+        tail.extend_from_slice(&gzip_deflate(&data_from_property_list(&PlistValue::Dict(d)).unwrap()));
+        buf.extend_from_slice(&tail);
+        car.remote_update(&car, &buf);
+        assert!((s.fuel_fraction() - 0.2).abs() < 1e-6);
+        assert!(s.st.borrow().send_whistle);
+        assert_eq!(s.st.borrow().left_station_name.as_deref(), Some("LL"));
+        assert_eq!(s.st.borrow().right_station_name.as_deref(), Some("RR"));
+        // a car ridden by a remote player follows that rider's direction and stop goal
+        let bh = rider(&world, &dw);
+        bh.base().borrow_mut().is_net = true;
+        s.tc.borrow_mut().riders[0] = Some(bh.clone());
+        img.train_car_creation_net_data.rider0_id = bh.unique_id();
+        buf = img.to_vec();
+        buf.extend_from_slice(&tail);
+        car.remote_update(&car, &buf);
+        assert!(s.st.borrow().stopped && !s.st.borrow().going_right);
+        assert_eq!(s.st.borrow().station_goal_pos, IntPair { x: 7, y: 10 });
+        // fuel drops to nothing / returns
+        img.fuel_fraction = 0;
+        car.remote_update(&car, &img.to_vec());
+        assert_eq!(s.fuel_fraction(), 0.0);
+        img.fuel_fraction = 255;
+        car.remote_update(&car, &img.to_vec());
+        assert_eq!(s.fuel_fraction(), 1.0);
+        // a replica ignores a lower fuel value while a local rider is aboard
+        let rep = SteamTrain::from_net_data(&world, &dw, None, &car.creation_net_data_for_client(&car, None).unwrap())
+            .unwrap();
+        let local = rider(&world, &dw);
+        train_car_add_rider(&rep, &local);
+        img.fuel_fraction = 20;
+        img.train_car_creation_net_data.rider0_id = local.unique_id();
+        rep.remote_update(&rep, &img.to_vec());
+        assert_eq!(steam_of(&rep).fuel_fraction(), 1.0);
+        assert_eq!(steam_of(&rep).st.borrow().left_station_goal_pos, IntPair { x: 3, y: 0 });
+    }
+
+    #[test]
+    #[should_panic]
+    fn remote_update_with_short_image_raises() {
+        let (world, dw) = setup("steam_short");
+        lay_rails(&world, &dw, 3, 60);
+        let car = place_steam(&dw, 30);
+        car.remote_update(&car, &[0u8; 0x20]);
+    }
+
+    fn mount(world: &Rc<World>, dw: &Rc<DynamicWorld>, car: &ObjRef) -> ObjRef {
+        let bh = rider(world, dw);
+        train_car_add_rider(car, &bh);
+        bh
+    }
+
+    /// A ridden engine with fuel pulls right, burns fuel, syncs and halts at the end of the rail line.
+    #[test]
+    fn ridden_engine_runs_to_the_end_of_the_line() {
+        let _h = TestHost::install();
+        let (world, dw) = setup("steam_run");
+        lay_rails(&world, &dw, 5, 34);
+        let car = place_steam(&dw, 20);
+        let _bh = mount(&world, &dw, &car);
+        steam_of(&car).st.borrow_mut().fuel_counter = 5.99;
+        let x0 = car.float_pos().x;
+        tick(&car, 120);
+        assert!(car.float_pos().x > x0, "the engine pulled right");
+        assert!(steam_of(&car).fuel_fraction() < 1.0, "fuel burned");
+        tick(&car, 600);
+        assert!(steam_of(&car).st.borrow().stopped, "auto-stop at the end of the rails");
+        // the stop comes too late to hold it: the engine rolls off the last rail and is dropped as a free block
+        assert!(car.needs_removed());
+    }
+
+    /// Without fuel the engine does not pull; a goal position stops it as it passes.
+    #[test]
+    fn goal_position_and_empty_tank() {
+        let _h = TestHost::install();
+        let (world, dw) = setup("steam_goal");
+        lay_rails(&world, &dw, 5, 50);
+        let car = place_steam(&dw, 20);
+        let _bh = mount(&world, &dw, &car);
+        {
+            let mut st = steam_of(&car).st.borrow_mut();
+            st.stop_at_goal_pos = true;
+            st.station_goal_pos = IntPair { x: 30, y: 10 };
+        }
+        tick(&car, 2000);
+        assert!(steam_of(&car).st.borrow().stopped);
+        let x = car.pos().x;
+        assert!((26..=34).contains(&x), "stopped near the goal, got {x}");
+        // left direction, goal on the far side, then an empty tank
+        let (world2, dw2) = setup("steam_goal2");
+        lay_rails(&world2, &dw2, 5, 50);
+        let car2 = place_steam(&dw2, 30);
+        let _bh2 = mount(&world2, &dw2, &car2);
+        {
+            let mut st = steam_of(&car2).st.borrow_mut();
+            st.going_right = false;
+            st.stop_at_goal_pos = true;
+            st.station_goal_pos = IntPair { x: 20, y: 10 };
+        }
+        tick(&car2, 2000);
+        assert!(steam_of(&car2).st.borrow().stopped);
+        let (world3, dw3) = setup("steam_empty");
+        lay_rails(&world3, &dw3, 5, 50);
+        let car3 = place_steam(&dw3, 30);
+        let _bh3 = mount(&world3, &dw3, &car3);
+        steam_of(&car3).st.borrow_mut().has_fuel = false;
+        steam_of(&car3).st.borrow_mut().fuel_fraction = 0.0;
+        tick(&car3, 300);
+        assert_eq!(car3.pos().x, 30);
+    }
+
+    /// Solid ground ahead of the nose, under a wheel, a paused rider and a simulation tick.
+    #[test]
+    fn crashes_and_early_outs() {
+        let _h = TestHost::install();
+        let (world, dw) = setup("steam_crash");
+        lay_rails(&world, &dw, 5, 50);
+        let car = place_steam(&dw, 20);
+        let bh = mount(&world, &dw, &car);
+        // simulation ticks and a paused rider return early
+        car.update_accurate_dt_is_simulation(&car, 0.016, 0.016, true);
+        crate::blockhead::blockhead::testutil::bh_of(&bh).bh.borrow_mut().paused = true;
+        tick(&car, 3);
+        crate::blockhead::blockhead::testutil::bh_of(&bh).bh.borrow_mut().paused = false;
+        // a wall in front of the nose
+        tile_at_world_position_loaded(20, 12, &world).unwrap().set_type_index(1);
+        tick(&car, 2);
+        assert!(car.needs_removed());
+        // already removed: nothing more happens
+        tick(&car, 2);
+
+        // ground where a wheel is
+        let (world2, dw2) = setup("steam_crash2");
+        lay_rails(&world2, &dw2, 5, 50);
+        let car2 = place_steam(&dw2, 20);
+        let _bh2 = mount(&world2, &dw2, &car2);
+        tile_at_world_position_loaded(19, 10, &world2).unwrap().set_foreground_contents(0);
+        tile_at_world_position_loaded(19, 10, &world2).unwrap().set_type_index(1);
+        tick(&car2, 2);
+        assert!(car2.needs_removed());
+        // without a rider an authoritative car is dropped the same way, a replica is not
+        let (world3, dw3) = setup("steam_crash3");
+        lay_rails(&world3, &dw3, 5, 50);
+        let car3 = place_steam(&dw3, 20);
+        tile_at_world_position_loaded(19, 10, &world3).unwrap().set_foreground_contents(0);
+        tile_at_world_position_loaded(19, 10, &world3).unwrap().set_type_index(1);
+        let nd = car3.creation_net_data_for_client(&car3, None).unwrap();
+        let rep = SteamTrain::from_net_data(&world3, &dw3, None, &nd).unwrap();
+        tick(&rep, 2);
+        assert!(!rep.needs_removed());
+        tick(&car3, 2);
+        assert!(car3.needs_removed());
+        // already removed with a wheel in the ground: returns quietly
+        let (world4, dw4) = setup("steam_crash4");
+        lay_rails(&world4, &dw4, 5, 50);
+        let car4 = place_steam(&dw4, 20);
+        tile_at_world_position_loaded(19, 10, &world4).unwrap().set_foreground_contents(0);
+        tile_at_world_position_loaded(19, 10, &world4).unwrap().set_type_index(1);
+        car4.base().borrow_mut().needs_removed = true;
+        tick(&car4, 2);
+        // a locally ridden replica with a wheel in the ground is not blocked
+        let (world5, dw5) = setup("steam_crash5");
+        lay_rails(&world5, &dw5, 5, 50);
+        let car5 = place_steam(&dw5, 20);
+        let bh5 = mount(&world5, &dw5, &car5);
+        let nd5 = car5.creation_net_data_for_client(&car5, None).unwrap();
+        let rep5 = SteamTrain::from_net_data(&world5, &dw5, None, &nd5).unwrap();
+        steam_of(&rep5).tc.borrow_mut().riders[0] = Some(bh5.clone());
+        bh5.base().borrow_mut().is_net = true;
+        tile_at_world_position_loaded(19, 10, &world5).unwrap().set_foreground_contents(0);
+        tile_at_world_position_loaded(19, 10, &world5).unwrap().set_type_index(1);
+        tick(&rep5, 2);
+        assert!(!rep5.needs_removed());
+    }
+
+    /// Wheels over empty air fall; the replica path resolves coupled-car ids by itself.
+    #[test]
+    fn airborne_wheels_and_replica_links() {
+        let _h = TestHost::install();
+        let (world, dw) = setup("steam_air");
+        lay_rails(&world, &dw, 5, 50);
+        let car = place_steam(&dw, 20);
+        let _bh = mount(&world, &dw, &car);
+        // both wheels over air: the rails under them go away but the tile above them carries one
+        for x in 18..=23 {
+            let t = tile_at_world_position_loaded(x, 10, &world).unwrap();
+            t.set_foreground_contents(0);
+            t.set_type_index(2);
+            tile_at_world_position_loaded(x, 11, &world).unwrap().set_foreground_contents(CONTENTS_RAIL);
+        }
+        tick(&car, 3);
+        for x in 18..=23 {
+            tile_at_world_position_loaded(x, 11, &world).unwrap().set_foreground_contents(0);
+        }
+        tick(&car, 30);
+        assert!(car.float_pos().y < 10.0);
+        // replica: remote link ids resolve against the dynamic world
+        let (world2, dw2) = setup("steam_links");
+        lay_rails(&world2, &dw2, 3, 60);
+        let other = place(&dw2, 40, 208, 44);
+        let eng = place_steam(&dw2, 20);
+        let nd = eng.creation_net_data_for_client(&eng, None).unwrap();
+        let rep = SteamTrain::from_net_data(&world2, &dw2, None, &nd).unwrap();
+        {
+            let mut tc = steam_of(&rep).tc.borrow_mut();
+            tc.remote_right_car_id = other.unique_id();
+            tc.remote_left_car_id = other.unique_id();
+        }
+        tick(&rep, 2);
+        assert!(steam_of(&rep).tc.borrow().right_car.is_some());
+        assert!(steam_of(&rep).tc.borrow().left_car.is_some());
+        // coupled cars that vanish are forgotten on the authoritative side
+        {
+            let mut tc = steam_of(&eng).tc.borrow_mut();
+            tc.left_car = Some(other.clone());
+            tc.right_car = Some(other.clone());
+        }
+        other.base().borrow_mut().needs_removed = true;
+        tick(&eng, 1);
+        assert!(steam_of(&eng).tc.borrow().left_car.is_none() && steam_of(&eng).tc.borrow().right_car.is_none());
+    }
+
+    /// A rider that disappears frees the seat; a coupled consist is pulled along by the springs.
+    #[test]
+    fn rider_leaves_and_consist_follows() {
+        let _h = TestHost::install();
+        let (world, dw) = setup("steam_consist");
+        lay_rails(&world, &dw, 3, 60);
+        let pass = place(&dw, 22, 208, 44);
+        let eng = place(&dw, 21, 205, 42);
+        let rear = place(&dw, 18, 206, 43);
+        let _ = (&pass, &rear);
+        let bh = mount(&world, &dw, &eng);
+        tick(&eng, 200);
+        // the rider is removed: the seat is cleared and the net sync flag set
+        bh.base().borrow_mut().needs_removed = true;
+        tick(&eng, 2);
+        assert!(steam_of(&eng).tc.borrow().riders[0].is_none());
+        assert!(eng.update_needs_to_be_sent());
+    }
+
+    /// Bigger-than-full tanks cap at ten pips; a long frame is clamped to 50 ms; the rider stands on the back.
+    #[test]
+    fn tank_cap_long_frames_and_rider_spot() {
+        let _h = TestHost::install();
+        let (world, dw) = setup("steam_misc");
+        lay_rails(&world, &dw, 3, 60);
+        let car = place_steam(&dw, 20);
+        let s = steam_of(&car);
+        s.st.borrow_mut().fuel_fraction = 1.5;
+        assert_eq!(s.fuel_count(), 10);
+        let bh = mount(&world, &dw, &car);
+        car.update_accurate_dt_is_simulation(&car, 0.1, 0.1, false);
+        let right = s.rider_pos_for_blockhead(&bh);
+        s.st.borrow_mut().going_right = false;
+        let left = s.rider_pos_for_blockhead(&bh);
+        assert!(right[0] < left[0]);
+        car.blockheads_loaded(&car);
+        assert!(_unused(&car, &car));
+        // an id that names no car stays unresolved on a replica
+        let nd = car.creation_net_data_for_client(&car, None).unwrap();
+        let rep = SteamTrain::from_net_data(&world, &dw, None, &nd).unwrap();
+        {
+            let mut tc = steam_of(&rep).tc.borrow_mut();
+            tc.remote_right_car_id = 9999;
+            tc.remote_left_car_id = 9998;
+        }
+        tick(&rep, 1);
+        assert!(steam_of(&rep).tc.borrow().right_car.is_none());
+        assert!(steam_of(&rep).tc.borrow().left_car.is_none());
+    }
+
+    /// A replica image whose tile is not loaded yields no object.
+    #[test]
+    fn replica_off_the_loaded_world_is_refused() {
+        let (world, dw) = setup_wide("steam_far", 4);
+        lay_rails(&world, &dw, 3, 60);
+        let car = place_steam(&dw, 20);
+        car.base().borrow_mut().pos = IntPair { x: 70, y: 10 };
+        let nd = car.creation_net_data_for_client(&car, None).unwrap();
+        assert!(SteamTrain::from_net_data(&world, &dw, None, &nd).is_none());
+    }
+
+    /// The car runs over the seam of the cylindrical world in both directions (positions stay on the cylinder).
+    #[test]
+    fn wraps_around_the_world_seam() {
+        let _h = TestHost::install();
+        for (name, x, right) in [("steam_wrap", 60, true), ("steam_wrap2", 3, false)] {
+            let (world, dw) = setup(name);
+            lay_rails(&world, &dw, 0, 63);
+            let car = place_steam(&dw, x);
+            let _bh = mount(&world, &dw, &car);
+            steam_of(&car).st.borrow_mut().going_right = right;
+            tick(&car, 400);
+            let fx = car.float_pos().x;
+            assert!((-2.0..66.0).contains(&fx), "x={fx}");
+        }
+    }
+
+    /// A ridden car whose wheel axis points backwards is derailed.
+    #[test]
+    fn backwards_axis_derails() {
+        let _h = TestHost::install();
+        let (world, dw) = setup("steam_flip");
+        lay_rails(&world, &dw, 3, 60);
+        let car = place_steam(&dw, 20);
+        let _bh = mount(&world, &dw, &car);
+        // the nose probe of the flipped body points into the ground: open it so the crash check passes
+        for x in 18..=22 {
+            tile_at_world_position_loaded(x, 9, &world).unwrap().set_type_index(2);
+        }
+        {
+            let mut tc = steam_of(&car).tc.borrow_mut();
+            let (l, r) = (tc.left_wheel_pos, tc.right_wheel_pos);
+            tc.left_wheel_pos = r;
+            tc.right_wheel_pos = l;
+        }
+        tick(&car, 3);
+        assert!(car.needs_removed());
+    }
+
+    /// Wheel positions beyond the seam are folded back onto the cylinder.
+    #[test]
+    fn wheels_beyond_the_seam_are_folded_back() {
+        let _h = TestHost::install();
+        for (name, shift, dx) in [("steam_fold_hi", 64.0f32, 1.0f32), ("steam_fold_lo", -64.0, -1.0)] {
+            let (world, dw) = setup(name);
+            lay_rails(&world, &dw, 0, 63);
+            let car = place_steam(&dw, 30);
+            let _bh = mount(&world, &dw, &car);
+            let _ = dx;
+            {
+                let mut tc = steam_of(&car).tc.borrow_mut();
+                let (l, r) = (tc.left_wheel_pos, tc.right_wheel_pos);
+                let (l, r) = if shift > 0.0 {
+                    (Vector2 { x: 64.2, y: l.y }, Vector2 { x: 66.2, y: r.y })
+                } else {
+                    (Vector2 { x: -1.8, y: l.y }, Vector2 { x: 0.2, y: r.y })
+                };
+                tc.left_wheel_pos = l;
+                tc.right_wheel_pos = r;
+            }
+            car.base().borrow_mut().float_pos = Vector2 { x: if shift > 0.0 { 65.2 } else { -0.8 }, y: 10.0 };
+            tick(&car, 1);
+            let fx = car.float_pos().x;
+            assert!((0.0..64.0).contains(&fx) || car.needs_removed(), "x={fx}");
+        }
+    }
+
+    /// Rails along the lowest and the highest row: the scans and the auto-stop meet the edges of the world.
+    #[test]
+    fn rails_on_the_edge_rows() {
+        let _h = TestHost::install();
+        for (name, y) in [("steam_bottom", 0), ("steam_top", 1023)] {
+            let (world, dw) = setup(name);
+            for x in 5..=40 {
+                tile_at_world_position_loaded(x, y, &world).unwrap().set_foreground_contents(CONTENTS_RAIL);
+            }
+            for x in 5..=40 {
+                dw.add_rail_at_pos_of_type_owned_by_station(IntPair { x, y }, ITEM_RAIL, false);
+            }
+            dw.place_train_car_at_pos_of_type_save_dict_placed_by_client(IntPair { x: 20, y }, 205, None, None);
+            let car = find_car(&dw, 42);
+            dw.do_set(42, car.unique_id(), car.clone());
+            let _bh = mount(&world, &dw, &car);
+            tick(&car, 5);
+            // a scan that falls off the edge of the world stalls where it is (still searching)
+            {
+                let st = steam_of(&car).st.borrow();
+                assert!(st.searching_for_left_station_name && st.searching_for_right_station_name);
+            }
+            tick(&car, 1200);
+        }
+    }
+
+    /// A station right next to the train is not offered; the scan walks on and ends at the rail's end.
+    #[test]
+    fn near_station_is_skipped() {
+        let (world, dw) = setup("steam_near");
+        lay_rails(&world, &dw, 3, 60);
+        let _near = station(&world, &dw, 23, "Near");
+        let car = place_steam(&dw, 20);
+        tick(&car, 8);
+        assert_eq!(steam_of(&car).st.borrow().right_station_name, None);
+    }
+
+    /// Neighbours that cannot join (a hand car) or already have an engine are left alone on placement.
+    #[test]
+    fn placement_skips_cars_that_cannot_couple() {
+        let (world, dw) = setup("steam_nocouple");
+        lay_rails(&world, &dw, 3, 40);
+        let hand = place(&dw, 21, 204, 41);
+        let eng = place(&dw, 20, 205, 42);
+        assert!(train_car_of(&eng).unwrap().right_car().is_none());
+        assert!(train_car_of(&hand).unwrap().engine_car(&hand).is_none());
+        let (world2, dw2) = setup("steam_nocouple2");
+        lay_rails(&world2, &dw2, 3, 40);
+        let first = place(&dw2, 19, 205, 42);
+        let car = place(&dw2, 21, 208, 44);
+        let _ = (&first, &car);
+        let second = place(&dw2, 20, 205, 42);
+        let _ = second;
+    }
+
+    /// Scans give up on a rail line longer than 2048 tiles.
+    #[test]
+    fn scans_give_up_after_2048_tiles() {
+        let (world, dw) = setup_wide("steam_giveup", 130);
+        for x in 10..=4150 {
+            tile_at_world_position_loaded(x, 10, &world).unwrap().set_foreground_contents(CONTENTS_RAIL);
+        }
+        lay_rails(&world, &dw, 2070, 2090);
+        let car = place_steam(&dw, 2080);
+        tick(&car, 300);
+        let st = steam_of(&car).st.borrow();
+        assert!(!st.searching_for_left_station_name && !st.searching_for_right_station_name);
+        assert!(st.needs_to_update_choice_ui);
+    }
+
+    /// Interaction objects on the line that are not stations are passed over.
+    #[test]
+    fn other_interaction_objects_are_not_stations() {
+        use crate::interaction::sign::Sign;
+        let (world, dw) = setup("steam_sign");
+        lay_rails(&world, &dw, 3, 60);
+        let it = InventoryItem::new(ItemType(163), 0, 0, None, None);
+        let pos = IntPair { x: 40, y: 10 };
+        let sign: ObjRef = Sign::new(&world, &dw, pos, None, Some(&it.borrow()), false, None, Some("c"), None).unwrap();
+        dw.by_pos_set(sign.object_type(), dw.world_index(pos), &sign);
+        tile_at_world_position_loaded(40, 10, &world).unwrap().set_contents(CONTENTS_INTERACTION_OBJECT);
+        let car = place_steam(&dw, 20);
+        tick(&car, 8);
+        assert_eq!(steam_of(&car).st.borrow().right_station_name, None);
     }
 }

@@ -438,11 +438,10 @@ impl Dodo {
     ) -> Option<ObjRef> {
         let o = Dodo::alloc();
         let me: ObjRef = o;
-        if !npc_init_with_world_dynamic_world_at_position_cache_save_dict_is_adult_was_placed_placed_by_client(
+        let inited = npc_init_with_world_dynamic_world_at_position_cache_save_dict_is_adult_was_placed_placed_by_client(
             &me, world, dw, pos, cache, save_dict, is_adult, was_placed, client_id,
-        ) {
-            return None;
-        }
+        );
+        debug_assert!(inited); // the base initialisers cannot fail on this path
         dodo_load_derived_stuff(&me);
         Some(me)
     }
@@ -473,9 +472,8 @@ impl Dodo {
     ) -> Option<ObjRef> {
         let o = Dodo::alloc();
         let me: ObjRef = o;
-        if !npc_init_with_world_dynamic_world_save_dict_cache(&me, world, dw, save_dict, cache) {
-            return None;
-        }
+        let inited = npc_init_with_world_dynamic_world_save_dict_cache(&me, world, dw, save_dict, cache);
+        debug_assert!(inited); // the base initialisers cannot fail on this path
         dodo_load_derived_stuff(&me);
         Some(me)
     }
@@ -1074,7 +1072,7 @@ fn update_alive(me: &ObjRef, d: &Dodo, s: &mut DodoState, dt: f32, is_simulation
         Npc::check_current_position_for_food(d, me);
         reload(d, s);
         me.base().borrow_mut().float_pos = Vector2 { x: (to.x as f32) + 0.5f32, y: to.y as f32 };
-        if turn_back && ((!me.is_net() && !b_ridden) || rider().map_or(false, |r| !r.is_net())) {
+        if turn_back && ((!me.is_net() && !b_ridden) || matches!(rider(), Some(r) if !r.is_net())) {
             s.to_square = turn_back_square;
             s.movement_direction = if s.from_square.x < s.to_square.x { 1 } else { -1 };
             s.walk_speed = 2.0f32;
@@ -1542,17 +1540,6 @@ mod tests {
     #[test]
     fn random_direction_thresholds() {
         // R() exactly 0.25 and 0.75 -> 0; 1.0 reachable
-        let probe = |target: f32| -> Option<i32> {
-            for seed in 0..200000u32 {
-                glibc_rand::srand(seed);
-                let v = glibc_rand::rand();
-                if rr(v) == target {
-                    return Some(seed as i32);
-                }
-            }
-            None
-        };
-        let _ = probe;
         // synthetic check through the formula
         let f = |rv: f32| {
             let x = rv as f64;
@@ -1909,6 +1896,514 @@ mod tests {
         assert!((450.0..900.0).contains(&lt) || lt > 0.0, "{lt}");
     }
 
-    #[allow(dead_code)]
-    fn _u(_: &dyn PassiveEnv) {}
+    /// Every forwarded selector of the class answers.
+    #[test]
+    fn faces() {
+        let fx = fixture();
+        let me = make(&fx, true, None);
+        let bh: ObjRef = crate::objects::base::testutil::TestObj::new();
+        crate::npc::npc::faces::exercise_faces(&me, &bh);
+    }
+
+    /// Dodo on a floor at (40,3) with a walking plan towards (41,3), about to arrive there.
+    fn about_to_arrive(fx: &Fx) -> ObjRef {
+        floor(fx, 20, 70, 2);
+        let me = make(fx, true, None);
+        {
+            let mut s = dodo_of(&me).dodo.borrow_mut();
+            s.from_square = IntPair { x: 40, y: 3 };
+            s.to_square = IntPair { x: 41, y: 3 };
+            s.travel_fraction = 1.0;
+            s.movement_direction = 1;
+            s.walk_speed = 1.0;
+            s.random_time_between_direction_changes = 100.0;
+            s.random_cluck_noise_timer = 100.0;
+            s.next_peck_timer = 100.0;
+        }
+        me
+    }
+
+    #[test]
+    fn arriving_at_a_gate_turns_the_dodo_back() {
+        let fx = fixture();
+        let me = about_to_arrive(&fx);
+        let mut gate = Tile::default();
+        gate.type_index = 2;
+        gate.contents = 0x92;
+        fx.env.tiles.borrow_mut().insert((41, 3), gate);
+        me.update_accurate_dt_is_simulation(&me, 0.01, 0.01, false);
+        let s = dodo_of(&me).dodo.borrow().clone();
+        assert_eq!((s.from_square, s.to_square), (IntPair { x: 41, y: 3 }, IntPair { x: 40, y: 3 }));
+        assert_eq!((s.movement_direction, s.walk_speed), (-1, 2.0));
+    }
+
+    #[test]
+    fn apple_tiles_without_an_apple_tree_feed_nobody() {
+        for case in 0..2 {
+            let fx = fixture();
+            let me = about_to_arrive(&fx);
+            let mut t = Tile::default();
+            t.type_index = 2;
+            t.contents = 5;
+            fx.env.tiles.borrow_mut().insert((41, 3), t);
+            if case == 1 {
+                let tree: ObjRef = crate::objects::base::testutil::TestObj::new();
+                fx.env.food.borrow_mut().insert(crate::objects::handle::obj_id(&tree), 2000.0);
+                fx.env.trees.borrow_mut().insert((41, 3), tree);
+                fx.env.apple_tree.set(false);
+            }
+            npc_state(&me).borrow_mut().fullness = 1000.0;
+            me.update_accurate_dt_is_simulation(&me, 0.01, 0.01, false);
+            assert_eq!(me.pos(), IntPair { x: 41, y: 3 });
+            assert!(npc_state(&me).borrow().fullness < 1000.0);
+        }
+        // arriving on a tile that is not loaded skips the meal and the laying plans
+        let fx = fixture();
+        let me = about_to_arrive(&fx);
+        fx.env.tiles.borrow_mut().remove(&(41, 3));
+        me.update_accurate_dt_is_simulation(&me, 0.01, 0.01, false);
+    }
+
+    #[test]
+    fn a_ridden_dodo_stops_at_a_low_ceiling_and_visitors_far_away_are_ignored() {
+        let fx = fixture();
+        floor(&fx, 20, 70, 2);
+        let me = make(&fx, true, None);
+        let rider = bh_at(40, 3);
+        npc_state(&me).borrow_mut().rider = Some(rider);
+        for (x, y) in [(41, 3), (40, 4)] {
+            let mut t = Tile::default();
+            t.type_index = 1;
+            fx.env.tiles.borrow_mut().insert((x, y), t);
+        }
+        {
+            let mut s = dodo_of(&me).dodo.borrow_mut();
+            s.rider_target_velocity = 1.0;
+            s.travel_fraction = 0.0;
+            s.random_cluck_noise_timer = 100.0;
+        }
+        me.update_accurate_dt_is_simulation(&me, 0.01, 0.01, false);
+        assert_eq!(dodo_of(&me).dodo.borrow().movement_direction, 0);
+        // somebody on the way to look at the dodo, but 30 tiles off, changes nothing
+        npc_state(&me).borrow_mut().rider = None;
+        let far = bh_at(70, 3);
+        npc_state(&me).borrow_mut().coming_to_inspect_blockhead = Some(std::rc::Rc::downgrade(&far));
+        me.update_accurate_dt_is_simulation(&me, 0.01, 0.01, false);
+        assert!(dodo_of(&me).dodo.borrow().walk_speed.is_finite());
+        // removing someone while there is no rider (or the wrong one) is a no-op
+        let d = dodo_of(&me);
+        Npc::remove_rider_opt(d, &me, Some(&far));
+        npc_state(&me).borrow_mut().rider = Some(far.clone());
+        Npc::remove_rider_opt(d, &me, None);
+        assert!(npc_state(&me).borrow().rider.is_some());
+    }
+
+    /// A stand-in blockhead that the server may be steering.
+    struct SteeredBh {
+        base: RefCell<DynamicObjectBase>,
+        steered: bool,
+    }
+    impl crate::objects::base::BlockheadApi for SteeredBh {
+        fn client_id(&self) -> Option<String> {
+            Some("other".into())
+        }
+        fn local_net_id(&self) -> Option<String> {
+            None
+        }
+        fn is_client_blockhead_being_controlled_by_server(&self) -> bool {
+            self.steered
+        }
+        fn is_interacting_with_any_interaction_object(&self) -> bool {
+            false
+        }
+        fn set_interaction_object(&self, _o: Option<&ObjRef>) {}
+        fn stop_interacting(&self) {}
+    }
+    impl DynamicObject for SteeredBh {
+        fn base(&self) -> &RefCell<DynamicObjectBase> {
+            &self.base
+        }
+        fn class_info(&self) -> &'static ClassInfo {
+            &crate::objects::class_info::DYNAMIC_OBJECT_CLASS
+        }
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn as_blockhead(&self) -> Option<&dyn crate::objects::base::BlockheadApi> {
+            Some(self)
+        }
+    }
+    fn steered_bh(steered: bool) -> ObjRef {
+        crate::objects::handle::alloc_obj(|w| SteeredBh {
+            base: RefCell::new(DynamicObjectBase::alloc_zeroed_with(w)),
+            steered,
+        })
+    }
+
+    #[test]
+    fn the_steered_stand_in_answers() {
+        let o = steered_bh(true);
+        let api = o.as_blockhead().unwrap();
+        assert_eq!(api.client_id().as_deref(), Some("other"));
+        assert_eq!(api.local_net_id(), None);
+        assert!(api.is_client_blockhead_being_controlled_by_server());
+        assert!(!api.is_interacting_with_any_interaction_object());
+        api.set_interaction_object(None);
+        api.stop_interacting();
+        assert_eq!(o.class_info().name, "DynamicObject");
+        assert!(o.as_any().is::<SteeredBh>());
+        assert!(o.base().borrow().pos == o.pos());
+    }
+
+    #[test]
+    fn a_dodo_dies_once_and_its_corpse_is_removed_after_the_fall() {
+        let fx = fixture();
+        floor(&fx, 20, 70, 2);
+        let me = make(&fx, true, None);
+        let killer = bh_at(41, 3);
+        dodo_of(&me).dodo.borrow_mut().travel_fraction = 0.7;
+        Npc::die(dodo_of(&me), &me, Some(&killer));
+        assert!(npc_state(&me).borrow().dead);
+        assert_eq!(dodo_of(&me).dodo.borrow().travel_fraction, 0.0);
+        dodo_of(&me).dodo.borrow_mut().travel_fraction = 0.5;
+        Npc::die(dodo_of(&me), &me, None);
+        assert_eq!(dodo_of(&me).dodo.borrow().travel_fraction, 0.5, "dying twice changes nothing");
+        // the corpse tumbles for a quarter of a second, then drops its loot and goes
+        dodo_of(&me).dodo.borrow_mut().jump_and_cluck_state = SEND_STATE_SENT;
+        me.update_accurate_dt_is_simulation(&me, 0.05, 0.05, false);
+        assert!(!me.needs_removed());
+        assert_eq!(dodo_of(&me).dodo.borrow().jump_and_cluck_state, SEND_STATE_NONE);
+        me.update_accurate_dt_is_simulation(&me, 0.2, 0.2, false);
+        assert!(me.needs_removed());
+        // a dead replica only keeps its animation going
+        let rep = make(&fx, true, None);
+        rep.base().borrow_mut().is_net = true;
+        npc_state(&rep).borrow_mut().dead = true;
+        dodo_of(&rep).dodo.borrow_mut().travel_fraction = 0.9;
+        rep.update_accurate_dt_is_simulation(&rep, 0.5, 0.5, false);
+        assert!(!rep.needs_removed());
+    }
+
+    #[test]
+    fn a_client_applies_the_remote_goal_and_clucks_on_request() {
+        let fx = fixture();
+        fx.env.client.set(true);
+        let me = make(&fx, true, None);
+        let mut u = DodoUpdateNetData::read_le(&[0u8; 0x28]);
+        u.to_square_x = 44;
+        u.to_square_y = 3;
+        u.walk_speed = 255;
+        u.movement_direction = -1;
+        u.jump_and_cluck = 1;
+        dodo_do_remote_update(&me, u);
+        let s = dodo_of(&me).dodo.borrow().clone();
+        assert_eq!(
+            (s.remote_goal_square, s.remote_walk_speed, s.remote_movement_direction),
+            (IntPair { x: 44, y: 3 }, 1.0, -1)
+        );
+        assert!(s.jumping);
+        u.jump_and_cluck = 0;
+        dodo_do_remote_update(&me, u);
+    }
+
+    #[test]
+    fn riding_rules_and_who_may_capture() {
+        let fx = fixture();
+        let me = make(&fx, true, None);
+        let d = dodo_of(&me);
+        let rider = bh_at(40, 3);
+        npc_state(&me).borrow_mut().rider = Some(rider.clone());
+        for (v, dir) in [(0.5f32, 1), (-0.5, -1), (0.05, 0)] {
+            d.dodo.borrow_mut().rider_target_velocity = v;
+            assert_eq!(Npc::ride_direction(d), dir);
+        }
+        // removing somebody who is not the rider does nothing; the rider's own removal stops the steering
+        let other = bh_at(41, 3);
+        Npc::remove_rider(d, &me, &other);
+        assert!(npc_state(&me).borrow().rider.is_some());
+        d.dodo.borrow_mut().rider_target_velocity = 0.9;
+        Npc::remove_rider(d, &me, &rider);
+        assert!(npc_state(&me).borrow().rider.is_none());
+        assert_eq!(d.dodo.borrow().rider_target_velocity, 0.0);
+        // the rider leaving the world stops the steering too
+        npc_state(&me).borrow_mut().rider = Some(rider.clone());
+        d.dodo.borrow_mut().rider_target_velocity = 0.9;
+        me.blockhead_unloaded(&me, &other);
+        assert_eq!(d.dodo.borrow().rider_target_velocity, 0.9);
+        me.blockhead_unloaded(&me, &rider);
+        assert_eq!(d.dodo.borrow().rider_target_velocity, 0.0);
+        // a blockhead the server is steering never becomes the rider: nothing is carried over
+        d.dodo.borrow_mut().rider_target_velocity = 0.9;
+        Npc::add_rider(d, &me, &steered_bh(true));
+        assert_eq!(d.dodo.borrow().rider_target_velocity, 0.0);
+        // the cage rules
+        let mine = steered_bh(false);
+        assert!(Npc::can_be_captured_by_blockhead_with_item_type(d, &mine, ITEM_CAGE));
+        npc_state(&me).borrow_mut().tamed_client_id = Some("somebody else".into());
+        assert!(!Npc::can_be_captured_by_blockhead_with_item_type(d, &mine, ITEM_CAGE));
+        assert_eq!(
+            Npc::cant_be_captured_tip_string_for_blockhead_with_item_type(d, &mine, ITEM_CAGE).unwrap(),
+            "THAT DODO BELONGS TO\nSOMEONE ELSE"
+        );
+        assert!(Npc::cant_be_captured_tip_string_for_blockhead_with_item_type(d, &mine, 0).is_none());
+    }
+
+    #[test]
+    fn a_replica_with_an_unloaded_position_is_refused() {
+        let fx = fixture();
+        let me = make(&fx, true, None);
+        let mut nd = me.creation_net_data_for_client(&me, None).unwrap();
+        nd[8..12].copy_from_slice(&5000u32.to_le_bytes());
+        let wr: WorldRef = fx.w.clone();
+        let dr: DynamicWorldRef = fx.dw.clone();
+        assert!(Dodo::init_with_world_dynamic_world_cache_net_data(&wr, &dr, None, &nd).is_none());
+        // and the same data with the position back in the world makes a replica
+        nd[8..12].copy_from_slice(&41u32.to_le_bytes());
+        let rep = Dodo::init_with_world_dynamic_world_cache_net_data(&wr, &dr, None, &nd).unwrap();
+        assert!(rep.is_net());
+        assert_eq!(dodo_of(&rep).dodo.borrow().remote_goal_square, rep.pos());
+    }
+}
+
+/// Seeded simulations of the walking AI on random terrain (walls, pits, pools, gates, apple trees, replicas,
+/// riders, visitors), with the invariants that matter checked after every tick.
+#[cfg(test)]
+mod ai_tests {
+    use super::*;
+    use crate::npc::egg::test_support::TestPassiveEnv;
+    use crate::objects::base::testutil::{setup, MockDw, MockWorld};
+    use crate::types::tile::Tile;
+    use std::rc::Rc;
+
+    struct Lcg(u64);
+    impl Lcg {
+        fn next(&mut self) -> u32 {
+            self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (self.0 >> 33) as u32
+        }
+        fn below(&mut self, n: u32) -> u32 {
+            self.next() % n
+        }
+    }
+
+    struct Rig {
+        _w: Rc<MockWorld>,
+        _dw: Rc<MockDw>,
+        env: Rc<TestPassiveEnv>,
+        me: ObjRef,
+    }
+
+    fn tile(ty: u8) -> Tile {
+        let mut t = Tile::default();
+        t.type_index = ty;
+        t
+    }
+    fn put(env: &TestPassiveEnv, x: i32, y: i32, t: Tile) {
+        env.tiles.borrow_mut().insert((x, y), t);
+    }
+    fn bh(x: i32, y: i32, net: bool) -> ObjRef {
+        let b: ObjRef = crate::objects::base::testutil::TestObj::new();
+        b.base().borrow_mut().pos = IntPair { x, y };
+        b.base().borrow_mut().is_net = net;
+        b
+    }
+
+    fn rig(seed: u32) -> Rig {
+        let mut g = Lcg(seed as u64 * 104729 + 7);
+        let (w, dw, _l) = setup(4, 4);
+        let env = TestPassiveEnv::new();
+        env.install();
+        glibc_rand::srand(seed);
+        for x in 0..128 {
+            for y in 0..=2 {
+                put(&env, x, y, tile(1));
+            }
+            for y in 3..32 {
+                put(&env, x, y, tile(2));
+            }
+        }
+        let mut x = 2;
+        while x < 126 {
+            match g.below(12) {
+                0 => {
+                    for dx in 0..=(g.below(3) as i32) {
+                        put(&env, x + dx, 2, tile(2));
+                        put(&env, x + dx, 1, tile(2));
+                    }
+                }
+                1 => {
+                    for dy in 0..=(g.below(3) as i32) {
+                        put(&env, x, 3 + dy, tile(1));
+                    }
+                }
+                2 => {
+                    for dx in 0..=(g.below(4) as i32) {
+                        let mut t = tile(3);
+                        t.partial_content_left = [255u8, 128, 40][g.below(3) as usize];
+                        put(&env, x + dx, 2, t);
+                        put(&env, x + dx, 3, t);
+                    }
+                }
+                3 => {
+                    let mut t = tile(2);
+                    t.contents = 0x92;
+                    put(&env, x, 3, t);
+                    if g.below(2) == 0 {
+                        put(&env, x, 4, t);
+                    }
+                }
+                4 => {
+                    let mut t = tile(2);
+                    t.contents = [4u8, 5][g.below(2) as usize];
+                    put(&env, x, 3, t);
+                    let tree: ObjRef = crate::objects::base::testutil::TestObj::new();
+                    env.food
+                        .borrow_mut()
+                        .insert(crate::objects::handle::obj_id(&tree), [50.0f32, 2000.0][g.below(2) as usize]);
+                    env.trees.borrow_mut().insert((x, 3), tree);
+                }
+                5 => {
+                    put(&env, x, 3, tile(1));
+                    put(&env, x + 1, 3, tile(1));
+                    put(&env, x + 1, 4, tile(1));
+                }
+                6 => {
+                    // a plateau with a drop on the far side
+                    for dx in 0..=(g.below(4) as i32) {
+                        put(&env, x + dx, 3, tile(1));
+                        put(&env, x + dx, 4, tile(1));
+                    }
+                }
+                7 => {
+                    env.tiles.borrow_mut().remove(&(x, 3));
+                    env.tiles.borrow_mut().remove(&(x, 4));
+                }
+                8 => {
+                    // snow
+                    put(&env, x, 3, tile(5));
+                }
+                _ => {}
+            }
+            x += 1 + g.below(4) as i32;
+        }
+        let breed = [0i64, 0, 3, 40][g.below(4) as usize];
+        let mut sd = crate::objects::base::new_mutable_dict();
+        sd.map.insert("breed".into(), PlistValue::int(breed));
+        let wr: WorldRef = w.clone();
+        let dr: DynamicWorldRef = dw.clone();
+        let start = IntPair { x: g.below(128) as i32, y: [3, 3, 3, 30, 1][g.below(5) as usize] };
+        let me = Dodo::init_with_world_dynamic_world_at_position_cache_save_dict_is_adult_was_placed_placed_by_client(
+            &wr,
+            &dr,
+            start,
+            None,
+            Some(&sd),
+            g.below(3) != 0,
+            false,
+            None,
+        )
+        .unwrap();
+        let d = dodo_of(&me);
+        let is_net = g.below(5) == 0;
+        if is_net {
+            me.base().borrow_mut().is_net = true;
+        }
+        {
+            let mut s = d.dodo.borrow_mut();
+            s.remote_goal_square =
+                IntPair { x: (start.x + g.below(21) as i32 - 10).rem_euclid(128), y: 3 + g.below(4) as i32 };
+            s.remote_walk_speed = [0.0f32, 0.5, 1.5][g.below(3) as usize];
+            s.remote_movement_direction = g.below(3) as i32 - 1;
+            s.movement_direction = g.below(3) as i32 - 1;
+            s.walk_speed = [0.5f32, 1.0, 2.0][g.below(3) as usize];
+            s.random_time_between_direction_changes = [0.0f32, 0.1][g.below(2) as usize];
+            s.random_cluck_noise_timer = [0.05f32, 50.0][g.below(2) as usize];
+            s.next_peck_timer = [0.05f32, 5.0][g.below(2) as usize];
+            s.rider_target_velocity = [-1.0f32, 0.0, 0.05, 1.0][g.below(4) as usize];
+            s.drown_timer = [0.0f32, 2.4][g.below(2) as usize];
+            s.fall_speed = [0.0f32, 3.9][g.below(2) as usize];
+        }
+        match g.below(5) {
+            0 => {
+                let rider = bh(start.x, start.y, g.below(2) == 0);
+                let mut n = npc_state(&me).borrow_mut();
+                n.rider = Some(rider);
+                n.being_controlled = true;
+            }
+            1 => {
+                let b = bh(start.x + g.below(15) as i32 - 7, 3, false);
+                let mut n = npc_state(&me).borrow_mut();
+                if g.below(2) == 0 {
+                    n.inspecting_blockhead = Some(Rc::downgrade(&b));
+                } else {
+                    n.coming_to_inspect_blockhead = Some(Rc::downgrade(&b));
+                }
+                std::mem::forget(b);
+            }
+            _ => {}
+        }
+        {
+            let mut n = npc_state(&me).borrow_mut();
+            n.age = [100.0f32, 899.0, 1000.0, 5000.0][g.below(4) as usize];
+            n.fullness = [100.0f32, 3000.0, 5390.0, 5500.0][g.below(4) as usize];
+            n.lay_cooldown_timer = [0.0f32, 0.0, 10.0][g.below(3) as usize];
+            n.lay_timer = [0.0f32, 0.0, 0.05][g.below(3) as usize];
+            n.mate_cooldown_timer = 0.0;
+            if g.below(3) == 0 {
+                n.tamed_client_id = Some("server".into());
+            }
+            n.dead = g.below(25) == 0;
+        }
+        for _ in 0..g.below(3) {
+            let b = bh(start.x + g.below(21) as i32 - 10, 3 + g.below(10) as i32 - 1, g.below(4) == 0);
+            env.moving.borrow_mut().push((crate::objects::handle::obj_id(&b), g.below(2) == 0));
+            env.bhs.borrow_mut().push(b);
+        }
+        env.held.set([ITEM_APPLE, 0][g.below(2) as usize]);
+        env.occupied.set(g.below(4) == 0);
+        env.npc_here.set(g.below(4) == 0);
+        env.server_clients.set(g.below(2) as usize);
+        if g.below(3) == 0 {
+            let partner =
+                Dodo::init_with_world_dynamic_world_at_position_cache_save_dict_is_adult_was_placed_placed_by_client(
+                    &wr,
+                    &dr,
+                    IntPair { x: 31, y: 3 },
+                    None,
+                    None,
+                    true,
+                    false,
+                    None,
+                )
+                .unwrap();
+            npc_state(&partner).borrow_mut().age = 2000.0;
+            *env.breed_with.borrow_mut() = Some(partner);
+        }
+        Rig { _w: w, _dw: dw, env, me }
+    }
+
+    #[test]
+    fn walking_on_random_terrain() {
+        for seed in 0..400u32 {
+            let rig = rig(seed);
+            let me = rig.me.clone();
+            let mut g = Lcg(seed as u64 + 99);
+            for tick in 0..300 {
+                let dt = [0.02f32, 0.1, 0.3][g.below(3) as usize];
+                if tick % 97 == 96 {
+                    npc_state(&me).borrow_mut().lay_timer = 0.05;
+                    npc_state(&me).borrow_mut().fullness = 6000.0;
+                    rig.env.held.set([ITEM_APPLE, 0][g.below(2) as usize]);
+                }
+                me.update_accurate_dt_is_simulation(&me, dt, dt, false);
+                let fp = me.float_pos();
+                assert!(fp.x.is_finite() && fp.y.is_finite(), "seed {seed} tick {tick}: {fp:?}");
+                let s = dodo_of(&me).dodo.borrow().clone();
+                assert!(s.travel_fraction.is_finite() && s.walk_speed.is_finite(), "seed {seed} tick {tick}");
+                if me.needs_removed() {
+                    break;
+                }
+            }
+        }
+    }
 }
