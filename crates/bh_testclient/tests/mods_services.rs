@@ -58,6 +58,11 @@ impl Running {
     }
 }
 
+/// An unused UDP port: fixed ports collide with the same suite running in another worktree at the same time.
+fn free_port() -> u16 {
+    std::net::UdpSocket::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
+}
+
 fn start(data: &Path, world: &str, port: u16, mods: &Path) -> Running {
     let lines = Arc::new(Mutex::new(Vec::<String>::new()));
     let l2 = lines.clone();
@@ -188,7 +193,7 @@ fn clients_call_server_services_and_the_server_calls_clients() {
     let w = host::create_world(Some(&data), "Services", 104, false).expect("create");
     let mods = tmp.path().join("mods");
     write_mod(&mods);
-    let mut srv = start(&data, &w.id, 15490, &mods);
+    let mut srv = start(&data, &w.id, free_port(), &mods);
     assert!(srv.wait_log("[mods] svc: enabled", 10), "{}", srv.log());
     let cache = tmp.path().join("cache");
 
@@ -303,7 +308,7 @@ fn servers_without_service_mods_ignore_service_packets() {
     )
     .unwrap();
     std::fs::write(d.join("server/main.luau"), "return {}").unwrap();
-    let mut srv = start(&data, &w.id, 15491, &mods);
+    let mut srv = start(&data, &w.id, free_port(), &mods);
     let mut v = srv.session("VANILLA");
     assert_eq!(v.join(10_000).unwrap(), JoinOutcome::Approved);
     // A vanilla client sending the new ops anyway gets nothing back.
