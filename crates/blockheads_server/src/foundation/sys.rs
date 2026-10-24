@@ -338,7 +338,11 @@ pub(crate) mod tests {
     #[test]
     fn host_queries() {
         assert!(page_size().is_power_of_two());
+        // Linux reads /proc/self/statm instead; macOS and Windows have a native query.
+        #[cfg(not(any(target_vendor = "apple", windows)))]
         assert_eq!(process_memory(), None);
+        #[cfg(any(target_vendor = "apple", windows))]
+        assert!(process_memory().is_some_and(|(total, resident, _)| total > 0 && resident > 0));
         assert!(!host_name().is_empty());
         assert!(passwd_home_dir().is_some());
         assert!(monotonic() > 0.0);
