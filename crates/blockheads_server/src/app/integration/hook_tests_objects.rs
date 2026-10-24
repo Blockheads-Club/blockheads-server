@@ -22,6 +22,16 @@ fn adapters_with_objects_of_every_class() {
         let mut objs: Vec<ObjRef> = vec![f.stub.clone(), f.bh_obj.clone()];
         objs.extend(f.objs.iter().map(|(_, o)| o.clone()));
         let _ = WorldCoreHooks::loader_init(&*f.g, &f.world, 1, true, "objs", 1100, None);
+        // A blockhead the dynamic world knows, so the preview list has an entry.
+        f.dw.blockheads.borrow_mut().push(f.bh_obj.clone());
+        // One object of every class that can be built from a (nearly empty) save dictionary.
+        for ty in 0..130 {
+            for kind in [SaveLoadKind::Generic, SaveLoadKind::TreeOrPlant, SaveLoadKind::InteractionObject(ty)] {
+                let made =
+                    crate::foundation::exception::catch_ns(|| f.g.construct_from_save_dict(kind, ty, &f.dict, None));
+                objs.extend(made.ok().flatten());
+            }
+        }
         // Every tree and plant species, so the per-class adapters find their class.
         let ops: &dyn crate::dynworld::lookups::DwOpsHooks = &*f.g;
         for ty in 1..16 {
@@ -181,7 +191,10 @@ fn adapters_with_objects_of_every_class() {
                 }
             });
         }
-        for g in [&f.g, &f.dead] {
+        // A glue that has a world but no dynamic world.
+        let nodw = Glue::new(&f.g.srv().unwrap());
+        *nodw.world.borrow_mut() = Rc::downgrade(&f.world);
+        for g in [&f.g, &f.dead, &nodw] {
             for kind in [
                 SaveLoadKind::TreeOrPlant,
                 SaveLoadKind::Shark,
@@ -190,7 +203,7 @@ fn adapters_with_objects_of_every_class() {
                 SaveLoadKind::InteractionObject(1),
                 SaveLoadKind::Generic,
             ] {
-                for ty in [1, 29, 1000] {
+                for ty in 0..130 {
                     t("construct_from_save_dict", || {
                         drop(g.construct_from_save_dict(kind, ty, &f.dict, Some(&f.dict)))
                     });
@@ -198,6 +211,11 @@ fn adapters_with_objects_of_every_class() {
             }
             for c in ['p', 'c', 's', 't', 'w', 'x'] {
                 t("object_at_pos_for_item", || drop(g.object_at_pos_for_item(c, f.p)));
+            }
+            for (x, y, create) in [(0, 0, true), (0, 0, false), (1, 1, false), (3, 3, true)] {
+                t("load_physical_block", || {
+                    g.load_physical_block_at_x_pos_y_pos_create_if_not_created(f.pb, x, y, create)
+                });
             }
             let mut avoid = std::collections::VecDeque::new();
             t("freeblock_from_net_data", || drop(g.freeblock_from_net_data(&[0u8; 32], Some(&mut avoid))));

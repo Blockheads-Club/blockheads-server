@@ -203,10 +203,8 @@ impl Queries {
         let dw = self.glue.upgrade()?.dw()?;
         let obj = f(&dw)?;
         let item_type = dw.hooks().item_type(&obj);
-        let (interaction_object_type, is_paintable) = match crate::objects::registry::as_interaction_like(&obj) {
-            Some(i) => (i.interaction_object_type(), i.is_paintable()),
-            None => (0, false),
-        };
+        let (interaction_object_type, is_paintable) = crate::objects::registry::as_interaction_like(&obj)
+            .map_or((0, false), |i| (i.interaction_object_type(), i.is_paintable()));
         Some(DwObject { obj, item_type, interaction_object_type, chest_type: 0, is_paintable, sign_info: None })
     }
 }
@@ -962,10 +960,9 @@ impl WorldgenHost for Glue {
         let w = self.world()?;
         let _ = world;
         let face = crate::app::game_controller::WorldServerAdapter { world: w, glue: None };
-        match sc.get_and_remove_all_reciept_data_for_macro_pos_world(pos, &face)? {
-            PlistValue::Array(a) => Some(a.items.iter().map(|v| v.unsigned_int_value()).collect()),
-            _ => None,
-        }
+        let data = sc.get_and_remove_all_reciept_data_for_macro_pos_world(pos, &face)?;
+        let PlistValue::Array(a) = data else { return None };
+        Some(a.items.iter().map(|v| v.unsigned_int_value()).collect())
     }
     fn client_contains_light_block_index(&self, _world: &World, client_id: &str, index: u64) -> bool {
         self.client(client_id).map_or(false, |c| c.all_light_block_indices().borrow().contains_index(index))
@@ -2238,11 +2235,8 @@ impl DwHooks for Glue {
             'w' => "Wire",
             _ => return None,
         };
-        let t = dyn_type_named(name);
-        if t == 0 {
-            return None;
-        }
-        self.dw().and_then(|d| d.object_of_type_at_pos(t as i32, pos))
+        // A class that the type table does not know has type 0 and no object.
+        Some(dyn_type_named(name)).filter(|t| *t != 0).and_then(|t| self.dw()?.object_of_type_at_pos(t as i32, pos))
     }
     fn remove_door_at_pos(&self, pos: IntPair) -> Option<ObjRef> {
         self.dw().and_then(|d| d.remove_door_at_pos(pos))
