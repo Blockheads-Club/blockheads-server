@@ -878,6 +878,8 @@ pub(crate) mod testkit {
         pub blockheads: RefCell<Vec<ObjRef>>,
         pub view_radius: Cell<i32>,
         pub peers: Cell<usize>,
+        /// Answers of the next `peersInterestedInMacroIndex` calls, front first; `peers` once it is empty.
+        pub peers_script: RefCell<Vec<usize>>,
         pub has_save: Cell<bool>,
         /// When set, `loadLightBlock...` installs an empty per-client light block.
         pub load_light: Cell<bool>,
@@ -929,7 +931,12 @@ pub(crate) mod testkit {
             self.push(format!("decommission({b})"));
         }
         fn peers_interested_in_macro_index_count(&self, _w: &World, _i: i32) -> usize {
-            self.peers.get()
+            let mut script = self.peers_script.borrow_mut();
+            if script.is_empty() {
+                self.peers.get()
+            } else {
+                script.remove(0)
+            }
         }
         fn remove_water_tile_at_pos(&self, _w: &World, p: IntPair) {
             self.push(format!("removeWater({},{})", p.x, p.y));
@@ -1091,19 +1098,45 @@ mod tests {
     }
 
     fn all_zero(world: &World, x0: i32, y0: i32, n: i32) -> bool {
-        for x in x0..x0 + n {
-            for y in y0..y0 + n {
+        (x0..x0 + n).all(|x| {
+            (y0..y0 + n).all(|y| {
                 let t = tile(world, x, y).get();
-                if t.artificial_light_r != 0
-                    || t.artificial_light_g != 0
-                    || t.artificial_light_b != 0
-                    || t.artificial_heat != 0
-                {
-                    return false;
+                t.artificial_light_r == 0
+                    && t.artificial_light_g == 0
+                    && t.artificial_light_b == 0
+                    && t.artificial_heat == 0
+            })
+        })
+    }
+
+    #[test]
+    fn lights_at_the_edge_of_the_loaded_world_skip_missing_tiles() {
+        install_rec();
+        // only the first block is loaded: the grid reaches into the missing blocks to its right
+        let world = world_with_blocks(4, &[(0, 0), (1, 0)]);
+        let l = mk(&world, 30, 10, 15, LIGHT_DIRECTION_ALL, (100, 100, 100, 1));
+        assert_eq!(tile(&world, 30, 10).get().artificial_light_r, 100);
+        // the right block goes away: removing keeps the grid values, adding again meets them on missing tiles
+        let saved = *world.macro_tiles().get(1).unwrap().physical_block.borrow();
+        l.remove_from_tiles();
+        {
+            // forget everything on the loaded side
+            let mut st = l.st.borrow_mut();
+            let (origin, d) = (st.contribution_grid_origin, st.diameter);
+            for gy in 0..d {
+                for gx in 0..d {
+                    if origin.x + gx < 32 {
+                        st.contribution_grid[((gy * d + gx) * 5) as usize] = 0;
+                    }
                 }
             }
         }
-        true
+        *world.macro_tiles().get(1).unwrap().physical_block.borrow_mut() = None;
+        l.add_to_tiles();
+        *world.macro_tiles().get(1).unwrap().physical_block.borrow_mut() = saved;
+        l.world_changed_positions(&[IntPair { x: 31, y: 10 }, IntPair { x: 30, y: 11 }]);
+        l.remove_from_tiles();
+        assert!(all_zero(&world, 20, 5, 12));
     }
 
     #[test]

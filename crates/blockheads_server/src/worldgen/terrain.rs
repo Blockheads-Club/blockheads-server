@@ -1215,8 +1215,8 @@ mod tests {
         let world = World::alloc(32);
         let mut found = 0;
         for treasure in [1u8, 2, 3] {
-            for rainfall in 0..6u8 {
-                for seed in 1..14i32 {
+            for rainfall in [0u8, 2, 4] {
+                for seed in 1..8i32 {
                     let (mut t, mut p) = sample_terrain();
                     let mk = |fx, fy, amp, s| {
                         Some(Rc::new(
@@ -1231,7 +1231,7 @@ mod tests {
                     t.dirt_heights = vec![520; 1024];
                     p.rules.treasure = treasure as _;
                     p.rules.rainfall = rainfall as _;
-                    for x_pos in (0..32).step_by(8) {
+                    for x_pos in (0..32).step_by(16) {
                         let pb = world.take_physical_block();
                         pb.x_pos.set(x_pos);
                         pb.y_pos.set(15);

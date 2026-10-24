@@ -515,6 +515,24 @@ mod tests {
         assert_eq!(o4.owner_name().as_deref(), Some("Name"));
     }
 
+    /// A bed that arrives over the net tells every real blockhead of the dynamic world that it was loaded.
+    #[test]
+    fn net_beds_notify_the_blockheads_of_the_world() {
+        use crate::blockhead::blockhead::testutil::{new_bh, setup, TestHost};
+        let (w, d) = env();
+        let o = mk(&w, &d, 40, 20, &item(63, 0), false);
+        let net = o.creation_net_data_for_client(&o, None).unwrap();
+        let _host = TestHost::install();
+        let (bw, _bdw, bdref) = setup();
+        let bh = new_bh(&bw, &bdref, 0);
+        // the bed's own object is in the list too, and is no blockhead
+        d.blockheads.borrow_mut().push(o.clone());
+        d.blockheads.borrow_mut().push(bh.clone());
+        let loaded = Bed::init_with_world_dynamic_world_cache_net_data(&w, &d, None, &net).unwrap();
+        assert!(!loaded.needs_removed());
+        d.blockheads.borrow_mut().clear();
+    }
+
     #[test]
     fn world_changed_removes_unsupported_bed() {
         let (w, d) = env();

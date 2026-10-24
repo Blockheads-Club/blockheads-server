@@ -2566,6 +2566,40 @@ mod lifecycle_scenarios {
         assert!(r.is_err());
     }
 
+    /// A plain record named `blocks` sits where the block database would go: `main` opens, `blocks` is
+    /// incompatible.
+    #[test]
+    fn a_blocked_block_database_name_ends_the_process_at_the_block_database() {
+        use lmdb_master_sys as ffi;
+        let (_g, _dir) = sandbox("fulldb");
+        let f = fixture(32);
+        let id = f.world.save_id.borrow().clone().unwrap();
+        let path = format!("{}/saves/{}/world_db/", crate::foundation::paths::appsup(), id);
+        {
+            let env = DatabaseEnvironment::new(&path, 4, 0x400).expect("environment");
+            assert!(Database::new(&env, "main").is_some());
+            unsafe {
+                let mut txn: *mut ffi::MDB_txn = std::ptr::null_mut();
+                assert_eq!(ffi::mdb_txn_begin(env.env(), std::ptr::null_mut(), 0, &mut txn), 0);
+                let mut dbi: ffi::MDB_dbi = 0;
+                assert_eq!(ffi::mdb_dbi_open(txn, std::ptr::null(), 0, &mut dbi), 0);
+                let mut k = ffi::MDB_val { mv_size: 6, mv_data: b"blocks".as_ptr() as *mut _ };
+                let mut v = ffi::MDB_val { mv_size: 1, mv_data: b"x".as_ptr() as *mut _ };
+                assert_eq!(ffi::mdb_put(txn, dbi, &mut k, &mut v, 0), 0);
+                assert_eq!(ffi::mdb_txn_commit(txn), 0);
+            }
+        }
+        crate::foundation::sys::set_hosted(true);
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let log = capture_log(|| f.world.initialize_databases());
+            drop(log);
+        }));
+        crate::foundation::sys::set_hosted(false);
+        let exit = r.expect_err("the process exits").downcast::<crate::foundation::sys::HostExit>().unwrap();
+        assert_eq!(*exit, crate::foundation::sys::HostExit(0));
+        assert!(f.world.main_database.borrow().is_some() && f.world.block_database.borrow().is_none());
+    }
+
     #[test]
     fn legacy_world_files_and_odd_save_contents() {
         let (_g, dir) = sandbox("legacyfile");

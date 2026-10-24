@@ -690,6 +690,13 @@ mod tests {
     }
 
     #[test]
+    fn removing_sun_light_outside_the_world_does_nothing() {
+        let _rec = install_rec();
+        let w = solid_world();
+        WorldHelper::update_sun_light_removed_for_tile_at_pos_world(None, IntPair { x: 0, y: -50 }, &w);
+    }
+
+    #[test]
     fn decommission_decision_table() {
         let rec = install_rec();
         let w = solid_world();
@@ -729,6 +736,14 @@ mod tests {
         ));
         rec.peers.set(0);
         rec.take();
+        // a peer that becomes interested between the two looks keeps the tile loaded
+        pb.last_required_time.set(reference_time() - 1000.0);
+        *rec.peers_script.borrow_mut() = vec![0, 1];
+        assert!(!WorldHelper::check_if_macro_tile_can_be_decommissioned_world_min_age_block_to_save_physcial_block(
+            &mt, &w, 30.0, false
+        ));
+        assert!(rec.peers_script.borrow().is_empty());
+        assert!(rec.take().is_empty());
         // portal 3x3 is never unloaded
         let near_portal = w.macro_tiles().get(0).unwrap();
         near_portal.physical_block().unwrap().last_required_time.set(reference_time() - 1000.0);
