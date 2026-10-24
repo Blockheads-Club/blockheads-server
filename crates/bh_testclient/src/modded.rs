@@ -36,6 +36,10 @@ pub struct LoaderOptions {
     pub accept: bool,
     /// Ask for the mod list even when no client mod is required.
     pub always_list: bool,
+    /// Packages of native client mods the player installed from the index (and confirmed). A server lists native
+    /// mods without bytes, so they are never downloaded; a required native mod that is not in here is missing and
+    /// the client does not join (like the game's loader).
+    pub native_installed: Vec<Hash>,
     /// Stop a download once this many bytes are held (an interrupted transfer; the join then fails).
     pub interrupt_after: Option<u64>,
     /// How long to wait for `SERVER_HELLO`.
@@ -54,6 +58,7 @@ impl LoaderOptions {
             cache_dir: cache_dir.to_path_buf(),
             accept: true,
             always_list: false,
+            native_installed: Vec::new(),
             interrupt_after: None,
             hello_timeout_ms: HELLO_TIMEOUT_MS,
         }
@@ -180,8 +185,12 @@ impl ModClient {
         let mut accepted = !hello.client_required;
         if hello.client_required || self.opts.always_list {
             let list = self.request_list(s, timeout_ms)?;
-            if self.opts.accept {
-                for m in list.mods.iter().filter(|m| m.sides.iter().any(|x| x == "client")) {
+            let missing = list
+                .mods
+                .iter()
+                .any(|m| m.permissions.native && m.client_required && !self.opts.native_installed.contains(&m.sha256));
+            if self.opts.accept && !missing {
+                for m in list.mods.iter().filter(|m| m.sides.iter().any(|x| x == "client") && !m.permissions.native) {
                     if !self.is_cached(&m.sha256) && !self.download(s, m, timeout_ms)? {
                         return Ok(JoinOutcome::Disconnected);
                     }

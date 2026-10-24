@@ -80,7 +80,7 @@ installed) and the `bhcModLoader` argument of `ModHooks::pre_login` (the 0x1f ch
 
 - Offered: every enabled package with a client half (its server half, if any, must have loaded), plus loaded
   server-only mods for information. Unpacked folders are packed in memory with the deterministic `.bhmod` writer.
-  Never offered: client mods with `native` (logged), packages over 32 MiB or beyond 128 MiB in total.
+  Listed without bytes (never served, logged): client mods with `native`; never offered: packages over 32 MiB or beyond 128 MiB in total.
   `indexListed` is always false (the server does not read the index; clients check it themselves).
 - Downloads: 8 chunks in flight per peer, sliding with every `FILE_REQUEST`; at most 8 peers download at once
   (`FILE_ERROR` BUSY); a lower offset restarts there (resume).

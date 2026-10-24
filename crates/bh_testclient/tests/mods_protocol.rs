@@ -165,6 +165,25 @@ fn server_only_mods_admit_vanilla_and_modded_clients() {
 
 /// A mods directory with chan-echo (client + server, channels) and a client-only mod with an incompressible data
 /// file of `big` bytes (several chunks).
+/// The SHA-256 the server lists for the native client mod `nat` (what the player's own install must match).
+fn native_hash(srv: &Running, cache: &Path) -> bhmod_proto::Hash {
+    let mut s = srv.session("NATPROBE");
+    let mut mc = ModClient::new(LoaderOptions::new(cache));
+    assert!(s.wait_for(0x23, 10_000).unwrap().is_some());
+    s.client.send(&mc.hello().encode()).unwrap();
+    s.wait_for_matching(5000, &mut |rx| rx.data.starts_with(&[0xbc, 0x01])).unwrap().unwrap();
+    let list = mc.request_list(&mut s, 5000).unwrap();
+    s.disconnect();
+    list.mods.iter().find(|m| m.id == "nat").unwrap().sha256
+}
+
+/// Loader options of a player who installed the native mod `nat` from the index.
+fn with_native(cache: &Path, nat: bhmod_proto::Hash) -> LoaderOptions {
+    let mut o = LoaderOptions::new(cache);
+    o.native_installed = vec![nat];
+    o
+}
+
 fn client_mods(root: &Path, big: usize) -> PathBuf {
     let mods = root.join("mods");
     copy_dir(&fixture("chan-echo"), &mods.join("chan-echo"));
@@ -190,7 +209,7 @@ fn client_mods(root: &Path, big: usize) -> PathBuf {
         })
         .collect();
     std::fs::write(skin.join("data/blob.bin"), blob).unwrap();
-    // A native client mod is never offered.
+    // A native client mod: listed (required) with its hash, never served.
     let nat = mods.join("nat");
     std::fs::create_dir_all(nat.join("client")).unwrap();
     let toml = std::fs::read_to_string(skin.join("mod.toml"))
@@ -210,8 +229,9 @@ fn client_mods_reject_vanilla_and_serve_modded_clients() {
     let (data, wid) = world(tmp.path());
     let mods = client_mods(tmp.path(), 200_000);
     let mut srv = start(&data, &wid, 15461, &mods);
-    assert!(srv.log().contains("offering 2 client mod(s) to modded clients (required)"), "{}", srv.log());
-    assert!(srv.log().contains("not offering nat to clients: native client mods are never pushed"), "{}", srv.log());
+    assert!(srv.log().contains("offering 3 client mod(s) to modded clients (required)"), "{}", srv.log());
+    assert!(srv.log().contains("listing nat without bytes: native client mods are installed"), "{}", srv.log());
+    let nat = native_hash(&srv, &tmp.path().join("probe"));
 
     // Vanilla client: held in the limbo. It gets the world summary with the readable welcomeMessage (the vanilla
     // game shows it as its welcome popup), is not a player and never sees a 0xBC byte; its next packet ends it
@@ -261,7 +281,13 @@ fn client_mods_reject_vanilla_and_serve_modded_clients() {
     let e = s.wait_for_matching(5000, &mut |rx| rx.data.starts_with(&[0xbc, 0x06])).unwrap().unwrap();
     assert_eq!(e.data, vector("06-file-error"));
     let list = mc.request_list(&mut s, 5000).unwrap();
-    assert_eq!(list.mods.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["big-skin", "chan-echo"]);
+    assert_eq!(list.mods.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["big-skin", "chan-echo", "nat"]);
+    // The native mod is listed with its hash, required, and its bytes are never sent.
+    let n = list.mods[2].clone();
+    assert!(n.permissions.native && n.client_required && n.sides == ["client"] && n.sha256 == nat);
+    assert!(!mc.download(&mut s, &n, 5000).unwrap());
+    assert_eq!(mc.file_errors[0].code, bhmod_proto::file_error::NOT_FOUND);
+    assert!(mod_packets(&s, 0x05).is_empty(), "native bytes were sent");
     assert_eq!(list.channels.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["chan-echo:echo"]);
     s.disconnect();
 
@@ -285,10 +311,18 @@ fn client_mods_reject_vanilla_and_serve_modded_clients() {
     assert_eq!(r.data, [0x26, 3]);
     assert_eq!(mod_packets(&s, 0x08).len(), 1);
 
-    // The modded client: list, download, verify, READY, join.
+    // A player who did not install the required native mod from the index does not join: nothing is downloaded,
+    // no READY, the server declines the plain 0x1f.
+    let mut s = srv.session("NONATIVE");
+    let mut mc = ModClient::new(LoaderOptions::new(&tmp.path().join("c4")));
+    assert_eq!(mc.join(&mut s, 10_000).unwrap(), JoinOutcome::Rejected { reason: 3 });
+    assert!(mc.downloads.is_empty() && mc.file_errors.is_empty());
+    assert!(mod_packets(&s, 0x05).is_empty());
+
+    // The modded client (native mod installed from the index): list, download, verify, READY, join.
     let cache = tmp.path().join("cache");
     let mut s = srv.session("MODDER");
-    let mut mc = ModClient::new(LoaderOptions::new(&cache));
+    let mut mc = ModClient::new(with_native(&cache, nat));
     assert_eq!(mc.join(&mut s, 10_000).unwrap(), JoinOutcome::Approved, "{}", srv.log());
     assert_eq!(mc.downloads.len(), 2);
     assert!(mc.downloads.iter().all(|d| d.complete && d.resumed_from == 0));
@@ -320,13 +354,13 @@ fn client_mods_reject_vanilla_and_serve_modded_clients() {
 
     // A second join with everything cached downloads nothing.
     let mut s2 = srv.session("MODDER2");
-    let mut mc2 = ModClient::new(LoaderOptions::new(&cache));
+    let mut mc2 = ModClient::new(with_native(&cache, nat));
     assert_eq!(mc2.join(&mut s2, 10_000).unwrap(), JoinOutcome::Approved);
     assert!(mc2.downloads.is_empty());
 
     // A server mod refusing the join (player-pre-login): REJECT_TEXT, then its reason.
     let mut s3 = srv.session("NOPE");
-    let mut mc3 = ModClient::new(LoaderOptions::new(&cache));
+    let mut mc3 = ModClient::new(with_native(&cache, nat));
     assert_eq!(mc3.join(&mut s3, 10_000).unwrap(), JoinOutcome::Rejected { reason: 12 });
     assert_eq!(mc3.reject.as_ref().unwrap().reason_code, 12);
 
@@ -369,10 +403,11 @@ fn interrupted_download_resumes() {
     let mods = client_mods(tmp.path(), 6 * CHUNK_SIZE);
     let mut srv = start(&data, &wid, 15462, &mods);
     let cache = tmp.path().join("cache");
+    let nat = native_hash(&srv, &tmp.path().join("probe"));
 
     // Interrupted once 100000 bytes are held (chunks arrive whole: 4 chunks).
     let mut s = srv.session("RESUMER");
-    let mut opts = LoaderOptions::new(&cache);
+    let mut opts = with_native(&cache, nat);
     opts.interrupt_after = Some(100_000);
     let mut mc = ModClient::new(opts.clone());
     assert_eq!(mc.join(&mut s, 10_000).unwrap(), JoinOutcome::Disconnected);
@@ -757,8 +792,9 @@ fn servers_without_content_write_no_registry_and_send_no_cosmetics() {
     let (data, wid) = world(tmp.path());
     let mods = client_mods(tmp.path(), 1000);
     let mut srv = start(&data, &wid, 15480, &mods);
+    let nat = native_hash(&srv, &tmp.path().join("probe"));
     let mut s = srv.session("MODDER");
-    let mut mc = ModClient::new(LoaderOptions::new(&tmp.path().join("cache")));
+    let mut mc = ModClient::new(with_native(&tmp.path().join("cache"), nat));
     assert_eq!(mc.join(&mut s, 10_000).unwrap(), JoinOutcome::Approved, "{}", srv.log());
     s.run_for(500).unwrap();
     assert!(mc.list.unwrap().registry.is_empty());
