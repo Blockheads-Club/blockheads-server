@@ -56,7 +56,7 @@ impl EnetHost {
             ..Default::default()
         };
         let host = enet::Host::new(socket, settings)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("{e:?}")))?;
+            .map_err(enet_io_error)?;
         Ok(EnetHost { host })
     }
 
@@ -150,6 +150,13 @@ pub fn enet_id_string(addr: &SocketAddrV4) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn enet_error_maps_to_io_error() {
+        let e = super::enet_io_error("bad");
+        assert_eq!(e.kind(), std::io::ErrorKind::Other);
+        assert_eq!(e.to_string(), "\"bad\"");
+    }
+
     use super::*;
 
     #[test]
@@ -175,4 +182,8 @@ mod tests {
         assert_ne!(port, 0);
         assert!(EnetHost::create(port).is_err());
     }
+}
+
+fn enet_io_error<E: std::fmt::Debug>(e: E) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::Other, format!("{e:?}"))
 }

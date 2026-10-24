@@ -30,12 +30,14 @@ pub fn ns_raise_nil_reason(name: &str) -> ! {
 
 /// `@try { f } @catch (NSException*)`. Any other panic payload is resumed.
 pub fn catch_ns<T>(f: impl FnOnce() -> T) -> Result<T, NsException> {
-    match catch_unwind(AssertUnwindSafe(f)) {
-        Ok(v) => Ok(v),
-        Err(p) => match p.downcast::<NsException>() {
-            Ok(ex) => Err(*ex),
-            Err(other) => resume_unwind(other),
-        },
+    catch_unwind(AssertUnwindSafe(f)).map_err(ns_payload)
+}
+
+/// Non-generic payload handling for `catch_ns`: NSException is returned, anything else resumes unwinding.
+fn ns_payload(p: Box<dyn std::any::Any + Send>) -> NsException {
+    match p.downcast::<NsException>() {
+        Ok(ex) => *ex,
+        Err(other) => resume_unwind(other),
     }
 }
 

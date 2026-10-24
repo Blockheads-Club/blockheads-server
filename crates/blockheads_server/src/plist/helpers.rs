@@ -44,11 +44,11 @@ pub fn property_list_with_data_raw(d: &[u8], opts: u32) -> Option<PlistValue> {
 
 /// `dataFromPropertyList`: XML (format 100); exceptions are logged and give nil. The word "load" is the original's.
 pub fn data_from_property_list(v: &PlistValue) -> Option<Vec<u8>> {
-    data_from_property_list_hooked(v, || {})
+    data_from_property_list_hooked(v, &|| {})
 }
 
 /// Implementation with a test hook run inside the `@try`.
-pub(crate) fn data_from_property_list_hooked(v: &PlistValue, hook: impl FnOnce()) -> Option<Vec<u8>> {
+pub(crate) fn data_from_property_list_hooked(v: &PlistValue, hook: &dyn Fn()) -> Option<Vec<u8>> {
     match catch_ns(|| {
         hook();
         write_xml(v)
@@ -110,7 +110,7 @@ mod tests {
             "Failed to create plist due to exception in propertyListFromDataWithOptions. Exception:'NSInvalidArgumentException' (reason: 'Tried to add nil to array')\n"
         ), "{log}");
         let log = capture(|| {
-            let r = data_from_property_list_hooked(&PlistValue::Null, || {
+            let r = data_from_property_list_hooked(&PlistValue::Null, &|| {
                 crate::foundation::exception::ns_raise("NSInvalidArgumentException", "boom")
             });
             assert!(r.is_none());
