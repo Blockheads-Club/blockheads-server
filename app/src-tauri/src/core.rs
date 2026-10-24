@@ -852,7 +852,8 @@ mod tests {
         assert_eq!(on, [("BLOCKHEADS_JVM", Some("1".into())), ("BLOCKHEADS_JAVA_HOME", Some("/opt/jdk".into()))]);
         let on = jvm_env(&ModsPrefs { jvm: true, java_home: "  ".into() });
         assert_eq!(on, [("BLOCKHEADS_JVM", Some("1".into())), ("BLOCKHEADS_JAVA_HOME", None)]);
-        let saved: Vec<_> = ["BLOCKHEADS_JVM", "BLOCKHEADS_JAVA_HOME"].iter().map(|k| (*k, std::env::var_os(k))).collect();
+        let saved: Vec<_> =
+            ["BLOCKHEADS_JVM", "BLOCKHEADS_JAVA_HOME"].iter().map(|k| (*k, std::env::var_os(k))).collect();
         apply_jvm_env(&ModsPrefs { jvm: true, java_home: "/opt/jdk".into() });
         assert_eq!(std::env::var("BLOCKHEADS_JVM").unwrap(), "1");
         assert_eq!(std::env::var("BLOCKHEADS_JAVA_HOME").unwrap(), "/opt/jdk");
