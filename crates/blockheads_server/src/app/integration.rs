@@ -42,6 +42,8 @@ mod hook_fixture;
 mod hook_tests;
 #[cfg(test)]
 mod hook_tests_more;
+#[cfg(test)]
+mod hook_tests_objects;
 
 /// The dynamic object type whose class is `name` (`classNameForDynamicObjectType`); 0 when unknown.
 fn dyn_type_named(name: &str) -> usize {
