@@ -179,7 +179,7 @@ impl Blockhead {
                     if ih.action_goal_interaction(action) == 4 {
                         if let Some(wb) = &wb {
                             let cur = h.workbench_current_blockhead(wb);
-                            if cur.as_ref().map_or(false, |c| crate::objects::handle::ptr_eq(c, &me))
+                            if cur.as_ref().is_some_and(|c| crate::objects::handle::ptr_eq(c, &me))
                                 && ih.workbench_currently_crafting_item_type(wb) == t.0 as i32
                             {
                                 change = ih.workbench_total_items_left_to_craft(wb);
@@ -570,7 +570,7 @@ impl Blockhead {
                 self.item_will_be_removed_from_inventory(sub_item);
             }
         }
-        let is_it = self.bh.borrow().interaction_item.as_ref().map_or(false, |x| std::rc::Rc::ptr_eq(x, item));
+        let is_it = self.bh.borrow().interaction_item.as_ref().is_some_and(|x| std::rc::Rc::ptr_eq(x, item));
         if is_it {
             let mut f = self.bh.borrow_mut();
             f.interaction_item = None;
@@ -733,17 +733,17 @@ impl Blockhead {
         }
         let ih = inventory_host();
         let mut was_interaction_item =
-            self.bh.borrow().interaction_item.as_ref().map_or(false, |x| std::rc::Rc::ptr_eq(x, item));
+            self.bh.borrow().interaction_item.as_ref().is_some_and(|x| std::rc::Rc::ptr_eq(x, item));
         let queue0 = self.bh.borrow().action_queue.first().cloned();
         if let Some(a) = &queue0 {
-            was_interaction_item = ih.action_interaction_item(a).map_or(false, |x| std::rc::Rc::ptr_eq(&x, item));
+            was_interaction_item = ih.action_interaction_item(a).is_some_and(|x| std::rc::Rc::ptr_eq(&x, item));
         }
         let ty = item.borrow().item_type;
         if ty == ItemType::ITEM_FISHING_ROD && self.bh.borrow().fishing_rod.is_none() {
             return;
         }
         let level = self.custom_tool_decay_level();
-        let exp = self.world_rc().map_or(false, |w| w.expert_mode());
+        let exp = self.world_rc().is_some_and(|w| w.expert_mode());
         let inc = usage_increment_per_use(ty, level, exp, was_attack).wrapping_mul(multiplier);
         if inc < 1 {
             return;
@@ -844,7 +844,7 @@ impl Blockhead {
                 let ty = item.borrow().item_type;
                 let lvl = self.custom_clothing_decay_level();
                 let pole = self.custom_pole_items();
-                let expert = self.world_rc().map_or(false, |w| w.expert_mode());
+                let expert = self.world_rc().is_some_and(|w| w.expert_mode());
                 let rate = clothing_item_pasively_used_rate(ty, lvl, pole, expert);
                 if rate > 0.0f32 {
                     {
@@ -873,7 +873,7 @@ impl Blockhead {
                 let item = slot_first(&sub).expect("non-empty");
                 let ty = item.borrow().item_type;
                 // ICE_BOOTS 198, ICE_PANTS 195, ICE_CHEST_PLATE 196, ICE_HELMET 197
-                if matches!(ty.0, 198 | 195 | 196 | 197) {
+                if matches!(ty.0, 195..=198) {
                     let r = self.bh.borrow().current_temperature / 30.0f32;
                     if r > 0.0f32 {
                         {

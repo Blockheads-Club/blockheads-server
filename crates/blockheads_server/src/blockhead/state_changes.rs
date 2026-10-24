@@ -67,7 +67,7 @@ impl Blockhead {
             || t == it::RIDE_BOAT
             || (t == it::RIDE_TRAIN_CAR && {
                 let tapped = self.bh.borrow().tapped_ride_object.clone();
-                tapped.map_or(true, |o| o.as_ridable().map_or(true, |r| r.acts_as_interaction_object().is_none()))
+                tapped.is_none_or(|o| o.as_ridable().is_none_or(|r| r.acts_as_interaction_object().is_none()))
             })
         {
             // UI: setFuelUIShouldBeDisplayed:NO (CLIENT-ONLY)
@@ -81,7 +81,7 @@ impl Blockhead {
             };
             self.bh.borrow_mut().ride_object = src.clone();
             let itype = item_type_of_interaction_item(self);
-            let can = src.as_ref().map_or(false, |r| h.ridable_blockhead_can_ride_using_item(r, self, itype));
+            let can = src.as_ref().is_some_and(|r| h.ridable_blockhead_can_ride_using_item(r, self, itype));
             if !can {
                 self.bh.borrow_mut().ride_object = None;
                 return;
@@ -173,7 +173,7 @@ impl Blockhead {
             if let Some(e) = extra {
                 let obj = e.object_for_key("interactionObject");
                 // `[self canUseDynamicObject:nil]` is NO
-                let ok = obj.as_ref().map_or(false, |o| h.can_use_dynamic_object(self, o));
+                let ok = obj.as_ref().is_some_and(|o| h.can_use_dynamic_object(self, o));
                 if !ok {
                     return;
                 }
@@ -217,12 +217,12 @@ impl Blockhead {
                     let item = e.any_for_key("craftableItemObject");
                     let wb = e.object_for_key("workbench");
                     let count = e.int_for_key("count");
-                    let precond = item.is_some() && wb.as_ref().map_or(false, |w| !w.needs_removed()) && count != 0;
+                    let precond = item.is_some() && wb.as_ref().is_some_and(|w| !w.needs_removed()) && count != 0;
                     if precond {
                         let wb = wb.unwrap();
                         if h.workbench_is_in_use(&wb) {
                             let cur = h.workbench_current_blockhead(&wb);
-                            if !cur.map_or(false, |c| ptr_eq(&c, &me)) {
+                            if !cur.is_some_and(|c| ptr_eq(&c, &me)) {
                                 self.stop_interacting();
                                 return;
                             }
@@ -315,7 +315,7 @@ impl Blockhead {
     ) -> FreeBlockCreationCount {
         let dflt =
             FreeBlockCreationCount { count: 1, bonus_multiplier: 1, bonus_color: Vector { v: [1.0, 1.0, 1.0, 1.0] } };
-        let expert = self.world_rc().map_or(false, |w| w.expert_mode());
+        let expert = self.world_rc().is_some_and(|w| w.expert_mode());
         let base_n: i32 = if expert { 2 } else { 3 };
         let ty: u32 = item.map_or(0, |i| i.borrow().item_type.0);
         let Some(tile) = tile else { return dflt };
@@ -524,9 +524,9 @@ impl Blockhead {
         let world = self.world_rc();
         let rules = world.as_ref().map(|w| w.custom_rules()).unwrap_or_default();
         let enabled = rules.custom_rules_enabled != 0;
-        let can_regenerate = !(enabled && !matches!(rules.death, 0 | 1 | 2));
+        let can_regenerate = !(enabled && !matches!(rules.death, 0..=2));
         // sound die.wav: CLIENT-ONLY
-        let expert = world.as_ref().map_or(false, |w| w.expert_mode());
+        let expert = world.as_ref().is_some_and(|w| w.expert_mode());
         let mut drop_all = expert;
         let mut drop_some = !drop_all;
         if enabled {
@@ -617,7 +617,7 @@ impl Blockhead {
         self.bh.borrow_mut().state.sub_animation_type = vsa::LIE_ON_GROUND;
         // sigh sound: CLIENT-ONLY; displaySleepUI: dead on server
         self.bh.borrow_mut().cancel_simulate_due_to_collapse = true;
-        let simulating = self.world_rc().map_or(false, |w| w.is_simulating());
+        let simulating = self.world_rc().is_some_and(|w| w.is_simulating());
         let ctl = self.is_client_blockhead_being_controlled_by_server();
         let energy = self.bh.borrow().state.energy;
         if !simulating && !ctl {
@@ -688,8 +688,8 @@ impl Blockhead {
         self.bh.borrow_mut().jetpack_send_update_timer = 0.0;
         let d = BlockheadUpdateData::read_le(&padded_bytes(net_data, 0x70));
         let world = self.world_rc();
-        let has_server = world.as_ref().map_or(false, |w| w.server().is_some());
-        let dw_is_server = self.dw().map_or(false, |x| x.is_server());
+        let has_server = world.as_ref().is_some_and(|w| w.server().is_some());
+        let dw_is_server = self.dw().is_some_and(|x| x.is_server());
         let client_id = self.client_id();
         // 3.
         if dw_is_server && d.z_index == 1 && has_server && !h.player_is_admin_with_id(client_id.as_deref()) {
@@ -803,7 +803,7 @@ impl Blockhead {
             }
         } else {
             let cur = self.bh.borrow().ride_object.clone();
-            let same = cur.as_ref().map_or(false, |o| o.unique_id() == d.ride_object_id);
+            let same = cur.as_ref().is_some_and(|o| o.unique_id() == d.ride_object_id);
             if !same {
                 if cur.is_some() {
                     h.stop_riding(self);
@@ -1008,7 +1008,7 @@ impl Blockhead {
         let bg = t.background_contents();
         let can = |ty: u32| -> bool { h.can_pick_up_item_of_type_sub_items(self, ItemType(ty), None) == 1 };
         let removable =
-            |o: &Option<ObjRef>| -> bool { o.as_ref().map_or(false, |o| o.can_be_removed_by_blockhead(o, &me)) };
+            |o: &Option<ObjRef>| -> bool { o.as_ref().is_some_and(|o| o.can_be_removed_by_blockhead(o, &me)) };
         let save =
             |o: &Option<ObjRef>| -> Option<PlistValue> { o.as_ref().map(|o| PlistValue::Dict(o.get_save_dict(o))) };
         let mk = |ty: u32, a: u16, b: u16, sd: Option<PlistValue>| -> Option<ItemRef> {
@@ -1169,7 +1169,7 @@ impl Blockhead {
         // 4.
         let world = self.world_rc();
         if interaction_type_disallowed_on_protected_tiles(crate::types::enums::InteractionType(ty))
-            && world.as_ref().map_or(false, |w| WorldApi::tile_is_protected_at_pos_against_blockhead(&**w, p, &me))
+            && world.as_ref().is_some_and(|w| WorldApi::tile_is_protected_at_pos_against_blockhead(&**w, p, &me))
         {
             ty = h.interaction_type_for_tile_at_pos_item_pickup_rejected_due_to_inventory_full_include_actions_face_index_allow_protected_actions(
                 self, tr, p, item.as_ref(), &mut rejected, false, extra, false,
@@ -1181,7 +1181,7 @@ impl Blockhead {
         if ty == it::PICKUP_FREEBLOCK {
             let mut fbs = h.free_blocks_at_pos(p);
             // comparator: Ascending if obj2.uniqueID < obj1.uniqueID else Descending -> descending by uniqueID
-            fbs.sort_by(|a, b| b.unique_id().cmp(&a.unique_id()));
+            fbs.sort_by_key(|b| std::cmp::Reverse(b.unique_id()));
             let mut max_sound_play = 8;
             let mut delay = 0.0f32;
             for fb in fbs.iter().rev() {
@@ -1254,7 +1254,7 @@ impl Blockhead {
                 if let Some(a) = ach {
                     h.report_achievement_with_identifier(a);
                 }
-                if ity == 0x58 && matches!(t.contents(), 0x7b | 0x79 | 0x7a) {
+                if ity == 0x58 && matches!(t.contents(), 0x79..=0x7b) {
                     h.report_achievement_with_identifier("grp.diamond_tree");
                 }
             }
@@ -1263,8 +1263,7 @@ impl Blockhead {
             let fg = t.foreground_contents();
             let contents = t.contents();
             // (remover, clears foreground?)
-            let torch_fgs =
-                [b'1', b'a', b'2', b'W', b'f', b'i', b'U', b'T', b'S', b'R', b'V', b'3', b'5', b'7', b'9', b';', b'X'];
+            let torch_fgs = *b"1a2WfiUTSRV3579;X";
             let row: Option<(Remover, bool)> = if item_type_is_torch(ityp) && torch_fgs.contains(&fg) {
                 Some((Remover::Torch, true))
             } else if ity == 0x5b && fg == b'N' {
@@ -1298,7 +1297,7 @@ impl Blockhead {
                 // registration (nil-safe on the server: both containers are None)
                 let key: u64 = obj.as_ref().map_or(0, |o| o.unique_id());
                 let mut f = self.bh.borrow_mut();
-                let absent = f.unconfirmed_pickups.as_ref().map_or(true, |m| !m.contains_key(&key));
+                let absent = f.unconfirmed_pickups.as_ref().is_none_or(|m| !m.contains_key(&key));
                 if absent {
                     if let Some(s) = f.this_frame_pickup_requests.as_mut() {
                         s.add_index(key);
@@ -1399,7 +1398,7 @@ impl Blockhead {
                     _ => {}
                 }
             }
-            if world.as_ref().map_or(false, |w| w.expert_mode()) {
+            if world.as_ref().is_some_and(|w| w.expert_mode()) {
                 damage *= 2.0f32;
             }
             let mut die_now = false;
@@ -1772,7 +1771,7 @@ mod tests {
             f.shoes_item_type = 0x122;
         }
         b.suffer_damage_is_simulation_recoil(1.0, false, false);
-        let m = (0.4f32 * 0.5 * 0.5 * 0.7) as f32;
+        let m = 0.4f32 * 0.5 * 0.5 * 0.7;
         assert_eq!(b.health(), 1.0 - 1.0 * (if m <= 0.1 { 0.1 } else { m }));
         // expert doubles
         {

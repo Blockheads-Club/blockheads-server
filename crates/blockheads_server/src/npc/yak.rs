@@ -181,16 +181,20 @@ pub fn yak_create_item_drops_for_death(me: &ObjRef) {
     let pos = me.pos();
     let r1 = glibc_rand::rand_tagged("Yak.drops.leather");
     let leather;
-    let wheat;
-    if expert {
+
+    let wheat = if expert {
         leather = if r1 > 0x3fffffff { 2 } else { 1 };
         let r2 = glibc_rand::rand_tagged("Yak.drops.wheat");
-        wheat = if r2 > 0x3fffffff { 1 } else { 0 };
+        if r2 > 0x3fffffff {
+            1
+        } else {
+            0
+        }
     } else {
         leather = f32_to_i32(1.1f32 + ((r1 as f32) / 2147483648.0f32) * 4.0f32);
         let r2 = glibc_rand::rand_tagged("Yak.drops.wheat");
-        wheat = r2 % 3;
-    }
+        r2 % 3
+    };
     let r3 = glibc_rand::rand_tagged("Yak.drops.horn");
     let horn = if (((r3 as f32) / 2147483648.0f32) as f64) < 0.2f64 { 1 } else { 0 };
     for _ in 0..leather.max(0) {

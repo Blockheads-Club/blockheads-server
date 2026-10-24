@@ -323,7 +323,7 @@ impl Blockhead {
         }
         let first = self.bh.borrow().action_queue.first().cloned();
         if let Some(first) = first {
-            if action_of(&first).map_or(false, |a| a.in_progress()) {
+            if action_of(&first).is_some_and(|a| a.in_progress()) {
                 self.set_path_type_goal_interaction_extra_data(None, 2, 0, None);
             }
             self.stop_interacting();
@@ -400,7 +400,7 @@ impl Blockhead {
             && io
                 .as_deref()
                 .and_then(crate::objects::base::DynamicObject::as_interaction_like)
-                .map_or(false, crate::objects::interaction_object::InteractionObjectLike::requires_human_interaction)
+                .is_some_and(crate::objects::interaction_object::InteractionObjectLike::requires_human_interaction)
     }
 
     /// `-setPaused:`. The `FishingRod` has no pause state in this port.
@@ -429,7 +429,7 @@ impl Blockhead {
         empty
             && !self.meditating()
             && !self.on_trade_mission()
-            && (anim == va::STAND || ride.map_or(false, |r| r.object_type() == 32))
+            && (anim == va::STAND || ride.is_some_and(|r| r.object_type() == 32))
     }
 
     /// `-stopFishing`.
@@ -461,7 +461,7 @@ impl Blockhead {
         if self.is_client_blockhead_being_controlled_by_server() {
             self.bh.borrow().client_double_time_unlocked
         } else {
-            self.world_rc().map_or(false, |w| w.double_time_unlocked())
+            self.world_rc().is_some_and(|w| w.double_time_unlocked())
         }
     }
 
@@ -512,7 +512,7 @@ impl Blockhead {
         !(sub == 5 || sub == 6 || sub == 7)
             && f.state.regenerating == 0
             && f.state.on_trade_mission == 0
-            && f.path.as_ref().map_or(true, |p| p.is_empty())
+            && f.path.as_ref().is_none_or(|p| p.is_empty())
             && f.state.interacting == 0
             && !f.waiting_for_path
             && f.ride_object.is_none()
@@ -722,7 +722,7 @@ impl Blockhead {
                     vc = base + (t - base) * 2.0f32;
                     vc = clamp(vc, -1.3f32, 1.3f32);
                     if vc > 0.0f32 {
-                        vc = 0.75f32 * vc;
+                        vc *= 0.75f32;
                     }
                 } else {
                     vc = vc - 0.1f32 * sgn(vc);
@@ -741,11 +741,11 @@ impl Blockhead {
                     let d = wrap_x_float(fp.x - pos.x as f32, wm);
                     let lift = hc < 0.0f32 && open(tile(p2.x, p2.y), p2);
                     if lift {
-                        vc = hc.abs() + vc;
+                        vc += hc.abs();
                     }
                     if d >= 0.5f32 {
                         if hc < 0.0f32 {
-                            hc = hc * (d - 0.5f32);
+                            hc *= d - 0.5f32;
                         }
                     } else {
                         hc = 1.0f32 - 2.0f32 * d;
@@ -761,11 +761,11 @@ impl Blockhead {
                     let d = wrap_x_float(fp.x - pos.x as f32, wm);
                     let lift = hc > 0.0f32 && open(tile(p2.x, p2.y), p2);
                     if lift {
-                        vc = hc.abs() + vc;
+                        vc += hc.abs();
                     }
                     if d <= 0.5f32 {
                         if hc > 0.0f32 {
-                            hc = hc * (0.5f32 - (d - 0.5f32));
+                            hc *= 0.5f32 - (d - 0.5f32);
                         }
                     } else {
                         hc = -((d - 0.5f32) * 2.0f32);
@@ -781,7 +781,7 @@ impl Blockhead {
                     let d = fp.y - pos.y as f32;
                     if d >= 0.5f32 {
                         if vc < 0.0f32 {
-                            vc = 0.1f32 * vc;
+                            vc *= 0.1f32;
                         }
                     } else {
                         vc = 1.0f32 - 2.0f32 * d;
@@ -803,7 +803,7 @@ impl Blockhead {
                         let d = fp.y - pos.y as f32;
                         if d <= 0.0f32 {
                             if vc > 0.0f32 {
-                                vc = 0.1f32 * vc;
+                                vc *= 0.1f32;
                             }
                         } else {
                             vc = -(2.0f32 * d);
@@ -949,14 +949,14 @@ impl Blockhead {
     pub fn hit_with_force_blockhead(&self, force: i32, blockhead: Option<&ObjRef>) {
         let mut damage = (((force as f32) as f64) * 0.01f64) as f32;
         if blockhead.is_some() {
-            damage = 0.5f32 * damage;
+            damage *= 0.5f32;
         }
-        let sim = self.world_rc().map_or(false, |w| w.is_simulating());
+        let sim = self.world_rc().is_some_and(|w| w.is_simulating());
         self.suffer_damage_is_simulation_recoil(damage, sim, true);
         if !self.is_net() {
             let ride = self.bh.borrow().ride_object.clone();
             if let Some(ride) = ride {
-                let is_npc = class_info_by_name("NPC").map_or(false, |c| is_kind_of_class(&ride, c));
+                let is_npc = class_info_by_name("NPC").is_some_and(|c| is_kind_of_class(&ride, c));
                 if is_npc {
                     if let Some(hm) = ride.as_harmable() {
                         hm.hit_with_force_blockhead(&ride, force / 4, blockhead);

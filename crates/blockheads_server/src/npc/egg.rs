@@ -126,12 +126,12 @@ pub trait PassiveEnv, stub PassiveEnvStub {
     /// `[world expertMode]`
     #[provided]
     fn expert_mode(&self) -> bool {
-        self.world().map_or(false, |w| w.expert_mode())
+        self.world().is_some_and(|w| w.expert_mode())
     }
     /// `[world fastForward]`
     #[provided]
     fn fast_forward(&self) -> bool {
-        self.world().map_or(false, |w| w.fast_forward())
+        self.world().is_some_and(|w| w.fast_forward())
     }
     /// `[world customRules]` (zeros when there is no world).
     #[provided]
@@ -214,12 +214,12 @@ pub trait PassiveEnv, stub PassiveEnvStub {
     /// `npcExistsAtPos:ignoreNPC:`
     #[provided]
     fn dw_npc_exists_at_pos(&self, pos: IntPair, ignore: &ObjRef) -> bool {
-        self.dynamic_world().map_or(false, |dw| dw.npc_exists_at_pos_ignore_npc(pos, Some(ignore)))
+        self.dynamic_world().is_some_and(|dw| dw.npc_exists_at_pos_ignore_npc(pos, Some(ignore)))
     }
     /// `blockheadOccupiesTileAtPos:ignoreBlockhead:nil`
     #[provided]
     fn dw_blockhead_occupies_tile(&self, pos: IntPair) -> bool {
-        self.dynamic_world().map_or(false, |dw| dw.blockhead_occupies_tile_at_pos_ignore_blockhead(pos, None))
+        self.dynamic_world().is_some_and(|dw| dw.blockhead_occupies_tile_at_pos_ignore_blockhead(pos, None))
     }
     /// `npcCloseEnoughToBreedWithNPC:`
     #[provided]
@@ -244,7 +244,7 @@ pub trait PassiveEnv, stub PassiveEnvStub {
     /// `tooManyNPCsToSpawnMoreNearPos:`
     #[provided]
     fn dw_too_many_npcs(&self, pos: IntPair) -> bool {
-        self.dynamic_world().map_or(false, |dw| dw.too_many_npcs_to_spawn_more_near_pos(pos))
+        self.dynamic_world().is_some_and(|dw| dw.too_many_npcs_to_spawn_more_near_pos(pos))
     }
     /// `removeStandardObject:`
     #[provided]
@@ -312,22 +312,22 @@ pub trait PassiveEnv, stub PassiveEnvStub {
     /// `[b paused]`
     #[provided]
     fn bh_paused(&self, b: &ObjRef) -> bool {
-        b.as_any().downcast_ref::<Blockhead>().map_or(false, |x| x.paused())
+        b.as_any().downcast_ref::<Blockhead>().is_some_and(|x| x.paused())
     }
     /// `[b regenerating]`
     #[provided]
     fn bh_regenerating(&self, b: &ObjRef) -> bool {
-        b.as_any().downcast_ref::<Blockhead>().map_or(false, |x| x.regenerating())
+        b.as_any().downcast_ref::<Blockhead>().is_some_and(|x| x.regenerating())
     }
     /// `[b onTradeMission]`
     #[provided]
     fn bh_on_trade_mission(&self, b: &ObjRef) -> bool {
-        b.as_any().downcast_ref::<Blockhead>().map_or(false, |x| x.on_trade_mission())
+        b.as_any().downcast_ref::<Blockhead>().is_some_and(|x| x.on_trade_mission())
     }
     /// `[b shouldContinueSimulating]`
     #[provided]
     fn bh_should_continue_simulating(&self, b: &ObjRef) -> bool {
-        b.as_any().downcast_ref::<Blockhead>().map_or(false, |x| x.should_continue_simulating())
+        b.as_any().downcast_ref::<Blockhead>().is_some_and(|x| x.should_continue_simulating())
     }
     /// `[b rideObject]`
     #[provided]

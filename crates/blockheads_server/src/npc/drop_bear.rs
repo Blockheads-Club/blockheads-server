@@ -541,7 +541,7 @@ impl DropBear {
         let t0 = tile0.unwrap().get();
 
         // ---- eating pine bush / trunk
-        if (self.npc.borrow().fullness as f64) < 2700.0f64 && matches!(t0.contents, 6 | 7 | 8) {
+        if (self.npc.borrow().fullness as f64) < 2700.0f64 && matches!(t0.contents, 6..=8) {
             self.npc.borrow_mut().fullness += 2.0f32 * dt;
         }
 

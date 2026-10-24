@@ -336,7 +336,7 @@ impl ClownFish {
             None => return,
         };
         let cur = f.clown_fish.borrow().hooked_fishing_rod.clone();
-        let same = cur.as_ref().map_or(false, |c| std::rc::Rc::ptr_eq(c, &rod));
+        let same = cur.as_ref().is_some_and(|c| std::rc::Rc::ptr_eq(c, &rod));
         if env.rod_hooked_fish(&rod).is_none() && !same {
             f.clown_fish.borrow_mut().hooked_fishing_rod = Some(rod.clone());
             env.rod_set_hooked_fish(&rod, Some(me));
@@ -559,7 +559,7 @@ fn update_body(me: &ObjRef, f: &ClownFish, s: &mut ClownFishState, dt: f32, is_s
         if lay > 0.0f32 {
             let nl = lay - dt;
             ns.borrow_mut().lay_timer = nl;
-            if nl <= 0.0f32 && t_water(&tile) && tile.map_or(false, |t| t.type_index != TILE_ICE) {
+            if nl <= 0.0f32 && t_water(&tile) && tile.is_some_and(|t| t.type_index != TILE_ICE) {
                 {
                     let mut n = ns.borrow_mut();
                     n.fullness = ((n.fullness as f64) - 2700.0f64) as f32;
@@ -571,7 +571,7 @@ fn update_body(me: &ObjRef, f: &ClownFish, s: &mut ClownFishState, dt: f32, is_s
                 dw_changed(me);
             }
         }
-        let shallow = tile.map_or(true, |t| t.type_index == TILE_ICE || t.partial_content_left < 0x7f);
+        let shallow = tile.is_none_or(|t| t.type_index == TILE_ICE || t.partial_content_left < 0x7f);
         if !t_water(&tile) || shallow {
             s.drown_timer += dt;
             if s.drown_timer > 10.0f32 {
@@ -587,7 +587,7 @@ fn update_body(me: &ObjRef, f: &ClownFish, s: &mut ClownFishState, dt: f32, is_s
     // 4. gravity / flopping (also for replicas)
     let pos = me.pos();
     let t2 = env.tile_loaded(pos.x, pos.y);
-    let in_water = !t_air_snow(&t2) && t2.map_or(true, |t| t.partial_content_left >= 0x7f);
+    let in_water = !t_air_snow(&t2) && t2.is_none_or(|t| t.partial_content_left >= 0x7f);
     if in_water {
         if s.falling {
             s.fall_velocity = ((s.fall_velocity as f64) + (dt as f64) * 0.2f64) as f32;
@@ -628,7 +628,7 @@ fn update_body(me: &ObjRef, f: &ClownFish, s: &mut ClownFishState, dt: f32, is_s
     }
 
     // 5. advance along the current step
-    s.travel_fraction = dt * walk_speed_to_use + s.travel_fraction;
+    s.travel_fraction += dt * walk_speed_to_use;
     if s.travel_fraction >= 1.0f32 {
         s.travel_fraction -= 1.0f32;
         if s.travel_fraction >= 1.0f32 || s.travel_fraction < 0.0f32 {
@@ -1003,7 +1003,7 @@ impl DynamicObject for ClownFish {
     fn blockhead_unloaded(&self, _me: &ObjRef, b: &ObjRef) {
         let rod = self.clown_fish.borrow().hooked_fishing_rod.clone();
         let hit = match rod {
-            Some(r) => penv().rod_blockhead(&r).map_or(false, |x| ptr_eq(&x, b)),
+            Some(r) => penv().rod_blockhead(&r).is_some_and(|x| ptr_eq(&x, b)),
             None => false,
         };
         if hit {

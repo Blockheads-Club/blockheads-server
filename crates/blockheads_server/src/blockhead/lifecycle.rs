@@ -440,7 +440,7 @@ impl Blockhead {
             f.client_save_dir = client_save_dir.map(|s| s.to_string());
             if f.client_save_dir.is_some() {
                 f.is_client_blockhead_being_controlled_by_server = true;
-                f.client_double_time_unlocked = get("doubleTimeUnlocked").map_or(false, |v| v.bool_value());
+                f.client_double_time_unlocked = get("doubleTimeUnlocked").is_some_and(|v| v.bool_value());
             }
         }
 
@@ -586,7 +586,7 @@ impl Blockhead {
             f.name = get("name").and_then(|v| v.as_str().map(|s| s.to_string()));
             match get("skinOptions") {
                 None => {
-                    let male = get("male").map_or(false, |v| v.bool_value());
+                    let male = get("male").is_some_and(|v| v.bool_value());
                     let head = get("headIndex").map_or(0, |v| v.int_value());
                     let skin = get("skinIndex").map_or(0, |v| v.int_value());
                     let hair = get("hairStyleIndex").map_or(0, |v| v.int_value());
@@ -602,7 +602,7 @@ impl Blockhead {
         // ---- pending path
         {
             let mut f = rc.bh.borrow_mut();
-            f.load_requires_recalculation = get("loadRequiresRecalculation").map_or(false, |v| v.bool_value());
+            f.load_requires_recalculation = get("loadRequiresRecalculation").is_some_and(|v| v.bool_value());
             if f.load_requires_recalculation {
                 f.final_goal_square.x = get("finalGoalSquare.x").map_or(0, |v| v.int_value());
                 f.final_goal_square.y = get("finalGoalSquare.y").map_or(0, |v| v.int_value());
@@ -703,7 +703,7 @@ impl Blockhead {
         let dget = |k: &str| -> Option<String> {
             dict.as_ref().and_then(|d| d.object_for_key(k)).and_then(|v| v.as_str().map(|s| s.to_string()))
         };
-        let has_server = self.world_rc().map_or(false, |w| w.server().is_some());
+        let has_server = self.world_rc().is_some_and(|w| w.server().is_some());
         let name = resolve_net_name(has_server, dget("name"));
         let mut f = self.bh.borrow_mut();
         f.name = name;
@@ -842,9 +842,9 @@ impl Blockhead {
         let world = self.world_rc();
         let h = host();
         let is_net = self.is_net();
-        let dw_is_server = self.dw().map_or(false, |d| d.is_server());
+        let dw_is_server = self.dw().is_some_and(|d| d.is_server());
         let w_tiles = world.as_ref().map_or(0, |w| w.world_width_macro().wrapping_mul(32));
-        let is_admin = world.as_ref().map_or(false, |w| w.is_admin());
+        let is_admin = world.as_ref().is_some_and(|w| w.is_admin());
 
         let mut u = BlockheadUpdateData::default();
         u.dynamic_object_net_data = nd;
@@ -863,7 +863,7 @@ impl Blockhead {
         };
         let fishing_valid = {
             let f = self.bh.borrow();
-            f.fishing_rod.as_ref().map_or(false, |r| h.fishing_rod_valid(r))
+            f.fishing_rod.as_ref().is_some_and(|r| h.fishing_rod_valid(r))
         };
         let hooked_fish = {
             let f = self.bh.borrow();
@@ -951,7 +951,7 @@ impl Blockhead {
             set(
                 &mut d,
                 "doubleTimeUnlocked",
-                PlistValue::boolean(world.as_ref().map_or(false, |w| w.double_time_unlocked())),
+                PlistValue::boolean(world.as_ref().is_some_and(|w| w.double_time_unlocked())),
             );
             if f.controlled_by_server_crystal_discrepency != 0 {
                 set(

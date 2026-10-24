@@ -989,7 +989,7 @@ impl DynamicObject for Blockhead {
     /// `-requiresPhysicalBlock`: `isNet ? dw.isServer: YES`.
     fn requires_physical_block(&self) -> bool {
         if self.is_net() {
-            self.dw().map_or(false, |d| d.is_server())
+            self.dw().is_some_and(|d| d.is_server())
         } else {
             true
         }
@@ -1792,7 +1792,7 @@ pub trait BlockheadHost, stub BlockheadHostStub {
     /// `[rideObject blockheadCanRide:self usingItem:t]`
     #[provided]
     fn ridable_blockhead_can_ride_using_item(&self, o: &ObjRef, b: &Blockhead, item: i32) -> bool {
-        o.as_ridable().map_or(false, |r| r.blockhead_can_ride_using_item(&b.me(), item))
+        o.as_ridable().is_some_and(|r| r.blockhead_can_ride_using_item(&b.me(), item))
     }
     /// `[rideObject isKindOfClass:[HandCar|SteamTrain|PassengerCar class]]`: 28 / 29 / 30 or 0 = other.
     #[provided]
