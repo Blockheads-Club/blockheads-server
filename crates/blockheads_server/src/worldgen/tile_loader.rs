@@ -960,6 +960,8 @@ pub(crate) mod testutil {
         pub fully_loaded: RefCell<Vec<(IntPair, i32)>>,
         pub chests: RefCell<Vec<(IntPair, bool, bool)>>,
         pub decommisions: Cell<u32>,
+        /// A block whose client light blocks the next `fully_load_if_needed_around_pos` throws away.
+        pub clobber: RefCell<Option<crate::world::state::PhysicalBlockRef>>,
     }
 
     impl WorldgenHost for FakeHost {
@@ -1008,6 +1010,9 @@ pub(crate) mod testutil {
         }
         fn fully_load_if_needed_around_pos(&self, _w: &World, pos: IntPair, i: i32) {
             self.fully_loaded.borrow_mut().push((pos, i));
+            for pb in self.clobber.borrow().iter() {
+                pb.client_light_blocks.borrow_mut().iter_mut().for_each(|b| *b = None);
+            }
         }
     }
 
@@ -1063,15 +1068,16 @@ pub(crate) mod testutil {
 
 /// Whole-world generation over many rule sets: terrain, spawn tables, islands, ores, gems and the blocks themselves.
 #[cfg(test)]
-mod sweep_tests {
+pub(crate) mod sweep_tests {
     use super::*;
     use crate::types::structs::CustomRules;
     use crate::world::custom_rules::default_custom_rules;
     use crate::worldgen::block_io::LoadOutcome;
     use crate::worldgen::terrain::GenParams;
 
-    struct GenOps {
-        loader: RefCell<Option<Rc<WorldTileLoader>>>,
+    /// `World` block loading for tests: the loader answers, the outcome is applied to the macro tile (R9).
+    pub(crate) struct GenOps {
+        pub(crate) loader: RefCell<Option<Rc<WorldTileLoader>>>,
     }
     impl crate::world::state::WorldOpsHooks for GenOps {
         fn load_physical_block_for_macro_tile_at_x_y_load_surrounding_blocks_create_if_not_created(
@@ -1142,6 +1148,36 @@ mod sweep_tests {
             l.refine_terrain();
         }
         (world, l)
+    }
+
+    /// The block loading double answers every outcome and its other two hooks are inert.
+    #[test]
+    fn the_block_loading_double_applies_every_outcome() {
+        let (world, _l) = generate(32, 31, rules_with(|_| {}), false, true);
+        let ops = world.ops_hooks().unwrap();
+        let mt = world.macro_tiles().get(40).unwrap();
+        // nothing stored, not created: the tile stays unexplored
+        assert!(ops.load_physical_block_for_macro_tile_at_x_y_load_surrounding_blocks_create_if_not_created(
+            &world, &mt, 8, 1, false, false
+        ));
+        assert_eq!(mt.unexplored.get(), 1);
+        // already explored, nothing to create: skipped
+        assert!(ops.load_physical_block_for_macro_tile_at_x_y_load_surrounding_blocks_create_if_not_created(
+            &world, &mt, 8, 1, false, false
+        ));
+        assert!(mt.physical_block().is_none());
+        // created on demand
+        assert!(ops.load_physical_block_for_macro_tile_at_x_y_load_surrounding_blocks_create_if_not_created(
+            &world, &mt, 8, 1, false, true
+        ));
+        assert!(mt.physical_block().is_some());
+        // a loaded clean tile is left alone
+        assert!(ops.load_physical_block_for_macro_tile_at_x_y_load_surrounding_blocks_create_if_not_created(
+            &world, &mt, 8, 1, false, true
+        ));
+        ops.load_dynamic_objects_if_not_already_loaded_for_macro_tile_include_surface_blocks(&world, &mt, true);
+        let o = crate::world::helpers::testutil::dw_obj_of_type(0).obj;
+        assert!(!ops.tile_is_protected_at_pos_against_blockhead(&world, IntPair { x: 1, y: 1 }, &o));
     }
 
     fn rules_with(f: impl FnOnce(&mut CustomRules)) -> CustomRules {
@@ -1224,7 +1260,7 @@ mod sweep_tests {
             for dy in 0..6 {
                 for dx in -4..=4 {
                     let x = (x0 + dx).rem_euclid(p.wt());
-                    if let Some(t) = crate::world::tiles::tile_at_world_position_loaded(x, 330 + dy, &world) {
+                    for t in crate::world::tiles::tile_at_world_position_loaded(x, 330 + dy, &world) {
                         t.update(|v| {
                             v.type_index = if dx % 2 == 0 { 2 } else { 3 };
                             v.zone_type_index = 1;
@@ -1471,6 +1507,47 @@ mod loader_more_tests {
             &world, 5, false, "wgserver", 0, None,
         );
         assert!(l.light_block_database.borrow().is_some());
+        l.dealloc();
+        drop(g);
+    }
+
+    /// A world without lakes skips the reverse lake pass.
+    #[test]
+    fn worlds_without_lakes_have_no_reverse_pass() {
+        let mut t = Terrain::new_empty(16, 5);
+        let mut r = default_custom_rules(false);
+        r.custom_rules_enabled = 1;
+        r.lakes = 0;
+        let p = GenParams { w: 32, rules: r, expert: false };
+        WorldTileLoader::step_a_noise(&mut t, &p);
+        WorldTileLoader::step_b_c_heights_and_lakes(&mut t, &p);
+        assert!(t.lake_heights.iter().all(|&h| h == 0));
+    }
+
+    /// The light block database of a server world cannot be opened when its directory path is blocked by a file.
+    #[test]
+    fn a_blocked_light_block_directory_is_logged_and_survived() {
+        let g = crate::world::lifecycle::testkit::HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let home = format!("{}/bhwg_blocked_{}", std::env::temp_dir().display(), std::process::id());
+        let _ = std::fs::remove_dir_all(&home);
+        let saves = format!("{home}/GNUstep/Library/ApplicationSupport/TheBlockheads/saves");
+        std::fs::create_dir_all(&saves).unwrap();
+        std::fs::write(format!("{saves}/wgblocked"), b"in the way").unwrap();
+        crate::foundation::paths::set_home_for_test(&home);
+        let (world, _s) = testutil::world_with_server(32);
+        let mut r = default_custom_rules(false);
+        r.custom_rules_enabled = 1;
+        world.set_custom_rules(r);
+        glibc_rand::srand(5);
+        let l = WorldTileLoader::init_with_world_random_seed_is_new_world_save_id_loaded_version_block_database(
+            &world,
+            5,
+            false,
+            "wgblocked",
+            0,
+            None,
+        );
+        assert!(l.light_block_database.borrow().is_none());
         l.dealloc();
         drop(g);
     }

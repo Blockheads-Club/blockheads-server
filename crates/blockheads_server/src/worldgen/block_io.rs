@@ -8,7 +8,6 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::fmath::cconv::f32_to_i32;
-use crate::foundation::exception::ns_raise;
 use crate::foundation::gzip::{gzip_deflate, gzip_inflate};
 use crate::foundation::{clock, paths};
 use crate::nslog;
@@ -187,10 +186,9 @@ impl WorldTileLoader {
         let x_pos = pb.x_pos.get();
         let y_pos = pb.y_pos.get();
         let tiles_data = Self::block_payload(pb);
+        // `gzip_deflate` only answers an empty buffer for an empty input and the payload is 0x10005 bytes long, so
+        // the original's "Failed to save tilesData." DataSaveException cannot be raised.
         let deflated = gzip_deflate(&tiles_data);
-        if deflated.is_empty() {
-            ns_raise("DataSaveException", "Failed to save tilesData.");
-        }
         pb.update_index.set(pb.update_index.get().wrapping_add(1));
         let mut fill_receipts: HashMap<String, Vec<u8>> = HashMap::new();
         let h = host();
@@ -213,9 +211,9 @@ impl WorldTileLoader {
                     hash: block_wire::block_hash(peer, x_pos, y_pos, admin),
                     receipts: world.as_deref().and_then(|w| h.client_receipts(w, peer, IntPair { x: x_pos, y: y_pos })),
                 };
-                if let Some(blob) = block_wire::light_blob(&light, &extra) {
-                    fill_receipts.insert(peer.clone(), blob);
-                }
+                // `light_blob` fails only if `write_xml` raised, which it never does for a string, ints and data
+                let blob = block_wire::light_blob(&light, &extra).expect("light blob");
+                fill_receipts.insert(peer.clone(), blob);
             }
         }
         if let Some(db) = &self.block_database {
@@ -227,12 +225,8 @@ impl WorldTileLoader {
                 let index = (y_pos.wrapping_mul(w).wrapping_add(x_pos)) as u32;
                 for peer in clients {
                     let light_gz = fill_receipts.get(peer).map(|l| gzip_deflate(l));
-                    if let Some(m) = block_wire::server_block(index, &deflated, light_gz.as_deref()) {
-                        if let Some(wd) = world.as_deref() {
-                            let _ = wd;
-                        }
-                        h.send_network_data_to_peers_reliable(server, &m, std::slice::from_ref(peer), true);
-                    }
+                    let m = block_wire::server_block(index, &deflated, light_gz.as_deref()).expect("server block");
+                    h.send_network_data_to_peers_reliable(server, &m, std::slice::from_ref(peer), true);
                 }
             }
         }
@@ -289,13 +283,8 @@ impl WorldTileLoader {
             hash: block_wire::block_hash(client_id, pos.x, pos.y, admin),
             receipts: h.client_receipts(&world, client_id, pos),
         };
-        let light_blob = match block_wire::light_blob(&light, &extra) {
-            Some(b) => b,
-            None => {
-                nslog!("unable to load extra data");
-                return false;
-            }
-        };
+        // `light_blob` fails only if `write_xml` raised, which it never does for a string, ints and data
+        let light_blob = block_wire::light_blob(&light, &extra).expect("light blob");
         let w = world.world_width_macro();
         let index = (pos.y.wrapping_mul(w).wrapping_add(pos.x)) as u32;
         let dyn_info = if send_dynamic_objects {
@@ -303,10 +292,9 @@ impl WorldTileLoader {
         } else {
             None
         };
-        let packet = block_wire::server_block(index, &gzip_deflate(&tiles_blob), Some(&gzip_deflate(&light_blob)));
-        if let Some(packet) = packet {
-            h.send_network_data_to_peers_reliable(server, &packet, &[client_id.to_string()], reliable);
-        }
+        let packet = block_wire::server_block(index, &gzip_deflate(&tiles_blob), Some(&gzip_deflate(&light_blob)))
+            .expect("server block");
+        h.send_network_data_to_peers_reliable(server, &packet, &[client_id.to_string()], reliable);
         if let Some(dyn_info) = dyn_info {
             let peers = [client_id.to_string()];
             for (kind, entries) in [(7u8, &dyn_info.creation), (8u8, &dyn_info.update)] {
@@ -477,12 +465,9 @@ mod tests {
     use crate::types::tile::{parse_block_plain, Tile};
     use crate::world::custom_rules::default_custom_rules;
     use crate::world::state::World;
+    use crate::worldgen::tile_loader::sweep_tests::GenOps;
 
     /// Copies a sample `world_db` to a scratch dir (opening LMDB may touch lock files) and returns all stored blocks.
-    fn sample_blocks(sample: &str, id: &str) -> Option<Vec<(i32, i32, Vec<u8>)>> {
-        sample_blocks_under(&crate::testenv::refenv_samples(), sample, id)
-    }
-
     fn sample_blocks_under(root: &str, sample: &str, id: &str) -> Option<Vec<(i32, i32, Vec<u8>)>> {
         let id = if id.is_empty() {
             std::fs::read_dir(format!("{}/{}", root, sample))
@@ -520,56 +505,24 @@ mod tests {
         Some(out)
     }
 
-    /// Minimal `World loadPhysicalBlockForMacroTile...`: allocate a block, call the loader, apply the outcome (R9).
-    struct TestOps {
-        loader: std::cell::RefCell<Option<Rc<WorldTileLoader>>>,
+    /// Tiles that DynamicWorld touched after generation (tree trunks with a season offset) are not generation:
+    /// the generated tile takes over what the stored one has there.
+    fn without_later_changes(mut g: Tile, t: &Tile) -> Tile {
+        if t.season_offset != 0 && (g.contents == 0 || g.contents == t.contents) {
+            g.season_offset = t.season_offset;
+            g.contents = t.contents;
+            g.dynamic_object_owner = t.dynamic_object_owner;
+        }
+        g
     }
-    impl crate::world::state::WorldOpsHooks for TestOps {
-        fn load_physical_block_for_macro_tile_at_x_y_load_surrounding_blocks_create_if_not_created(
-            &self,
-            world: &World,
-            mt: &crate::world::state::MacroTileRef,
-            mx: i32,
-            my: i32,
-            _load_surrounding_blocks: bool,
-            create_if_not_created: bool,
-        ) -> bool {
-            if mt.physical_block().is_none() || mt.dirty.get() != 0 {
-                let pb = mt.physical_block().unwrap_or_else(|| world.take_physical_block());
-                let l = self.loader.borrow().clone().unwrap();
-                match l.load_physical_block_at_x_pos_y_pos_create_if_not_created(
-                    pb,
-                    mx,
-                    my,
-                    create_if_not_created,
-                    mt.unexplored.get() != 0,
-                ) {
-                    LoadOutcome::Loaded | LoadOutcome::Generated => {
-                        *mt.physical_block.borrow_mut() = Some(pb);
-                        mt.unexplored.set(0);
-                        mt.dynamic_objects_loaded.set(false);
-                    }
-                    LoadOutcome::NotFound => mt.unexplored.set(1),
-                    LoadOutcome::Skipped => {}
-                }
-            }
-            true
-        }
-        fn load_dynamic_objects_if_not_already_loaded_for_macro_tile_include_surface_blocks(
-            &self,
-            _world: &World,
-            _mt: &crate::world::state::MacroTileRef,
-            _include_surface_blocks: bool,
-        ) {
-        }
-        fn tile_is_protected_at_pos_against_blockhead(
-            &self,
-            _world: &World,
-            _pos: IntPair,
-            _b: &crate::objects::handle::ObjRef,
-        ) -> bool {
-            false
-        }
+
+    #[test]
+    fn later_changes_by_the_dynamic_world_are_not_generation() {
+        let stored = Tile { season_offset: 9, contents: 4, dynamic_object_owner: 77, ..Tile::default() };
+        assert_eq!(without_later_changes(Tile::default(), &stored), stored);
+        let other = Tile { contents: 5, ..Tile::default() };
+        assert_eq!(without_later_changes(other, &stored), other);
+        assert_eq!(without_later_changes(other, &Tile::default()), other);
     }
 
     /// Full creation pipeline of a sample (srand, init, srand, 8 x refine_terrain with on-demand block loading)
@@ -601,7 +554,7 @@ mod tests {
         let world = World::alloc(w);
         world.set_custom_rules(rules);
         world.set_expert_mode(expert);
-        let ops = Rc::new(TestOps { loader: std::cell::RefCell::new(None) });
+        let ops = Rc::new(GenOps { loader: std::cell::RefCell::new(None) });
         world.set_ops_hooks(Some(ops.clone()));
         glibc_rand::srand(seed);
         let l = WorldTileLoader::init_with_world_random_seed_is_new_world_save_id_loaded_version_block_database(
@@ -619,82 +572,19 @@ mod tests {
         }
         let mut compared = 0;
         let mut diff_blocks = 0;
-        let mut field_diffs = std::collections::BTreeMap::<&'static str, usize>::new();
-        let mut first: Vec<String> = Vec::new();
-        let mut pairs = std::collections::BTreeMap::<(&'static str, u8, u8), usize>::new();
         let macro_tiles = world.macro_tiles();
-        for (x, y, plain) in &blocks {
-            let (tiles, version, _upd) = parse_block_plain(plain).unwrap();
-            if version != 0 {
-                continue;
-            }
+        for (x, y, plain) in blocks.iter().filter(|b| parse_block_plain(&b.2).unwrap().1 == 0) {
+            let (tiles, _version, _upd) = parse_block_plain(plain).unwrap();
             let mt = macro_tiles.get((*y * w + *x) as usize).unwrap();
             if mt.physical_block().is_none() {
                 crate::world::tiles::load_block_at_macro_pos(IntPair { x: *x, y: *y }, &world);
             }
             let pb = mt.physical_block().expect("block generated");
             compared += 1;
-            let mut bd = false;
-            for (i, t) in tiles.iter().enumerate() {
-                let mut g: Tile = pb.tiles[i].get();
-                // Tiles that DynamicWorld touched after generation (tree trunks with a season offset): not generation.
-                if t.season_offset != 0 && (g.contents == 0 || g.contents == t.contents) {
-                    g.season_offset = t.season_offset;
-                    g.contents = t.contents;
-                    g.dynamic_object_owner = t.dynamic_object_owner;
-                }
-                if g != *t {
-                    bd = true;
-                    macro_rules! f {
-                        ($n:ident) => {
-                            if g.$n != t.$n {
-                                *field_diffs.entry(stringify!($n)).or_default() += 1;
-                                if first.len() < 16 {
-                                    first.push(format!(
-                                        "block {x}_{y} tile {} ({},{}) {}: gen {:?} ref {:?}",
-                                        i,
-                                        i % 32,
-                                        i / 32,
-                                        stringify!($n),
-                                        g.$n,
-                                        t.$n
-                                    ));
-                                }
-                            }
-                        };
-                    }
-                    if g.type_index != t.type_index {
-                        *pairs.entry(("type", g.type_index, t.type_index)).or_default() += 1;
-                    }
-                    if g.contents != t.contents {
-                        *pairs.entry(("contents", g.contents, t.contents)).or_default() += 1;
-                    }
-                    f!(type_index);
-                    f!(back_wall_type_index);
-                    f!(zone_type_index);
-                    f!(contents);
-                    f!(partial_content_left);
-                    f!(sun_light);
-                    f!(light);
-                    f!(foreground_contents);
-                    f!(artificial_light_r);
-                    f!(artificial_heat);
-                    f!(terrain_slow_factor);
-                    f!(explored_fraction);
-                    f!(season_offset);
-                }
-            }
-            if bd {
-                diff_blocks += 1;
-            }
+            let differs = tiles.iter().enumerate().any(|(i, t)| without_later_changes(pb.tiles[i].get(), t) != *t);
+            diff_blocks += usize::from(differs);
         }
-        eprintln!("{sample}: compared {compared} fresh blocks, {diff_blocks} differ; field diffs {field_diffs:?}");
-        for s in &first {
-            eprintln!("  {s}");
-        }
-        let mut top: Vec<_> = pairs.iter().collect();
-        top.sort_by(|a, b| b.1.cmp(a.1));
-        eprintln!("  top pairs (kind, gen, ref): {:?}", &top[..top.len().min(10)]);
+        eprintln!("{sample}: compared {compared} fresh blocks, {diff_blocks} differ");
         assert!(compared > 0);
         assert_eq!(diff_blocks, 0, "{sample}: generated blocks differ from the reference");
     }
@@ -754,10 +644,8 @@ mod tests {
     fn generated_blocks_match_custom_sample() {
         let json = br#"{"seed":"custom","custom_seed_value":"hello world","oceans":"ocean world","temperature":"hot","health":"easy","day/night cycle":"faster","world modification":"admin only","sunColor_0":255,"sunColor_1":128,"sunColor_2":64}"#;
         let v = crate::plist::json::json_object_with_data(json).value.unwrap();
-        let rules = match &v {
-            PlistValue::Dict(d) => crate::world::custom_rules::custom_rules_from_dict(Some(d), false),
-            _ => panic!("not a dict"),
-        };
+        let PlistValue::Dict(d) = &v else { unreachable!() };
+        let rules = crate::world::custom_rules::custom_rules_from_dict(Some(d), false);
         compare_sample("custom", "", 512, 166199516, rules, false);
     }
 
@@ -867,7 +755,7 @@ mod tests {
         {
             let world = World::alloc(32);
             world.set_custom_rules(rules);
-            let ops = Rc::new(TestOps { loader: std::cell::RefCell::new(None) });
+            let ops = Rc::new(GenOps { loader: std::cell::RefCell::new(None) });
             world.set_ops_hooks(Some(ops.clone()));
             glibc_rand::srand(1792182287);
             let l = WorldTileLoader::init_with_world_random_seed_is_new_world_save_id_loaded_version_block_database(
@@ -1075,10 +963,8 @@ mod tests {
         assert_eq!(m.macro_index, 3 * 32 + 4);
         assert_eq!(m.update_index, 100);
         let extra = m.extra.unwrap();
-        let rec = match extra.object_for_key("receipts").unwrap() {
-            PlistValue::Array(a) => a.items.iter().map(|v| v.unsigned_int_value()).collect::<Vec<_>>(),
-            _ => panic!(),
-        };
+        let PlistValue::Array(a) = extra.object_for_key("receipts").unwrap() else { unreachable!() };
+        let rec = a.items.iter().map(|v| v.unsigned_int_value()).collect::<Vec<_>>();
         assert_eq!(rec, vec![3, 4]);
         // dynamic objects: creation types first (in the given order), then updates, always reliable
         assert_eq!(&s[1].0[..2], &[7, 5]);
@@ -1193,5 +1079,91 @@ mod tests {
         }
         assert!(host.chests.borrow().iter().all(|(_, troll, treasure)| !troll && *treasure));
         set_host(None);
+    }
+
+    /// Blocks of every old version walk through exactly the passes newer than them, the start column is skipped,
+    /// and beach sand over a generated rock line gets its treasure chest.
+    #[test]
+    fn old_blocks_get_only_the_passes_after_their_version() {
+        let host = install_host();
+        let world = World::alloc(32);
+        world.set_custom_rules(rules_default(true, false));
+        glibc_rand::srand(777);
+        let l = WorldTileLoader::init_with_world_random_seed_is_new_world_save_id_loaded_version_block_database(
+            &world,
+            777,
+            true,
+            "wgtest_old_blocks",
+            0,
+            None,
+        );
+        let start = l.best_start_position();
+        let p = crate::worldgen::terrain::GenParams::from_world_opt(Some(&world));
+        for version in [0u8, 2, 3, 4, 5, 6, 7, 8] {
+            let pb = world.take_physical_block();
+            let out = l.load_physical_block_at_x_pos_y_pos_create_if_not_created(pb, start.x / 32, 16, true, false);
+            assert_eq!(out, LoadOutcome::Generated);
+            pb.version.set(version);
+            l.update_physical_block_to_latest_version(pb);
+        }
+        // chests: put sand on the rock line of every column of the blocks around the surface and see who answers
+        'search: for y_pos in 14..20 {
+            for x_pos in 0..32 {
+                let pb = world.take_physical_block();
+                let out = l.load_physical_block_at_x_pos_y_pos_create_if_not_created(pb, x_pos, y_pos, true, false);
+                assert_eq!(out, LoadOutcome::Generated);
+                for x in 0..32 {
+                    let (r, _d) = l.t.get_rock_and_dirt_height(&p, x_pos * 32 + x);
+                    let lr = r - y_pos * 32;
+                    if (0..32).contains(&lr) {
+                        let cell = &pb.tiles[(lr * 32 + x) as usize];
+                        let mut t = cell.get();
+                        t.contents = 0;
+                        t.type_index = tt::SAND_BEACH;
+                        cell.set(t);
+                    }
+                }
+                pb.version.set(0);
+                l.update_physical_block_to_latest_version(pb);
+                if !host.chests.borrow().is_empty() {
+                    break 'search;
+                }
+            }
+        }
+        assert!(!host.chests.borrow().is_empty(), "a beach chest was placed");
+        set_host(None);
+    }
+
+    /// A host that throws the light block away while the block is being sent or saved: the packet is not sent.
+    #[test]
+    fn light_blocks_that_vanish_while_loading_stop_the_send() {
+        let host = install_host();
+        let dir = scratch("light_vanish");
+        let (world, server) = world_with_server(32);
+        let l = loader_with_dbs(&world, &dir, true);
+        host.clients.borrow_mut().insert("c1".into(), (true, 3));
+        // the start portal lies in this block, so creating its zeroed light block fully loads around it
+        world.set_start_portal_pos(IntPair { x: 5 * 32 + 3, y: 6 * 32 + 1 });
+        let pb = marked_block(&world, 5, 6, 8, 41);
+        *host.clobber.borrow_mut() = Some(pb);
+        let sent = l
+            .send_block_to_client_without_saving_for_block_pos_send_to_client_server_send_dynamic_objects_reliable(
+                pb,
+                IntPair { x: 5, y: 6 },
+                Some("c1"),
+                Some(&server),
+                false,
+                true,
+            );
+        assert!(!sent);
+        assert!(host.sent.borrow().is_empty());
+        // saving does the same lookup: the block is stored, nothing is pushed to the peer
+        l.save_physical_block_send_to_clients_server_send_reliably(pb, &["c1".to_string()], Some(&server), false);
+        assert!(l.block_database.as_ref().unwrap().data_for_key(Some("5_6")).is_some());
+        *host.clobber.borrow_mut() = None;
+        // a server without any peer to push to
+        l.save_physical_block_send_to_clients_server_send_reliably(pb, &[], Some(&server), false);
+        set_host(None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

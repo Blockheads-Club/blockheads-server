@@ -429,28 +429,27 @@ impl Terrain {
             }
             island = gi;
         }
-        if island != 0 {
-            plan.island_type = island;
-            let n1 = noise_xy(&self.flint, xd * 0.312 + 0.31, yd * 0.194 + 0.35, 2);
-            let mut w = f64_to_i32(15.0 + (n1 * 0.5 + 0.5) * 15.0);
-            if w > 29 {
-                w = 30;
+        // every island kind assigned above is non-zero (ISLAND_NONE is the only 0)
+        plan.island_type = island;
+        let n1 = noise_xy(&self.flint, xd * 0.312 + 0.31, yd * 0.194 + 0.35, 2);
+        let mut w = f64_to_i32(15.0 + (n1 * 0.5 + 0.5) * 15.0);
+        if w > 29 {
+            w = 30;
+        }
+        plan.width = w;
+        let max_start_x = 32 - w;
+        let n2 = noise_xy(&self.flint, xd * 0.212 + 0.23, yd * 0.094 + 0.45, 2);
+        let min_x = clampi(f64_to_i32((n2 * 2.0 + 1.0) * 0.5 * (max_start_x as f64)), 0, max_start_x);
+        plan.local_min_x = min_x;
+        let n3 = noise_xy(&self.flint, xd * 0.156 + 0.17, yd * 0.122 + 0.21, 2);
+        plan.local_y = clampi(f64_to_i32((w as f64) + (n3 * 2.0 + 1.0) * 0.5 * ((31 - w) as f64)), w, 31);
+        if w > 12 {
+            let n4 = noise_xy(&self.flint, xd * 0.126 + 0.19, yd * 0.1662 + 0.24, 2);
+            let mut cx = f64_to_i32(((min_x + w / 2) as f64) + n4 * (w as f64));
+            if cx > min_x + w - 4 || cx < min_x + 4 {
+                cx = -1;
             }
-            plan.width = w;
-            let max_start_x = 32 - w;
-            let n2 = noise_xy(&self.flint, xd * 0.212 + 0.23, yd * 0.094 + 0.45, 2);
-            let min_x = clampi(f64_to_i32((n2 * 2.0 + 1.0) * 0.5 * (max_start_x as f64)), 0, max_start_x);
-            plan.local_min_x = min_x;
-            let n3 = noise_xy(&self.flint, xd * 0.156 + 0.17, yd * 0.122 + 0.21, 2);
-            plan.local_y = clampi(f64_to_i32((w as f64) + (n3 * 2.0 + 1.0) * 0.5 * ((31 - w) as f64)), w, 31);
-            if w > 12 {
-                let n4 = noise_xy(&self.flint, xd * 0.126 + 0.19, yd * 0.1662 + 0.24, 2);
-                let mut cx = f64_to_i32(((min_x + w / 2) as f64) + n4 * (w as f64));
-                if cx > min_x + w - 4 || cx < min_x + 4 {
-                    cx = -1;
-                }
-                plan.cloud_tree_x = cx;
-            }
+            plan.cloud_tree_x = cx;
         }
         plan
     }
@@ -1009,5 +1008,78 @@ impl Terrain {
                 }
             }
         }
+    }
+}
+
+/// Floating islands over noise functions of different strength: every island kind, width and thickness.
+#[cfg(test)]
+mod island_tests {
+    use super::*;
+    use crate::world::custom_rules::default_custom_rules;
+
+    fn noise(amplitude: f64, seed: i32) -> Option<Rc<NoiseFunction>> {
+        Some(Rc::new(
+            NoiseFunction::init_with_frequency_x_frequency_y_frequency_z_amplitude_seed_tileable_loop_persistance(
+                -1, 3, 2, amplitude, seed, true, false, 1.2,
+            ),
+        ))
+    }
+
+    #[test]
+    fn islands_of_every_kind_over_strong_and_weak_noise() {
+        let world = World::alloc(32);
+        let mut seen = std::collections::BTreeSet::new();
+        let mut widths = std::collections::BTreeSet::new();
+        for (sky, trees, amplitude) in
+            [(3u8, 0u8, 0.9f64), (3, 1, 2.5), (3, 2, 8.0), (1, 2, 20.0), (2, 1, 4.0), (3, 2, 1.7)]
+        {
+            let mut rules = default_custom_rules(false);
+            rules.custom_rules_enabled = 1;
+            rules.sky_islands = sky as _;
+            rules.trees = trees as _;
+            world.set_custom_rules(rules);
+            let p = GenParams::from_world_opt(Some(&world));
+            let mut t = Terrain::new_empty(32, 1);
+            for seed in 1..14i32 {
+                t.flint = noise(amplitude, seed);
+                t.gem = noise(amplitude, seed + 100);
+                for x_pos in (0..32).step_by(5) {
+                    for y_pos in 19..28 {
+                        let plan = t.plan_floating_island(&p, x_pos, y_pos, Some(&world));
+                        if plan.island_type == 0 {
+                            continue;
+                        }
+                        seen.insert(plan.island_type);
+                        widths.insert(plan.width);
+                        let pb = world.take_physical_block();
+                        for x in 0..32 {
+                            for y in 0..32 {
+                                let mut tile = Tile::default();
+                                t.overlay_island_tile(&p, pb, &plan, x, y, x_pos * 32 + x, y_pos, &mut tile);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // no flint noise: the cave gem density is not positive, nothing is placed
+        let mut rules = default_custom_rules(false);
+        rules.custom_rules_enabled = 1;
+        world.set_custom_rules(rules);
+        let p = GenParams::from_world_opt(Some(&world));
+        let t = Terrain::new_empty(32, 1);
+        let mut tile = Tile::default();
+        t.place_gems_in_cave_tile(&p, &mut tile, 40, 40, 0);
+        assert_eq!(tile.foreground_contents, 0);
+        // and with gems switched off
+        let mut rules = default_custom_rules(false);
+        rules.custom_rules_enabled = 1;
+        rules.gems = 0;
+        world.set_custom_rules(rules);
+        let p = GenParams::from_world_opt(Some(&world));
+        t.place_gems_in_cave_tile(&p, &mut tile, 40, 40, 0);
+        assert_eq!(tile.foreground_contents, 0);
+        assert!(seen.contains(&ISL_DIAMOND), "{seen:?}");
+        assert!(widths.contains(&30), "{widths:?}");
     }
 }

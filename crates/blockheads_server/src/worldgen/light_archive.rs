@@ -103,9 +103,8 @@ impl WorldTileLoader {
             Some(s) => s,
             None => return,
         };
-        if cfg!(feature = "faithful-crashes") {
-            gnustep_block_abort();
-        }
+        #[cfg(feature = "faithful-crashes")]
+        gnustep_block_abort();
         self.archive_light_block_indices(client_id, set.iter());
     }
 
@@ -330,10 +329,8 @@ mod tests {
         }
         let keys = gzip_inflate(&db.data_for_key(Some("abc_archiveKeys")).unwrap()).unwrap();
         let arr = property_list_from_data(&keys).unwrap();
-        let names: Vec<_> = match &arr {
-            PlistValue::Array(a) => a.items.iter().map(|v| v.as_str().unwrap().to_string()).collect(),
-            _ => panic!(),
-        };
+        let PlistValue::Array(a) = &arr else { unreachable!() };
+        let names: Vec<_> = a.items.iter().map(|v| v.as_str().unwrap().to_string()).collect();
         assert_eq!(names, vec!["1_2", "3_4", "31_31"]);
         let data = gzip_inflate(&db.data_for_key(Some("abc_archiveData")).unwrap()).unwrap();
         assert_eq!(data.len(), 3 * 0x400);
@@ -374,6 +371,46 @@ mod tests {
         assert!(!db.has_key(Some("zz_archiveKeys")) && !db.has_key(Some("zz_archiveData")));
         assert!(!db.has_key(Some("zz_1_1")));
         assert!(host.indices.borrow().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn unarchive_skips_malformed_keys_and_archive_needs_saved_indices() {
+        let host = install_host();
+        let dir = scratch("archive_odd");
+        let (world, server) = world_with_server(32);
+        let l = loader_with_dbs(&world, &dir, false);
+        let db = l.light_block_database().unwrap();
+        host.clients.borrow_mut().insert("yy".into(), (true, 0));
+        let keys = data_from_property_list(&PlistValue::array(vec![
+            PlistValue::string("1_1"),
+            PlistValue::string("not_a_key_at_all"),
+        ]))
+        .unwrap();
+        db.set_data(Some(&gzip_deflate(&keys)), Some("yy_archiveKeys"));
+        db.set_data(Some(&gzip_deflate(&vec![9u8; 0x800])), Some("yy_archiveData"));
+        l.unarchive_light_blocks_for_client("yy");
+        assert!(db.has_key(Some("yy_1_1")));
+        assert_eq!(host.indices.borrow().len(), 1);
+        // nothing was saved for this client: archiving stops after the unarchive
+        l.archive_light_blocks_for_client("nobody");
+        // a connected client whose light block is not loaded gets no packet
+        let pb = world.take_physical_block();
+        let sent = l.send_light_block_to_client_without_saving_for_block_pos_send_to_client_server(
+            pb,
+            IntPair { x: 1, y: 1 },
+            Some("yy"),
+            Some(&server),
+        );
+        assert!(!sent);
+        // and neither does a client the server does not know
+        let sent = l.send_light_block_to_client_without_saving_for_block_pos_send_to_client_server(
+            pb,
+            IntPair { x: 1, y: 1 },
+            Some("ghost"),
+            Some(&server),
+        );
+        assert!(!sent);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -557,7 +594,8 @@ mod more_tests {
         set.add_index(2 * 32 + 1);
         db.set_data(Some(&archive_index_set(&set, "all")), Some("c_allIndexes"));
         db.set_data(Some(&[4u8; 0x400]), Some("c_1_2"));
-        if !cfg!(feature = "faithful-crashes") {
+        #[cfg(not(feature = "faithful-crashes"))]
+        {
             l.archive_light_blocks_for_client("c");
             assert!(db.has_key(Some("c_archiveData")));
         }
