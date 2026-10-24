@@ -8,7 +8,7 @@ mod golden_tests {
     #[test]
     fn real_double_and_float_vectors() {
         for (file, is_float) in [("xml_real_double.txt", false), ("xml_real_float.txt", true)] {
-            let Ok(txt) = std::fs::read_to_string(crate::testenv::plist_golden(&format!("{file}"))) else { return };
+            let Ok(txt) = std::fs::read_to_string(crate::testenv::plist_golden(file)) else { return };
             let mut n = 0;
             for l in txt.lines().filter(|l| !l.starts_with('#') && !l.is_empty()) {
                 let mut it = l.split(' ');

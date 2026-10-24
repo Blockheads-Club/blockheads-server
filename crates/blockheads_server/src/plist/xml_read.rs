@@ -147,7 +147,7 @@ fn xml_string_split_storage(raw: &str) -> bool {
             raw[i + 1..].find(';').filter(|r| *r <= 40).and_then(|rel| {
                 let name = &raw[i + 1..i + 1 + rel];
                 let known = matches!(name, "amp" | "lt" | "gt" | "quot" | "apos")
-                    || name.strip_prefix('#').map_or(false, |n| {
+                    || name.strip_prefix('#').is_some_and(|n| {
                         match n.strip_prefix('x').or_else(|| n.strip_prefix('X')) {
                             Some(h) => u64::from_str_radix(h, 16).is_ok(),
                             None => n.parse::<u64>().is_ok(),
@@ -649,7 +649,7 @@ impl<'a> XmlParser<'a> {
     /// Whole document. `Ok(None)` = no root value.
     fn document(&mut self) -> Result<Option<PlistValue>, Fail> {
         // Leading whitespace before the declaration makes libxml-style parsing fail (observed).
-        if self.s.as_bytes().first().map_or(true, |c| c.is_ascii_whitespace()) {
+        if self.s.as_bytes().first().is_none_or(|c| c.is_ascii_whitespace()) {
             return Err(());
         }
         self.skip_misc()?;
@@ -688,7 +688,7 @@ fn xml_text(d: &[u8]) -> String {
             t.contains("iso-8859-1") || t.contains("latin1") || t.contains("iso8859-1")
         })
         .unwrap_or(false)
-        && head.find("?>").map_or(false, |e| head.find("encoding").unwrap() < e);
+        && head.find("?>").is_some_and(|e| head.find("encoding").unwrap() < e);
     if latin1 {
         d.iter().map(|&b| b as char).collect()
     } else {

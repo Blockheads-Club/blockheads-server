@@ -7,7 +7,7 @@ use crate::server::bhserver::BHServer;
 impl BHServer {
     /// `-isCloudMatch`: `[match isCloudMatch]`, NO for a nil match.
     pub fn is_cloud_match(&self) -> bool {
-        self.node.match_().map_or(false, |m| m.is_cloud_match())
+        self.node.match_().is_some_and(|m| m.is_cloud_match())
     }
 
     /// `-credit` (float32): 0.0 unless a cloud match with a server match.
@@ -51,7 +51,7 @@ impl BHServer {
             let world_name = self.world().and_then(|w| w.world_name()).unwrap_or_default();
             self.send_network_data_to_peers_reliable(
                 messages::rejection_no_credit(&world_id, &world_name),
-                &[id.clone()],
+                std::slice::from_ref(&id),
                 true,
             );
             let srv = self.rc();

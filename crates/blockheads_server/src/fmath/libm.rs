@@ -494,7 +494,7 @@ fn kernel_rem_pio2f(x: &[f32; 3], y: &mut [f32; 2], e0: i32, nx: i32) -> i32 {
     let jp = jk;
     let jx = nx - 1;
     // callers pass e0 >= 0, so the quotient is never negative; the clamp only keeps the C expression's shape
-    let mut jv = ((e0 - 3) / 8).max(0);
+    let jv = ((e0 - 3) / 8).max(0);
     let mut q0 = e0 - 8 * (jv + 1);
     let mut j = jv - jx;
     let m = jx + jk;
@@ -735,7 +735,7 @@ fn ieee754_rem_pio2f(x: f32, y: &mut [f32; 2]) -> i32 {
     let mut z = sfw(ix - (e0 << 23));
     let mut tx = [0f32; 3];
     for i in 0..2 {
-        tx[i] = ((z as i32) as f32) as f32;
+        tx[i] = (z as i32) as f32;
         z = (z - tx[i]) * two8;
     }
     tx[2] = z;
@@ -1079,8 +1079,8 @@ fn ieee754_powf(x: f32, mut y: f32) -> f32 {
         return (x - x) / (x - x);
     }
     let t1: f32;
-    let t2: f32;
-    if iy > 0x4d00_0000 {
+
+    let t2: f32 = if iy > 0x4d00_0000 {
         if ix < 0x3f7f_fff8 {
             return if hy < 0 { huge * huge } else { tiny * tiny };
         }
@@ -1095,7 +1095,7 @@ fn ieee754_powf(x: f32, mut y: f32) -> f32 {
         let is = fw(tt1);
         tt1 = sfw(is & 0xffff_f000u32 as i32);
         t1 = tt1;
-        t2 = v - (t1 - u);
+        v - (t1 - u)
     } else {
         if iy < 0x2f80_0000 {
             y = sfw((hy & 0x8000_0000u32 as i32) | 0x2f80_0000);
@@ -1150,8 +1150,8 @@ fn ieee754_powf(x: f32, mut y: f32) -> f32 {
         let is = fw(tt1);
         tt1 = sfw(is & 0xffff_f000u32 as i32);
         t1 = tt1;
-        t2 = z_l - (((t1 - t) - dp_h[k as usize]) - z_h);
-    }
+        z_l - (((t1 - t) - dp_h[k as usize]) - z_h)
+    };
     let mut s = one;
     if ((((hx as u32) >> 31).wrapping_sub(1)) | ((yisint - 1) as u32)) == 0 {
         s = -one;
@@ -1963,7 +1963,8 @@ mod big {
         let quad = if kneg { (4 - low) & 3 } else { low };
         let sctx = Ctx { p: p + 48 };
         let (s, c) = sincos_series(&sctx, &sctx.norm(r));
-        let v = if want_cos {
+
+        if want_cos {
             match quad {
                 0 => c,
                 1 => s.neg(),
@@ -1977,8 +1978,7 @@ mod big {
                 2 => s.neg(),
                 _ => c.neg(),
             }
-        };
-        v
+        }
     }
 
     /// ln(a), a > 0
@@ -2195,7 +2195,7 @@ mod big {
             assert_eq!(F::from_f64(-1.5).approx(), -1.5);
             assert_eq!(F::zero().top(), i64::MIN / 4);
             assert_eq!(f(8, 0, false).top(), 4);
-            assert!(F::zero().neg().neg == false && f(1, 0, false).neg().neg);
+            assert!(!F::zero().neg().neg && f(1, 0, false).neg().neg);
             assert!(!f(1, 0, true).abs().neg);
             assert!(F::zero().ldexp(5).is_zero());
             assert_eq!(f(1, 0, false).ldexp(3).e, 3);
@@ -2240,7 +2240,7 @@ mod big {
             // normalisation keeps only p bits
             let wide = F { neg: true, e: 0, m: vec![u64::MAX, u64::MAX] };
             assert_eq!(bitlen(&c.norm(wide).m), 64);
-            assert!(c.norm(F { neg: true, e: 9, m: vec![] }).neg == false);
+            assert!(!c.norm(F { neg: true, e: 9, m: vec![] }).neg);
         }
 
         #[test]

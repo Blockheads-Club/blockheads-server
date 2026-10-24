@@ -68,7 +68,7 @@ pub struct Client {
 }
 
 fn enet_err<E: std::fmt::Debug>(what: &str, e: E) -> io::Error {
-    io::Error::new(io::ErrorKind::Other, format!("{what}: {e:?}"))
+    io::Error::other(format!("{what}: {e:?}"))
 }
 
 /// Queue the CONNECT to `cfg.addr` on a free peer slot.

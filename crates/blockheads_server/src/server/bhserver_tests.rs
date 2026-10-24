@@ -302,7 +302,7 @@ fn delayed_disconnects_only_touch_connected_players() {
     assert!(h.m.disconnected.borrow().is_empty());
     let a = h.join("Alice");
     h.srv.delayed_disconnect_player_due_to_no_credit_with_id(&a);
-    assert_eq!(h.m.disconnected.borrow().as_slice(), &[a.clone()]);
+    assert_eq!(h.m.disconnected.borrow().as_slice(), std::slice::from_ref(&a));
     assert!(h.w.calls.borrow().contains(&format!("client_disconnected {a} false")));
 }
 

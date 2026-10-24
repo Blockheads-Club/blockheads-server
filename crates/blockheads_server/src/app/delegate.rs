@@ -515,7 +515,7 @@ impl CommandLineDelegate {
         match dict {
             Some(PlistValue::Dict(d)) => {
                 if get(&d, "saveVersion").map_or(0, |v| v.int_value()) >= 400
-                    && !get(&d, "remoteGame").map_or(false, |v| v.bool_value())
+                    && !get(&d, "remoteGame").is_some_and(|v| v.bool_value())
                 {
                     return Some(d);
                 }
@@ -636,7 +636,7 @@ impl CommandLineDelegate {
             owner_name: owner_name.map(|s| s.to_string()),
             privacy,
             convert_to_custom_rules,
-            expert_mode: get(sd, "expertMode").map_or(false, |v| v.bool_value()),
+            expert_mode: get(sd, "expertMode").is_some_and(|v| v.bool_value()),
             no_exit,
         });
         *self.game_controller.borrow_mut() = gc;

@@ -147,6 +147,10 @@ pub fn enet_id_string(addr: &SocketAddrV4) -> String {
     format!("{}:{}", i32::from_le_bytes(addr.ip().octets()), addr.port() as i32)
 }
 
+fn enet_io_error<E: std::fmt::Debug>(e: E) -> std::io::Error {
+    std::io::Error::other(format!("{e:?}"))
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -181,8 +185,4 @@ mod tests {
         assert_ne!(port, 0);
         assert!(EnetHost::create(port).is_err());
     }
-}
-
-fn enet_io_error<E: std::fmt::Debug>(e: E) -> std::io::Error {
-    std::io::Error::new(std::io::ErrorKind::Other, format!("{e:?}"))
 }

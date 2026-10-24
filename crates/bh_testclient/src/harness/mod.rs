@@ -91,7 +91,7 @@ fn our_server_bin_in(bin: Option<String>, target_dir: Option<String>, ws: &Path)
             let p = t.join(prof).join("blockheads_server");
             if let Ok(m) = std::fs::metadata(&p) {
                 let mt = m.modified().unwrap_or(std::time::UNIX_EPOCH);
-                if best.as_ref().map_or(true, |(b, _)| mt > *b) {
+                if best.as_ref().is_none_or(|(b, _)| mt > *b) {
                     best = Some((mt, p));
                 }
             }

@@ -135,7 +135,7 @@ fn run_reference_trace_within(args: &[String], limit: u64, out: &Path, timeout: 
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .map_err(|e| HarnessError::Io(e))?;
+        .map_err(HarnessError::Io)?;
     let end = Instant::now() + timeout;
     loop {
         match gdb.try_wait()? {

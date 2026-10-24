@@ -1041,7 +1041,7 @@ mod tests {
         assert!(matches!(a.items[3], PV::Real { value, .. } if value == 2.5));
         assert!(matches!(&a.items[4], PV::Data(d) if d.bytes == [0, 1, 2]));
         assert!(matches!(&a.items[5], PV::String(s) if s.s == "not base64!"));
-        assert_eq!(a.items[6].object_for_key("k").unwrap().class_name().is_empty(), false);
+        assert!(!a.items[6].object_for_key("k").unwrap().class_name().is_empty());
         // outside arrays strings stay strings
         let Step::UploadInventory { slots, .. } = step("inventory 1 \"AAEC\"") else { panic!() };
         assert!(matches!(slots, PV::String(_)));

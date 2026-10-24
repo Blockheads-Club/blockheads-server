@@ -346,7 +346,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("bh_host_unit_{}", std::process::id()));
         assert_eq!(on_worker(Some(dir.clone()), || 5), Some(5));
         assert_eq!(on_worker(Some(dir.clone()), || crate::nslog!("goes to the silent sink")), Some(()));
-        assert_eq!(on_worker(None, || None::<i32>.unwrap()), None);
+        assert_eq!(on_worker(None, || std::hint::black_box(None::<i32>).unwrap()), None);
         let _ = std::fs::remove_dir_all(dir);
     }
 

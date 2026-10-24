@@ -1,11 +1,10 @@
 //! Block (0x04), light block (0x28), block-not-loaded (0x27) and block request (0x03/0x0d) wire forms.
 //!
 
-use super::codec::{self, frame, gunz, gz, plist_from, plist_xml, t, Rd, Wr};
+use super::codec::{frame, gunz, gz, plist_from, plist_xml, t, Rd, Wr};
 use crate::foundation::gsdict::GsDict;
 use crate::foundation::md5;
 use crate::plist::value::PlistValue as PV;
-use crate::types::structs::WireStruct;
 
 pub use crate::types::netdata::ClientMacroBlockRequest;
 
@@ -209,7 +208,7 @@ mod tests {
         let without = ExtraData { hash: "h".into(), receipts: None };
         assert!(without.to_plist().object_for_key("receipts").is_none());
         let light = [1u8; LIGHT_LEN];
-        assert_eq!(light_blob(&light, &without).unwrap().len() > LIGHT_LEN, true);
+        assert!(light_blob(&light, &without).unwrap().len() > LIGHT_LEN);
         let blob = tiles_blob(&[2u8; TILES_LEN], 3, 0x01020304);
         assert_eq!((blob.len(), blob[TILES_LEN], blob[TILES_LEN + 1]), (TILES_BLOB_LEN, 3, 4));
         assert_eq!(block_removal_notification(7), vec![t::CLIENT_BLOCK_REMOVAL_NOTIFICATION, 7, 0, 0, 0]);

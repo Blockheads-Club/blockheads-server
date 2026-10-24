@@ -198,8 +198,8 @@ pub fn write_bnode(root: &BNode) -> Vec<u8> {
         for c in children(objs[i]) {
             let mut k = Vec::new();
             canon(c, &mut k);
-            if !idx.contains_key(&k) {
-                idx.insert(k, objs.len());
+            if let std::collections::hash_map::Entry::Vacant(e) = idx.entry(k) {
+                e.insert(objs.len());
                 objs.push(c);
             }
         }
@@ -502,7 +502,7 @@ mod edge_cases {
     }
     fn read1(o: &[u8]) -> Option<V> {
         let mut d = vec![0u8; 32]; // padding so the file reaches the 40 byte minimum
-        d.truncate(0);
+        d.clear();
         d.extend_from_slice(&mk(&[o.to_vec()], 0));
         read_bplist(&d, 0).unwrap()
     }

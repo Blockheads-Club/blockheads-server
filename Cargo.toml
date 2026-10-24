@@ -40,7 +40,15 @@ overflow-checks = false
 debug = 1
 
 # Faithful float expressions (`x - x`, `x / x`, literal PI/TAU constants, `* 0`) are game behaviour, not mistakes.
+[workspace.lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(coverage)"] }
+
 [workspace.lints.clippy]
+# `for x in option { .. }` is how the coverage-tested code avoids an uncovered closing brace after an `if let` without
+# else (see notes/resume/server-coverage.md).
+for_loops_over_fallibles = "allow"
+# `Some(x).filter(..)` likewise keeps a test helper free of a never-run closure.
+some_filter = "allow"
 approx_constant = "allow"
 eq_op = "allow"
 erasing_op = "allow"

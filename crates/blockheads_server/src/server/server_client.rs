@@ -248,7 +248,7 @@ impl ServerClient {
                 }
                 // dataFromPropertyList failure: nothing is appended after the two header bytes.
                 let pkt = encode_batch(*kind, i as u8, &items).unwrap_or(vec![*kind as u8, i as u8]);
-                srv.send_network_data_to_peers_reliable(pkt, &[self.client_id.clone()], *reliable);
+                srv.send_network_data_to_peers_reliable(pkt, std::slice::from_ref(&self.client_id), *reliable);
             }
         }
     }

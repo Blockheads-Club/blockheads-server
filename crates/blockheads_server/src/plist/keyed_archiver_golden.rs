@@ -1,6 +1,7 @@
 //! Replays of the oracle goldens (keyed archives). They need the private fixtures and skip without them, so they live in this
 //! file, which the coverage gate leaves out (`*_golden.rs`).
 
+#![allow(clippy::manual_strip)]
 #[cfg(test)]
 mod golden_tests {
     use super::super::*;

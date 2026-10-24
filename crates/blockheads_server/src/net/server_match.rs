@@ -45,7 +45,7 @@ pub struct StartServerError;
 /// 1/60 s poll interval.
 const POLL_INTERVAL: f64 = 0.016666666666666666;
 /// `0.01f32` widened to f64.
-const CREDIT_THRESHOLD: f64 = 0.0099999997764825821;
+const CREDIT_THRESHOLD: f64 = 0.009_999_999_776_482_582;
 
 /// Class `BHNetServerMatch` (subclass of `BHMatch`).
 pub struct BhNetServerMatch {
@@ -384,7 +384,7 @@ impl BhMatch for BhNetServerMatch {
             let c = self.connections.borrow();
             let mut h = self.host.borrow_mut();
             if let (Some(c), Some(h)) = (c.as_ref(), h.as_mut()) {
-                if c.len() != 0 {
+                if !c.is_empty() {
                     for k in c.keys_in_order() {
                         if let Some(p) = c.get(&k) {
                             h.peer_reset(*p);
@@ -478,7 +478,7 @@ impl BhMatch for BhNetServerMatch {
                     }
                     let old_udid = dget(&dict.borrow(), "udidNew").cloned();
                     let Some(old_udid) = old_udid else { continue };
-                    let same = client.get(&key("udidNew")).map_or(false, |c| c.is_equal(&old_udid));
+                    let same = client.get(&key("udidNew")).is_some_and(|c| c.is_equal(&old_udid));
                     if !same {
                         continue;
                     }

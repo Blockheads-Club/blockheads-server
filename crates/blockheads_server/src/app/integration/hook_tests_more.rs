@@ -1,5 +1,6 @@
 //! The remaining production hook adapters of the glue, called with live and with missing targets.
 
+#![allow(dropping_copy_types, clippy::unit_arg)]
 use super::hook_fixture::fx;
 use super::*;
 
@@ -132,7 +133,7 @@ fn remaining_forwarders_reach_live_and_missing_targets() {
                 ))
             });
             t("interaction_object_placed_at_position_with_item_flipped_save_dict_placed_by_client_client_name", || {
-                drop(WorldOpsDeps::interaction_object_placed_at_position_with_item_flipped_save_dict_placed_by_client_client_name(&**g, f.p, &*f.item.borrow(), true, Some(&f.pv), Some("cid"), Some("cid")))
+                drop(WorldOpsDeps::interaction_object_placed_at_position_with_item_flipped_save_dict_placed_by_client_client_name(&**g, f.p, &f.item.borrow(), true, Some(&f.pv), Some("cid"), Some("cid")))
             });
             t("sow_tree_or_plant_at_position_item_type_max_height_growth_rate", || {
                 drop(WorldOpsDeps::sow_tree_or_plant_at_position_item_type_max_height_growth_rate(

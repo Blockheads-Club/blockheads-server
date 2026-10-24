@@ -419,7 +419,7 @@ impl WorldCoreHooks for Glue {
         self.srv().map_or(0.0, |s| s.credit())
     }
     fn server_is_cloud_match(&self) -> bool {
-        self.srv().map_or(false, |s| s.is_cloud_match())
+        self.srv().is_some_and(|s| s.is_cloud_match())
     }
     fn server_privacy_string(&self) -> Option<String> {
         self.srv().and_then(|s| s.privacy_string())
@@ -436,7 +436,7 @@ impl WorldCoreHooks for Glue {
         }
     }
     fn server_finish_bulk_transaction(&self) -> bool {
-        self.srv().map_or(true, |s| s.finish_bulk_transaction())
+        self.srv().is_none_or(|s| s.finish_bulk_transaction())
     }
     fn server_local_player_name(&self) -> String {
         self.srv().map(|s| s.local_player_name()).unwrap_or_default()
@@ -467,7 +467,7 @@ impl WorldCoreHooks for Glue {
         self.dw_clients.borrow_mut().insert(client_id.to_string(), face);
     }
     fn server_client_connected(&self, client_id: &str) -> bool {
-        self.client(client_id).map_or(false, |c| c.connected())
+        self.client(client_id).is_some_and(|c| c.connected())
     }
     fn server_client_set_connected(&self, client_id: &str, connected: bool) {
         if let Some(c) = self.client(client_id) {
@@ -497,10 +497,10 @@ impl WorldCoreHooks for Glue {
         }
     }
     fn server_client_block_is_wired(&self, client_id: &str, macro_index: i32) -> bool {
-        self.client(client_id).map_or(false, |c| c.block_is_wired(macro_index))
+        self.client(client_id).is_some_and(|c| c.block_is_wired(macro_index))
     }
     fn server_client_paused(&self, client_id: &str) -> bool {
-        self.client(client_id).map_or(false, |c| c.paused())
+        self.client(client_id).is_some_and(|c| c.paused())
     }
     fn server_client_set_paused(&self, client_id: &str, paused: bool) {
         if let Some(c) = self.client(client_id) {
@@ -556,7 +556,7 @@ impl WorldCoreHooks for Glue {
         }
     }
     fn loader_finish_bulk_light_block_transaction(&self) -> bool {
-        self.loader().map_or(true, |l| l.finish_bulk_light_block_transaction())
+        self.loader().is_none_or(|l| l.finish_bulk_light_block_transaction())
     }
     fn loader_unarchive_light_blocks_for_client(&self, client_id: &str) {
         if let Some(l) = self.loader() {
@@ -606,7 +606,7 @@ impl WorldCoreHooks for Glue {
         *self.path_creator.borrow_mut() = Some(crate::path::path_creator::PathCreator::init_with_world(world));
     }
     fn path_creator_in_progress(&self) -> bool {
-        self.path_creator.borrow().as_ref().map_or(false, |p| p.in_progress())
+        self.path_creator.borrow().as_ref().is_some_and(|p| p.in_progress())
     }
     fn path_creator_path_user(&self) -> Option<ObjRef> {
         self.path_creator.borrow().as_ref().and_then(|p| p.path_user())
@@ -718,7 +718,7 @@ impl WorldCoreHooks for Glue {
         }
     }
     fn dynamic_world_is_controlling_blockheads_for_client_player(&self, player_id: &str) -> bool {
-        self.dw().map_or(false, |d| d.is_controlling_blockheads_for_client_player(player_id))
+        self.dw().is_some_and(|d| d.is_controlling_blockheads_for_client_player(player_id))
     }
     fn dynamic_world_light_changed_at_macro_pos_send_reliably(&self, macro_pos: IntPair, send_reliably: bool) {
         if let Some(d) = self.dw() {
@@ -965,7 +965,7 @@ impl WorldgenHost for Glue {
         Some(a.items.iter().map(|v| v.unsigned_int_value()).collect())
     }
     fn client_contains_light_block_index(&self, _world: &World, client_id: &str, index: u64) -> bool {
-        self.client(client_id).map_or(false, |c| c.all_light_block_indices().borrow().contains_index(index))
+        self.client(client_id).is_some_and(|c| c.all_light_block_indices().borrow().contains_index(index))
     }
     fn client_add_light_block_index(&self, _world: &World, client_id: &str, index: u64) {
         if let Some(c) = self.client(client_id) {
@@ -989,7 +989,7 @@ impl WorldgenHost for Glue {
         }
     }
     fn player_is_admin_with_id(&self, _server: &Rc<WorldServerHandle>, client_id: &str) -> bool {
-        self.srv().map_or(false, |s| s.player_is_admin_with_id(Some(client_id)))
+        self.srv().is_some_and(|s| s.player_is_admin_with_id(Some(client_id)))
     }
     fn initial_dynamic_objects_net_data(
         &self,
@@ -1159,7 +1159,7 @@ impl WorldOpsDeps for Glue {
     ) {
         let (Some(l), Some(w)) = (self.loader(), self.world()) else { return };
         let mt = crate::world::tiles::macro_tile_at_macro_postion(x, y, &w.macro_tiles(), &w);
-        let unexplored = mt.as_ref().map_or(false, |m| m.unexplored.get() != 0);
+        let unexplored = mt.as_ref().is_some_and(|m| m.unexplored.get() != 0);
         let out =
             l.load_physical_block_at_x_pos_y_pos_create_if_not_created(pb, x, y, create_if_not_created, unexplored);
         for m in mt {
@@ -1246,7 +1246,7 @@ impl WorldOpsDeps for Glue {
 
     // ---- ServerClient by peer id
     fn sc_connected(&self, peer: &str) -> bool {
-        self.client(peer).map_or(false, |c| c.connected())
+        self.client(peer).is_some_and(|c| c.connected())
     }
     fn sc_requested_block_indices_first_n(&self, peer: &str, n: usize) -> Vec<u64> {
         match self.client(peer) {
@@ -1255,7 +1255,7 @@ impl WorldOpsDeps for Glue {
         }
     }
     fn sc_create_if_not_created_for_block_request(&self, peer: &str, index: i32) -> bool {
-        self.client(peer).map_or(false, |c| c.create_if_not_created_for_block_request(index))
+        self.client(peer).is_some_and(|c| c.create_if_not_created_for_block_request(index))
     }
     fn sc_remove_block_request(&self, peer: &str, index: i32) {
         if let Some(c) = self.client(peer) {
@@ -1263,10 +1263,10 @@ impl WorldOpsDeps for Glue {
         }
     }
     fn sc_block_is_wired(&self, peer: &str, macro_index: i32) -> bool {
-        self.client(peer).map_or(false, |c| c.block_is_wired(macro_index))
+        self.client(peer).is_some_and(|c| c.block_is_wired(macro_index))
     }
     fn sc_requests_heart_beat(&self, peer: &str) -> bool {
-        self.client(peer).map_or(false, |c| c.requests_heart_beat())
+        self.client(peer).is_some_and(|c| c.requests_heart_beat())
     }
     fn sc_set_requests_heart_beat(&self, peer: &str, v: bool) {
         if let Some(c) = self.client(peer) {
@@ -1287,7 +1287,7 @@ impl WorldOpsDeps for Glue {
         self.client(peer).map_or(-1, |c| c.light_block_index())
     }
     fn sc_paused(&self, peer: &str) -> bool {
-        self.client(peer).map_or(false, |c| c.paused())
+        self.client(peer).is_some_and(|c| c.paused())
     }
 
     // ---- BHServer
@@ -1297,7 +1297,7 @@ impl WorldOpsDeps for Glue {
         }
     }
     fn player_is_admin_with_id(&self, client_id: Option<&str>) -> bool {
-        self.srv().map_or(false, |s| s.player_is_admin_with_id(client_id))
+        self.srv().is_some_and(|s| s.player_is_admin_with_id(client_id))
     }
     fn update_player(&self, client_id: &str) {
         if let Some(s) = self.srv() {
@@ -1328,7 +1328,7 @@ impl WorldOpsDeps for Glue {
         }
     }
     fn is_controlling_blockheads_for_client_player(&self, client_id: &str) -> bool {
-        self.dw().map_or(false, |d| d.is_controlling_blockheads_for_client_player(client_id))
+        self.dw().is_some_and(|d| d.is_controlling_blockheads_for_client_player(client_id))
     }
 
     // ---- WorldHelper (lighting_env)
@@ -1741,22 +1741,22 @@ impl WorldOpsDeps for Glue {
         }
     }
     fn bh_asleep(&self, bh: &ObjRef) -> bool {
-        bh_of(bh).map_or(false, |b| b.asleep())
+        bh_of(bh).is_some_and(|b| b.asleep())
     }
     fn bh_meditating(&self, bh: &ObjRef) -> bool {
-        bh_of(bh).map_or(false, |b| b.meditating())
+        bh_of(bh).is_some_and(|b| b.meditating())
     }
     fn bh_regenerating(&self, bh: &ObjRef) -> bool {
-        bh_of(bh).map_or(false, |b| b.regenerating())
+        bh_of(bh).is_some_and(|b| b.regenerating())
     }
     fn bh_on_trade_mission(&self, bh: &ObjRef) -> bool {
-        bh_of(bh).map_or(false, |b| b.on_trade_mission())
+        bh_of(bh).is_some_and(|b| b.on_trade_mission())
     }
     fn bh_is_net(&self, bh: &ObjRef) -> bool {
-        bh_of(bh).map_or(false, |b| b.is_net())
+        bh_of(bh).is_some_and(|b| b.is_net())
     }
     fn bh_is_client_blockhead_being_controlled_by_server(&self, bh: &ObjRef) -> bool {
-        bh_of(bh).map_or(false, |b| b.is_client_blockhead_being_controlled_by_server())
+        bh_of(bh).is_some_and(|b| b.is_client_blockhead_being_controlled_by_server())
     }
     fn bh_add_to_crystal_discrepency(&self, bh: &ObjRef, n: i32) {
         if let Some(b) = bh_of(bh) {
@@ -1777,7 +1777,7 @@ impl WorldOpsDeps for Glue {
         }
     }
     fn bh_can_use_dynamic_object(&self, bh: &ObjRef, o: &ObjRef) -> bool {
-        bh_of(bh).map_or(false, |b| b.can_use_dynamic_object(o))
+        bh_of(bh).is_some_and(|b| b.can_use_dynamic_object(o))
     }
 
     fn load_new_blockhead_at_pos_craftable_item_object_unique_id(
@@ -1994,7 +1994,7 @@ impl DwHooks for Glue {
         dont_send: bool,
         only_save_if_clients_need_it: bool,
     ) -> bool {
-        self.world().map_or(false, |w| {
+        self.world().is_some_and(|w| {
             w.save_physical_block_for_macro_tile_send_reliably_dont_send_only_save_if_clients_need_it(
                 mt,
                 send_reliably,
@@ -2032,7 +2032,7 @@ impl DwHooks for Glue {
         }
     }
     fn tile_is_lit_for_client(&self, client_id: Option<&str>, pos: IntPair, tile: TileRef) -> bool {
-        self.world().map_or(false, |w| w.tile_is_lit_for_client_at_pos_tile(client_id, pos, Some(tile)))
+        self.world().is_some_and(|w| w.tile_is_lit_for_client_at_pos_tile(client_id, pos, Some(tile)))
     }
     fn construct_from_save_dict(
         &self,
@@ -2350,7 +2350,7 @@ impl DwHooks for Glue {
         }
     }
     fn blockhead_inventory_needs_saving(&self, b: &ObjRef) -> bool {
-        bh_of(b).map_or(false, |x| x.inventory_needs_saving())
+        bh_of(b).is_some_and(|x| x.inventory_needs_saving())
     }
     fn blockhead_set_inventory_needs_saving(&self, b: &ObjRef, v: bool) {
         if let Some(x) = bh_of(b) {
@@ -2609,10 +2609,10 @@ impl crate::crafting::workbench::WorkbenchHost for Glue {
 
 impl crate::path::path_creator::PathDynamicWorldHooks for Glue {
     fn has_lights_to_add(&self) -> bool {
-        self.dw().map_or(false, |d| d.has_lights_to_add())
+        self.dw().is_some_and(|d| d.has_lights_to_add())
     }
     fn blockhead_occupies_tile_at_pos_ignore_blockhead(&self, pos: IntPair, ignore: Option<&ObjRef>) -> bool {
-        self.dw().map_or(false, |d| d.blockhead_occupies_tile_at_pos_ignore_blockhead(pos, ignore))
+        self.dw().is_some_and(|d| d.blockhead_occupies_tile_at_pos_ignore_blockhead(pos, ignore))
     }
     fn workbench_at_pos(&self, pos: IntPair) -> Option<Rc<dyn crate::path::wire_path::WirePowerSource>> {
         let _ = pos;
@@ -2702,7 +2702,7 @@ impl crate::lighting::artificial_light::LightingServices for Glue {
         }
     }
     fn has_dynamic_objects_to_save_in_macro_pos(&self, macro_pos: IntPair) -> bool {
-        self.dw().map_or(false, |d| d.has_dynamic_objects_to_save_in_macro_pos(macro_pos))
+        self.dw().is_some_and(|d| d.has_dynamic_objects_to_save_in_macro_pos(macro_pos))
     }
     fn blockheads(&self) -> Vec<ObjRef> {
         self.dw().map_or_else(Vec::new, |d| d.blockheads())
@@ -3035,13 +3035,13 @@ impl DwOpsHooks for Glue {
     // r4_longrun_0/1: forwarders to the real object methods (the trait defaults are inert constants).
     /// `-[NPC canMate]` as seen by `npcCloseEnoughToBreedWithNPC:`.
     fn npc_can_mate(&self, npc: &ObjRef) -> bool {
-        crate::npc::npc::as_npc(npc).map_or(false, |n| n.can_mate())
+        crate::npc::npc::as_npc(npc).is_some_and(|n| n.can_mate())
     }
     fn npc_can_be_fed_by_blockhead(&self, npc: &ObjRef, bh: &ObjRef) -> bool {
         crate::npc::npc::as_npc(npc).is_some() && crate::npc::npc::npc_can_be_fed_by_blockhead(npc, bh)
     }
     fn freeblock_hovers(&self, fb: &ObjRef) -> bool {
-        fb.as_any().downcast_ref::<crate::physics_objects::free_block::FreeBlock>().map_or(false, |f| f.hovers())
+        fb.as_any().downcast_ref::<crate::physics_objects::free_block::FreeBlock>().is_some_and(|f| f.hovers())
     }
     fn tree_height(&self, tree: &ObjRef) -> i32 {
         if crate::trees::tree::as_tree(tree).is_some() {

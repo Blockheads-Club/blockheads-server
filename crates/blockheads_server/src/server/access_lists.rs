@@ -17,7 +17,7 @@ use crate::storage::lists::{self, LIST_TYPE_ADMINLIST, LIST_TYPE_BLACKLIST, LIST
 
 /// `any entry safeCI-equals alias` (a nil alias never matches: `safeCI(entry, nil) == 1`).
 fn list_contains_ci(list: &RefCell<Option<Vec<String>>>, alias: Option<&str>) -> bool {
-    list.borrow().as_ref().map_or(false, |l| l.iter().any(|e| safe_ci(Some(e), alias) == 0))
+    list.borrow().as_ref().is_some_and(|l| l.iter().any(|e| safe_ci(Some(e), alias) == 0))
 }
 
 impl BHServer {
@@ -48,7 +48,7 @@ impl BHServer {
         *self.black_list.borrow_mut() = loaded.black;
         *self.white_list.borrow_mut() = loaded.white;
         if self.is_cloud_match() {
-            let white_empty = self.white_list.borrow().as_ref().map_or(true, |l| l.is_empty());
+            let white_empty = self.white_list.borrow().as_ref().is_none_or(|l| l.is_empty());
             if white_empty {
                 crate::nslog!("CLOUD:SETTING:WHITELISTED:OFF");
             } else {
@@ -70,7 +70,7 @@ impl BHServer {
         // Enforcement: whitelist failures first, then blacklist hits (a player may appear twice).
         let mut boot: Vec<String> = Vec::new();
         let connected = self.connected_clients.borrow().clone();
-        let white_nonempty = self.white_list.borrow().as_ref().map_or(false, |l| !l.is_empty());
+        let white_nonempty = self.white_list.borrow().as_ref().is_some_and(|l| !l.is_empty());
         if white_nonempty {
             for pid in &connected {
                 let info = self.player_info_dict_for_peer_id(pid).unwrap_or_else(new_mutable_dict);
@@ -79,7 +79,7 @@ impl BHServer {
                 }
             }
         }
-        let black_nonempty = self.black_list.borrow().as_ref().map_or(false, |l| !l.is_empty());
+        let black_nonempty = self.black_list.borrow().as_ref().is_some_and(|l| !l.is_empty());
         if black_nonempty {
             for pid in &connected {
                 let info = self.player_info_dict_for_peer_id(pid).unwrap_or_else(new_mutable_dict);
@@ -146,7 +146,7 @@ impl BHServer {
                         .reset_list
                         .borrow()
                         .as_ref()
-                        .map_or(false, |rl| rl.iter().any(|n| safe_ci(Some(n), alias.as_deref()) == 0));
+                        .is_some_and(|rl| rl.iter().any(|n| safe_ci(Some(n), alias.as_deref()) == 0));
                     if !on_reset {
                         udid = dict_str(d, "udidNew");
                     }
@@ -180,7 +180,7 @@ impl BHServer {
                     } else {
                         messages::admin_or_mod_changed(0, 0)
                     };
-                    self.send_network_data_to_peers_reliable(pkt, &[pid.clone()], true);
+                    self.send_network_data_to_peers_reliable(pkt, std::slice::from_ref(&pid), true);
                     self.send_updated_player_list_to_clients();
                     if let Some(w) = self.world() {
                         if let Some(sc) = w.server_client(&pid) {
@@ -309,11 +309,11 @@ impl BHServer {
 
     /// `-playerIsConnectedWithInfo:`.
     pub fn player_is_connected_with_info(&self, info: &PlistDict) -> bool {
-        if dict_get(info, "local").map_or(false, |v| v.bool_value()) {
+        if dict_get(info, "local").is_some_and(|v| v.bool_value()) {
             return true;
         }
         match dict_str(info, "playerID") {
-            Some(pid) => self.connected_clients.borrow().iter().any(|e| *e == pid),
+            Some(pid) => self.connected_clients.borrow().contains(&pid),
             None => false,
         }
     }

@@ -989,7 +989,9 @@ mod tests {
         let chat = server_chat_dict("hi", "Al", "p1", 5.0);
         let ServerMsg::Chat(Some(c)) = sm(chat_message(&chat)) else { panic!() };
         assert_eq!(c.object_for_key("message").unwrap().as_str(), Some("hi"));
-        let ServerMsg::ChatHistory(Some(h)) = sm(chat_history(&PV::array(vec![]), &[chat.clone()])) else { panic!() };
+        let ServerMsg::ChatHistory(Some(h)) = sm(chat_history(&PV::array(vec![]), std::slice::from_ref(&chat))) else {
+            panic!()
+        };
         assert!(h.object_for_key("messages").is_some());
         assert!(matches!(sm(admin_or_mod_changed(1, 0)), ServerMsg::AdminOrModChanged { x: 1, y: 0 }));
         assert!(matches!(sm(clear_chat()), ServerMsg::ClearChat));

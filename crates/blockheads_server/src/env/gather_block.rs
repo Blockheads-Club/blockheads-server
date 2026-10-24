@@ -159,7 +159,7 @@ impl DynamicObject for GatherBlock {
     }
     fn world_changed(&self, me: &ObjRef, positions: &mut Vec<IntPair>) {
         let pos = self.base.borrow().pos;
-        if !positions.iter().any(|p| *p == pos) {
+        if !positions.contains(&pos) {
             return;
         }
         let Some(world) = self.world.upgrade() else { return };

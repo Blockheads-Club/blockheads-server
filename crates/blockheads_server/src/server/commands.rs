@@ -25,7 +25,7 @@ pub const OWNER_EXTRA_CLOUD_COMMANDS: &str = "/SET-PASSWORD password - (owner on
 /// `[command rangeOfString:X].location == 1`.
 fn at1(command: &Option<String>, literal: &str) -> bool {
     match command {
-        Some(c) => nsstring::range_of_string(c, literal).map_or(false, |(l, _)| l == 1),
+        Some(c) => nsstring::range_of_string(c, literal).is_some_and(|(l, _)| l == 1),
         None => false,
     }
 }
@@ -148,7 +148,7 @@ impl BHServer {
             if at1(&command, "set-privacy ") {
                 let privacy = arg(&command, 13);
                 if let (true, Some(s)) = (nsstring::length(&privacy) != 0, server_match) {
-                    let white_nonempty = self.white_list.borrow().as_ref().map_or(false, |l| !l.is_empty());
+                    let white_nonempty = self.white_list.borrow().as_ref().is_some_and(|l| !l.is_empty());
                     if is_cloud && white_nonempty && safe_ci(Some(&privacy), Some("public")) == 0 {
                         print_result = Some(
                             "Error: This world is whitelisted, and whitelisted worlds can only be serachable or private. Privacy setting has been left unchanged."
@@ -186,7 +186,7 @@ impl BHServer {
                     }
                 }
             } else if at1(&command, "remove-password") && server_match.is_some() {
-                let had = world.as_ref().map_or(false, |w| w.server_password().is_some());
+                let had = world.as_ref().is_some_and(|w| w.server_password().is_some());
                 print_result =
                     Some(if !had { "There was already no password set." } else { "Password removed." }.to_string());
                 if let Some(w) = &world {
@@ -252,7 +252,7 @@ impl BHServer {
             if !issuer_is_admin {
                 incorrect_permissions = true;
             } else {
-                let enabled = world.as_ref().map_or(false, |w| w.pvp_enabled());
+                let enabled = world.as_ref().is_some_and(|w| w.pvp_enabled());
                 if !enabled {
                     if let Some(w) = &world {
                         w.set_pvp_enabled_display_notifciation(true, true);
@@ -269,7 +269,7 @@ impl BHServer {
             if !issuer_is_admin {
                 incorrect_permissions = true;
             } else {
-                let enabled = world.as_ref().map_or(false, |w| w.pvp_enabled());
+                let enabled = world.as_ref().is_some_and(|w| w.pvp_enabled());
                 if !enabled {
                     print_result = Some("PVP was already disabled.".to_string());
                 } else {
@@ -410,7 +410,7 @@ impl BHServer {
                         incorrect_permissions = true;
                     } else {
                         let mut append_warning: Option<&str> = None;
-                        let white_empty = self.white_list.borrow().as_ref().map_or(true, |l| l.is_empty());
+                        let white_empty = self.white_list.borrow().as_ref().is_none_or(|l| l.is_empty());
                         if let (true, true, Some(s)) = (is_cloud, white_empty, server_match) {
                             if s.privacy() == 1 {
                                 s.set_privacy(2);

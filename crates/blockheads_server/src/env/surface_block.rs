@@ -345,10 +345,9 @@ impl DynamicObject for SurfaceBlock {
             let side = tile_at_world_position_loaded(pos.x + o, pos.y, &world);
             if tile_is_water(side)
                 && (tile.partial_content_left() as i32 + 1) < side.unwrap().partial_content_left() as i32
+                && self.take_any_water_from_tile_at_pos_tile(IntPair { x: pos.x + o, y: pos.y }, &tile)
             {
-                if self.take_any_water_from_tile_at_pos_tile(IntPair { x: pos.x + o, y: pos.y }, &tile) {
-                    is_static = false;
-                }
+                is_static = false;
             }
         }
         if is_static && tile.partial_content_left() == 1 {

@@ -246,7 +246,8 @@ mod tests {
 
     #[test]
     fn generated_accessors_sweep() {
-        let table: &[(&str, fn(i64) -> bool)] = sweep![
+        type Sweep = (&'static str, fn(i64) -> bool);
+        let table: &[Sweep] = sweep![
             LightDirectionType,
             ListType,
             BlockheadAnimationType,

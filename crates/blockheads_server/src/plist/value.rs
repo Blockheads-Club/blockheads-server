@@ -317,7 +317,7 @@ impl PlistValue {
                 a.items.len() == b.items.len() && a.items.iter().zip(b.items.iter()).all(|(x, y)| x.is_equal(y))
             }
             (PlistValue::Dict(a), PlistValue::Dict(b)) => {
-                a.map.len() == b.map.len() && a.map.iter().all(|(k, v)| b.map.get(k).map_or(false, |w| v.is_equal(w)))
+                a.map.len() == b.map.len() && a.map.iter().all(|(k, v)| b.map.get(k).is_some_and(|w| v.is_equal(w)))
             }
             _ => false,
         }

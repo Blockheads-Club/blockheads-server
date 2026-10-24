@@ -700,7 +700,7 @@ impl Session {
 
     /// Wait for the first packet whose type is in `types`.
     pub fn wait_for_any(&mut self, types: &[u8], timeout_ms: u64) -> Res<Option<Rx>> {
-        self.wait_for_matching(timeout_ms, &mut |rx| rx.data.first().map_or(false, |t| types.contains(t)))
+        self.wait_for_matching(timeout_ms, &mut |rx| rx.data.first().is_some_and(|t| types.contains(t)))
     }
 
     /// Pump + process until `pred` accepts a not-yet-claimed packet (it is then claimed) or the timeout elapses.

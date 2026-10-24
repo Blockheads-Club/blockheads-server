@@ -113,7 +113,7 @@ impl Getopt {
     pub fn next(&mut self, err: &mut dyn FnMut(&[u8])) -> i32 {
         let argc = self.argv.len();
         self.optarg = None;
-        if self.nextchar.as_ref().map_or(true, |n| n.is_empty()) {
+        if self.nextchar.as_ref().is_none_or(|n| n.is_empty()) {
             if self.last_nonopt > self.optind {
                 self.last_nonopt = self.optind;
             }
@@ -154,7 +154,7 @@ impl Getopt {
         let cur = self.argv[self.optind].clone();
         let c1 = cur.get(1).copied();
         // The long-option test runs on every call (also for the rest of a cluster).
-        if c1 == Some(b'-') || (cur.len() > 2 || !c1.map_or(false, in_optstring)) {
+        if c1 == Some(b'-') || (cur.len() > 2 || !c1.is_some_and(in_optstring)) {
             let nc = self.nextchar.clone().unwrap_or_default();
             let eq = nc.iter().position(|&b| b == b'=');
             let namelen = eq.unwrap_or(nc.len());
@@ -224,7 +224,7 @@ impl Getopt {
             }
             // no long match
             let first = nc.first().copied();
-            if c1 == Some(b'-') || !first.map_or(false, in_optstring) {
+            if c1 == Some(b'-') || !first.is_some_and(in_optstring) {
                 let m = if c1 == Some(b'-') {
                     msg(&[&a0, b": unrecognized option '--", &nc, b"'"])
                 } else {

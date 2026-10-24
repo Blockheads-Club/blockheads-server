@@ -18,7 +18,7 @@ mod golden_tests {
     fn load_bins(name: &str, prefix_filter: &dyn Fn(&str) -> bool) -> Vec<TraceEvent> {
         let dir = vec_dir(name);
         let mut files: Vec<PathBuf> = match std::fs::read_dir(&dir) {
-            Ok(r) => r.map(|e| e.unwrap().path()).filter(|p| p.extension().map_or(false, |x| x == "bin")).collect(),
+            Ok(r) => r.map(|e| e.unwrap().path()).filter(|p| p.extension().is_some_and(|x| x == "bin")).collect(),
             Err(_) => {
                 eprintln!("SKIP: {} missing", dir.display());
                 return vec![];

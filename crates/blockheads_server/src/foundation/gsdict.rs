@@ -121,7 +121,7 @@ impl<K: GsKey, V> GsDict<K, V> {
 
     fn find(&self, k: &K) -> Option<usize> {
         let b = (k.gs_hash() % self.buckets.len() as u64) as usize;
-        self.buckets[b].iter().rev().copied().find(|&ni| self.nodes[ni].as_ref().map_or(false, |n| n.key.gs_eq(k)))
+        self.buckets[b].iter().rev().copied().find(|&ni| self.nodes[ni].as_ref().is_some_and(|n| n.key.gs_eq(k)))
     }
 
     fn add_new_node(&mut self, k: K, v: V) {
@@ -154,7 +154,7 @@ impl<K: GsKey, V> GsDict<K, V> {
     /// `removeObjectForKey:`; the table never shrinks.
     pub fn remove(&mut self, k: &K) -> Option<V> {
         let b = (k.gs_hash() % self.buckets.len() as u64) as usize;
-        let pos = self.buckets[b].iter().position(|&ni| self.nodes[ni].as_ref().map_or(false, |n| n.key.gs_eq(k)))?;
+        let pos = self.buckets[b].iter().position(|&ni| self.nodes[ni].as_ref().is_some_and(|n| n.key.gs_eq(k)))?;
         let ni = self.buckets[b].remove(pos);
         let n = self.nodes[ni].take().unwrap();
         self.free.push(ni);

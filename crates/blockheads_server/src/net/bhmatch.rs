@@ -328,7 +328,7 @@ impl BhNetNode {
     }
 
     fn add_live(&self, dict: &PlayerInfo) {
-        let local = dget(&dict.borrow(), "local").map_or(false, |v| v.bool_value());
+        let local = dget(&dict.borrow(), "local").is_some_and(|v| v.bool_value());
         if let Some(l) = self.live_player_infos.borrow_mut().as_mut() {
             if local {
                 l.insert(0, dict.clone());
@@ -530,7 +530,7 @@ impl BhNetNode {
 
     /// `-audioChatSupported` (forwards to the match).
     pub fn audio_chat_supported(&self) -> bool {
-        self.match_.borrow().as_ref().map_or(false, |m| m.audio_chat_supported())
+        self.match_.borrow().as_ref().is_some_and(|m| m.audio_chat_supported())
     }
 
     /// `-voiceChatActive`: `voiceChat != nil`, always NO.

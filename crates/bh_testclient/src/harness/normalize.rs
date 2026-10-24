@@ -559,7 +559,7 @@ fn normalize_one(e: &TraceEvent, o: &NormalizeOptions) -> NormMsg {
                     PlistValue::Dict(d) => {
                         d.map
                             .get(&"mod".to_string())
-                            .map_or(false, |m| matches!(m, PlistValue::String(s) if s.s == "owner"))
+                            .is_some_and(|m| matches!(m, PlistValue::String(s) if s.s == "owner"))
                             && d.map.contains_key(&"date".to_string())
                     }
                     _ => false,
@@ -689,7 +689,7 @@ pub fn normalize_trace(ev: &[TraceEvent], o: &NormalizeOptions) -> Vec<NormMsg> 
         let mut res: Vec<NormMsg> = Vec::with_capacity(out.len());
         let mut group: Vec<NormMsg> = Vec::new();
         let flush = |g: &mut Vec<NormMsg>, res: &mut Vec<NormMsg>| {
-            g.sort_by(|a, b| (a.ty, a.canonical()).cmp(&(b.ty, b.canonical())));
+            g.sort_by_key(|a| (a.ty, a.canonical()));
             res.append(g);
         };
         for m in out {
@@ -709,7 +709,6 @@ pub fn normalize_trace(ev: &[TraceEvent], o: &NormalizeOptions) -> Vec<NormMsg> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     fn opts() -> NormalizeOptions {
         NormalizeOptions {

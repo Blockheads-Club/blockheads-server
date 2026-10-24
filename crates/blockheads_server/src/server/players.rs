@@ -81,7 +81,7 @@ impl BHServer {
         if data.is_some() {
             return data;
         }
-        let migrated = self.world().map_or(false, |w| w.has_finished_database_migration_to17());
+        let migrated = self.world().is_some_and(|w| w.has_finished_database_migration_to17());
         if migrated {
             return None;
         }
@@ -152,13 +152,12 @@ impl BHServer {
             let Some(alias) = dict_str(&d, "alias") else { continue };
             let mut photo = None;
             if let Some(PlistValue::Data(ph)) = dict_get(&d, "photo") {
-                let withheld = send_minor > 0 && include_clients.map_or(false, |inc| !inc.iter().any(|c| *c == pid));
+                let withheld = send_minor > 0 && include_clients.is_some_and(|inc| !inc.contains(&pid));
                 if !withheld {
                     photo = Some(ph.bytes.clone());
                 }
             }
-            let is_connected =
-                dict_get(&d, "local").map_or(false, |v| v.bool_value()) || connected.iter().any(|c| *c == pid);
+            let is_connected = dict_get(&d, "local").is_some_and(|v| v.bool_value()) || connected.contains(&pid);
             let modk = if self.player_is_owner_with_alias(Some(&alias)) {
                 Some("owner")
             } else if self.player_is_admin_with_alias(Some(&alias)) {
@@ -214,7 +213,7 @@ impl BHServer {
             if let Some(m) = self.node.match_() {
                 m.send_data_to_players_with_data_mode_error(
                     Some(&messages::player_list(&list)),
-                    &[id.clone()],
+                    std::slice::from_ref(&id),
                     crate::net::bhmatch::SendDataMode::Reliable,
                 );
             }

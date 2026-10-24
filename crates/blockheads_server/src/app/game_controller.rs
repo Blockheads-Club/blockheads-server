@@ -402,8 +402,8 @@ impl GameController {
         }
         let v = self.has_had_connected_clients.get()
             || !self.connected_client_ids().is_empty()
-            || self.world().map_or(false, |w| w.current_total_blockhead_count_including_net() > 0)
-            || self.world().map_or(false, |w| w.server_clients_count() != 0);
+            || self.world().is_some_and(|w| w.current_total_blockhead_count_including_net() > 0)
+            || self.world().is_some_and(|w| w.server_clients_count() != 0);
         self.has_had_connected_clients.set(v);
     }
 
@@ -448,12 +448,12 @@ impl GameController {
 
     /// `-full`.
     pub fn full(&self) -> bool {
-        self.bh_server().map_or(false, |s| s.full())
+        self.bh_server().is_some_and(|s| s.full())
     }
 
     /// `-isControllingBlockheadsForClientPlayer:`.
     pub fn is_controlling_blockheads_for_client_player(&self, player_id: &str) -> bool {
-        self.world().map_or(false, |w| w.is_controlling_blockheads_for_client_player(player_id))
+        self.world().is_some_and(|w| w.is_controlling_blockheads_for_client_player(player_id))
     }
 
     /// `-handleCommand:issueClient:`; the BHServer result is dropped. The server is cloned out first because
@@ -466,7 +466,7 @@ impl GameController {
 
     /// `-isWaitingForMultiPartCommandResponse`.
     pub fn is_waiting_for_multi_part_command_response(&self) -> bool {
-        self.bh_server().map_or(false, |s| s.is_waiting_for_multi_part_command_response())
+        self.bh_server().is_some_and(|s| s.is_waiting_for_multi_part_command_response())
     }
 
     /// `-whiteList` (forwarder).
@@ -488,25 +488,25 @@ impl GameController {
 
     /// `-playerIsBlackListedWithInfo:`.
     pub fn player_is_black_listed_with_info(&self, info: &PlistDict) -> bool {
-        self.bh_server().map_or(false, |s| s.player_is_black_listed_with_info(info))
+        self.bh_server().is_some_and(|s| s.player_is_black_listed_with_info(info))
     }
     /// `-playerIsWhiteListedWithInfo:`.
     pub fn player_is_white_listed_with_info(&self, info: &PlistDict) -> bool {
-        self.bh_server().map_or(false, |s| s.player_is_white_listed_with_info(info))
+        self.bh_server().is_some_and(|s| s.player_is_white_listed_with_info(info))
     }
     /// `-playerIsConnectedWithInfo:`.
     pub fn player_is_connected_with_info(&self, info: &PlistDict) -> bool {
-        self.bh_server().map_or(false, |s| s.player_is_connected_with_info(info))
+        self.bh_server().is_some_and(|s| s.player_is_connected_with_info(info))
     }
     /// `-playerIsAdminWithInfo:` -> `playerIsAdminWithAlias:info[@"alias"]`.
     pub fn player_is_admin_with_info(&self, info: &PlistDict) -> bool {
         let alias = info.get(&"alias".to_string()).and_then(|v| v.as_str()).map(|s| s.to_string());
-        self.bh_server().map_or(false, |s| s.player_is_admin_with_alias(alias.as_deref()))
+        self.bh_server().is_some_and(|s| s.player_is_admin_with_alias(alias.as_deref()))
     }
     /// `-playerIsModWithInfo:`.
     pub fn player_is_mod_with_info(&self, info: &PlistDict) -> bool {
         let alias = info.get(&"alias".to_string()).and_then(|v| v.as_str()).map(|s| s.to_string());
-        self.bh_server().map_or(false, |s| s.player_is_mod_with_alias(alias.as_deref()))
+        self.bh_server().is_some_and(|s| s.player_is_mod_with_alias(alias.as_deref()))
     }
 
     /// `-world` (cloned out of the cell).
@@ -622,13 +622,11 @@ impl ServerWorld for WorldServerAdapter {
     }
     fn dynamic_world(&self) -> Option<Rc<dyn ServerDynamicWorld>> {
         // `None` only while the World has no DynamicWorld (before load stage 12). A1.
-        if self.world.dynamic_world().is_none() {
-            return None;
-        }
+        self.world.dynamic_world()?;
         self.glue.as_ref().and_then(|g| g.dw_face())
     }
     fn distance_ordered_food_types(&self) -> Vec<i32> {
-        self.world.distance_ordered_food_types.borrow().iter().map(|v| *v as i32).collect()
+        self.world.distance_ordered_food_types.borrow().iter().copied().collect()
     }
     fn has_finished_database_migration_to17(&self) -> bool {
         self.world.has_finished_database_migration_to17()
@@ -991,7 +989,9 @@ mod tests {
         let _ = a.summary_net_data_for_admin_mod_owner_cloud_mode(true, true, true, 0);
         let bytes = || vec![vec![0u8; 8]];
         let calls: Vec<Box<dyn Fn()>> = vec![
-            Box::new(|| drop(a.client_connected("c1"))),
+            Box::new(|| {
+                let _ = a.client_connected("c1");
+            }),
             Box::new(|| a.client_disconnected_was_kick("c1", false)),
             Box::new(|| {
                 a.request_for_block_from_client(
@@ -1004,9 +1004,15 @@ mod tests {
             Box::new(move || a.remote_update_for_objects_of_type_from_client(bytes(), 1, "c1")),
             Box::new(move || a.remote_remove_for_objects_of_type_from_client(bytes(), 1, "c1")),
             Box::new(move || a.remote_creation_data_update_for_objects_of_type_from_client(bytes(), 1, "c1")),
-            Box::new(|| drop(a.remote_fill_request_placed_by_client(&[0; 16], "c1"))),
-            Box::new(|| drop(a.remote_remove_request_from_client(&[0; 16], "c1"))),
-            Box::new(|| drop(a.remote_remove_back_wall_request_from_client(&[0; 16], "c1"))),
+            Box::new(|| {
+                let _ = a.remote_fill_request_placed_by_client(&[0; 16], "c1");
+            }),
+            Box::new(|| {
+                let _ = a.remote_remove_request_from_client(&[0; 16], "c1");
+            }),
+            Box::new(|| {
+                let _ = a.remote_remove_back_wall_request_from_client(&[0; 16], "c1");
+            }),
             Box::new(|| a.remote_place_workbench_request_from_peer(&[0; 16], "c1")),
             Box::new(|| a.remote_place_interaction_object_request_from_peer(&[0; 16], "c1")),
             Box::new(|| a.remote_paint_request_from_client(&[0; 16], "c1")),
@@ -1016,7 +1022,9 @@ mod tests {
             Box::new(|| a.remote_tip_notification(&[0; 16])),
             Box::new(|| a.remote_blockhead_damage_request_requested_by_client_name(&[0; 16], Some("c1"))),
             Box::new(|| a.electricity_path_data_recieved_from_client(&[0; 16], "c1")),
-            Box::new(|| drop(a.get_blockhead_zoom_pos_for_client_requester_client_cycle_index(Some("c1"), None, 0))),
+            Box::new(|| {
+                let _ = a.get_blockhead_zoom_pos_for_client_requester_client_cycle_index(Some("c1"), None, 0);
+            }),
             Box::new(|| a.transaction_data_recieved_from_client(None, "c1")),
             Box::new(|| a.welcome_message_dict_recieved_from_client(None, "c1")),
             Box::new(|| {
@@ -1024,15 +1032,19 @@ mod tests {
                     None, None, None, None,
                 )
             }),
-            Box::new(|| drop(a.verify_client_custom_rules_data(&[0; 16]))),
+            Box::new(|| {
+                let _ = a.verify_client_custom_rules_data(&[0; 16]);
+            }),
             Box::new(|| a.custom_rule_dict_recieved_from_net(&PlistValue::string("not a dictionary"))),
             Box::new(|| a.custom_rule_dict_recieved_from_net(&PlistValue::Dict(new_mutable_dict()))),
             Box::new(|| a.archive_light_blocks_for_client("c1")),
             Box::new(|| a.do_repair_for_tile_at_pos(IntPair { x: 0, y: 0 })),
-            Box::new(|| drop(a.world_pos_at_world_index(0))),
+            Box::new(|| {
+                let _ = a.world_pos_at_world_index(0);
+            }),
         ];
         for c in &calls {
-            let _ = catch_ns(|| c());
+            let _ = catch_ns(c);
         }
     }
 

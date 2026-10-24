@@ -200,14 +200,17 @@ pub trait ServerDynamicWorld {
     fn user_ban_changed_is_banned(&self, id: &str, banned: bool);
 }
 
+/// A delayed callback: seconds and the call.
+type DelayedCall = (f64, Box<dyn FnOnce()>);
+
 /// Scheduler used for `performSelector:withObject:afterDelay:`. Default: `app::run_loop::perform_after_delay`.
 thread_local! {
     /// Delayed callbacks queued while no scheduler is installed; drained by the run loop.
-    static PENDING_DELAYS: RefCell<Vec<(f64, Box<dyn FnOnce()>)>> = RefCell::new(Vec::new());
+    static PENDING_DELAYS: RefCell<Vec<DelayedCall>> = RefCell::new(Vec::new());
 }
 
 /// Drain callbacks queued by `performSelector:afterDelay:` when no scheduler was installed.
-pub fn take_pending_delays() -> Vec<(f64, Box<dyn FnOnce()>)> {
+pub fn take_pending_delays() -> Vec<DelayedCall> {
     PENDING_DELAYS.with(|q| std::mem::take(&mut *q.borrow_mut()))
 }
 
@@ -632,7 +635,7 @@ impl BHServer {
             let moderator = self.player_is_mod_with_alias(alias.as_deref());
             let owner = self.player_is_owner_with_alias(alias.as_deref());
             let summary = world.summary_net_data_for_admin_mod_owner_cloud_mode(admin, moderator, owner, cloud_mode);
-            self.send_network_data_to_peers_reliable(summary, &[id.clone()], true);
+            self.send_network_data_to_peers_reliable(summary, std::slice::from_ref(&id), true);
             world.client_connected(&id);
         }
         self.players_changed();
@@ -949,7 +952,7 @@ impl BHServer {
                     self.unapproved_clients.borrow_mut().push(player_id.to_string());
                 }
                 let world = self.world();
-                let requires_password = world.as_ref().map_or(false, |w| w.server_password().is_some());
+                let requires_password = world.as_ref().is_some_and(|w| w.server_password().is_some());
                 let world_id = match &self.save_id {
                     Some(s) => s.clone(),
                     None => world.as_ref().and_then(|w| w.save_id()).unwrap_or_default(),
@@ -1649,6 +1652,7 @@ pub(crate) mod test_support {
         pub m: Rc<crate::net::server_match::BhNetServerMatch>,
         pub d: Rc<MockDelegate>,
         pub w: Rc<MockWorld>,
+        #[allow(dead_code)] // keeps the world alive for the server's weak reference
         pub world_dyn: Rc<dyn ServerWorld>,
     }
 
@@ -1695,7 +1699,7 @@ pub(crate) mod test_support {
                 32,
             )
             .expect("init");
-            let delayed: Rc<RefCell<Vec<(f64, Box<dyn FnOnce()>)>>> = Rc::new(RefCell::new(Vec::new()));
+            let delayed: Rc<RefCell<Vec<DelayedCall>>> = Rc::new(RefCell::new(Vec::new()));
             srv.set_delay_scheduler(Some(Rc::new(move |t, cb| delayed.borrow_mut().push((t, cb)))));
             let w = MockWorld::new(&id);
             let world_dyn: Rc<dyn ServerWorld> = w.clone();
@@ -1710,8 +1714,9 @@ pub(crate) mod test_support {
         pub m: Rc<MockMatch>,
         pub d: Rc<MockDelegate>,
         pub w: Rc<MockWorld>,
+        #[allow(dead_code)] // keeps the world alive for the server's weak reference
         pub world_dyn: Rc<dyn ServerWorld>,
-        pub delayed: Rc<RefCell<Vec<(f64, Box<dyn FnOnce()>)>>>,
+        pub delayed: Rc<RefCell<Vec<DelayedCall>>>,
     }
 
     impl Harness {
@@ -1766,7 +1771,7 @@ pub(crate) mod test_support {
                 32,
             )
             .expect("init");
-            let delayed: Rc<RefCell<Vec<(f64, Box<dyn FnOnce()>)>>> = Rc::new(RefCell::new(Vec::new()));
+            let delayed: Rc<RefCell<Vec<DelayedCall>>> = Rc::new(RefCell::new(Vec::new()));
             let dl = delayed.clone();
             srv.set_delay_scheduler(Some(Rc::new(move |t, cb| dl.borrow_mut().push((t, cb)))));
             let w = MockWorld::new(&id);

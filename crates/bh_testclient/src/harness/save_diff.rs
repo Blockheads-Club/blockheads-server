@@ -1270,7 +1270,7 @@ mod unit {
             RecordDiff::Text { id: i.clone(), first_diff_line: 3, a: "x".into(), b: "y".into() },
         ];
         for d in &diffs {
-            assert_eq!(d.id().env.is_empty(), false);
+            assert!(!d.id().env.is_empty());
             assert!(d.lines()[0].contains("e/d/") || d.lines()[0].contains("world_db/blocks/1_2"));
         }
         assert!(diffs[3].lines()[1].contains("blocks 1_2 tile(1,0) world(33,64) light a=5 b=6"));

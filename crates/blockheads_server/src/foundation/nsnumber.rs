@@ -54,7 +54,7 @@ impl NsNumber {
     /// out of range / NaN / inf -> 0 (observed).
     pub fn gs_hash(&self) -> u64 {
         fn dh(d: f64) -> u64 {
-            if !(d > -9.223372036854775809e18 && d < 9.223372036854775808e18) {
+            if !(d > -9.223_372_036_854_776e18 && d < 9.223_372_036_854_776e18) {
                 0
             } else {
                 ((d as i64) as u32) as u64

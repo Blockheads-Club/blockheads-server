@@ -207,7 +207,7 @@ fn route(srv: &Rc<BHServer>, msg: ClientMsg, original_packet: &[u8], peer: &str)
             }
         }
         ClientMsg::HeartbeatRequestOld => {
-            let enabled = w.as_ref().map_or(false, |w| w.custom_rules_enabled());
+            let enabled = w.as_ref().is_some_and(|w| w.custom_rules_enabled());
             if enabled {
                 crate::nslog!("Kicking player {} due to likely cheating.", peer);
                 srv.boot_player_was_ban(peer, false);
@@ -221,7 +221,7 @@ fn route(srv: &Rc<BHServer>, msg: ClientMsg, original_packet: &[u8], peer: &str)
             let now = reference_time();
             if now - srv.rules_changed_time.get() > 30.0
                 && !srv.player_is_admin_with_alias(alias.as_deref())
-                && !w.as_ref().map_or(false, |w| w.verify_client_custom_rules_data(&payload))
+                && !w.as_ref().is_some_and(|w| w.verify_client_custom_rules_data(&payload))
             {
                 crate::nslog!("Kicking player {} due to likely cheating.", peer);
                 srv.boot_player_was_ban(peer, false);
@@ -346,7 +346,7 @@ fn route(srv: &Rc<BHServer>, msg: ClientMsg, original_packet: &[u8], peer: &str)
             let matches = saved
                 .as_ref()
                 .and_then(|s| s.object_for_key("transaction"))
-                .map_or(false, |v| v.unsigned_int_value() == id as u32);
+                .is_some_and(|v| v.unsigned_int_value() == id as u32);
             if matches {
                 to_peer(messages::portal_chest_ack_resend(&raw8));
             } else {
@@ -472,7 +472,7 @@ fn privacy_change(srv: &Rc<BHServer>, privacy: Option<String>, peer: &str, alias
     }
     let Some(m) = srv.match_() else { return };
     let Some(sm) = m.as_server_match() else { return };
-    let white_nonempty = srv.white_list.borrow().as_ref().map_or(false, |l| !l.is_empty());
+    let white_nonempty = srv.white_list.borrow().as_ref().is_some_and(|l| !l.is_empty());
     if srv.is_cloud_match() && white_nonempty && safe_ci(Some(&privacy), Some("public")) == 0 {
         let cur = srv.privacy_string().map(|s| nsstring::uppercase_string(&s)).unwrap_or("(null)".to_string());
         let msg = format!(
@@ -542,7 +542,7 @@ fn chat(srv: &Rc<BHServer>, dict: Option<PlistValue>, peer: &str) {
         None => None,
     };
     let loc_zero = match &text {
-        Some(t) => nsstring::range_of_string(t, "/").map_or(false, |(l, _)| l == 0),
+        Some(t) => nsstring::range_of_string(t, "/").is_some_and(|(l, _)| l == 0),
         None => true,
     };
     let is_command = (loc_zero || srv.is_waiting_for_multi_part_command_response()) && srv.player_is_mod_with_alias(a);
@@ -679,7 +679,7 @@ fn handshake(srv: &Rc<BHServer>, payload: &[u8], peer: &str) {
     let Some(m) = srv.match_() else { return };
     let info: Option<PlayerInfo> = m.client_player_information_recieved_from_peer(raw_dict.as_ref(), peer);
     let p_id: Option<String> = m.persistent_id_for_net_id(peer);
-    let already = p_id.as_ref().map_or(false, |p| srv.connected_clients.borrow().iter().any(|e| e == p));
+    let already = p_id.as_ref().is_some_and(|p| srv.connected_clients.borrow().iter().any(|e| e == p));
     let (Some(info), Some(p_id), false) = (info.clone(), p_id.clone(), already) else {
         reject_to(reject::USER_LOGGED_IN, peer);
         m.remove_client(peer);
@@ -699,7 +699,7 @@ fn handshake(srv: &Rc<BHServer>, payload: &[u8], peer: &str) {
     // 7.
     if world.custom_rules_enabled() || world.world_width_macro() < 512 {
         let minor = dict_get(&info.borrow(), "minorVersion").map(|v| v.int_value());
-        if minor.map_or(true, |v| v < 2) {
+        if minor.is_none_or(|v| v < 2) {
             reject_p(reject::CLIENT_TOO_OLD, p);
             return;
         }
@@ -795,7 +795,7 @@ fn handshake(srv: &Rc<BHServer>, payload: &[u8], peer: &str) {
     m.client_approved_with_info(&info);
     srv.node.load_info_for_player(p);
     if let Some(d) = srv.player_info_dict_for_peer_id(p) {
-        if d.map.len() != 0 {
+        if !d.map.is_empty() {
             {
                 let mut rp = srv.recent_players.borrow_mut();
                 if let Some(i) = rp.iter().position(|x| dict_str(x, "playerID").as_deref() == Some(p)) {

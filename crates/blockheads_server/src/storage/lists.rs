@@ -88,7 +88,7 @@ pub fn parse_list(contents: Option<&str>, rule: ListRule) -> Option<Vec<String>>
     let len0 = |a: &Vec<String>| a.first().map(|s| nsstring::length(s));
     match rule {
         ListRule::Black => {
-            if len0(&arr).map_or(false, |l| l > 64) {
+            if len0(&arr).is_some_and(|l| l > 64) {
                 arr.remove(0);
             }
             if len0(&arr) == Some(0) {
@@ -101,7 +101,7 @@ pub fn parse_list(contents: Option<&str>, rule: ListRule) -> Option<Vec<String>>
             }
         }
         ListRule::White => {
-            if len0(&arr).map_or(false, |l| l > 64) {
+            if len0(&arr).is_some_and(|l| l > 64) {
                 arr.remove(0);
             }
             if arr.iter().any(|s| !s.is_empty()) {
@@ -111,7 +111,7 @@ pub fn parse_list(contents: Option<&str>, rule: ListRule) -> Option<Vec<String>>
             }
         }
         ListRule::Plain => {
-            if len0(&arr).map_or(false, |l| l > 64) {
+            if len0(&arr).is_some_and(|l| l > 64) {
                 arr.remove(0);
             }
             if arr.is_empty() {
@@ -121,7 +121,7 @@ pub fn parse_list(contents: Option<&str>, rule: ListRule) -> Option<Vec<String>>
             }
         }
         ListRule::Cloud => {
-            if len0(&arr).map_or(false, |l| !(l <= 64 && l != 0)) {
+            if len0(&arr).is_some_and(|l| !(l <= 64 && l != 0)) {
                 arr.remove(0);
             }
             if arr.is_empty() {

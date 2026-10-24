@@ -1,5 +1,6 @@
 //! Adapters of the glue that need an object of the right class: called with every fixture object.
 
+#![allow(dropping_copy_types, clippy::unit_arg)]
 use super::hook_fixture::fx;
 use super::*;
 
@@ -225,6 +226,6 @@ fn adapters_with_objects_of_every_class() {
             }
             t("tile_is_lit_for_client", || drop(g.tile_is_lit_for_client(Some("cid"), f.p, f.tile)));
         }
-        for b in [&f.bg, &f.dead_bg, &f.gone] {}
+        for _b in [&f.bg, &f.dead_bg, &f.gone] {}
     });
 }

@@ -49,7 +49,7 @@ pub struct InitialNetData {
 }
 
 /// `999999.875f` (0x497423fe): the adult max age of generated trees.
-pub const ADULT_MAX_AGE: f32 = 999999.875f32;
+pub const ADULT_MAX_AGE: f32 = 999_999.9_f32;
 
 /// `clampi255(v)`: `v < 1 -> 0; v < 255 -> v; else 255`.
 pub fn clampi255(v: i32) -> i32 {
@@ -217,7 +217,7 @@ impl DynamicWorld {
                 let get = |k: &str| sd.object_for_key(k);
                 self.dynamic_object_id_count.set(get("dynamicObjectIDCount").map_or(0, |v| v.unsigned_long_value()));
                 self.active_blockhead_index.set(get("activeBlockheadIndex").map_or(0, |v| v.int_value()));
-                self.workbench_has_been_crafted.set(get("workbenchHasBeenCrafted").map_or(false, |v| v.bool_value()));
+                self.workbench_has_been_crafted.set(get("workbenchHasBeenCrafted").is_some_and(|v| v.bool_value()));
                 if let Some(PlistValue::Dict(t)) = get("poleItemTakenTimes") {
                     *self.pole_item_taken_times.borrow_mut() = Some(GsDict::copy_from(&t.map));
                 }
@@ -355,7 +355,7 @@ impl DynamicWorld {
         client_owned_id: Option<&str>,
     ) {
         // guard: != 21, != 0, < 65 (and reject negatives: the original indexes out of bounds)
-        if object_type == 21 || object_type == 0 || object_type >= 65 || object_type < 0 {
+        if object_type == 21 || object_type == 0 || !(0..65).contains(&object_type) {
             return;
         }
         let hooks = self.hooks();
@@ -542,7 +542,7 @@ impl DynamicWorld {
                 if let Some(data) = self.dynamic_object_database.data_for_key(Some(&key)) {
                     let mt = macro_tile_at_macro_postion(pb.x_pos.get(), pb.y_pos.get(), &world.macro_tiles(), &world);
                     if let Some(mt) = mt {
-                        if mt.physical_block().map_or(false, |p| std::ptr::eq(p, pb)) {
+                        if mt.physical_block().is_some_and(|p| std::ptr::eq(p, pb)) {
                             if !mt.dynamic_objects_loaded.get() {
                                 if let Some(h) = world.ops_hooks() {
                                     h.load_dynamic_objects_if_not_already_loaded_for_macro_tile_include_surface_blocks(
@@ -1073,9 +1073,7 @@ impl DynamicWorld {
         if let Some(h) = world.ops_hooks() {
             h.load_dynamic_objects_if_not_already_loaded_for_macro_tile_include_surface_blocks(&world, &mt, true);
         }
-        if pb.is_none() {
-            return None;
-        }
+        pb?;
         let mut creation: GsDict<NsNumberKey, Vec<NetBlob>> = GsDict::new();
         let mut update: GsDict<NsNumberKey, Vec<NetBlob>> = GsDict::new();
         let objects: Vec<ObjRef> = mt.dynamic_objects.borrow().clone().unwrap_or_default();
@@ -1374,7 +1372,7 @@ impl DynamicWorld {
             &serialize_or_raise(&save_data_dict, "Failed to save blockheads.", false, &|| {}),
         );
         let cache_nonempty =
-            self.disconnected_clients_cached_save_dicts_not_done.borrow().as_ref().map_or(false, |c| !c.is_empty());
+            self.disconnected_clients_cached_save_dicts_not_done.borrow().as_ref().is_some_and(|c| !c.is_empty());
         if cache_nonempty {
             for bh in self.net_blockheads_with_disconnected_clients.borrow().clone() {
                 if let Some(dir) = hooks.blockhead_client_save_dir(&bh) {
@@ -1479,7 +1477,7 @@ impl DynamicWorld {
         if object_type == 15 {
             nslog!("saving dep");
         }
-        if object_type == 21 || !macro_tile.dynamic_objects_loaded.get() || object_type < 0 || object_type >= 65 {
+        if object_type == 21 || !macro_tile.dynamic_objects_loaded.get() || !(0..65).contains(&object_type) {
             return;
         }
         let hooks = self.hooks();
