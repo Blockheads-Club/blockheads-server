@@ -484,7 +484,7 @@ fn cosmetics_full_delta_and_leave() {
     assert_eq!(n.worn("a"), vec![("hair".to_string(), 2), ("hat".to_string(), 1)]);
     // The next joiner gets the table.
     n.cosmetics_full(&l, "b2");
-    assert_eq!(cosmetics(&l.take())[0].0, true);
+    assert!(cosmetics(&l.take())[0].0);
     // Taking off, then leaving.
     n.set_cosmetic(&l, "a", "hat", None).unwrap();
     l.take();

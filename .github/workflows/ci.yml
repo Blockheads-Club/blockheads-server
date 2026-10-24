@@ -34,10 +34,9 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      # Plain clippy: correctness lints are deny-by-default; style lints are still being worked down.
       # approx_constant / eq_op / erasing_op are allowed in Cargo.toml (`[lints.clippy]`): the faithful float
       # expressions are behaviour.
-      - run: cargo clippy --workspace --all-targets
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
   commitlint:
     if: github.event_name == 'pull_request'
