@@ -72,6 +72,11 @@ impl DatabaseEnvironment {
         max_map_size_mb: usize,
         crash_on_failed_open: bool,
     ) -> Option<Rc<DatabaseEnvironment>> {
+        // The unit tests of a 32-bit build run many worlds in one process, and every environment maps its
+        // whole size: at the 1 GiB the world asks for, a handful of them (some leaked in reference cycles)
+        // use up the 4 GiB address space. Test-only; production maps what the original maps.
+        #[cfg(all(test, target_pointer_width = "32"))]
+        let max_map_size_mb = max_map_size_mb.min(32);
         let mut mb: usize = if max_map_size_mb < 2 { 1 } else { max_map_size_mb };
         let _ = std::fs::create_dir_all(path);
         unsafe {
@@ -440,11 +445,11 @@ mod tests {
     #[test]
     fn env_open_mapsize_and_files() {
         let p = tmp("open");
-        let e = DatabaseEnvironment::new(&p, 4, 128).unwrap();
+        let e = DatabaseEnvironment::new(&p, 4, 16).unwrap();
         unsafe {
             let mut i: ffi::MDB_envinfo = std::mem::zeroed();
             ffi::mdb_env_info(e.env(), &mut i);
-            assert_eq!(i.me_mapsize as usize, 128 << 20);
+            assert_eq!(i.me_mapsize as usize, 16 << 20);
         }
         assert!(std::path::Path::new(&format!("{p}data.mdb")).exists());
         assert!(std::path::Path::new(&format!("{p}lock.mdb")).exists());
