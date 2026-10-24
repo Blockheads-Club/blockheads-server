@@ -384,7 +384,7 @@ mod scenario_tests {
             let p = t.pos();
             for y in 0..24 {
                 for dx in -3..=3 {
-                    if let Some(tr) = tile_at(&w, p.x + dx, p.y + y) {
+                    for tr in tile_at(&w, p.x + dx, p.y + y).into_iter() {
                         if tr.get().contents == 43 {
                             // the trunk is written again, the arms found as somebody else's
                             tr.update(|tile| {

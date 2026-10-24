@@ -1826,7 +1826,7 @@ pub(crate) mod testenv {
                 if r % 100 >= density {
                     continue;
                 }
-                if let Some(tr) = tile_at(w, x + dx, y) {
+                for tr in tile_at(w, x + dx, y).into_iter() {
                     tr.update(|t| match (r >> 8) % 4 {
                         0 => t.type_index = 6,
                         1 => t.on_fire = 1,
@@ -1871,14 +1871,14 @@ pub(crate) mod testenv {
             };
             let y = if seed % 5 == 4 { 31 } else { GROUND + 1 };
             let ground_tile = if tree_type == TREE_CACTUS { 7 } else { 6 };
-            if let Some(tr) = tile_at(&w, x, y - 1) {
+            for tr in tile_at(&w, x, y - 1).into_iter() {
                 tr.update(|t| t.type_index = ground_tile);
             }
             scatter(&w, x, u64::from(seed) + 1, [0, 3, 8, 20][(seed % 4) as usize]);
             let unload: &[usize] =
                 [&[][..], &[1, 3], &[2, 3], &[1, 2, 3], &[2], &[3], &[0], &[0, 2]][((seed / 3) % 8) as usize];
             crate::rng::glibc_rand::srand(seed + 1);
-            if let Some(t) = new_tree_for_type(
+            for t in new_tree_for_type(
                 tree_type,
                 &w,
                 &d,
@@ -1890,7 +1890,9 @@ pub(crate) mod testenv {
                 None,
                 seed % 2 == 0,
                 99_999.0,
-            ) {
+            )
+            .into_iter()
+            {
                 for &i in unload {
                     *mt.get(i).unwrap().physical_block.borrow_mut() = None;
                 }
@@ -1919,7 +1921,7 @@ pub(crate) mod testenv {
                 *mt.get(i).unwrap().physical_block.borrow_mut() = *pb;
             }
             wipe(&w, x);
-            if let Some(tr) = tile_at(&w, x, y - 1) {
+            for tr in tile_at(&w, x, y - 1).into_iter() {
                 tr.update(|t| t.type_index = if y == 31 { 2 } else { 6 });
             }
         }
@@ -3010,7 +3012,7 @@ mod scenario_tests {
                     // clean the tiles for the next round
                     for y in GROUND + 1..GROUND + 30 {
                         for dx in -6..=6 {
-                            if let Some(tr) = crate::world::tiles::tile_at_world_position_loaded(x + dx, y, &w) {
+                            for tr in crate::world::tiles::tile_at_world_position_loaded(x + dx, y, &w).into_iter() {
                                 tr.update(|tile| {
                                     tile.type_index = 2;
                                     tile.contents = 0;
@@ -3217,7 +3219,7 @@ mod fuzz_tests {
                     t.remove_from_macro_block(&t);
                     wipe(&w, x);
                     for dx in -12..=12 {
-                        if let Some(tr) = tile_at(&w, x + dx, 32) {
+                        for tr in tile_at(&w, x + dx, 32).into_iter() {
                             tr.update(|t| {
                                 *t = Tile { type_index: 2, back_wall_type_index: 2, sun_light: 255, ..Tile::default() }
                             });
@@ -3270,7 +3272,7 @@ mod fuzz_tests {
                         let mut changed = vec![];
                         for _ in 0..(1 + r.next() % 6) {
                             let p = IntPair { x: x + (r.next() % 13) as i32 - 6, y: GROUND + (r.next() % 14) as i32 };
-                            if let Some(tr) = crate::world::tiles::tile_at_world_position_loaded(p.x, p.y, &w) {
+                            for tr in crate::world::tiles::tile_at_world_position_loaded(p.x, p.y, &w).into_iter() {
                                 let (ty, fire, contents) = (
                                     r.pick(&[2u8, 2, 6, 3, 1]),
                                     r.pick(&[0u8, 0, 0, 1]),
@@ -3293,8 +3295,9 @@ mod fuzz_tests {
                     if step == 30 {
                         let dict = t.get_save_dict(&t);
                         w.set_world_time(f64::from(round) * 4000.0 + 20_000.0);
-                        if let Some(back) =
+                        for back in
                             new_tree_from_save_dict(t.object_type(), &w, &d, &dict, None, noise_fn(), noise_fn())
+                                .into_iter()
                         {
                             back.update_accurate_dt_is_simulation(&back, 5.0, 5.0, false);
                             back.world_changed(&back, &mut vec![IntPair { x, y: GROUND + 2 }]);
@@ -3307,7 +3310,7 @@ mod fuzz_tests {
                 t.remove_from_macro_block(&t);
                 for y in GROUND + 1..GROUND + 30 {
                     for dx in -8..=8 {
-                        if let Some(tr) = crate::world::tiles::tile_at_world_position_loaded(x + dx, y, &w) {
+                        for tr in crate::world::tiles::tile_at_world_position_loaded(x + dx, y, &w).into_iter() {
                             tr.update(|tile| {
                                 tile.type_index = 2;
                                 tile.contents = 0;
@@ -3539,7 +3542,7 @@ mod edge_tests {
                 t.remove_from_macro_block(&t);
                 for dx in -12..=12 {
                     for y in 31..60 {
-                        if let Some(tr) = tile_at(&w, 20 + dx, y) {
+                        for tr in tile_at(&w, 20 + dx, y).into_iter() {
                             tr.update(|t| {
                                 *t = Tile { type_index: 2, back_wall_type_index: 2, sun_light: 255, ..Tile::default() }
                             });

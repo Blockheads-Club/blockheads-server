@@ -1257,7 +1257,7 @@ pub(crate) mod sweep_tests {
             for dy in 0..6 {
                 for dx in -4..=4 {
                     let x = (x0 + dx).rem_euclid(p.wt());
-                    if let Some(t) = crate::world::tiles::tile_at_world_position_loaded(x, 330 + dy, &world) {
+                    for t in crate::world::tiles::tile_at_world_position_loaded(x, 330 + dy, &world).into_iter() {
                         t.update(|v| {
                             v.type_index = if dx % 2 == 0 { 2 } else { 3 };
                             v.zone_type_index = 1;

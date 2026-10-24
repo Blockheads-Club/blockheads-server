@@ -990,7 +990,7 @@ mod scenario_tests {
         let mut stopped = false;
         for seed in 1..80u32 {
             srand(seed);
-            if let Some(k) = kelp_at(&d, 29, true) {
+            for k in kelp_at(&d, 29, true).into_iter() {
                 stopped |= k.n() > 0 && k.n() < 15;
                 // the stalk reaches into the unloaded rows: dying of old age skips them, growth finds no water
                 let me: ObjRef = k.clone();
