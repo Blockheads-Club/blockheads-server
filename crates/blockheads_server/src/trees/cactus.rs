@@ -367,3 +367,36 @@ impl TreeLike for CactusTree {
         fruit_season_update(me, &FRUIT);
     }
 }
+
+#[cfg(test)]
+mod scenario_tests {
+    use super::*;
+    use crate::trees::tree::testenv::gauntlet;
+
+    #[test]
+    fn cacti_over_obstacles_and_unloaded_blocks() {
+        gauntlet(TREE_CACTUS, "cactus_gauntlet", 90, &|t, seed| {
+            let c = downcast::<CactusTree>(t).unwrap();
+            c.set_available_food(if seed % 2 == 0 { 2000.0 } else { 3.0 });
+            let _ = c.available_food();
+            // arms that nobody owns any more are taken over again
+            let w = tree_world(t);
+            let p = t.pos();
+            for y in 0..24 {
+                for dx in -3..=3 {
+                    for tr in tile_at(&w, p.x + dx, p.y + y) {
+                        if tr.get().contents == 43 {
+                            // the trunk is written again, the arms found as somebody else's
+                            tr.update(|tile| {
+                                tile.dynamic_object_owner = 0;
+                                if dx == 0 {
+                                    tile.contents = 0;
+                                }
+                            });
+                        }
+                    }
+                }
+            }
+        });
+    }
+}

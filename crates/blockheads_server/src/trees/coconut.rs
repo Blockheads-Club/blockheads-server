@@ -273,3 +273,24 @@ impl TreeLike for CoconutTree {
         fruit_season_update(me, &FRUIT);
     }
 }
+
+#[cfg(test)]
+mod scenario_tests {
+    use super::*;
+    use crate::trees::tree::testenv::{env, gauntlet, GROUND};
+
+    #[test]
+    fn coconut_palms_over_obstacles_and_unloaded_blocks() {
+        gauntlet(TREE_COCONUT, "coconut_gauntlet", 90, &|_, _| {});
+    }
+
+    #[test]
+    fn expert_mode_halves_the_coconuts() {
+        let (w, d) = env("coconut_expert");
+        let t =
+            CoconutTree::new(&w, &d, IntPair { x: 20, y: GROUND + 1 }, None, 100, 100, None, None, false, 0.0).unwrap();
+        let normal = count(&t, 8);
+        w.set_expert_mode(true);
+        assert_eq!(count(&t, 8), std::cmp::max(1, normal / 2));
+    }
+}

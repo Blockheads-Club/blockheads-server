@@ -191,3 +191,18 @@ impl TreeLike for AppleTree {
         d.map.insert("availableFood".to_string(), PlistValue::real_f32(self.available_food.get()));
     }
 }
+
+#[cfg(test)]
+mod scenario_tests {
+    use super::*;
+    use crate::trees::tree::testenv::gauntlet;
+
+    #[test]
+    fn apple_trees_over_obstacles_and_unloaded_blocks() {
+        gauntlet(TREE_APPLE, "apple_gauntlet", 90, &|t, seed| {
+            let a = downcast::<AppleTree>(t).unwrap();
+            a.set_available_food(t, if seed % 2 == 0 { 2000.0 } else { 3.0 });
+            assert!(a.available_food() > 0.0);
+        });
+    }
+}

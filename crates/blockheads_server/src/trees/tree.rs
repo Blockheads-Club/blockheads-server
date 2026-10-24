@@ -1830,7 +1830,8 @@ pub(crate) mod testenv {
                     tr.update(|t| match (r >> 8) % 4 {
                         0 => t.type_index = 6,
                         1 => t.on_fire = 1,
-                        _ => t.contents = 0x30,
+                        2 => t.contents = 0x30,
+                        _ => t.contents = 43,
                     });
                 }
             }
@@ -1852,6 +1853,74 @@ pub(crate) mod testenv {
                         t.sun_light = 255;
                     });
                 }
+            }
+        }
+    }
+
+    /// Grow one species over obstacle fields, partly unloaded worlds and odd heights; `prep` may set species state
+    /// (food, fruit...) before each update.
+    pub fn gauntlet(tree_type: i32, tag: &str, rounds: u32, prep: &dyn Fn(&ObjRef, u32)) {
+        let (w, d) = env(tag);
+        let mt = w.macro_tiles();
+        let saved: Vec<_> = (0..4).map(|i| *mt.get(i).unwrap().physical_block.borrow()).collect();
+        for seed in 0..rounds {
+            let x = match seed % 6 {
+                0 => 31,
+                3 => 32,
+                _ => 14 + (seed % 30) as i32,
+            };
+            let y = if seed % 5 == 4 { 31 } else { GROUND + 1 };
+            let ground_tile = if tree_type == TREE_CACTUS { 7 } else { 6 };
+            for tr in tile_at(&w, x, y - 1) {
+                tr.update(|t| t.type_index = ground_tile);
+            }
+            scatter(&w, x, u64::from(seed) + 1, [0, 3, 8, 20][(seed % 4) as usize]);
+            let unload: &[usize] =
+                [&[][..], &[1, 3], &[2, 3], &[1, 2, 3], &[2], &[3], &[0], &[0, 2]][((seed / 3) % 8) as usize];
+            crate::rng::glibc_rand::srand(seed + 1);
+            for t in new_tree_for_type(
+                tree_type,
+                &w,
+                &d,
+                IntPair { x, y },
+                None,
+                255,
+                255,
+                None,
+                None,
+                seed % 2 == 0,
+                99_999.0,
+            ) {
+                for &i in unload {
+                    *mt.get(i).unwrap().physical_block.borrow_mut() = None;
+                }
+                tree_state(&t).borrow_mut().height = 2 + (seed % 21) as i32;
+                tree_state(&t).borrow_mut().tree_season_offset = [-300, 0, 70, 700][(seed % 4) as usize];
+                prep(&t, seed);
+                if seed % 9 == 0 {
+                    tree_state(&t).borrow_mut().dead = true;
+                }
+                tl(&t).update_growth(&t, seed % 8 != 7);
+                t.update_accurate_dt_is_simulation(&t, 12.0, 12.0, false);
+                tree_state(&t).borrow_mut().dead = false;
+                prep(&t, seed + 1);
+                tl(&t).update_growth(&t, true);
+                t.update_accurate_dt_is_simulation(&t, 12.0, 12.0, false);
+                tree_state(&t).borrow_mut().height = 1;
+                tree_state(&t).borrow_mut().fruit_count = 1;
+                tl(&t).update_growth(&t, true);
+                for (i, pb) in saved.iter().enumerate() {
+                    *mt.get(i).unwrap().physical_block.borrow_mut() = *pb;
+                }
+                t.set_needs_removed(&t, true);
+                t.remove_from_macro_block(&t);
+            }
+            for (i, pb) in saved.iter().enumerate() {
+                *mt.get(i).unwrap().physical_block.borrow_mut() = *pb;
+            }
+            wipe(&w, x);
+            for tr in tile_at(&w, x, y - 1) {
+                tr.update(|t| t.type_index = if y == 31 { 2 } else { 6 });
             }
         }
     }

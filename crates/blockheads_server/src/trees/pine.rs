@@ -251,4 +251,11 @@ mod scenario_tests {
             t.set_needs_removed(&t, true);
         }
     }
+
+    #[test]
+    fn pines_over_obstacles_and_unloaded_blocks() {
+        crate::trees::tree::testenv::gauntlet(TREE_PINE, "pine_gauntlet", 90, &|t, seed| {
+            downcast::<PineTree>(t).unwrap().available_food.set(if seed % 2 == 0 { 2000.0 } else { 3.0 });
+        });
+    }
 }
