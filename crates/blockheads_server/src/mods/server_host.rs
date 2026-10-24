@@ -571,7 +571,7 @@ pub(super) fn load(dir: &Path, save_id: Option<&str>, server: &Rc<BHServer>) -> 
     if host.is_empty() && catalog.is_empty() {
         return None;
     }
-    let offered = catalog.entries.iter().filter(|e| e.bytes.is_some()).count();
+    let offered = catalog.entries.iter().filter(|e| e.is_client()).count();
     if offered > 0 {
         let req = if catalog.client_required { "required" } else { "optional" };
         GameBridge::log(
@@ -581,8 +581,7 @@ pub(super) fn load(dir: &Path, save_id: Option<&str>, server: &Rc<BHServer>) -> 
             &format!("offering {offered} client mod(s) to modded clients ({req})"),
         );
     }
-    let offered: Vec<String> =
-        catalog.entries.iter().filter(|e| e.bytes.is_some()).map(|e| e.info.id.clone()).collect();
+    let offered: Vec<String> = catalog.entries.iter().filter(|e| e.is_client()).map(|e| e.info.id.clone()).collect();
     let content = super::content::build(dir, &offered, &world_dir.join("mods/registry.toml"), &mut |m| {
         GameBridge::log(&*bridge, None, LogLevel::Error, &m)
     });

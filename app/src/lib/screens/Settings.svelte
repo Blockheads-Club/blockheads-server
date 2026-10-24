@@ -13,6 +13,7 @@
   import Toggle from '../ui/Toggle.svelte';
   import { toast } from '../ui/toast.svelte';
   import { copyText } from '../util';
+  import JvmSettings from './JvmSettings.svelte';
   import UpdateSettings from './UpdateSettings.svelte';
 
   const run = $derived(store.settings.run);
@@ -124,6 +125,8 @@
       <Tabs mode="radiogroup" label={t('settings.theme')} items={themes} value={theme.choice} onchange={(c: ThemeChoice) => setTheme(c)} />
     </SettingRow>
   </Card>
+
+  <JvmSettings />
 
   <UpdateSettings />
 

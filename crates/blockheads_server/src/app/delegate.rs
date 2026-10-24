@@ -422,6 +422,17 @@ impl CommandLineDelegate {
         self.game_controller.borrow().is_none()
     }
 
+    /// For hosts that run with `no_exit`: after `/stop` the world is gone, which is where the vanilla idle check
+    /// ends the process; do that here (`exit(0)`, which unwinds to the host). Otherwise true.
+    pub fn keep_running(&self, no_exit: bool) -> bool {
+        if no_exit && self.game_controller.borrow().as_ref().is_some_and(|g| g.world().is_none()) {
+            let old = self.game_controller.borrow_mut().take();
+            std::mem::forget(old);
+            crate::foundation::sys::exit(0);
+        }
+        true
+    }
+
     /// `-commandTyped:` (the caller re-arms the read).
     pub fn command_typed(&self, data: &[u8]) {
         let s = match std::str::from_utf8(data) {

@@ -79,6 +79,8 @@ struct AppInfo {
     platform: &'static str,
     /// macOS draws the window buttons (overlay title bar).
     native_controls: bool,
+    /// This build can run JVM mods (cargo feature `jvm`); the settings switch is inert without it.
+    jvm_built: bool,
 }
 
 #[tauri::command]
@@ -88,6 +90,7 @@ fn app_info(core: State<'_, Arc<Core>>) -> AppInfo {
         data_dir: core.data_dir().to_string_lossy().into_owned(),
         platform: std::env::consts::OS,
         native_controls: cfg!(target_os = "macos"),
+        jvm_built: cfg!(feature = "jvm"),
     }
 }
 

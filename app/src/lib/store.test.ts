@@ -34,6 +34,7 @@ describe('init and polling', () => {
     s.stopPolling();
     expect(s.ready).toBe(true);
     expect(s.settings.run.worldId).toBe('z');
+    expect(s.settings.mods).toEqual({ jvm: false, javaHome: '' });
     expect(s.info?.version).toBe('9.9.9');
     expect(s.lists.admin).toEqual(['alice']);
     expect(s.currentWorld?.name).toBe('Z');

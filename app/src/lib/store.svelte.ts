@@ -1,7 +1,7 @@
 import { api } from './api';
 import { errText, i18n, setLang, t } from './i18n.svelte';
 import { toast } from './ui/toast.svelte';
-import type { AppInfo, BootPhase, ListKind, LogEntry, NewWorld, Player, RunOptions, RunState, Screen, Settings, Stats, World } from './types';
+import type { AppInfo, BootPhase, ListKind, LogEntry, ModsPrefs, NewWorld, Player, RunOptions, RunState, Screen, Settings, Stats, World } from './types';
 import { classify, storage } from './util';
 
 /** After this long the splash says that opening the data folder is slow. */
@@ -10,6 +10,8 @@ const MAX_LINES = 1500;
 const MAX_HISTORY = 30;
 const MAX_KNOWN = 200;
 const KNOWN_KEY = 'bh.known';
+/** JVM mods are unsandboxed code: off until the owner turns them on. */
+export const DEFAULT_MODS: ModsPrefs = { jvm: false, javaHome: '' };
 const DEFAULT_RUN: RunOptions = { worldId: '', port: 15151, maxPlayers: 0, password: '', saveDelay: 10 };
 const KINDS: ListKind[] = ['admin', 'mod', 'white', 'black'];
 
@@ -98,7 +100,7 @@ export class AppStore {
     try {
       const settings = await api.getSettings();
       this.info ??= await api.appInfo();
-      this.settings = { ...settings, run: { ...DEFAULT_RUN, ...settings.run } };
+      this.settings = { ...settings, run: { ...DEFAULT_RUN, ...settings.run }, mods: { ...DEFAULT_MODS, ...settings.mods } };
       setLang(settings.language);
       // First launch (no language saved yet): keep the one picked from the OS locale, so the Android
       // notification that Rust builds speaks it too.
