@@ -876,20 +876,20 @@ mod tests {
         let t = TileRef::new(pb, 5);
         // server + nil client id: tile light
         t.set_light(0);
-        assert!(!w.tile_is_lit_for_client_at_pos_tile(None, IntPair { x: 5, y: 0 }, Some(t.clone())));
+        assert!(!w.tile_is_lit_for_client_at_pos_tile(None, IntPair { x: 5, y: 0 }, Some(t)));
         t.set_light(9);
-        assert!(w.tile_is_lit_for_client_at_pos_tile(None, IntPair { x: 5, y: 0 }, Some(t.clone())));
+        assert!(w.tile_is_lit_for_client_at_pos_tile(None, IntPair { x: 5, y: 0 }, Some(t)));
         // known client: light block byte
         assert!(w.client_connected("c"));
         let idx = f.rec.sc_created.borrow()[0].1 as usize;
         let mut lb = Box::new([0u8; 1024]);
         lb[5] = 1;
         pb.client_light_blocks.borrow_mut()[idx] = Some(lb);
-        assert!(w.tile_is_lit_for_client_at_pos_tile(Some("c"), IntPair { x: 5, y: 0 }, Some(t.clone())));
-        assert!(!w.tile_is_lit_for_client_at_pos_tile(Some("c"), IntPair { x: 6, y: 0 }, Some(t.clone())));
+        assert!(w.tile_is_lit_for_client_at_pos_tile(Some("c"), IntPair { x: 5, y: 0 }, Some(t)));
+        assert!(!w.tile_is_lit_for_client_at_pos_tile(Some("c"), IntPair { x: 6, y: 0 }, Some(t)));
         // block missing for that client and nothing loads it: treated as lit
         pb.client_light_blocks.borrow_mut()[idx] = None;
-        assert!(w.tile_is_lit_for_client_at_pos_tile(Some("c"), IntPair { x: 6, y: 0 }, Some(t.clone())));
+        assert!(w.tile_is_lit_for_client_at_pos_tile(Some("c"), IntPair { x: 6, y: 0 }, Some(t)));
         // unknown client id reads light block index 0
         let mut lb0 = Box::new([0u8; 1024]);
         lb0[6] = 1;
@@ -1214,17 +1214,17 @@ mod more_tests {
         // the block thinks it sits at the far end of the world: x wraps forward
         pb.x_pos.set(31);
         pb.y_pos.set(0);
-        assert!(w.tile_is_lit_for_client_at_pos_tile(Some("c"), IntPair { x: 5, y: 0 }, Some(t.clone())));
-        assert!(!w.tile_is_lit_for_client_at_pos_tile(Some("c"), IntPair { x: 6, y: 0 }, Some(t.clone())));
+        assert!(w.tile_is_lit_for_client_at_pos_tile(Some("c"), IntPair { x: 5, y: 0 }, Some(t)));
+        assert!(!w.tile_is_lit_for_client_at_pos_tile(Some("c"), IntPair { x: 6, y: 0 }, Some(t)));
         // and the other way round (a block at the start, a tile far to the east): out of range, so lit
         *w.macro_tiles.get(18).unwrap().physical_block.borrow_mut() = Some(pb);
         pb.x_pos.set(0);
-        assert!(w.tile_is_lit_for_client_at_pos_tile(Some("c"), IntPair { x: 600, y: 0 }, Some(t.clone())));
+        assert!(w.tile_is_lit_for_client_at_pos_tile(Some("c"), IntPair { x: 600, y: 0 }, Some(t)));
         // an offset beyond the block is lit as well
-        assert!(w.tile_is_lit_for_client_at_pos_tile(Some("c"), IntPair { x: 5, y: 40 }, Some(t.clone())));
+        assert!(w.tile_is_lit_for_client_at_pos_tile(Some("c"), IntPair { x: 5, y: 40 }, Some(t)));
         // an invalid block, a negative light block index
         pb.valid.set(false);
-        assert!(w.tile_is_lit_for_client_at_pos_tile(Some("c"), IntPair { x: 5, y: 0 }, Some(t.clone())));
+        assert!(w.tile_is_lit_for_client_at_pos_tile(Some("c"), IntPair { x: 5, y: 0 }, Some(t)));
         pb.valid.set(true);
         f.rec.clients.borrow_mut().get_mut("c").unwrap().lbi = -1;
         assert!(w.tile_is_lit_for_client_at_pos_tile(Some("c"), IntPair { x: 5, y: 0 }, Some(t)));

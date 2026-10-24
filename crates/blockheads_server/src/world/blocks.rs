@@ -130,7 +130,7 @@ impl World {
                 deps().load_light_block_for_client_light_block_index_client_id_into_physical_block(
                     client_light_block_index,
                     &id,
-                    *pb,
+                    pb,
                 );
             }
         }
@@ -148,7 +148,7 @@ impl World {
                 deps().save_light_block_for_client_light_block_index_client_id_physical_block_send_now(
                     client_light_block_index,
                     &id,
-                    *pb,
+                    pb,
                     send_now,
                 );
             }
@@ -595,7 +595,7 @@ mod more_tests {
         // the ops hooks forward dynamic object loading
         let hooks = w.ops_hooks().unwrap();
         hooks.load_dynamic_objects_if_not_already_loaded_for_macro_tile_include_surface_blocks(&w, &mt, false);
-        assert!(hooks.tile_is_protected_at_pos_against_blockhead(&w, IntPair { x: 0, y: 0 }, &new_obj()) == false);
+        assert!(!hooks.tile_is_protected_at_pos_against_blockhead(&w, IntPair { x: 0, y: 0 }, &new_obj()));
         // without a loader the answers are zero
         *w.world_tile_loader.borrow_mut() = None;
         assert_eq!(w.unmodified_ground_level_for_x(10), 0);

@@ -9,7 +9,6 @@
 //! All methods take `self: &Rc<DynamicWorld>` (the original passes `self` to the constructors). Concrete object
 //! constructors that are not in the `ClassFactory` table go through [`DwOpsHooks`](super::lookups::DwOpsHooks).
 
-use std::any::Any;
 use std::rc::Rc;
 
 use super::lookups::{ops, wi_key};
@@ -1133,7 +1132,7 @@ remove_wrappers! {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dynworld::lookups::{set_ops_hooks, DwOpsHooks};
+    use crate::dynworld::lookups::set_ops_hooks;
     use crate::dynworld::state::testutil::*;
     use std::cell::{Cell, RefCell};
 
@@ -1412,7 +1411,7 @@ mod scenario_tests {
     use crate::dynworld::lookups::{set_ops_hooks, DwOpsHooksStub};
     use crate::dynworld::state::testutil::Obj;
     use crate::rng::glibc_rand::srand;
-    use crate::trees::tree::testenv::{env, ip, tile, GROUND};
+    use crate::trees::tree::testenv::{env, ip, tile};
     use crate::world::state::World;
     use std::cell::{Cell, RefCell};
 

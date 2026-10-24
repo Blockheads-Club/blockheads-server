@@ -1179,15 +1179,15 @@ mod tests {
                     0
                 };
             }
-            let mut rules = CustomRules::default();
             // (a world with a negative rock height has no caves to flood)
-            rules.caves = if seed % 7 == 0 {
+            let caves = if seed % 7 == 0 {
                 0
             } else if seed % 2 == 0 {
                 2
             } else {
                 1
             };
+            let rules = CustomRules { caves, ..CustomRules::default() };
             let p = GenParams { w: 2, rules, expert: false };
             glibc_rand::srand(seed as u32);
             for slice in 0..8 {

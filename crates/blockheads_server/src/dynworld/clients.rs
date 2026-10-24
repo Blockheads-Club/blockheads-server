@@ -224,9 +224,9 @@ impl DynamicWorld {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dynworld::lookups::{set_ops_hooks, DwOpsHooks};
+    use crate::dynworld::lookups::set_ops_hooks;
     use crate::dynworld::state::testutil::*;
-    use crate::dynworld::state::DwHooks;
+
     use crate::plist::value::PlistValue;
     use crate::types::structs::IntPair;
     use std::cell::RefCell;

@@ -112,7 +112,7 @@ impl DynamicWorld {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dynworld::lookups::{set_ops_hooks, DwOpsHooks};
+    use crate::dynworld::lookups::set_ops_hooks;
     use crate::dynworld::state::testutil::*;
     use std::cell::RefCell;
     use std::rc::Rc;

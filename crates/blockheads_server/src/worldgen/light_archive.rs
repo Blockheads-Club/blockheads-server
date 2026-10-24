@@ -7,7 +7,6 @@
 
 use std::rc::Rc;
 
-use crate::foundation::exception::gnustep_block_abort;
 use crate::foundation::gzip::{gzip_deflate, gzip_inflate};
 use crate::foundation::{clock, paths};
 use crate::nslog;

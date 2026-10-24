@@ -835,7 +835,7 @@ mod scenario_tests {
             srand(seed);
             lengths.push(kelp_at(&d, ROOT, true).expect("kelp").n());
         }
-        assert!(lengths.iter().any(|n| *n > 1) && lengths.iter().any(|n| *n == 2), "{lengths:?}");
+        assert!(lengths.iter().any(|n| *n > 1) && lengths.contains(&2), "{lengths:?}");
         // water that is too cold, a root that is not wet, a root over air or water
         pond(&w);
         tile(&w, 1000).update(|t| {
@@ -990,7 +990,7 @@ mod scenario_tests {
         let mut stopped = false;
         for seed in 1..80u32 {
             srand(seed);
-            for k in kelp_at(&d, 29, true) {
+            if let Some(k) = kelp_at(&d, 29, true) {
                 stopped |= k.n() > 0 && k.n() < 15;
                 // the stalk reaches into the unloaded rows: dying of old age skips them, growth finds no water
                 let me: ObjRef = k.clone();

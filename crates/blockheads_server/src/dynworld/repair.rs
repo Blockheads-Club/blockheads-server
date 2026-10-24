@@ -153,7 +153,7 @@ impl DynamicWorld {
 mod tests {
     use super::*;
     use crate::dynworld::state::testutil::*;
-    use crate::dynworld::state::DwHooks;
+
     use std::cell::RefCell;
     use std::rc::Rc;
 

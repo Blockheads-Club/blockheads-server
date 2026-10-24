@@ -1106,7 +1106,7 @@ impl World {
 pub(crate) mod testkit {
     //! A recording [`WorldOpsDeps`] used by the world_ops unit tests.
     use super::*;
-    use crate::foundation::gsdict::GsDict;
+
     use std::cell::{Cell, RefCell};
     use std::collections::HashMap;
 
@@ -1930,32 +1930,32 @@ mod default_tests {
         let _ = WorldOpsDepsStub::all_blockheads_including_net(&h);
         let _ = WorldOpsDepsStub::blockhead_with_id_including_net(&h, 0);
         let _ = WorldOpsDepsStub::blockheads(&h);
-        let _ = WorldOpsDepsStub::remove_dynamic_objects_belonging_to_client(&h, "x");
-        let _ = WorldOpsDepsStub::update_accurate_dt(&h, 0.0, 0.0);
-        let _ = WorldOpsDepsStub::dynamic_world_set_paused(&h, false);
-        let _ = WorldOpsDepsStub::world_changed_at_pos_send_reliably(&h, IntPair { x: 0, y: 0 }, false);
-        let _ = WorldOpsDepsStub::world_contents_changed_at_pos(&h, IntPair { x: 0, y: 0 });
-        let _ = WorldOpsDepsStub::water_changed_at_pos_full_block(&h, IntPair { x: 0, y: 0 }, false);
-        let _ = WorldOpsDepsStub::load_surface_block_at_pos(&h, IntPair { x: 0, y: 0 });
-        let _ = WorldOpsDepsStub::load_snow_surface_block_at_pos_load_snow(&h, IntPair { x: 0, y: 0 }, false);
-        let _ = WorldOpsDepsStub::load_glow_block_if_needed_at_pos_tile(&h, IntPair { x: 0, y: 0 }, &tile);
-        let _ = WorldOpsDepsStub::load_gather_block_at_pos(&h, IntPair { x: 0, y: 0 });
-        let _ = WorldOpsDepsStub::play_time_crystal_received_sound_at_pos(&h, IntPair { x: 0, y: 0 });
-        let _ = WorldOpsDepsStub::create_free_block_at_position_of_type_data_a_data_b_sub_items_dynamic_object_save_dict_hovers_play_sound_priority_blockhead(&h, IntPair { x: 0, y: 0 }, ItemType(0), 0, 0, None, None, false, 0, None);
-        let _ = WorldOpsDepsStub::create_free_block_at_position_for_foreground_contents_for_tile_priority_blockhead(
+        WorldOpsDepsStub::remove_dynamic_objects_belonging_to_client(&h, "x");
+        WorldOpsDepsStub::update_accurate_dt(&h, 0.0, 0.0);
+        WorldOpsDepsStub::dynamic_world_set_paused(&h, false);
+        WorldOpsDepsStub::world_changed_at_pos_send_reliably(&h, IntPair { x: 0, y: 0 }, false);
+        WorldOpsDepsStub::world_contents_changed_at_pos(&h, IntPair { x: 0, y: 0 });
+        WorldOpsDepsStub::water_changed_at_pos_full_block(&h, IntPair { x: 0, y: 0 }, false);
+        WorldOpsDepsStub::load_surface_block_at_pos(&h, IntPair { x: 0, y: 0 });
+        WorldOpsDepsStub::load_snow_surface_block_at_pos_load_snow(&h, IntPair { x: 0, y: 0 }, false);
+        WorldOpsDepsStub::load_glow_block_if_needed_at_pos_tile(&h, IntPair { x: 0, y: 0 }, &tile);
+        WorldOpsDepsStub::load_gather_block_at_pos(&h, IntPair { x: 0, y: 0 });
+        WorldOpsDepsStub::play_time_crystal_received_sound_at_pos(&h, IntPair { x: 0, y: 0 });
+        WorldOpsDepsStub::create_free_block_at_position_of_type_data_a_data_b_sub_items_dynamic_object_save_dict_hovers_play_sound_priority_blockhead(&h, IntPair { x: 0, y: 0 }, ItemType(0), 0, 0, None, None, false, 0, None);
+        WorldOpsDepsStub::create_free_block_at_position_for_foreground_contents_for_tile_priority_blockhead(
             &h,
             IntPair { x: 0, y: 0 },
             false,
             &tile,
             None,
         );
-        let _ = WorldOpsDepsStub::create_background_content_free_block_at_position_for_tile_remove_blockhead(
+        WorldOpsDepsStub::create_background_content_free_block_at_position_for_tile_remove_blockhead(
             &h,
             IntPair { x: 0, y: 0 },
             &tile,
             None,
         );
-        let _ = WorldOpsDepsStub::workbench_placed_at_position_of_type_save_dict_placed_by_client_client_name(
+        WorldOpsDepsStub::workbench_placed_at_position_of_type_save_dict_placed_by_client_client_name(
             &h,
             IntPair { x: 0, y: 0 },
             WorkbenchType(0),
@@ -1963,15 +1963,15 @@ mod default_tests {
             None,
             None,
         );
-        let _ = WorldOpsDepsStub::interaction_object_placed_at_position_with_item_flipped_save_dict_placed_by_client_client_name(&h, IntPair { x: 0, y: 0 }, &*item_b, false, None, None, None);
-        let _ = WorldOpsDepsStub::sow_tree_or_plant_at_position_item_type_max_height_growth_rate(
+        let _ = WorldOpsDepsStub::interaction_object_placed_at_position_with_item_flipped_save_dict_placed_by_client_client_name(&h, IntPair { x: 0, y: 0 }, &item_b, false, None, None, None);
+        WorldOpsDepsStub::sow_tree_or_plant_at_position_item_type_max_height_growth_rate(
             &h,
             IntPair { x: 0, y: 0 },
             ItemType(0),
             0,
             0,
         );
-        let _ = WorldOpsDepsStub::add_torch_at_pos_of_type_data_a_data_b_save_dict_placed_by_client(
+        WorldOpsDepsStub::add_torch_at_pos_of_type_data_a_data_b_save_dict_placed_by_client(
             &h,
             IntPair { x: 0, y: 0 },
             ItemType(0),
@@ -1980,8 +1980,8 @@ mod default_tests {
             None,
             None,
         );
-        let _ = WorldOpsDepsStub::add_egg_at_pos_save_dict(&h, IntPair { x: 0, y: 0 }, None);
-        let _ = WorldOpsDepsStub::add_painting_at_pos_of_type_save_dict_placed_by_client_client_name(
+        WorldOpsDepsStub::add_egg_at_pos_save_dict(&h, IntPair { x: 0, y: 0 }, None);
+        WorldOpsDepsStub::add_painting_at_pos_of_type_save_dict_placed_by_client_client_name(
             &h,
             IntPair { x: 0, y: 0 },
             ItemType(0),
@@ -1989,79 +1989,73 @@ mod default_tests {
             None,
             None,
         );
-        let _ = WorldOpsDepsStub::add_window_at_pos_of_type_save_dict_placed_by_client(
+        WorldOpsDepsStub::add_window_at_pos_of_type_save_dict_placed_by_client(
             &h,
             IntPair { x: 0, y: 0 },
             ItemType(0),
             None,
             None,
         );
-        let _ = WorldOpsDepsStub::add_ladder_at_pos_of_type_save_dict_placed_by_client(
+        WorldOpsDepsStub::add_ladder_at_pos_of_type_save_dict_placed_by_client(
             &h,
             IntPair { x: 0, y: 0 },
             ItemType(0),
             None,
             None,
         );
-        let _ = WorldOpsDepsStub::add_wire_at_pos_of_type_save_dict_placed_by_client(
+        WorldOpsDepsStub::add_wire_at_pos_of_type_save_dict_placed_by_client(
             &h,
             IntPair { x: 0, y: 0 },
             ItemType(0),
             None,
             None,
         );
-        let _ = WorldOpsDepsStub::add_elevator_shaft_at_pos_of_type_save_dict_placed_by_client(
+        WorldOpsDepsStub::add_elevator_shaft_at_pos_of_type_save_dict_placed_by_client(
             &h,
             IntPair { x: 0, y: 0 },
             ItemType(0),
             None,
             None,
         );
-        let _ = WorldOpsDepsStub::add_elevator_motor_at_pos_of_type_save_dict_placed_by_client(
+        WorldOpsDepsStub::add_elevator_motor_at_pos_of_type_save_dict_placed_by_client(
             &h,
             IntPair { x: 0, y: 0 },
             ItemType(0),
             None,
             None,
         );
-        let _ = WorldOpsDepsStub::add_column_at_pos_of_type_save_dict_placed_by_client(
+        WorldOpsDepsStub::add_column_at_pos_of_type_save_dict_placed_by_client(
             &h,
             IntPair { x: 0, y: 0 },
             ItemType(0),
             None,
             None,
         );
-        let _ = WorldOpsDepsStub::add_stairs_at_pos_of_type_save_dict_placed_by_client(
+        WorldOpsDepsStub::add_stairs_at_pos_of_type_save_dict_placed_by_client(
             &h,
             IntPair { x: 0, y: 0 },
             ItemType(0),
             None,
             None,
         );
-        let _ = WorldOpsDepsStub::add_door_at_pos_of_type_save_dict_placed_by_client(
+        WorldOpsDepsStub::add_door_at_pos_of_type_save_dict_placed_by_client(
             &h,
             IntPair { x: 0, y: 0 },
             ItemType(0),
             None,
             None,
         );
-        let _ =
-            WorldOpsDepsStub::add_rail_at_pos_of_type_owned_by_station(&h, IntPair { x: 0, y: 0 }, ItemType(0), false);
-        let _ = WorldOpsDepsStub::place_boat_in_water_at_pos_save_dict_placed_by_client(
-            &h,
-            IntPair { x: 0, y: 0 },
-            None,
-            None,
-        );
-        let _ = WorldOpsDepsStub::place_train_car_at_pos_of_type_save_dict_placed_by_client(
+        WorldOpsDepsStub::add_rail_at_pos_of_type_owned_by_station(&h, IntPair { x: 0, y: 0 }, ItemType(0), false);
+        WorldOpsDepsStub::place_boat_in_water_at_pos_save_dict_placed_by_client(&h, IntPair { x: 0, y: 0 }, None, None);
+        WorldOpsDepsStub::place_train_car_at_pos_of_type_save_dict_placed_by_client(
             &h,
             IntPair { x: 0, y: 0 },
             ItemType(0),
             None,
             None,
         );
-        let _ = WorldOpsDepsStub::place_fire_at_position(&h, IntPair { x: 0, y: 0 });
-        let _ = WorldOpsDepsStub::load_npc_at_position_type_save_dict_is_adult_was_placed_placed_by_client(
+        WorldOpsDepsStub::place_fire_at_position(&h, IntPair { x: 0, y: 0 });
+        WorldOpsDepsStub::load_npc_at_position_type_save_dict_is_adult_was_placed_placed_by_client(
             &h,
             IntPair { x: 0, y: 0 },
             NPCType::NPC_NOTHING,
@@ -2070,71 +2064,63 @@ mod default_tests {
             false,
             None,
         );
-        let _ = WorldOpsDepsStub::client_blockhead_inventory_recieved_for_player_id_blockhead_id_data(&h, None, 0, &[]);
-        let _ = WorldOpsDepsStub::load_new_blockhead_at_pos_craftable_item_object_unique_id(
+        WorldOpsDepsStub::client_blockhead_inventory_recieved_for_player_id_blockhead_id_data(&h, None, 0, &[]);
+        WorldOpsDepsStub::load_new_blockhead_at_pos_craftable_item_object_unique_id(
             &h,
             IntPair { x: 0, y: 0 },
             &obj,
             0,
         );
-        let _ = WorldOpsDepsStub::load_dynamic_objects_for_macro_tile_include_surface_blocks(&h, &mt, false);
-        let _ = WorldOpsDepsStub::remove_dynamic_objects_for_macro_tile(&h, &mt);
-        let _ = WorldOpsDepsStub::add_artificial_light_contribution_for_physical_block_loaded_at_x_pos_y_pos(&h, 0, 0);
-        let _ = WorldOpsDepsStub::dynamic_world_do_repair_for_tile_at_pos(&h, IntPair { x: 0, y: 0 });
-        let _ = WorldOpsDepsStub::load_physical_block_at_x_pos_y_pos_create_if_not_created(&h, pb, 0, 0, false);
-        let _ = WorldOpsDepsStub::save_physical_block_macro_tile_send_to_clients_server_send_reliably(
-            &h,
-            pb,
-            &mt,
-            &[],
-            false,
-        );
-        let _ = WorldOpsDepsStub::load_light_block_for_client_light_block_index_client_id_into_physical_block(
-            &h, 0, "x", pb,
-        );
-        let _ = WorldOpsDepsStub::save_light_block_for_client_light_block_index_client_id_physical_block_send_now(
+        WorldOpsDepsStub::load_dynamic_objects_for_macro_tile_include_surface_blocks(&h, &mt, false);
+        WorldOpsDepsStub::remove_dynamic_objects_for_macro_tile(&h, &mt);
+        WorldOpsDepsStub::add_artificial_light_contribution_for_physical_block_loaded_at_x_pos_y_pos(&h, 0, 0);
+        WorldOpsDepsStub::dynamic_world_do_repair_for_tile_at_pos(&h, IntPair { x: 0, y: 0 });
+        WorldOpsDepsStub::load_physical_block_at_x_pos_y_pos_create_if_not_created(&h, pb, 0, 0, false);
+        WorldOpsDepsStub::save_physical_block_macro_tile_send_to_clients_server_send_reliably(&h, pb, &mt, &[], false);
+        WorldOpsDepsStub::load_light_block_for_client_light_block_index_client_id_into_physical_block(&h, 0, "x", pb);
+        WorldOpsDepsStub::save_light_block_for_client_light_block_index_client_id_physical_block_send_now(
             &h, 0, "x", pb, false,
         );
         let _ = WorldOpsDepsStub::send_block_to_client_without_saving_for_block_pos_send_to_client_server_send_dynamic_objects_reliable(&h, pb, IntPair { x: 0, y: 0 }, "x", false, false);
         let _ = WorldOpsDepsStub::unmodified_ground_level_for_x(&h, 0);
         let _ = WorldOpsDepsStub::sand_fraction_for_pos_high_res(&h, IntPair { x: 0, y: 0 }, false);
-        let _ = WorldOpsDepsStub::archive_light_blocks_for_client(&h, "x");
+        WorldOpsDepsStub::archive_light_blocks_for_client(&h, "x");
         let _ = WorldOpsDepsStub::sc_connected(&h, "x");
         let _ = WorldOpsDepsStub::sc_requested_block_indices_first_n(&h, "x", 0);
         let _ = WorldOpsDepsStub::sc_create_if_not_created_for_block_request(&h, "x", 0);
-        let _ = WorldOpsDepsStub::sc_remove_block_request(&h, "x", 0);
+        WorldOpsDepsStub::sc_remove_block_request(&h, "x", 0);
         let _ = WorldOpsDepsStub::sc_block_is_wired(&h, "x", 0);
         let _ = WorldOpsDepsStub::sc_requests_heart_beat(&h, "x");
-        let _ = WorldOpsDepsStub::sc_set_requests_heart_beat(&h, "x", false);
-        let _ = WorldOpsDepsStub::sc_set_has_ever_requested_heartbeat(&h, "x", false);
-        let _ = WorldOpsDepsStub::sc_set_time_since_last_heartbeat_request(&h, "x", 0.0);
+        WorldOpsDepsStub::sc_set_requests_heart_beat(&h, "x", false);
+        WorldOpsDepsStub::sc_set_has_ever_requested_heartbeat(&h, "x", false);
+        WorldOpsDepsStub::sc_set_time_since_last_heartbeat_request(&h, "x", 0.0);
         let _ = WorldOpsDepsStub::sc_light_block_index(&h, "x");
         let _ = WorldOpsDepsStub::sc_paused(&h, "x");
-        let _ = WorldOpsDepsStub::send_network_data_to_peers_reliable(&h, &[], None, false);
+        WorldOpsDepsStub::send_network_data_to_peers_reliable(&h, &[], None, false);
         let _ = WorldOpsDepsStub::player_is_admin_with_id(&h, None);
-        let _ = WorldOpsDepsStub::update_player(&h, "x");
+        WorldOpsDepsStub::update_player(&h, "x");
         let _ = WorldOpsDepsStub::player_alias_for_peer_id(&h, None);
-        let _ = WorldOpsDepsStub::client_finished_away_simulation(&h, "x");
-        let _ = WorldOpsDepsStub::send_player_changed_notifcation_to_delegate(&h);
+        WorldOpsDepsStub::client_finished_away_simulation(&h, "x");
+        WorldOpsDepsStub::send_player_changed_notifcation_to_delegate(&h);
         let _ = WorldOpsDepsStub::heartbeat_data(&h);
-        let _ = WorldOpsDepsStub::send_heartbeat_data(&h);
+        WorldOpsDepsStub::send_heartbeat_data(&h);
         let _ = WorldOpsDepsStub::is_controlling_blockheads_for_client_player(&h, "x");
-        let _ = WorldOpsDepsStub::continue_simulate(&h);
-        let _ = WorldOpsDepsStub::delegate_set_paused(&h, false);
+        WorldOpsDepsStub::continue_simulate(&h);
+        WorldOpsDepsStub::delegate_set_paused(&h, false);
         let _ = WorldOpsDepsStub::path_creator(&h);
-        let _ = WorldOpsDepsStub::projectile_manager_update(&h, 0.0);
+        WorldOpsDepsStub::projectile_manager_update(&h, 0.0);
         let _ = WorldOpsDepsStub::weather_noise_get_x_y_z_octaves(&h, 0.0, 0.0, 0.0, 0);
         let _ = WorldOpsDepsStub::weather_wind_strength(&h);
-        let _ = WorldOpsDepsStub::crystal_manager_set_count_watcher_none(&h);
+        WorldOpsDepsStub::crystal_manager_set_count_watcher_none(&h);
         let _ = WorldOpsDepsStub::crystal_manager_amount(&h);
-        let _ = WorldOpsDepsStub::crystal_manager_modify_modify_string(&h, 0, "x");
-        let _ = WorldOpsDepsStub::particle_emitter_add_particle_at_pos_velocity_color_gravity_type_life_scale(
+        WorldOpsDepsStub::crystal_manager_modify_modify_string(&h, 0, "x");
+        WorldOpsDepsStub::particle_emitter_add_particle_at_pos_velocity_color_gravity_type_life_scale(
             &h, [0.0; 3], [0.0; 3], [0.0; 4], 0, 0.0, 0.0,
         );
-        let _ = WorldOpsDepsStub::update_sun_light_for_tile_at_pos_world(&h, &tile, IntPair { x: 0, y: 0 });
-        let _ = WorldOpsDepsStub::update_sun_light_removed_for_tile_at_pos_world(&h, &tile, IntPair { x: 0, y: 0 });
-        let _ = WorldOpsDepsStub::recalculate_lighting_for_physical_block_if_needed_world_client_light_block_index_for_blockhead(&h, None, 0, None);
-        let _ = WorldOpsDepsStub::check_if_macro_tile_can_be_decommissioned_world_min_age_block_to_save_physcial_block(
+        WorldOpsDepsStub::update_sun_light_for_tile_at_pos_world(&h, &tile, IntPair { x: 0, y: 0 });
+        WorldOpsDepsStub::update_sun_light_removed_for_tile_at_pos_world(&h, &tile, IntPair { x: 0, y: 0 });
+        WorldOpsDepsStub::recalculate_lighting_for_physical_block_if_needed_world_client_light_block_index_for_blockhead(&h, None, 0, None);
+        WorldOpsDepsStub::check_if_macro_tile_can_be_decommissioned_world_min_age_block_to_save_physcial_block(
             &h, None, 0.0, false,
         );
         let _ = WorldOpsDepsStub::bh_asleep(&h, &obj);
@@ -2144,31 +2130,26 @@ mod default_tests {
         let _ = WorldOpsDepsStub::bh_is_idle(&h, &obj);
         let _ = WorldOpsDepsStub::bh_is_net(&h, &obj);
         let _ = WorldOpsDepsStub::bh_is_client_blockhead_being_controlled_by_server(&h, &obj);
-        let _ = WorldOpsDepsStub::bh_add_to_crystal_discrepency(&h, &obj, 0);
-        let _ = WorldOpsDepsStub::bh_check_if_can_warp_in_second_blockhead_after_item_added_data_b(
-            &h,
-            &obj,
-            ItemType(0),
-            0,
-        );
-        let _ = WorldOpsDepsStub::bh_add_expected_craft_item(&h, &obj, ItemType(0));
+        WorldOpsDepsStub::bh_add_to_crystal_discrepency(&h, &obj, 0);
+        WorldOpsDepsStub::bh_check_if_can_warp_in_second_blockhead_after_item_added_data_b(&h, &obj, ItemType(0), 0);
+        WorldOpsDepsStub::bh_add_expected_craft_item(&h, &obj, ItemType(0));
         let _ = WorldOpsDepsStub::bh_local_net_id(&h, &obj);
         let _ = WorldOpsDepsStub::bh_can_use_dynamic_object(&h, &obj, &obj);
-        let _ = WorldOpsDepsStub::bh_stop_interacting(&h, &obj);
+        WorldOpsDepsStub::bh_stop_interacting(&h, &obj);
         let _ = WorldOpsDepsStub::bh_current_interaction_type_for_tile_at_pos_pickup_rejected_due_to_inventory_full_include_actions_face_index_allow_protected_actions(&h, &obj, &tile, IntPair { x: 0, y: 0 }, &mut flag, false, 0, false);
-        let _ = WorldOpsDepsStub::bh_queue_action_with_goal_pos_goal_interaction_path_type_interaction_object_id_craftable_item_object_craft_count_or_extra_data_is_ai(&h, &obj, IntPair { x: 0, y: 0 }, InteractionType::INTERACTION_NONE, 0, 0, None, 0, false);
-        let _ = WorldOpsDepsStub::bh_cancel_any_action_at_goal_pos_or_with_interaction_object_id_goal_interaction_craft_count_or_extra_data(&h, &obj, IntPair { x: 0, y: 0 }, 0, InteractionType::INTERACTION_NONE, 0);
+        WorldOpsDepsStub::bh_queue_action_with_goal_pos_goal_interaction_path_type_interaction_object_id_craftable_item_object_craft_count_or_extra_data_is_ai(&h, &obj, IntPair { x: 0, y: 0 }, InteractionType::INTERACTION_NONE, 0, 0, None, 0, false);
+        WorldOpsDepsStub::bh_cancel_any_action_at_goal_pos_or_with_interaction_object_id_goal_interaction_craft_count_or_extra_data(&h, &obj, IntPair { x: 0, y: 0 }, 0, InteractionType::INTERACTION_NONE, 0);
         let _ = WorldOpsDepsStub::io_can_be_used_by_blockhead(&h, &obj, &obj);
         let _ = WorldOpsDepsStub::io_is_in_use(&h, &obj);
-        let _ = WorldOpsDepsStub::io_start_interaction_with_blockhead(&h, &obj, &obj);
+        WorldOpsDepsStub::io_start_interaction_with_blockhead(&h, &obj, &obj);
         let _ = WorldOpsDepsStub::io_is_paintable(&h, &obj);
         let _ = WorldOpsDepsStub::obj_needs_removed(&h, &obj);
         let _ = WorldOpsDepsStub::obj_can_be_removed_by_blockhead(&h, &obj, &obj);
-        let _ = WorldOpsDepsStub::obj_paint(&h, &obj, 0);
+        WorldOpsDepsStub::obj_paint(&h, &obj, 0);
         let _ = WorldOpsDepsStub::workbench_pos(&h, &obj);
         let _ = WorldOpsDepsStub::workbench_type(&h, &obj);
         let _ = WorldOpsDepsStub::workbench_level(&h, &obj);
-        let _ = WorldOpsDepsStub::workbench_upgrade_to_next_level(&h, &obj);
+        WorldOpsDepsStub::workbench_upgrade_to_next_level(&h, &obj);
         let _ = WorldOpsDepsStub::craftable_item(&h, &obj);
         let _ = WorldOpsDepsStub::free_block_creation_item_save_dict(&h, &obj);
         let _ = WorldOpsDepsStub::bh_subtract_items_from_inventory_of_type_count_data_b(&h, &obj, ItemType(0), 0, 0);

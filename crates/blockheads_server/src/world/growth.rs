@@ -429,9 +429,9 @@ mod range_tests {
     #[test]
     fn seed_and_promise_tables() {
         let trees: Vec<u32> = (0..400).map(|i| tree_type_for_seed_item_type(ItemType(i)).0).collect();
-        assert!(trees.iter().any(|&t| t == 10) && trees.iter().filter(|&&t| t != 0).count() >= 10);
+        assert!(trees.contains(&10) && trees.iter().filter(|&&t| t != 0).count() >= 10);
         let plants: Vec<u32> = (0..400).map(|i| plant_type_for_seed_item_type(ItemType(i)).0).collect();
-        assert!(plants.iter().any(|&t| t == 10) && plants.iter().filter(|&&t| t != 0).count() >= 10);
+        assert!(plants.contains(&10) && plants.iter().filter(|&&t| t != 0).count() >= 10);
         for c in 100..150 {
             let _ = tree_type_for_tree_promise(c);
         }

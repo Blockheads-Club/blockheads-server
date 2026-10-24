@@ -1097,14 +1097,14 @@ impl DynamicWorld {
                 } else {
                     let k = key(DYNAMIC_OBJECT_TYPE_BLOCKHEAD as u32);
                     if creation.get(&k).is_none() {
-                        creation.insert(k.clone(), Vec::new());
+                        creation.insert(k, Vec::new());
                     }
                     let Some(nd) = object.creation_net_data_for_client(&object, Some(client)) else {
                         invalid_argument("Tried to add nil to array");
                     };
                     creation.get_mut(&k).unwrap().push(nd);
                     if update.get(&k).is_none() {
-                        update.insert(k.clone(), Vec::new());
+                        update.insert(k, Vec::new());
                     }
                     let Some(ud) = object.update_net_data_for_client(&object, Some(client)) else {
                         invalid_argument("Tried to add nil to array");
@@ -1179,10 +1179,9 @@ impl DynamicWorld {
                 let mt = macro_tile_at_macro_postion(this_pos.x, this_pos.y, &world.macro_tiles(), &world);
                 if let Some(mt) = mt {
                     let mut send_now = true;
-                    if self.world_changed_macro_positions.borrow().iter().any(|p| *p == this_pos) {
+                    if self.world_changed_macro_positions.borrow().contains(&this_pos) {
                         send_now = false;
-                    } else if self.world_changed_send_unreliably_macro_positions.borrow().iter().any(|p| *p == this_pos)
-                    {
+                    } else if self.world_changed_send_unreliably_macro_positions.borrow().contains(&this_pos) {
                         send_now = false;
                     }
                     hooks.save_light_block_for_client_light_block_index(i as i32, mt.physical_block(), send_now);
@@ -1683,7 +1682,7 @@ mod tests {
     // persistence / generation tests (fake hooks)
     // ---------------------------------------------------------------------------------------------------
     use crate::dynworld::state::testutil::*;
-    use crate::dynworld::state::{DwHooks, DwNoise, DwWorldGen, DynamicWorldInit, FreeBlockInit};
+    use crate::dynworld::state::{DwHooks, DwWorldGen, DynamicWorldInit, FreeBlockInit};
     use std::cell::RefCell;
     use std::rc::Rc;
 
@@ -3118,8 +3117,7 @@ mod load_save_tests {
     use super::*;
     use crate::dynworld::state::testutil::*;
     use crate::dynworld::state::{DynamicWorldInit, ServerClientMap};
-    use crate::objects::base::{DynamicObject, DynamicObjectBase};
-    use crate::objects::class_info::{ClassInfo, DYNAMIC_OBJECT_CLASS};
+    use crate::objects::class_info::DYNAMIC_OBJECT_CLASS;
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
 
@@ -3199,11 +3197,11 @@ mod load_save_tests {
         assert_eq!(d.dynamic_object_id_count.get(), 41);
         assert!(d.workbench_has_been_crafted.get());
         assert!(d.pole_item_taken_times.borrow().is_some());
-        let list = d.version_one_to_two_conversion_list.borrow();
-        let list = list.as_ref().expect("conversion armed");
+        let guard = d.version_one_to_two_conversion_list.borrow();
+        let list = guard.as_ref().expect("conversion armed");
         assert_eq!(list.len(), 2);
         assert_eq!(list.get(&"3_4".to_string()).unwrap().len(), 2);
-        drop(list);
+        drop(guard);
         // the save written while converting is still version 1
         d.save_game_with_world_data_sign_ownership_data(Some(b"w"), Some(b"signs"));
         let v =

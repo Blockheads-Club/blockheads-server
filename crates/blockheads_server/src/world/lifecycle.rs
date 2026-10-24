@@ -2149,7 +2149,7 @@ mod tests {
         assert_eq!(w2.found_items_list.borrow().as_ref().unwrap().iter().collect::<Vec<_>>(), vec![3, 4, 5, 6]);
         assert!(w2.creation_date().is_some());
         assert!(w2.last_update_time() > 0.0);
-        assert!(w2.did_load_game() == false); // set by incremental_load stage 0, not by load_game
+        assert!(!w2.did_load_game()); // set by incremental_load stage 0, not by load_game
         let _ = home;
     }
 
@@ -2276,51 +2276,51 @@ mod hook_default_tests {
         let obj = new_obj();
         let pb: PhysicalBlockRef = Box::leak(Box::new(PhysicalBlock::new_fresh()));
         let mut log = String::new();
-        let _ = WorldCoreHooksStub::server_send_network_data_to_peers_reliable(&h, &[], None, false);
+        WorldCoreHooksStub::server_send_network_data_to_peers_reliable(&h, &[], None, false);
         let _ = WorldCoreHooksStub::server_credit(&h);
         let _ = WorldCoreHooksStub::server_is_cloud_match(&h);
         let _ = WorldCoreHooksStub::server_privacy_string(&h);
         let _ = WorldCoreHooksStub::server_match_privacy(&h);
         let _ = WorldCoreHooksStub::server_database(&h);
-        let _ = WorldCoreHooksStub::server_start_bulk_transaction(&h);
+        WorldCoreHooksStub::server_start_bulk_transaction(&h);
         let _ = WorldCoreHooksStub::server_finish_bulk_transaction(&h);
         let _ = WorldCoreHooksStub::server_local_player_name(&h);
         let _ = WorldCoreHooksStub::server_local_player_id(&h);
         let _ = WorldCoreHooksStub::server_player_name_for_player_with_id_including_old_players(&h, None);
-        let _ = WorldCoreHooksStub::server_client_create(&h, "x", 0, None);
+        WorldCoreHooksStub::server_client_create(&h, "x", 0, None);
         let _ = WorldCoreHooksStub::server_client_connected(&h, "x");
-        let _ = WorldCoreHooksStub::server_client_set_connected(&h, "x", false);
-        let _ = WorldCoreHooksStub::server_client_reconnected(&h, "x");
+        WorldCoreHooksStub::server_client_set_connected(&h, "x", false);
+        WorldCoreHooksStub::server_client_reconnected(&h, "x");
         let _ = WorldCoreHooksStub::server_client_light_block_index(&h, "x");
-        let _ = WorldCoreHooksStub::server_client_request_for_block(
+        WorldCoreHooksStub::server_client_request_for_block(
             &h,
             "x",
             ClientMacroBlockRequest { macro_index: 0, create_if_not_created: 0, padding: [0; 3] },
         );
-        let _ = WorldCoreHooksStub::server_client_block_removed(&h, "x", 0);
+        WorldCoreHooksStub::server_client_block_removed(&h, "x", 0);
         let _ = WorldCoreHooksStub::server_client_block_is_wired(&h, "x", 0);
         let _ = WorldCoreHooksStub::server_client_paused(&h, "x");
-        let _ = WorldCoreHooksStub::server_client_set_paused(&h, "x", false);
+        WorldCoreHooksStub::server_client_set_paused(&h, "x", false);
         let _ = WorldCoreHooksStub::loader_init(&h, &w, 0, false, "x", 0, None);
-        let _ = WorldCoreHooksStub::loader_refine_terrain(&h);
+        WorldCoreHooksStub::loader_refine_terrain(&h);
         let _ = WorldCoreHooksStub::loader_highest_point(&h);
         let _ = WorldCoreHooksStub::loader_best_start_position(&h);
         let _ = WorldCoreHooksStub::loader_distance_ordered_food_types(&h);
         let _ = WorldCoreHooksStub::loader_x_frequency_multiplier(&h);
         let _ = WorldCoreHooksStub::loader_light_block_database(&h);
-        let _ = WorldCoreHooksStub::loader_start_bulk_light_block_transaction(&h);
+        WorldCoreHooksStub::loader_start_bulk_light_block_transaction(&h);
         let _ = WorldCoreHooksStub::loader_finish_bulk_light_block_transaction(&h);
-        let _ = WorldCoreHooksStub::loader_unarchive_light_blocks_for_client(&h, "x");
-        let _ = WorldCoreHooksStub::loader_set_needs_to_exit(&h, false);
-        let _ = WorldCoreHooksStub::loader_update_physical_block_to_latest_version(&h, pb);
-        let _ = WorldCoreHooksStub::weather_noise_function_init(&h, 0, 0, 0, 0.0, 0, false, false, 0.0);
-        let _ = WorldCoreHooksStub::weather_init(&h, &w, 0.0);
-        let _ = WorldCoreHooksStub::path_creator_init(&h, &w);
+        WorldCoreHooksStub::loader_unarchive_light_blocks_for_client(&h, "x");
+        WorldCoreHooksStub::loader_set_needs_to_exit(&h, false);
+        WorldCoreHooksStub::loader_update_physical_block_to_latest_version(&h, pb);
+        WorldCoreHooksStub::weather_noise_function_init(&h, 0, 0, 0, 0.0, 0, false, false, 0.0);
+        WorldCoreHooksStub::weather_init(&h, &w, 0.0);
+        WorldCoreHooksStub::path_creator_init(&h, &w);
         let _ = WorldCoreHooksStub::path_creator_in_progress(&h);
         let _ = WorldCoreHooksStub::path_creator_path_user(&h);
-        let _ = WorldCoreHooksStub::path_creator_abort_path(&h);
-        let _ = WorldCoreHooksStub::projectile_manager_init(&h, &w);
-        let _ = WorldCoreHooksStub::projectile_manager_fire(
+        WorldCoreHooksStub::path_creator_abort_path(&h);
+        WorldCoreHooksStub::projectile_manager_init(&h, &w);
+        WorldCoreHooksStub::projectile_manager_fire(
             &h,
             Vector2 { x: 0.0, y: 0.0 },
             Vector2 { x: 0.0, y: 0.0 },
@@ -2331,40 +2331,36 @@ mod hook_default_tests {
         let _ = WorldCoreHooksStub::dynamic_world_create(&h, &w);
         let _ =
             WorldCoreHooksStub::dynamic_world_load_dynamic_objects_reposition_blockhead_load_failures(&h, false, false);
-        let _ = WorldCoreHooksStub::dynamic_world_set_server_server_clients(&h, false);
-        let _ = WorldCoreHooksStub::dynamic_world_conversion_pump(&h);
-        let _ = WorldCoreHooksStub::dynamic_world_send_lightblocks_to_clients(&h);
-        let _ = WorldCoreHooksStub::dynamic_world_save_and_send_only_blocks_that_need_to_be_sent(&h);
-        let _ = WorldCoreHooksStub::dynamic_world_save_game_with_world_data_sign_ownership_data(&h, None, None);
+        WorldCoreHooksStub::dynamic_world_set_server_server_clients(&h, false);
+        WorldCoreHooksStub::dynamic_world_conversion_pump(&h);
+        WorldCoreHooksStub::dynamic_world_send_lightblocks_to_clients(&h);
+        WorldCoreHooksStub::dynamic_world_save_and_send_only_blocks_that_need_to_be_sent(&h);
+        WorldCoreHooksStub::dynamic_world_save_game_with_world_data_sign_ownership_data(&h, None, None);
         let _ = WorldCoreHooksStub::dynamic_world_portal_level(&h);
         let _ = WorldCoreHooksStub::dynamic_world_blockhead_previews(&h);
         let _ = WorldCoreHooksStub::dynamic_world_blockheads(&h);
         let _ = WorldCoreHooksStub::dynamic_world_all_blockheads_including_net(&h);
-        let _ = WorldCoreHooksStub::dynamic_world_client_connected(&h, "x");
-        let _ = WorldCoreHooksStub::dynamic_world_client_disconnected_simulate(&h, "x", false);
-        let _ = WorldCoreHooksStub::dynamic_world_stop_all_blockhead_actions_for_client_due_to_kick(&h, "x");
+        WorldCoreHooksStub::dynamic_world_client_connected(&h, "x");
+        WorldCoreHooksStub::dynamic_world_client_disconnected_simulate(&h, "x", false);
+        WorldCoreHooksStub::dynamic_world_stop_all_blockhead_actions_for_client_due_to_kick(&h, "x");
         let _ = WorldCoreHooksStub::dynamic_world_is_controlling_blockheads_for_client_player(&h, "x");
-        let _ = WorldCoreHooksStub::dynamic_world_light_changed_at_macro_pos_send_reliably(
-            &h,
-            IntPair { x: 0, y: 0 },
-            false,
-        );
-        let _ = WorldCoreHooksStub::dynamic_world_remote_create(&h, Vec::new(), 0, None);
-        let _ = WorldCoreHooksStub::dynamic_world_remote_update(&h, Vec::new(), 0, None);
-        let _ = WorldCoreHooksStub::dynamic_world_remote_creation_data_update(&h, Vec::new(), 0, None);
-        let _ = WorldCoreHooksStub::dynamic_world_remote_remove(&h, Vec::new(), 0, None);
-        let _ = WorldCoreHooksStub::dynamic_world_user_mute_changed(&h, "x");
-        let _ = WorldCoreHooksStub::dynamic_world_players_changed(&h);
-        let _ = WorldCoreHooksStub::dynamic_world_append_debug_log(&h, &mut log);
-        let _ = WorldCoreHooksStub::dynamic_world_finish_simulating(&h);
-        let _ = WorldCoreHooksStub::dynamic_world_simulate(&h, 0.0);
-        let _ = WorldCoreHooksStub::dynamic_world_set_paused(&h, false);
+        WorldCoreHooksStub::dynamic_world_light_changed_at_macro_pos_send_reliably(&h, IntPair { x: 0, y: 0 }, false);
+        WorldCoreHooksStub::dynamic_world_remote_create(&h, Vec::new(), 0, None);
+        WorldCoreHooksStub::dynamic_world_remote_update(&h, Vec::new(), 0, None);
+        WorldCoreHooksStub::dynamic_world_remote_creation_data_update(&h, Vec::new(), 0, None);
+        WorldCoreHooksStub::dynamic_world_remote_remove(&h, Vec::new(), 0, None);
+        WorldCoreHooksStub::dynamic_world_user_mute_changed(&h, "x");
+        WorldCoreHooksStub::dynamic_world_players_changed(&h);
+        WorldCoreHooksStub::dynamic_world_append_debug_log(&h, &mut log);
+        WorldCoreHooksStub::dynamic_world_finish_simulating(&h);
+        WorldCoreHooksStub::dynamic_world_simulate(&h, 0.0);
+        WorldCoreHooksStub::dynamic_world_set_paused(&h, false);
         let _ = WorldCoreHooksStub::blockhead_name(&h, &obj);
         let _ = WorldCoreHooksStub::blockhead_client_id(&h, &obj);
         let _ = WorldCoreHooksStub::blockhead_is_client_blockhead_being_controlled_by_server(&h, &obj);
         let _ = WorldCoreHooksStub::blockhead_should_continue_simulating(&h, &obj);
-        let _ = WorldCoreHooksStub::blockhead_suffer_damage_is_simulation_recoil(&h, &obj, 0.0, false, false);
-        let _ = WorldCoreHooksStub::blockhead_die_for_good(&h, &obj);
+        WorldCoreHooksStub::blockhead_suffer_damage_is_simulation_recoil(&h, &obj, 0.0, false, false);
+        WorldCoreHooksStub::blockhead_die_for_good(&h, &obj);
         let _ = WorldCoreHooksStub::blockhead_asleep(&h, &obj);
         let _ = WorldCoreHooksStub::blockhead_regenerating(&h, &obj);
         let _ = WorldCoreHooksStub::blockhead_meditating(&h, &obj);
@@ -2373,24 +2369,23 @@ mod hook_default_tests {
         let _ = WorldCoreHooksStub::blockhead_action_count(&h, &obj);
         let _ = WorldCoreHooksStub::blockhead_cancel_simulate_due_to_collapse(&h, &obj);
         let _ = WorldCoreHooksStub::blockhead_current_interaction_requires_human_input(&h, &obj);
-        let _ = WorldCoreHooksStub::world_helper_check_if_macro_tile_can_be_decommissioned(&h, &w, None, 0.0, None);
-        let _ = WorldCoreHooksStub::world_fully_load_if_needed_around_pos_client_light_block_index(
+        WorldCoreHooksStub::world_helper_check_if_macro_tile_can_be_decommissioned(&h, &w, None, 0.0, None);
+        WorldCoreHooksStub::world_fully_load_if_needed_around_pos_client_light_block_index(
             &h,
             &w,
             IntPair { x: 0, y: 0 },
             0,
         );
-        let _ = WorldCoreHooksStub::world_place_workbench_of_type_at_pos(&h, &w, 0, IntPair { x: 0, y: 0 });
-        let _ =
-            WorldCoreHooksStub::world_load_light_block_for_client_light_block_index_into_physical_block(&h, &w, 0, pb);
+        WorldCoreHooksStub::world_place_workbench_of_type_at_pos(&h, &w, 0, IntPair { x: 0, y: 0 });
+        WorldCoreHooksStub::world_load_light_block_for_client_light_block_index_into_physical_block(&h, &w, 0, pb);
         let _ = WorldCoreHooksStub::world_welcome_back_message_for_simulation_events(&h, &w);
-        let _ = WorldCoreHooksStub::world_pause_button_tapped(&h, &w);
-        let _ = WorldCoreHooksStub::world_path_request_pump(&h, &w);
-        let _ = WorldCoreHooksStub::particle_emitter_set_world_width_macro(&h, 0);
-        let _ = WorldCoreHooksStub::particle_emitter_do_add_electricity_particle_with_path_size(&h, &[], 0.0);
-        let _ = WorldCoreHooksStub::tip_manager_set_world_and_reset(&h, &w);
-        let _ = WorldCoreHooksStub::tip_manager_update(&h, 0.0);
-        let _ = WorldCoreHooksStub::tip_manager_display_tip(&h, "x");
+        WorldCoreHooksStub::world_pause_button_tapped(&h, &w);
+        WorldCoreHooksStub::world_path_request_pump(&h, &w);
+        WorldCoreHooksStub::particle_emitter_set_world_width_macro(&h, 0);
+        WorldCoreHooksStub::particle_emitter_do_add_electricity_particle_with_path_size(&h, &[], 0.0);
+        WorldCoreHooksStub::tip_manager_set_world_and_reset(&h, &w);
+        WorldCoreHooksStub::tip_manager_update(&h, 0.0);
+        WorldCoreHooksStub::tip_manager_display_tip(&h, "x");
         let _ = WorldCoreHooksStub::tip_manager_current_tip(&h);
         assert!(log.is_empty());
         let q = NullQueries;

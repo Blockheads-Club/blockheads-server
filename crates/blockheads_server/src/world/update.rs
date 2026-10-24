@@ -707,7 +707,8 @@ mod path_pump_tests {
         w.update_path_pump(false);
         assert!(knobs(&user).needs.get());
         // goal kinds: plain, craft with a workbench (on the goal and below it), interactive objects
-        let setups: [(i32, bool, Option<(i32, i32)>, bool); 8] = [
+        type Setup = (i32, bool, Option<(i32, i32)>, bool);
+        let setups: [Setup; 8] = [
             (0, false, None, false),
             (4, true, None, false),
             (4, true, Some((104, 20)), false),

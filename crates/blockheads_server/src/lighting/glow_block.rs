@@ -232,7 +232,7 @@ impl DynamicObject for GlowBlock {
             l.world_changed_positions(positions);
         }
         let pos = self.base.borrow().pos;
-        if !positions.iter().any(|p| *p == pos) {
+        if !positions.contains(&pos) {
             return;
         }
         let world = self.world();
@@ -331,7 +331,6 @@ mod tests {
 mod more_tests {
     use super::*;
     use crate::lighting::artificial_light::testkit::*;
-    use crate::objects::base::DynamicObject as _;
 
     #[test]
     fn save_net_and_trait_answers() {

@@ -33,11 +33,11 @@ impl DynamicWorld {
     /// `-hasDynamicObjectsToSaveInMacroPos:` (`client` is always nil here).
     pub fn has_dynamic_objects_to_save_in_macro_pos(&self, macro_pos: IntPair) -> bool {
         for t in 0..MAX_DYNAMIC_OBJECT_TYPES {
-            if self.dynamic_world_changed_macro_positions.borrow()[t].iter().any(|p| *p == macro_pos) {
+            if self.dynamic_world_changed_macro_positions.borrow()[t].contains(&macro_pos) {
                 return true;
             }
         }
-        self.world_changed_macro_positions.borrow().iter().any(|p| *p == macro_pos)
+        self.world_changed_macro_positions.borrow().contains(&macro_pos)
     }
 
     /// `-finishSimulating`: flush all 8 inventory slots of every local blockhead.
@@ -792,7 +792,7 @@ mod scenario_tests {
         // an index beyond the list wraps to the start
         d.partial_update_current_index.borrow_mut()[22] = 9;
         d.update_accurate_dt(0.1, 0.1);
-        assert_eq!(d.partial_update_current_index.borrow()[22], 1 % 1);
+        assert_eq!(d.partial_update_current_index.borrow()[22], 0);
     }
 
     #[test]

@@ -717,7 +717,6 @@ impl DynamicObject for NormalPlant {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
     ///  U3: golden maxAge (Flax gene 191, vigor 1.0): `(191/255+0.5)*14400*(0.8+1)`.
     #[test]

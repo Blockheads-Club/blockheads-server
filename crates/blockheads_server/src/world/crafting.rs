@@ -270,7 +270,7 @@ pub struct InteractionDestination {
 mod tests {
     use super::*;
     use crate::world::helpers::testutil::new_obj;
-    use crate::world::misc::{install_deps, testkit, NullDeps, WorldOpsDeps};
+    use crate::world::misc::{install_deps, testkit, NullDeps};
     use std::cell::RefCell;
     use std::rc::Rc;
 

@@ -124,7 +124,6 @@ pub struct WorldTileLoader {
     pub(crate) world: Weak<World>,
     pub(crate) t: Terrain,
     pub(crate) refine_terrain_count: Cell<i32>,
-    pub(crate) has_refined_terrain: Cell<bool>,
     pub(crate) needs_to_exit: Cell<bool>,
     pub(crate) block_directory: String,
     /// Released first in `dealloc` (its drop commits a pending bulk transaction), then the environment.
@@ -284,7 +283,6 @@ impl WorldTileLoader {
             world: Rc::downgrade(world),
             t,
             refine_terrain_count: Cell::new(0),
-            has_refined_terrain: Cell::new(false),
             needs_to_exit: Cell::new(false),
             block_directory,
             light_block_database: RefCell::new(light_db),
@@ -1048,7 +1046,6 @@ pub(crate) mod testutil {
             world: Rc::downgrade(world),
             t: Terrain::new_empty(world.world_width_macro(), 1),
             refine_terrain_count: Cell::new(0),
-            has_refined_terrain: Cell::new(false),
             needs_to_exit: Cell::new(false),
             block_directory: format!("{}/blocks/", dir.display()),
             light_block_database: RefCell::new(Some(db)),
@@ -1260,7 +1257,7 @@ pub(crate) mod sweep_tests {
             for dy in 0..6 {
                 for dx in -4..=4 {
                     let x = (x0 + dx).rem_euclid(p.wt());
-                    for t in crate::world::tiles::tile_at_world_position_loaded(x, 330 + dy, &world) {
+                    if let Some(t) = crate::world::tiles::tile_at_world_position_loaded(x, 330 + dy, &world) {
                         t.update(|v| {
                             v.type_index = if dx % 2 == 0 { 2 } else { 3 };
                             v.zone_type_index = 1;

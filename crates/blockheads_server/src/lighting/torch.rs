@@ -754,7 +754,6 @@ mod tests {
 mod more_tests {
     use super::*;
     use crate::lighting::artificial_light::testkit::*;
-    use crate::objects::base::DynamicObject as _;
 
     struct Lcg(u64);
     impl Lcg {

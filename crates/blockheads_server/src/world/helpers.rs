@@ -132,7 +132,7 @@ pub fn tile_contains_usable_elevator(
     }
     let Some(dw) = world.dynamic_world() else { return false };
     match dw.elevator_motor_for_shaft_at_pos(pos) {
-        Some(m) if m.has_required_power => !blacklist.iter().any(|b| *b == m.pos),
+        Some(m) if m.has_required_power => !blacklist.contains(&m.pos),
         _ => false,
     }
 }

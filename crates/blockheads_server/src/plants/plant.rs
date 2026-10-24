@@ -1581,13 +1581,13 @@ mod scenario_tests {
             let x = [20, 31, 32, 20, 33][pick(5)];
             let y = [10, 32, 10, 31, 10, 33][pick(6)];
             let soil = [6u8, 7, 6, 48, 27, 58][pick(6)];
-            for tr in at(x, y - 1) {
+            if let Some(tr) = at(x, y - 1) {
                 tr.update(|t| t.type_index = soil);
             }
             // water above the root (kelp), sometimes a lid on it
             if pick(4) < 2 {
                 for dy in 0..8 {
-                    for tr in at(x, y + dy) {
+                    if let Some(tr) = at(x, y + dy) {
                         tr.update(|t| {
                             t.type_index = 3;
                             t.foreground_contents = 0;
@@ -1596,13 +1596,13 @@ mod scenario_tests {
                 }
             }
             if pick(4) == 1 {
-                for tr in at(x, y + 5) {
+                if let Some(tr) = at(x, y + 5) {
                     tr.update(|t| t.type_index = 6);
                 }
             }
             // vines hang from a ceiling
             if pick(5) == 0 {
-                for tr in at(x, y + 1) {
+                if let Some(tr) = at(x, y + 1) {
                     tr.update(|t| t.type_index = 6);
                 }
             }
@@ -1617,7 +1617,7 @@ mod scenario_tests {
             let adult = pick(3) != 1;
             let Some(p) = new_plant_for_type(plant_type, &w, &d, IntPair { x, y }, None, 128, 128, None, None, adult)
             else {
-                for tr in at(x, y - 1) {
+                if let Some(tr) = at(x, y - 1) {
                     tr.update(|t| t.type_index = 6);
                 }
                 wipe(&w, x);
@@ -1654,7 +1654,7 @@ mod scenario_tests {
                 }
                 if step == 200 {
                     let dict = p.get_save_dict(&p);
-                    for back in new_plant_from_save_dict(p.object_type(), &w, &d, &dict, None, None, None) {
+                    if let Some(back) = new_plant_from_save_dict(p.object_type(), &w, &d, &dict, None, None, None) {
                         back.update_accurate_dt_is_simulation(&back, 1.0, 1.0, false);
                         back.set_needs_removed(&back, true);
                         back.remove_from_macro_block(&back);
@@ -1666,12 +1666,12 @@ mod scenario_tests {
             }
             p.set_needs_removed(&p, true);
             p.remove_from_macro_block(&p);
-            for tr in at(x, y - 1) {
+            if let Some(tr) = at(x, y - 1) {
                 tr.update(|t| t.type_index = 6);
             }
             wipe(&w, x);
             for yy in 29..36 {
-                for tr in at(x, yy) {
+                if let Some(tr) = at(x, yy) {
                     tr.update(|t| {
                         *t = Tile {
                             type_index: if yy < 32 { 6 } else { 2 },
@@ -1704,7 +1704,7 @@ mod scenario_tests {
                 *mt.get(i).unwrap().physical_block.borrow_mut() = None;
             }
         };
-        for tr in tile_at_world_position_loaded(20, 30, &w) {
+        if let Some(tr) = tile_at_world_position_loaded(20, 30, &w) {
             tr.set_type_index(6);
         }
         for plant_type in [1, 2, 3, 4, 5, 9, 10] {
