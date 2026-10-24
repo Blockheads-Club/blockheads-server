@@ -105,7 +105,13 @@ impl ServerHandle for HostServer {
         self.log.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
     }
     fn is_running(&mut self) -> bool {
-        self.h.as_ref().is_some_and(|h| h.is_alive())
+        let r = self.h.as_ref().is_some_and(|h| h.is_alive());
+        if !r {
+            let l = self.log();
+            let t: Vec<&str> = l.lines().rev().take(40).collect();
+            eprintln!("DIAG not alive: {:?}\n{}", self.h.as_ref().map(|h| h.status()), t.into_iter().rev().collect::<Vec<_>>().join("\n"));
+        }
+        r
     }
     fn wait_for_log(&mut self, needle: &str, timeout: Duration) -> Result<()> {
         let end = Instant::now() + timeout;
@@ -216,9 +222,6 @@ mod tests {
     }
 
     /// The whole handle on a small new world: log waits, saves, console, stop, keep_data, drop while running.
-    // Linux only: on macOS CI the in-process server is no longer alive after the client scripts (run 40077610532,
-    // not investigated); the Linux run is what the coverage gate measures.
-    #[cfg(target_os = "linux")]
     #[test]
     fn host_server_lifecycle() {
         let spec = |tag: &str| RunSpec {

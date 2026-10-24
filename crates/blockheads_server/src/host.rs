@@ -130,6 +130,7 @@ fn note_ready(status: &Mutex<Status>, line: &str, ready_cmds: &[String], tx: &Se
 
 /// How a server thread ended: an exit unwinds with [`HostExit`], an escaped exception or panic is a failure.
 fn end_status(result: std::thread::Result<Result<bool, NsException>>) -> Status {
+    eprintln!("DIAG end_status: {:?}", match &result { Ok(Ok(b)) => format!("ok {b}"), Ok(Err(e)) => describe(e), Err(p) => match p.downcast_ref::<HostExit>() { Some(c) => format!("exit {}", c.0), None => "panic".into() } });
     match result {
         Ok(Ok(_)) => Status::Stopped(0),
         Ok(Err(ex)) => Status::Failed(describe(&ex)),
