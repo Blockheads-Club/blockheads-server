@@ -982,6 +982,487 @@ pub(crate) mod testutil {
         }
     }
 
+    pub type Log = Rc<RefCell<Vec<String>>>;
+
+    /// Build `{key: value,...}` as a mutable dictionary.
+    pub fn plist_dict(entries: Vec<(&str, PlistValue)>) -> PlistValue {
+        let mut v = PlistValue::mutable_dict();
+        let PlistValue::Dict(d) = &mut v else { unreachable!() };
+        for (k, val) in entries {
+            d.map.insert(k.to_string(), val);
+        }
+        v
+    }
+
+    /// An object with scriptable net data, owner and `blockheadsLoaded` counting.
+    pub struct TObj {
+        pub base: RefCell<DynamicObjectBase>,
+        pub ty: i32,
+        pub log: Log,
+        pub creation: Option<Vec<u8>>,
+        pub update: Option<Vec<u8>>,
+        pub owner: Option<String>,
+    }
+    pub fn tobj(
+        ty: i32,
+        id: u64,
+        log: &Log,
+        creation: Option<&[u8]>,
+        update: Option<&[u8]>,
+        owner: Option<&str>,
+    ) -> ObjRef {
+        let o = crate::objects::handle::alloc_obj(|w| TObj {
+            base: RefCell::new(DynamicObjectBase::alloc_zeroed_with(w)),
+            ty,
+            log: log.clone(),
+            creation: creation.map(|c| c.to_vec()),
+            update: update.map(|c| c.to_vec()),
+            owner: owner.map(str::to_string),
+        });
+        o.base.borrow_mut().unique_id = id;
+        o
+    }
+    impl DynamicObject for TObj {
+        fn base(&self) -> &RefCell<DynamicObjectBase> {
+            &self.base
+        }
+        fn class_info(&self) -> &'static ClassInfo {
+            &DYNAMIC_OBJECT_CLASS
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+        fn object_type(&self) -> i32 {
+            self.ty
+        }
+        fn creation_net_data_for_client(&self, _me: &ObjRef, _c: Option<&str>) -> Option<Vec<u8>> {
+            self.creation.clone()
+        }
+        fn update_net_data_for_client(&self, _me: &ObjRef, _c: Option<&str>) -> Option<Vec<u8>> {
+            self.update.clone()
+        }
+        fn client_id_for_saving_seperately_and_only_loading_while_player_online(&self) -> Option<String> {
+            self.owner.clone()
+        }
+        fn blockheads_loaded(&self, _me: &ObjRef) {
+            self.log.borrow_mut().push(format!("loaded({})", self.base.borrow().unique_id));
+        }
+    }
+
+    /// Scriptable hooks: what the constructors return and which flags the blockhead/chest/freight hooks report.
+    pub struct Hk {
+        pub log: Log,
+        pub existing: RefCell<Option<ObjRef>>,
+        pub fail_blockhead: Cell<bool>,
+        pub fail_construct: Cell<bool>,
+        pub level: Cell<i32>,
+        pub save_dir: RefCell<Option<String>>,
+        pub chest_type: Cell<i32>,
+        pub chest_chain: Cell<bool>,
+        pub freight_dict: Cell<bool>,
+        pub freight_flag: Cell<bool>,
+        pub no_dir: RefCell<Vec<u64>>,
+        pub save_ok: Cell<bool>,
+        /// `(unique id, client id)` pairs answered by `blockhead_client_id`.
+        pub client_of: RefCell<Vec<(u64, String)>>,
+        /// `workbench_type` answer.
+        pub wb_type: Cell<i32>,
+        /// Whether `construct_from_net_data` builds nothing.
+        pub net_none: Cell<bool>,
+        /// `(type, interaction type)` of every `construct_from_net_data` call.
+        pub net_made: RefCell<Vec<(i32, Option<i32>)>>,
+        /// `item_type` answer.
+        pub item: Cell<i32>,
+        /// Ids that `blockhead_with_id_including_net` knows.
+        pub known_ids: RefCell<Vec<u64>>,
+        /// `blockhead_inventory_needs_saving` answer.
+        pub needs_saving: Cell<bool>,
+        /// Last id given to a free block built by `freeblock_from_position`.
+        pub free_next: Cell<u64>,
+    }
+    impl crate::dynworld::state::DwHooksStub for Hk {
+        fn blockhead_with_id_including_net(&self, id: u64) -> Option<ObjRef> {
+            if self.known_ids.borrow().contains(&id) {
+                return Some(tobj(24, id, &self.log, None, None, None));
+            }
+            self.existing.borrow().clone()
+        }
+        fn blockhead_will_be_unloaded(&self, b: &ObjRef) {
+            self.log.borrow_mut().push(format!("unload({})", b.unique_id()));
+        }
+        fn blockhead_client_id(&self, b: &ObjRef) -> Option<String> {
+            self.client_of.borrow().iter().find(|(u, _)| *u == b.unique_id()).map(|(_, c)| c.clone())
+        }
+        fn blockhead_set_client_id(&self, b: &ObjRef, id: &str) {
+            self.log.borrow_mut().push(format!("client_id({},{id})", b.unique_id()));
+        }
+        fn blockhead_set_client_name(&self, b: &ObjRef, name: Option<&str>) {
+            self.log.borrow_mut().push(format!("client_name({},{name:?})", b.unique_id()));
+        }
+        fn blockhead_stop_riding(&self, b: &ObjRef) {
+            self.log.borrow_mut().push(format!("riding({})", b.unique_id()));
+        }
+        fn workbench_type(&self, _w: &ObjRef) -> i32 {
+            self.wb_type.get()
+        }
+        fn item_type(&self, _o: &ObjRef) -> i32 {
+            self.item.get()
+        }
+        fn freeblock_from_position(&self, init: FreeBlockInit<'_>) -> Option<ObjRef> {
+            self.free_next.set(self.free_next.get() + 1);
+            self.log.borrow_mut().push(format!("freeblock({})", init.item_type));
+            let o = tobj(14, self.free_next.get(), &self.log, None, None, None);
+            o.base().borrow_mut().pos = init.position;
+            Some(o)
+        }
+        fn blockhead_from_net_data(&self, net: &[u8]) -> Option<ObjRef> {
+            if self.fail_blockhead.get() {
+                return None;
+            }
+            let id = u64::from_le_bytes(net[0..8].try_into().unwrap());
+            Some(tobj(24, id, &self.log, None, None, None))
+        }
+        fn construct_from_net_data(&self, t: i32, ito: Option<i32>, net: &[u8]) -> Option<ObjRef> {
+            self.net_made.borrow_mut().push((t, ito));
+            if self.net_none.get() {
+                return None;
+            }
+            let id = u64::from_le_bytes(net[0..8].try_into().unwrap());
+            let o = tobj(t, id, &self.log, None, None, None);
+            o.base().borrow_mut().pos = IntPair { x: 3, y: 4 };
+            Some(o)
+        }
+        fn blockhead_from_save_dict(
+            &self,
+            d: &crate::plist::value::PlistDict,
+            _slots: Option<PlistValue>,
+            _repos: bool,
+            _dir: Option<&str>,
+            _local: Option<PlistValue>,
+        ) -> Option<ObjRef> {
+            if self.fail_blockhead.get() {
+                return None;
+            }
+            let id = d.map.get(&"uniqueID".to_string()).map_or(0, |v| v.unsigned_long_value());
+            Some(tobj(24, id, &self.log, None, None, None))
+        }
+        fn fully_load_if_needed_around_pos(&self, _p: IntPair, _i: u32, b: &ObjRef) {
+            self.log.borrow_mut().push(format!("fullload({})", b.unique_id()));
+        }
+        fn blockhead_stop_interacting_if_no_interaction_object(&self, b: &ObjRef) {
+            self.log.borrow_mut().push(format!("stop({})", b.unique_id()));
+        }
+        fn blockhead_die(&self, b: &ObjRef) {
+            self.log.borrow_mut().push(format!("die({})", b.unique_id()));
+        }
+        fn blockhead_prepare_inventory_for_saving(&self, b: &ObjRef) {
+            self.log.borrow_mut().push(format!("prep({})", b.unique_id()));
+        }
+        fn blockhead_inventory_needs_saving(&self, _b: &ObjRef) -> bool {
+            self.needs_saving.get()
+        }
+        fn blockhead_set_inventory_needs_saving(&self, b: &ObjRef, v: bool) {
+            self.log.borrow_mut().push(format!("needs({},{})", b.unique_id(), v));
+        }
+        fn blockhead_client_save_dir(&self, b: &ObjRef) -> Option<String> {
+            if self.no_dir.borrow().contains(&b.unique_id()) {
+                return None;
+            }
+            self.save_dir.borrow().clone()
+        }
+        fn save_physical_block_for_macro_tile(&self, mt: &MacroTileRef, rel: bool, dont: bool, only: bool) -> bool {
+            self.log.borrow_mut().push(format!("savepb({},{},{}){}", rel, dont, only, mt.dynamic_objects_loaded.get()));
+            self.save_ok.get()
+        }
+        fn save_light_block_for_client_light_block_index(&self, i: i32, pb: Option<PhysicalBlockRef>, now: bool) {
+            self.log.borrow_mut().push(format!("lightblock({},{},{})", i, pb.is_some(), now));
+        }
+        fn blockhead_save_item_slots_array(&self, _b: &ObjRef) -> PlistValue {
+            PlistValue::array(vec![PlistValue::int(1)])
+        }
+        fn blockhead_save_dict_including_workbench_or_interaction_object(&self, b: &ObjRef, inc: bool) -> PlistValue {
+            plist_dict(vec![("uniqueID", PlistValue::int(b.unique_id() as i64)), ("inc", PlistValue::boolean(inc))])
+        }
+        fn workbench_level(&self, _w: &ObjRef) -> i32 {
+            self.level.get()
+        }
+        fn workbench_set_level_silently(&self, _w: &ObjRef, l: i32) {
+            self.log.borrow_mut().push(format!("level({l})"));
+        }
+        fn tree_update_all_owned_tiles_to_new_id_size(&self, t: &ObjRef) {
+            self.log.borrow_mut().push(format!("treetiles({})", t.unique_id()));
+        }
+        fn dynamic_world_changed_at_pos_object_type(&self, p: IntPair, t: i32) {
+            self.log.borrow_mut().push(format!("changed({},{},{})", p.x, p.y, t));
+        }
+        fn chest_type(&self, _c: &ObjRef) -> i32 {
+            self.chest_type.get()
+        }
+        fn chest_inventory_data_allowing_empty(&self, _c: &ObjRef) -> Option<Vec<u8>> {
+            self.chest_chain.get().then(|| b"inv".to_vec())
+        }
+        fn chest_save_dict_excluding_inventory(&self, _c: &ObjRef) -> Option<PlistValue> {
+            self.chest_chain.get().then(|| plist_dict(vec![("chest", PlistValue::boolean(true))]))
+        }
+        fn freight_needs_chest_save(&self, _c: &ObjRef) -> bool {
+            self.freight_flag.get()
+        }
+        fn freight_set_needs_chest_save(&self, c: &ObjRef, v: bool) {
+            self.log.borrow_mut().push(format!("freightflag({},{})", c.unique_id(), v));
+        }
+        fn freight_chest_save_dict(&self, _c: &ObjRef) -> Option<PlistValue> {
+            self.freight_dict.get().then(|| plist_dict(vec![("items", PlistValue::int(3))]))
+        }
+        fn construct_from_save_dict(
+            &self,
+            kind: SaveLoadKind,
+            t: i32,
+            d: &crate::plist::value::PlistDict,
+            chest: Option<&crate::plist::value::PlistDict>,
+        ) -> Option<ObjRef> {
+            self.log.borrow_mut().push(format!("construct({:?},{},{})", kind, t, chest.is_some()));
+            if self.fail_construct.get() {
+                return None;
+            }
+            let id = d.map.get(&"uniqueID".to_string()).map_or(0, |v| v.unsigned_long_value());
+            let o = tobj(t, id, &self.log, None, None, None);
+            let x = d.map.get(&"pos_x".to_string()).map_or(0, |v| v.int_value());
+            let y = d.map.get(&"pos_y".to_string()).map_or(0, |v| v.int_value());
+            o.base().borrow_mut().pos = IntPair { x, y };
+            Some(o)
+        }
+    }
+
+    pub fn hk(log: &Log) -> Rc<Hk> {
+        Rc::new(Hk {
+            log: log.clone(),
+            existing: RefCell::new(None),
+            fail_blockhead: Cell::new(false),
+            fail_construct: Cell::new(false),
+            level: Cell::new(0),
+            save_dir: RefCell::new(None),
+            chest_type: Cell::new(0),
+            chest_chain: Cell::new(false),
+            freight_dict: Cell::new(true),
+            freight_flag: Cell::new(true),
+            no_dir: RefCell::new(vec![]),
+            save_ok: Cell::new(true),
+            client_of: RefCell::new(vec![]),
+            wb_type: Cell::new(0),
+            net_none: Cell::new(false),
+            net_made: RefCell::new(vec![]),
+            item: Cell::new(0),
+            known_ids: RefCell::new(vec![]),
+            needs_saving: Cell::new(true),
+            free_next: Cell::new(9000),
+        })
+    }
+
+    /// A server client with real tamed-animal sets.
+    pub struct Sc {
+        id: String,
+        pub tamed: RefCell<Vec<HashSet<u32>>>,
+        /// Every object wired for the client, in order.
+        pub wired: RefCell<Vec<u64>>,
+        /// What `block_is_wired` answers.
+        pub wired_block: Cell<bool>,
+        /// What `connected` answers.
+        pub online: Cell<bool>,
+        /// What the client was sent, one line per call.
+        pub events: RefCell<Vec<String>>,
+    }
+    impl Sc {
+        pub fn new(id: &str) -> Sc {
+            Sc {
+                id: id.into(),
+                tamed: RefCell::new(vec![HashSet::new(); 65]),
+                wired: RefCell::new(vec![]),
+                wired_block: Cell::new(false),
+                online: Cell::new(true),
+                events: RefCell::new(vec![]),
+            }
+        }
+    }
+    impl DwServerClient for Sc {
+        fn connected(&self) -> bool {
+            self.online.get()
+        }
+        fn client_id(&self) -> String {
+            self.id.clone()
+        }
+        fn light_block_index(&self) -> i32 {
+            0
+        }
+        fn block_is_wired(&self, _m: i32) -> bool {
+            self.wired_block.get()
+        }
+        fn dynamic_object_is_wired(&self, u: u64) -> bool {
+            self.wired.borrow().contains(&u)
+        }
+        fn wire_dynamic_object(&self, u: u64) {
+            self.events.borrow_mut().push(format!("wire({u})"));
+            self.wired.borrow_mut().push(u);
+        }
+        fn unwire_dynamic_object(&self, u: u64) {
+            self.events.borrow_mut().push(format!("unwire({u})"));
+            self.wired.borrow_mut().retain(|w| *w != u);
+        }
+        fn add_creation_object_data_to_send_of_type_object_id(&self, _d: &NetBlob, t: u8, i: u64) {
+            self.events.borrow_mut().push(format!("create({t},{i})"));
+        }
+        fn add_creation_data_update_object_data_to_send_of_type(&self, _d: &NetBlob, t: u8) {
+            self.events.borrow_mut().push(format!("cdu({t})"));
+        }
+        fn add_update_object_data_to_send_of_type_reliable(&self, _d: &NetBlob, t: u8, r: bool) {
+            self.events.borrow_mut().push(format!("update({t},{r})"));
+        }
+        fn add_removal_object_data_to_send_of_type_object_id(&self, _d: &NetBlob, t: u8, i: u64) {
+            self.events.borrow_mut().push(format!("remove({t},{i})"));
+        }
+        fn send_all_object_data(&self) {
+            self.events.borrow_mut().push("sendAll".to_string());
+        }
+        fn world_indices_containing_tamed_animals(&self) -> &RefCell<Vec<HashSet<u32>>> {
+            &self.tamed
+        }
+    }
+
+    /// A server that knows one player (`ab1234`) and, when `admin`, treats everybody as an admin.
+    pub struct Srv {
+        pub admin: bool,
+    }
+    impl DwServer for Srv {
+        fn player_info_for_peer_id(&self, p: &str) -> Option<PlistValue> {
+            (p == "ab1234").then(|| plist_dict(vec![("alias", PlistValue::string("Alice"))]))
+        }
+        fn player_is_admin_with_id(&self, _c: &str) -> bool {
+            self.admin
+        }
+        fn player_update(&self) -> Option<String> {
+            None
+        }
+        fn notify_players_changed(&self) {}
+    }
+
+    /// World hooks that only count the dynamic-object loads asked of them.
+    pub struct CountingOps(pub Cell<u32>);
+    impl crate::world::state::WorldOpsHooks for CountingOps {
+        fn load_physical_block_for_macro_tile_at_x_y_load_surrounding_blocks_create_if_not_created(
+            &self,
+            _w: &World,
+            _mt: &MacroTileRef,
+            _mx: i32,
+            _my: i32,
+            _s: bool,
+            _c: bool,
+        ) -> bool {
+            false
+        }
+        fn load_dynamic_objects_if_not_already_loaded_for_macro_tile_include_surface_blocks(
+            &self,
+            _w: &World,
+            _mt: &MacroTileRef,
+            _s: bool,
+        ) {
+            self.0.set(self.0.get() + 1);
+        }
+        fn tile_is_protected_at_pos_against_blockhead(&self, _w: &World, _p: IntPair, _b: &ObjRef) -> bool {
+            false
+        }
+    }
+
+    /// A `DynamicWorld` with a server and the given connected clients (`Sc`).
+    pub fn dw_served(name: &str, clients: &[&str]) -> (Rc<DynamicWorld>, Vec<Rc<Sc>>) {
+        let (main, dwdb) = dbs(name);
+        let w = world(1);
+        std::mem::forget(w.clone());
+        let map: ServerClientMap = Rc::new(RefCell::new(GsDict::new()));
+        let mut scs = Vec::new();
+        for c in clients {
+            let sc = Rc::new(Sc::new(c));
+            map.borrow_mut().insert(c.to_string(), sc.clone());
+            scs.push(sc);
+        }
+        let d = DynamicWorld::new(DynamicWorldInit {
+            world: w,
+            world_tile_loader: None,
+            server: Some(Rc::new(Srv { admin: false })),
+            server_clients: Some(map),
+            cache: None,
+            tree_density_noise_function: None,
+            season_offset_noise_function: None,
+            app_database: None,
+            world_database: main,
+            dynamic_object_database: dwdb,
+            world_save_directory_override: Some(scratch(&format!("{name}_save"))),
+        });
+        (d, scs)
+    }
+
+    /// A mod host that records what the server tells it and cancels on request.
+    #[derive(Default)]
+    pub struct ModSpy {
+        pub log: RefCell<Vec<String>>,
+        pub cancel: Cell<bool>,
+        pub wants_block_changed: Cell<bool>,
+    }
+    impl crate::mods::ModHooks for ModSpy {
+        fn player_join(&self, p: &str) {
+            self.log.borrow_mut().push(format!("join({p})"));
+        }
+        fn player_quit(&self, p: &str, kick: bool) {
+            self.log.borrow_mut().push(format!("quit({p},{kick})"));
+        }
+        fn chat(&self, _p: &str, _t: &str) -> crate::mods::ChatVerdict {
+            crate::mods::ChatVerdict::Keep
+        }
+        fn owns_command(&self, _l: &str) -> bool {
+            false
+        }
+        fn command(&self, _i: Option<&str>, _l: &str) -> bool {
+            false
+        }
+        fn tick(&self, _dt: f32) {}
+        fn poll(&self) {}
+        fn world_loaded(&self, _n: &str, _i: &str) {}
+        fn world_save(&self, _p: bool) {}
+        fn server_stop(&self) {}
+        fn wants(&self, what: crate::mods::Optional) -> bool {
+            what == crate::mods::Optional::BlockChanged && self.wants_block_changed.get()
+        }
+        fn mod_packet(&self, _p: &str, _d: &[u8]) {}
+        fn pre_login(&self, _p: &str, _i: &str, _a: &str, _l: Option<&crate::mods::LoaderKey>) -> Option<u8> {
+            None
+        }
+        fn limbo_join(&self, _p: &str, _i: &str, _l: Option<&crate::mods::LoaderKey>) -> bool {
+            false
+        }
+        fn limbo_packet(&self, _p: &str) -> bool {
+            false
+        }
+        fn limbo_gone(&self, _p: &str) {}
+        fn block_place(&self, p: &str, pos: IntPair, item: u32, a: u16, b: u16) -> bool {
+            self.log.borrow_mut().push(format!("place({p},{},{},{item},{a},{b})", pos.x, pos.y));
+            self.cancel.get()
+        }
+        fn block_break(&self, p: &str, pos: IntPair, back_wall: bool, tile: u32) -> bool {
+            self.log.borrow_mut().push(format!("break({p},{},{},{back_wall},{tile})", pos.x, pos.y));
+            self.cancel.get()
+        }
+        fn block_changed(&self, pos: IntPair, tile: u32, p: Option<&str>) {
+            self.log.borrow_mut().push(format!("changed({},{},{tile},{p:?})", pos.x, pos.y));
+        }
+        fn object_place(&self, p: &str, pos: IntPair, workbench: bool, item: u32) -> bool {
+            self.log.borrow_mut().push(format!("object({p},{},{},{workbench},{item})", pos.x, pos.y));
+            self.cancel.get()
+        }
+        fn damage(&self, _p: Option<&str>, _b: u64, amount: f32, _a: Option<&str>) -> Option<f32> {
+            Some(amount)
+        }
+        fn death(&self, _p: Option<&str>, _b: u64) {}
+        fn player_move(&self, _p: &str, _f: IntPair, _t: IntPair) {}
+    }
+
     /// A `World` with a given width in macro tiles.
     pub fn world(width_macro: i32) -> WorldRef {
         World::alloc(width_macro)
@@ -1096,5 +1577,224 @@ mod tests {
         d.free_blocks_erase(99, &a);
         d.free_blocks_erase(99, &b);
         assert!(d.free_blocks_by_position.borrow().is_empty());
+    }
+
+    /// Every default hook answers with the neutral value.
+    #[test]
+    fn null_hooks_answer_neutrally() {
+        let h: &dyn DwHooks = &NullHooks;
+        let log: Log = Rc::new(RefCell::new(vec![]));
+        let o = tobj(24, 1, &log, None, None, None);
+        let w = world(1);
+        let mt = w.macro_tiles().get(0).unwrap();
+        let pb = w.take_physical_block();
+        let tile = TileRef::new(pb, 0);
+        let pos = IntPair { x: 1, y: 2 };
+        let PlistValue::Dict(dict) = plist_dict(vec![]) else { unreachable!() };
+        assert!(!h.save_physical_block_for_macro_tile(&mt, true, false, false));
+        h.save_light_block_for_client_light_block_index(1, Some(pb), true);
+        h.fully_load_if_needed_around_pos(pos, 0, &o);
+        h.update_physical_block_to_latest_version(pb);
+        h.place_basic_portal_workbench(pos);
+        assert!(!h.tile_is_lit_for_client(None, pos, tile));
+        h.dynamic_world_changed_at_pos_object_type(pos, 3);
+        h.light_changed_at_macro_pos_send_reliably(pos, true);
+        assert!(h.blockhead_with_id_including_net(1).is_none());
+        h.blockhead_will_be_unloaded(&o);
+        assert_eq!(h.local_net_id().len(), 32);
+        h.check_and_restore_pole_items(0.1);
+        h.load_tree_at_position(pos, 1, 2, 3, true, 1.0);
+        h.load_plant_at_position(pos, 1, 2, 3, true);
+        h.load_npc_at_position(pos, 1, true, false);
+        h.add_torch_at_pos_of_type(pos, 17);
+        h.create_treasure_chest_or_troll_at_tile(tile, pos, true, true);
+        h.load_glow_block_if_needed_at_pos_tile(pos, tile);
+        h.load_surface_block_at_pos(pos);
+        h.load_snow_surface_block_at_pos_load_snow(pos, true);
+        assert!(h.workbench_at_pos(pos).is_none() && h.interaction_object_at_pos(pos).is_none());
+        assert!(h.object_at_pos_for_item('p', pos).is_none());
+        assert!(h.remove_door_at_pos(pos).is_none() && h.remove_window_at_pos(pos).is_none());
+        assert!(h.construct_from_save_dict(SaveLoadKind::Generic, 1, &dict, None).is_none());
+        assert!(h.construct_from_net_data(1, None, &[]).is_none());
+        assert_eq!((h.workbench_type(&o), h.workbench_level(&o)), (0, 0));
+        h.workbench_set_level_silently(&o, 2);
+        h.tree_update_all_owned_tiles_to_new_id_size(&o);
+        h.update_rain_dt(&o, 0.5, 0.1);
+        assert_eq!((h.item_type(&o), h.destroy_item_type(&o), h.chest_type(&o)), (0, 0, 0));
+        assert!(h.chest_inventory_data_allowing_empty(&o).is_none());
+        assert!(h.chest_save_dict_excluding_inventory(&o).is_none());
+        assert!(!h.freight_needs_chest_save(&o) && h.freight_chest_save_dict(&o).is_none());
+        h.freight_set_needs_chest_save(&o, true);
+        h.cleanup(&o);
+        assert!(h.freeblock_from_net_data(&[], None).is_none());
+        let init = FreeBlockInit {
+            position: pos,
+            item_type: 1,
+            data_a: 0,
+            data_b: 0,
+            sub_items: None,
+            dynamic_object_save_dict: None,
+            hovers: false,
+            priority_blockhead: None,
+        };
+        assert!(h.freeblock_from_position(init).is_none());
+        h.freeblock_set_creation_sound(&o, 0.0, 1);
+        assert!(h.blockhead_from_save_dict(&dict, None, false, None, None).is_none());
+        assert!(h.blockhead_from_net_data(&[]).is_none());
+        assert!(h.blockhead_client_id(&o).is_none() && h.blockhead_client_save_dir(&o).is_none());
+        h.blockhead_set_client_id(&o, "c");
+        h.blockhead_set_client_name(&o, None);
+        assert!(matches!(
+            h.blockhead_save_dict_including_workbench_or_interaction_object(&o, false),
+            PlistValue::Dict(_)
+        ));
+        assert!(matches!(h.blockhead_save_item_slots_array(&o), PlistValue::Array(_)));
+        h.blockhead_prepare_inventory_for_saving(&o);
+        assert!(!h.blockhead_inventory_needs_saving(&o));
+        h.blockhead_set_inventory_needs_saving(&o, true);
+        h.blockhead_inventory_was_changed(&o, 0, -1, false);
+        h.blockhead_stop_interacting_if_no_interaction_object(&o);
+        h.blockhead_stop_riding(&o);
+        h.blockhead_die(&o);
+    }
+
+    /// The save directory comes from the data directory when it is not overridden; `dealloc` unloads everything.
+    #[test]
+    fn default_save_directory_and_dealloc() {
+        let root = scratch("state_home");
+        crate::foundation::paths::set_data_dir_override(Some(format!("{root}TheBlockheads")));
+        let (main, dwdb) = dbs("state_home_db");
+        let w = world(1);
+        std::mem::forget(w.clone());
+        let d = DynamicWorld::new(DynamicWorldInit {
+            world: w,
+            world_tile_loader: None,
+            server: None,
+            server_clients: None,
+            cache: None,
+            tree_density_noise_function: None,
+            season_offset_noise_function: None,
+            app_database: None,
+            world_database: main,
+            dynamic_object_database: dwdb,
+            world_save_directory_override: None,
+        });
+        crate::foundation::paths::set_data_dir_override(None);
+        assert!(d.world_save_directory.starts_with(&root) && d.world_save_directory.ends_with("/saves//"));
+        assert!(std::path::Path::new(&d.world_save_directory).is_dir());
+        let log: Log = Rc::new(RefCell::new(vec![]));
+        d.set_hooks(hk(&log));
+        d.blockheads.borrow_mut().push(tobj(24, 1, &log, None, None, None));
+        d.net_blockheads.borrow_mut().push(tobj(24, 2, &log, None, None, None));
+        d.do_set(41, 3, tobj(41, 3, &log, None, None, None));
+        d.ta_set(42, 4, tobj(42, 4, &log, None, None, None));
+        d.dealloc();
+        assert!(d.blockheads.borrow().is_empty());
+        assert_eq!(d.server_client_count(), 0);
+        let l = log.borrow().clone();
+        assert!(l.contains(&"unload(1)".to_string()) && l.contains(&"unload(2)".to_string()));
+    }
+
+    /// The to-add and by-position tables: guarded inserts, ordered iteration, conditional erase.
+    #[test]
+    fn table_primitives() {
+        let d = dw("state_tables", 1);
+        let log: Log = Rc::new(RefCell::new(vec![]));
+        let a = tobj(7, 1, &log, None, None, None);
+        let b = tobj(7, 2, &log, None, None, None);
+        assert!(d.ta_insert_new(7, 1, a.clone()));
+        assert!(!d.ta_insert_new(7, 1, b.clone()));
+        assert!(d.ta_insert_new(7, 2, b.clone()));
+        assert_eq!(d.ta_next_after(7, None).unwrap().0, 1);
+        assert_eq!(d.ta_next_after(7, Some(1)).unwrap().0, 2);
+        assert!(d.ta_next_after(7, Some(2)).is_none());
+        assert!(d.bp_insert_new(7, 10, a.clone()));
+        assert!(!d.bp_insert_new(7, 10, b.clone()));
+        assert!(d.bp_insert_new(7, 11, b.clone()));
+        assert_eq!(d.bp_next_after(7, None).unwrap().0, 10);
+        assert_eq!(d.bp_next_after(7, Some(10)).unwrap().0, 11);
+        // erase only when the entry is the very object
+        d.bp_erase_if_same(7, 10, &b);
+        assert!(d.bp_contains(7, 10));
+        d.bp_erase_if_same(7, 10, &a);
+        assert!(!d.bp_contains(7, 10));
+        d.bp_erase_if_same(7, 99, &a);
+    }
+
+    /// The mod host double records what it hears and cancels on request.
+    #[test]
+    fn mod_spy_records_and_cancels() {
+        use crate::mods::{ChatVerdict, ModHooks, Optional};
+        let spy = ModSpy::default();
+        let pos = IntPair { x: 1, y: 2 };
+        spy.player_join("a");
+        spy.player_quit("a", true);
+        assert_eq!(spy.chat("a", "hi"), ChatVerdict::Keep);
+        assert!(!spy.owns_command("/x") && !spy.command(None, "/x"));
+        spy.tick(0.2);
+        spy.poll();
+        spy.world_loaded("w", "id");
+        spy.world_save(true);
+        spy.server_stop();
+        assert!(!spy.wants(Optional::BlockChanged) && !spy.wants(Optional::PlayerMove));
+        spy.wants_block_changed.set(true);
+        assert!(spy.wants(Optional::BlockChanged));
+        spy.mod_packet("p", &[1]);
+        assert!(spy.pre_login("p", "id", "alias", None).is_none());
+        assert!(!spy.limbo_join("p", "id", None) && !spy.limbo_packet("p"));
+        spy.limbo_gone("p");
+        assert!(!spy.block_place("a", pos, 1, 2, 3) && !spy.block_break("a", pos, true, 4));
+        spy.cancel.set(true);
+        assert!(spy.object_place("a", pos, false, 5) && spy.block_break("a", pos, false, 6));
+        spy.block_changed(pos, 7, None);
+        assert_eq!(spy.damage(None, 1, 2.0, None), Some(2.0));
+        spy.death(None, 1);
+        spy.player_move("a", pos, pos);
+        assert_eq!(spy.log.borrow().len(), 7);
+    }
+
+    /// The fakes answer the way a quiet connected client does.
+    #[test]
+    fn fake_client_server_and_world_hooks_are_inert() {
+        let sc = Sc::new("c9");
+        assert!(sc.connected());
+        assert_eq!(sc.client_id(), "c9");
+        assert_eq!(sc.light_block_index(), 0);
+        assert!(!sc.block_is_wired(1));
+        assert!(!sc.dynamic_object_is_wired(2));
+        sc.wired_block.set(true);
+        assert!(sc.block_is_wired(1));
+        sc.wire_dynamic_object(3);
+        assert!(sc.dynamic_object_is_wired(3));
+        sc.unwire_dynamic_object(3);
+        let blob: NetBlob = vec![1];
+        sc.add_creation_object_data_to_send_of_type_object_id(&blob, 1, 2);
+        sc.add_creation_data_update_object_data_to_send_of_type(&blob, 1);
+        sc.add_update_object_data_to_send_of_type_reliable(&blob, 1, true);
+        sc.add_removal_object_data_to_send_of_type_object_id(&blob, 1, 2);
+        sc.send_all_object_data();
+        assert_eq!(*sc.wired.borrow(), Vec::<u64>::new());
+        assert_eq!(sc.events.borrow().len(), 7);
+        assert_eq!(sc.world_indices_containing_tamed_animals().borrow().len(), 65);
+        let srv = Srv { admin: true };
+        assert!(srv.player_info_for_peer_id("p").is_none());
+        assert!(srv.player_info_for_peer_id("ab1234").is_some());
+        assert!(srv.player_is_admin_with_id("c") && !Srv { admin: false }.player_is_admin_with_id("c"));
+        assert!(srv.player_update().is_none());
+        srv.notify_players_changed();
+        let (d, scs) = dw_served("state_served", &["a", "b"]);
+        assert_eq!(scs.len(), 2);
+        assert_eq!(d.server_client_count(), 2);
+        use crate::world::state::WorldOpsHooks;
+        let w = d.world();
+        let mt = w.macro_tiles().get(0).unwrap();
+        let ops = CountingOps(Cell::new(0));
+        assert!(!ops.load_physical_block_for_macro_tile_at_x_y_load_surrounding_blocks_create_if_not_created(
+            &w, &mt, 0, 0, false, false
+        ));
+        ops.load_dynamic_objects_if_not_already_loaded_for_macro_tile_include_surface_blocks(&w, &mt, true);
+        assert_eq!(ops.0.get(), 1);
+        let bh: ObjRef = Obj::new(24, 1, Rc::new(RefCell::new(vec![])));
+        assert!(!ops.tile_is_protected_at_pos_against_blockhead(&w, IntPair { x: 0, y: 0 }, &bh));
     }
 }

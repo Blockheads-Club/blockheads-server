@@ -270,7 +270,7 @@ pub struct InteractionDestination {
 mod tests {
     use super::*;
     use crate::world::helpers::testutil::new_obj;
-    use crate::world::misc::{install_deps, testkit, NullDeps, WorldOpsDeps};
+    use crate::world::misc::{install_deps, testkit, NullDeps};
     use std::cell::RefCell;
     use std::rc::Rc;
 
@@ -395,6 +395,222 @@ mod tests {
             crate::rng::glibc_rand::rand();
         }
         assert_eq!(next, crate::rng::glibc_rand::rand());
+        install_deps(Rc::new(NullDeps));
+    }
+}
+
+/// Warping in blockheads, refunds, the blockhead recipe and interaction object arrival.
+#[cfg(test)]
+mod warp_tests {
+    use super::*;
+    use crate::types::structs::CraftableItem;
+    use crate::world::helpers::testutil::new_obj;
+    use crate::world::misc::{install_deps, NullDeps, WorldOpsDepsStub};
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+
+    #[derive(Default)]
+    struct Deps {
+        log: RefCell<Vec<String>>,
+        item: RefCell<Option<CraftableItem>>,
+        crystals: Cell<i32>,
+        /// answers of `bh_subtract_items...` in order
+        removed: RefCell<Vec<i32>>,
+        usable: Cell<bool>,
+        busy: Cell<bool>,
+        dying: Cell<bool>,
+        bh_can: Cell<bool>,
+    }
+    impl WorldOpsDepsStub for Deps {
+        fn craftable_item(&self, _o: &ObjRef) -> CraftableItem {
+            self.item.borrow().unwrap_or_else(zero_craftable_item)
+        }
+        fn workbench_pos(&self, _w: &ObjRef) -> IntPair {
+            IntPair { x: 10, y: 20 }
+        }
+        fn load_new_blockhead_at_pos_craftable_item_object_unique_id(&self, pos: IntPair, _c: &ObjRef, id: u64) {
+            self.log.borrow_mut().push(format!("newBlockhead({},{},{id})", pos.x, pos.y));
+        }
+        fn crystal_manager_amount(&self) -> i32 {
+            self.crystals.get()
+        }
+        fn crystal_manager_set_count_watcher_none(&self) {
+            self.log.borrow_mut().push("watcher".into());
+        }
+        fn crystal_manager_modify_modify_string(&self, amount: i32, _s: &str) {
+            self.log.borrow_mut().push(format!("crystal({amount})"));
+        }
+        fn bh_subtract_items_from_inventory_of_type_count_data_b(
+            &self,
+            _bh: &ObjRef,
+            item: ItemType,
+            count: i32,
+            _data_b: i32,
+        ) -> i32 {
+            self.log.borrow_mut().push(format!("subtract({},{count})", item.0));
+            let mut r = self.removed.borrow_mut();
+            if r.is_empty() {
+                count
+            } else {
+                r.remove(0)
+            }
+        }
+        fn create_free_block_at_position_of_type_data_a_data_b_sub_items_dynamic_object_save_dict_hovers_play_sound_priority_blockhead(
+            &self,
+            pos: IntPair,
+            t: ItemType,
+            _a: u16,
+            _b: u16,
+            _s: Option<&[crate::items::inventory_item::SubSlot]>,
+            _sd: Option<&PlistValue>,
+            _h: bool,
+            _snd: i32,
+            _bh: Option<&ObjRef>,
+        ) {
+            self.log.borrow_mut().push(format!("free({},{},{})", pos.x, pos.y, t.0));
+        }
+        fn obj_needs_removed(&self, _o: &ObjRef) -> bool {
+            self.dying.get()
+        }
+        fn io_can_be_used_by_blockhead(&self, _io: &ObjRef, _bh: &ObjRef) -> bool {
+            self.usable.get()
+        }
+        fn bh_can_use_dynamic_object(&self, _bh: &ObjRef, _o: &ObjRef) -> bool {
+            self.bh_can.get()
+        }
+        fn io_is_in_use(&self, _io: &ObjRef) -> bool {
+            self.busy.get()
+        }
+        fn io_start_interaction_with_blockhead(&self, _io: &ObjRef, _bh: &ObjRef) {
+            self.log.borrow_mut().push("start".into());
+        }
+        fn bh_stop_interacting(&self, _bh: &ObjRef) {
+            self.log.borrow_mut().push("stop".into());
+        }
+    }
+
+    fn recipe(items: &[(u32, i32)]) -> CraftableItem {
+        let mut c = zero_craftable_item();
+        c.crafted_item_type = ItemType::ITEM_BLOCKHEAD.0;
+        c.number_of_required_items = items.len() as i32;
+        for (i, (t, n)) in items.iter().enumerate() {
+            c.required_items[i] = *t;
+            c.required_item_counts[i] = *n;
+        }
+        c
+    }
+
+    #[test]
+    fn warping_in_a_blockhead_takes_or_refunds_the_ingredients() {
+        let d = Rc::new(Deps::default());
+        install_deps(d.clone());
+        let w = World::alloc(32);
+        let (obj, wb, bh) = (new_obj(), new_obj(), new_obj());
+        bh.base().borrow_mut().pos = IntPair { x: 3, y: 4 };
+        let crystal = ItemType::ITEM_TIME_CRYSTAL.0;
+        let take = || std::mem::take(&mut *d.log.borrow_mut());
+        // the blockhead recipe through the craft finish, with and without a workbench
+        *d.item.borrow_mut() = Some(recipe(&[]));
+        w.craft_item_finished_at_workbench_all_finished_blockhead(Some(&obj), Some(&wb), true, None);
+        w.craft_item_finished_at_workbench_all_finished_blockhead(Some(&obj), None, true, None);
+        w.craft_item_finished_at_workbench_all_finished_blockhead(None, Some(&wb), true, None);
+        assert_eq!(take().len(), 2);
+        w.craft_aborted_for_workbench_with_blockhead(Some(&wb), None);
+        // nobody pays
+        w.warp_in_blockhead_at_workbench_with_blockhead(&obj, &wb, None);
+        assert_eq!(take(), vec![format!("newBlockhead(10,20,{})", u64::MAX)]);
+        // items and crystals that are all there
+        *d.item.borrow_mut() = Some(recipe(&[(5, 2), (crystal, 10), (6, 1)]));
+        d.crystals.set(100);
+        w.warp_in_blockhead_at_workbench_with_blockhead(&obj, &wb, Some(&bh));
+        let log = take();
+        assert!(log.contains(&"crystal(10)".to_string()) && log.last().unwrap().starts_with("newBlockhead"), "{log:?}");
+        // not enough crystals: nothing happens
+        d.crystals.set(3);
+        w.warp_in_blockhead_at_workbench_with_blockhead(&obj, &wb, Some(&bh));
+        assert!(!take().iter().any(|l| l.starts_with("newBlockhead")));
+        // an item runs short after a crystal and an item were taken: everything goes back
+        d.crystals.set(100_000);
+        *d.item.borrow_mut() = Some(recipe(&[(5, 2), (crystal, 10), (crystal, 60000), (7, 4)]));
+        *d.removed.borrow_mut() = vec![2, 1];
+        w.warp_in_blockhead_at_workbench_with_blockhead(&obj, &wb, Some(&bh));
+        let log = take();
+        assert!(!log.iter().any(|l| l.starts_with("newBlockhead")), "{log:?}");
+        assert_eq!(log.iter().filter(|l| *l == "free(3,5,5)").count(), 2, "{log:?}");
+        assert_eq!(log.iter().filter(|l| *l == "free(3,5,7)").count(), 1, "{log:?}");
+        assert!(log.contains(&"crystal(-10)".to_string()), "{log:?}");
+        // a negative count does not spawn anything
+        *d.item.borrow_mut() = Some(recipe(&[(5, 2), (7, -3)]));
+        *d.removed.borrow_mut() = vec![2, 0];
+        w.warp_in_blockhead_at_workbench_with_blockhead(&obj, &wb, Some(&bh));
+        take();
+        install_deps(Rc::new(NullDeps));
+    }
+
+    #[test]
+    fn dye_bench_returns_the_bucket_for_colourable_items() {
+        let d = Rc::new(Deps::default());
+        install_deps(d.clone());
+        let w = World::alloc(32);
+        let (obj, wb) = (new_obj(), new_obj());
+        let mut c = zero_craftable_item();
+        c.crafted_item_type = ItemType::ITEM_LINEN_SHIRT.0;
+        c.crafted_item_count = 1;
+        *d.item.borrow_mut() = Some(c);
+        struct Dye(Rc<Deps>);
+        impl WorldOpsDepsStub for Dye {
+            fn craftable_item(&self, o: &ObjRef) -> CraftableItem {
+                self.0.craftable_item(o)
+            }
+            fn workbench_type(&self, _w: &ObjRef) -> crate::types::enums::WorkbenchType {
+                crate::types::enums::WorkbenchType(0xc)
+            }
+            fn create_free_block_at_position_of_type_data_a_data_b_sub_items_dynamic_object_save_dict_hovers_play_sound_priority_blockhead(
+                &self,
+                pos: IntPair,
+                t: ItemType,
+                a: u16,
+                b: u16,
+                s: Option<&[crate::items::inventory_item::SubSlot]>,
+                sd: Option<&PlistValue>,
+                h: bool,
+                snd: i32,
+                bh: Option<&ObjRef>,
+            ) {
+                self.0.create_free_block_at_position_of_type_data_a_data_b_sub_items_dynamic_object_save_dict_hovers_play_sound_priority_blockhead(pos, t, a, b, s, sd, h, snd, bh)
+            }
+        }
+        install_deps(Rc::new(Dye(d.clone())));
+        w.craft_item_finished_at_workbench_all_finished_blockhead(Some(&obj), Some(&wb), true, None);
+        assert_eq!(d.log.borrow().len(), 2);
+        install_deps(Rc::new(NullDeps));
+    }
+
+    #[test]
+    fn reaching_an_interaction_object_starts_or_stops_the_interaction() {
+        let d = Rc::new(Deps::default());
+        install_deps(d.clone());
+        let w = World::alloc(32);
+        let (bh, io) = (new_obj(), new_obj());
+        let dest = InteractionDestination { interaction_object: Some(io) };
+        let run = |dest: Option<&InteractionDestination>| {
+            w.blockhead_reached_interaction_object_destination_path_extra_data(&bh, dest);
+            std::mem::take(&mut *d.log.borrow_mut())
+        };
+        assert_eq!(run(None), vec!["stop"]);
+        assert_eq!(run(Some(&InteractionDestination { interaction_object: None })), vec!["stop"]);
+        // every gate in turn
+        assert_eq!(run(Some(&dest)), vec!["stop"]);
+        d.usable.set(true);
+        assert_eq!(run(Some(&dest)), vec!["stop"]);
+        d.bh_can.set(true);
+        d.busy.set(true);
+        assert_eq!(run(Some(&dest)), vec!["stop"]);
+        d.busy.set(false);
+        d.dying.set(true);
+        assert_eq!(run(Some(&dest)), vec!["stop"]);
+        d.dying.set(false);
+        assert_eq!(run(Some(&dest)), vec!["start"]);
         install_deps(Rc::new(NullDeps));
     }
 }

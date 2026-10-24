@@ -112,7 +112,7 @@ impl DynamicWorld {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dynworld::lookups::{set_ops_hooks, DwOpsHooks};
+    use crate::dynworld::lookups::set_ops_hooks;
     use crate::dynworld::state::testutil::*;
     use std::cell::RefCell;
     use std::rc::Rc;
@@ -159,9 +159,6 @@ mod tests {
             fn painting_user_mute_changed(&self, p: &ObjRef, pid: &str) {
                 self.0.borrow_mut().push(format!("mute{}:{}", p.unique_id(), pid));
             }
-            fn painting_user_ban_changed(&self, p: &ObjRef, pid: &str, b: bool) {
-                self.0.borrow_mut().push(format!("ban{}:{}:{}", p.unique_id(), pid, b));
-            }
         }
         let d = dw("fo_mute", 1);
         let o = Rc::new(O(RefCell::new(vec![])));
@@ -170,5 +167,38 @@ mod tests {
         d.user_mute_changed("p");
         d.user_ban_changed_is_banned("p", true); // no server: ignored
         assert_eq!(*o.0.borrow(), vec!["mute6:p".to_string()]);
+    }
+
+    #[test]
+    fn unloading_and_name_refresh_reach_everything() {
+        let (d, _scs) = dw_served("fo_srv", &["c1"]);
+        let log: Log = Rc::new(RefCell::new(vec![]));
+        struct O(Log);
+        impl crate::dynworld::lookups::DwOpsHooksStub for O {
+            fn painting_user_ban_changed(&self, p: &ObjRef, pid: &str, b: bool) {
+                self.0.borrow_mut().push(format!("ban{}:{pid}:{b}", p.unique_id()));
+            }
+            fn blockhead_update_name_text_view(&self, b: &ObjRef) {
+                self.0.borrow_mut().push(format!("name{}", b.unique_id()));
+            }
+        }
+        set_ops_hooks(Rc::new(O(log.clone())));
+        d.do_set(52, 6, obj(52, 6, 0, 0));
+        d.user_ban_changed_is_banned("p", true);
+        d.net_blockheads.borrow_mut().push(obj(24, 3, 0, 0));
+        d.players_changed();
+        d.do_set(17, 1, obj(17, 1, 0, 0));
+        d.ta_set(19, 2, obj(19, 2, 0, 0));
+        d.blockhead_will_be_unloaded(&obj(24, 9, 0, 0));
+        assert_eq!(*log.borrow(), vec!["ban6:p:true".to_string(), "name3".to_string()]);
+    }
+
+    #[test]
+    fn lights_are_recomputed_for_a_loaded_block() {
+        let d = dw("fo_light", 1);
+        d.do_set(17, 1, obj(17, 1, 0, 0));
+        d.ta_set(17, 2, obj(17, 2, 0, 0));
+        d.do_set(14, 3, obj(14, 3, 0, 0));
+        d.add_artificial_light_contribution_for_physical_block_loaded_at_x_pos_y_pos(0, 0);
     }
 }

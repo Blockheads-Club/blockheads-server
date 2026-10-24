@@ -216,14 +216,10 @@ impl Default for TreeState {
 pub trait TreeLike: DynamicObject {
     /// The Tree ivars.
     fn tree(&self) -> &RefCell<TreeState>;
-    /// `-treeType`: TREE_NOTHING in the base.
-    fn tree_type(&self) -> i32 {
-        0
-    }
-    /// `-fruitItemType`: ITEM_NONE.
-    fn fruit_item_type(&self) -> i32 {
-        0
-    }
+    /// `-treeType`: TREE_NOTHING in the base (every species overrides it).
+    fn tree_type(&self) -> i32;
+    /// `-fruitItemType`: ITEM_NONE in the base (every species overrides it).
+    fn fruit_item_type(&self) -> i32;
     /// `-shouldAddFallenFruits`: YES.
     fn should_add_fallen_fruits(&self) -> bool {
         true
@@ -236,12 +232,10 @@ pub trait TreeLike: DynamicObject {
     fn is_required_soil_type(&self, tile_type: i32) -> bool {
         tree_is_required_soil_type(tile_type)
     }
-    /// `-tileIsKindOfSelf:`: NO.
-    fn tile_is_kind_of_self(&self, _t: &Tile) -> bool {
-        false
-    }
-    /// `-makeTileDead:`: empty.
-    fn make_tile_dead(&self, _t: &mut Tile) {}
+    /// `-tileIsKindOfSelf:`: NO in the base (every species overrides it).
+    fn tile_is_kind_of_self(&self, t: &Tile) -> bool;
+    /// `-makeTileDead:`: empty in the base (every species overrides it).
+    fn make_tile_dead(&self, t: &mut Tile);
     /// `-updateGrowth:`: empty in the base.
     fn update_growth(&self, _me: &ObjRef, _add_new_branch_blocks: bool) {}
     /// `-isStaticTree`: NO (GemTree: YES).
@@ -257,11 +251,8 @@ pub trait TreeLike: DynamicObject {
     fn load_save_dict_values(&self, me: &ObjRef, d: &PlistDict) {
         tree_load_save_dict_values(me, d)
     }
-    /// Species `update:accurateDT:isSimulation:`: the default is the Tree base `update:`; species overrides run
-    /// [`tree_update`] first (`[super update:]`).
-    fn species_update(&self, me: &ObjRef, dt: f32, accurate_dt: f32, is_simulation: bool) {
-        tree_update(me, dt, accurate_dt, is_simulation)
-    }
+    /// Species `update:accurateDT:isSimulation:`; species overrides run [`tree_update`] first (`[super update:]`).
+    fn species_update(&self, me: &ObjRef, dt: f32, accurate_dt: f32, is_simulation: bool);
     /// Species `worldChanged:`: the default is [`tree_world_changed`]; GemTree does NOT chain.
     fn species_world_changed(&self, me: &ObjRef, positions: &mut Vec<IntPair>) {
         tree_world_changed(me, positions)
@@ -481,9 +472,8 @@ pub fn tree_init_static_tree(
     link_world(me, world, dw, tdnf, sonf);
     let wr: WorldRef = world.clone();
     let dr: DynamicWorldRef = dw.clone();
-    if !base_init_with_world_dynamic_world_at_position_cache(me, &wr, &dr, pos, cache) {
-        return false;
-    }
+    // `base_init_with_world_dynamic_world_at_position_cache` answers true on every path
+    let _ = base_init_with_world_dynamic_world_at_position_cache(me, &wr, &dr, pos, cache);
     let p = me.pos();
     match tile_at(world, p.x, p.y) {
         Some(t) if t.get().contents == 0 => true,
@@ -514,9 +504,8 @@ pub fn tree_init_with_world_dynamic_world_at_position_cache_max_height_growth_ra
     link_world(me, world, dw, tdnf, sonf);
     let wr: WorldRef = world.clone();
     let dr: DynamicWorldRef = dw.clone();
-    if !base_init_with_world_dynamic_world_at_position_cache(me, &wr, &dr, pos, cache) {
-        return false;
-    }
+    // `base_init_with_world_dynamic_world_at_position_cache` answers true on every path
+    let _ = base_init_with_world_dynamic_world_at_position_cache(me, &wr, &dr, pos, cache);
     let t = tl(me);
     let p = me.pos();
     let (mhg, grg) = (clampi(max_height as i32, 1, 255) as u16, clampi(growth_rate as i32, 1, 255) as u16);
@@ -560,17 +549,15 @@ pub fn tree_init_with_world_dynamic_world_save_dict_cache_tdnf_sonf(
     cache: CacheRef,
     tdnf: NoiseRef,
     sonf: NoiseRef,
-) -> bool {
+) {
     link_world(me, world, dw, tdnf, sonf);
     let wr: WorldRef = world.clone();
     let dr: DynamicWorldRef = dw.clone();
-    if !base_init_with_world_dynamic_world_save_dict_cache(me, &wr, &dr, d, cache) {
-        return false;
-    }
+    // `base_init_with_world_dynamic_world_save_dict_cache` answers true on every path
+    let _ = base_init_with_world_dynamic_world_save_dict_cache(me, &wr, &dr, d, cache);
     tl(me).load_save_dict_values(me, d);
     let save_time = d.map.get(&"saveTime".to_string()).map_or(0.0, |v| v.double_value());
     tree_grow_in_time_since_saved(me, save_time);
-    true
 }
 
 // ------------------------------------------------------------------------------------------------ simple queries
@@ -820,18 +807,17 @@ pub fn tree_get_save_dict(me: &ObjRef) -> PlistDict {
     put("timeDied", PlistValue::real_f64(s.time_died));
     put("removeCheckCount", PlistValue::real_f32(s.remove_check_count));
     let mut arr = PlistValue::mutable_array();
-    if let PlistValue::Array(a) = &mut arr {
-        for i in 0..s.fruit_count.clamp(0, 64) as usize {
-            let f = &s.tree_fruits[i];
-            let mut fd = new_mutable_dict();
-            fd.map.insert("pos.x".to_string(), PlistValue::int(f.pos.x as i64));
-            fd.map.insert("pos.y".to_string(), PlistValue::int(f.pos.y as i64));
-            fd.map.insert(
-                "hasCreatedFreeBlockThisSeason".to_string(),
-                PlistValue::boolean(f.has_created_free_block_this_season),
-            );
-            a.items.push(PlistValue::Dict(fd));
-        }
+    let PlistValue::Array(a) = &mut arr else { unreachable!() };
+    for i in 0..s.fruit_count.clamp(0, 64) as usize {
+        let f = &s.tree_fruits[i];
+        let mut fd = new_mutable_dict();
+        fd.map.insert("pos.x".to_string(), PlistValue::int(f.pos.x as i64));
+        fd.map.insert("pos.y".to_string(), PlistValue::int(f.pos.y as i64));
+        fd.map.insert(
+            "hasCreatedFreeBlockThisSeason".to_string(),
+            PlistValue::boolean(f.has_created_free_block_this_season),
+        );
+        a.items.push(PlistValue::Dict(fd));
     }
     put("treeFruit", arr);
     if !t.is_static_tree() {
@@ -1829,6 +1815,118 @@ pub(crate) mod testenv {
         (w, d)
     }
 
+    /// Scatter random obstacles (solid blocks, fire, foreign contents) around column `x`, rows above the ground;
+    /// `density` out of 100 per tile, from the LCG state `seed`.
+    pub fn scatter(w: &World, x: i32, seed: u64, density: u64) {
+        let mut s = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        for y in GROUND + 1..GROUND + 30 {
+            for dx in -10..=10 {
+                s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                let r = s >> 33;
+                if r % 100 >= density {
+                    continue;
+                }
+                for tr in tile_at(w, x + dx, y).into_iter() {
+                    tr.update(|t| match (r >> 8) % 4 {
+                        0 => t.type_index = 6,
+                        1 => t.on_fire = 1,
+                        2 => t.contents = 0x30,
+                        _ => t.contents = 43,
+                    });
+                }
+            }
+        }
+    }
+
+    /// Undo `scatter` and everything a tree left behind around column `x`.
+    pub fn wipe(w: &World, x: i32) {
+        for y in GROUND + 1..GROUND + 40 {
+            for dx in -12..=12 {
+                if let Some(tr) = tile_at(w, x + dx, y) {
+                    tr.update(|t| {
+                        t.type_index = 2;
+                        t.contents = 0;
+                        t.foreground_contents = 0;
+                        t.on_fire = 0;
+                        t.dynamic_object_owner = 0;
+                        t.back_wall_type_index = 2;
+                        t.sun_light = 255;
+                    });
+                }
+            }
+        }
+    }
+
+    /// Grow one species over obstacle fields, partly unloaded worlds and odd heights; `prep` may set species state
+    /// (food, fruit...) before each update.
+    pub fn gauntlet(tree_type: i32, tag: &str, rounds: u32, prep: &dyn Fn(&ObjRef, u32)) {
+        let (w, d) = env(tag);
+        let mt = w.macro_tiles();
+        let saved: Vec<_> = (0..4).map(|i| *mt.get(i).unwrap().physical_block.borrow()).collect();
+        for seed in 0..rounds {
+            let x = match seed % 6 {
+                0 => 31,
+                3 => 32,
+                _ => 14 + (seed % 30) as i32,
+            };
+            let y = if seed % 5 == 4 { 31 } else { GROUND + 1 };
+            let ground_tile = if tree_type == TREE_CACTUS { 7 } else { 6 };
+            for tr in tile_at(&w, x, y - 1).into_iter() {
+                tr.update(|t| t.type_index = ground_tile);
+            }
+            scatter(&w, x, u64::from(seed) + 1, [0, 3, 8, 20][(seed % 4) as usize]);
+            let unload: &[usize] =
+                [&[][..], &[1, 3], &[2, 3], &[1, 2, 3], &[2], &[3], &[0], &[0, 2]][((seed / 3) % 8) as usize];
+            crate::rng::glibc_rand::srand(seed + 1);
+            for t in new_tree_for_type(
+                tree_type,
+                &w,
+                &d,
+                IntPair { x, y },
+                None,
+                255,
+                255,
+                None,
+                None,
+                seed % 2 == 0,
+                99_999.0,
+            )
+            .into_iter()
+            {
+                for &i in unload {
+                    *mt.get(i).unwrap().physical_block.borrow_mut() = None;
+                }
+                tree_state(&t).borrow_mut().height = 2 + (seed % 21) as i32;
+                tree_state(&t).borrow_mut().tree_season_offset = [-300, 0, 70, 700][(seed % 4) as usize];
+                prep(&t, seed);
+                if seed % 9 == 0 {
+                    tree_state(&t).borrow_mut().dead = true;
+                }
+                tl(&t).update_growth(&t, seed % 8 != 7);
+                t.update_accurate_dt_is_simulation(&t, 12.0, 12.0, false);
+                tree_state(&t).borrow_mut().dead = false;
+                prep(&t, seed + 1);
+                tl(&t).update_growth(&t, true);
+                t.update_accurate_dt_is_simulation(&t, 12.0, 12.0, false);
+                tree_state(&t).borrow_mut().height = 1;
+                tree_state(&t).borrow_mut().fruit_count = 1;
+                tl(&t).update_growth(&t, true);
+                for (i, pb) in saved.iter().enumerate() {
+                    *mt.get(i).unwrap().physical_block.borrow_mut() = *pb;
+                }
+                t.set_needs_removed(&t, true);
+                t.remove_from_macro_block(&t);
+            }
+            for (i, pb) in saved.iter().enumerate() {
+                *mt.get(i).unwrap().physical_block.borrow_mut() = *pb;
+            }
+            wipe(&w, x);
+            for tr in tile_at(&w, x, y - 1).into_iter() {
+                tr.update(|t| t.type_index = if y == 31 { 2 } else { 6 });
+            }
+        }
+    }
+
     /// `n` rand draws after `srand(seed)`.
     pub fn draws(seed: u32, n: usize) -> Vec<i32> {
         crate::rng::glibc_rand::srand(seed);
@@ -1935,7 +2033,6 @@ mod tests {
     use crate::trees::mango::MangoTree;
     use crate::trees::maple::MapleTree;
     use crate::trees::orange::OrangeTree;
-    use crate::trees::pine::PineTree;
     use std::cell::RefCell as RC;
 
     type NewFn =
@@ -2402,8 +2499,7 @@ mod tests {
             PlistValue::Real { is_float: true, .. } => "float",
             PlistValue::Real { is_float: false, .. } => "double",
             PlistValue::Bool(_) => "bool",
-            PlistValue::Array(_) => "array",
-            _ => "other",
+            _ => "array",
         };
         for (k, e) in [
             ("height", "int"),
@@ -2808,13 +2904,7 @@ mod tests {
             for me in &trees {
                 let t = as_tree(me).unwrap();
                 let s = tree_state(me).borrow();
-                assert!(
-                    s.height >= 1 && s.height <= s.max_height,
-                    "{} h={} mh={}",
-                    me.object_type(),
-                    s.height,
-                    s.max_height
-                );
+                assert!(s.height >= 1 && s.height <= s.max_height);
                 assert!(s.max_height_reached >= s.height);
                 drop(s);
                 let uid = me.unique_id();
@@ -2823,12 +2913,7 @@ mod tests {
                     for x in pos.x - 40..pos.x + 40 {
                         let tt = tile_at(&w, x, y).unwrap().get();
                         if tt.dynamic_object_owner == uid {
-                            assert!(
-                                t.tile_is_kind_of_self(&tt),
-                                "obj {} owns foreign contents {} at ({x},{y})",
-                                me.object_type(),
-                                tt.contents
-                            );
+                            assert!(t.tile_is_kind_of_self(&tt));
                         }
                     }
                 }
@@ -2844,6 +2929,679 @@ mod tests {
                     crate::trees::tree::TreeLike::species_update(as_tree(me).unwrap(), me, 0.2, 0.2, false);
                 }
             }
+        }
+    }
+}
+
+/// Whole-life scenarios of every species: growth over the seasons, fruit, saving and loading, neighbours changing
+/// and death.
+#[cfg(test)]
+mod scenario_tests {
+    use super::testenv::{env, GROUND};
+    use super::*;
+    use crate::objects::handle::downcast;
+    use crate::rng::glibc_rand::srand;
+    use crate::trees::cactus::CactusTree;
+
+    const SPECIES: [(i32, i32); 15] = [
+        (TREE_APPLE, OBJECT_TYPE_APPLE),
+        (TREE_MANGO, OBJECT_TYPE_MANGO),
+        (TREE_MAPLE, OBJECT_TYPE_MAPLE),
+        (TREE_PINE, OBJECT_TYPE_PINE),
+        (TREE_CACTUS, OBJECT_TYPE_CACTUS),
+        (TREE_COCONUT, OBJECT_TYPE_COCONUT),
+        (TREE_ORANGE, OBJECT_TYPE_ORANGE),
+        (TREE_CHERRY, OBJECT_TYPE_CHERRY),
+        (TREE_COFFEE, OBJECT_TYPE_COFFEE),
+        (TREE_LIME, OBJECT_TYPE_LIME),
+        (11, OBJECT_TYPE_GEM),
+        (12, OBJECT_TYPE_GEM),
+        (13, OBJECT_TYPE_GEM),
+        (14, OBJECT_TYPE_GEM),
+        (15, OBJECT_TYPE_GEM),
+    ];
+
+    fn plant(w: &Rc<World>, d: &Rc<DynamicWorld>, tree_type: i32, x: i32, adult: bool) -> Option<ObjRef> {
+        new_tree_for_type(tree_type, w, d, IntPair { x, y: GROUND + 1 }, None, 9, 5, None, None, adult, 99_999.0)
+    }
+
+    #[test]
+    fn every_species_lives_through_the_seasons() {
+        for (k, (tree_type, object_type)) in SPECIES.iter().enumerate() {
+            let (w, d) = env(&format!("tr_life_{k}"));
+            let x = 10 + 3 * (k as i32 % 3);
+            for adult in [false, true] {
+                for seed in 1..4u32 {
+                    srand(seed);
+                    let Some(t) = plant(&w, &d, *tree_type, x, adult) else { continue };
+                    assert_eq!(t.object_type(), *object_type);
+                    for step in 0..150 {
+                        w.set_world_time(f64::from(step) * 37.5);
+                        t.update_accurate_dt_is_simulation(&t, 500.0, 500.0, false);
+                    }
+                    // the animals living in pines and cacti come when the food is there
+                    if let Some(cactus) = downcast::<CactusTree>(&t) {
+                        for _ in 0..4 {
+                            cactus.set_available_food(5000.0);
+                            t.update_accurate_dt_is_simulation(&t, 5.0, 5.0, false);
+                        }
+                    }
+                    // old age: the tree dies, its tiles die with it and are removed a minute later
+                    if seed == 2 {
+                        let max_age = tl(&t).tree().borrow().max_age;
+                        tl(&t).tree().borrow_mut().age = max_age + 10.0;
+                        for step in 0..40 {
+                            w.set_world_time(10_000.0 + f64::from(step) * 3.0);
+                            t.update_accurate_dt_is_simulation(&t, 1.5, 1.5, false);
+                        }
+                        w.set_world_time(10_200.0);
+                        t.update_accurate_dt_is_simulation(&t, 1.5, 1.5, false);
+                        assert!(t.needs_removed() || *tree_type == TREE_CACTUS || *object_type == OBJECT_TYPE_GEM);
+                    }
+                    // a save and a reload long after
+                    let dict = t.get_save_dict(&t);
+                    w.set_world_time(50_000.0);
+                    let back = new_tree_from_save_dict(*object_type, &w, &d, &dict, None, None, None);
+                    if let Some(back) = back {
+                        back.update_accurate_dt_is_simulation(&back, 25.0, 25.0, false);
+                    }
+                    // a change next to it, then the end
+                    t.world_changed(&t, &mut vec![IntPair { x, y: GROUND }, IntPair { x: x + 1, y: GROUND + 3 }]);
+                    t.set_needs_removed(&t, true);
+                    t.remove_from_macro_block(&t);
+                    // clean the tiles for the next round
+                    for y in GROUND + 1..GROUND + 30 {
+                        for dx in -6..=6 {
+                            for tr in crate::world::tiles::tile_at_world_position_loaded(x + dx, y, &w).into_iter() {
+                                tr.update(|tile| {
+                                    tile.type_index = 2;
+                                    tile.contents = 0;
+                                    tile.foreground_contents = 0;
+                                    tile.back_wall_type_index = 2;
+                                    tile.sun_light = 255;
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn fruit_falls_and_the_base_selectors_answer() {
+        struct Fixed(f64);
+        impl crate::dynworld::state::DwNoise for Fixed {
+            fn get_x_y_octaves(&self, _x: f64, _y: f64, _o: i32) -> f64 {
+                self.0
+            }
+        }
+        let noise: Rc<dyn crate::dynworld::state::DwNoise> = Rc::new(Fixed(0.3));
+        for (k, (tree_type, object_type)) in SPECIES.iter().enumerate() {
+            let (w, d) = env(&format!("tr_fruit_{k}"));
+            srand(3);
+            let x = 12;
+            let t = new_tree_for_type(
+                *tree_type,
+                &w,
+                &d,
+                IntPair { x, y: GROUND + 1 },
+                None,
+                9,
+                5,
+                Some(noise.clone()),
+                Some(noise.clone()),
+                true,
+                99_999.0,
+            )
+            .expect("tree");
+            let like = tl(&t);
+            let _ = (like.tree_type(), like.fruit_item_type(), like.should_add_fallen_fruits());
+            let _ = (like.fruit_should_fall_in_season(1), like.is_static_tree(), like.height());
+            for step in 0..160 {
+                w.set_world_time(f64::from(step) * 22.5);
+                t.update_accurate_dt_is_simulation(&t, 500.0, 500.0, false);
+                tree_add_fallen_fruits(&t);
+            }
+            like.update_growth(&t, true);
+            like.update_growth(&t, false);
+            assert_eq!(t.object_type(), *object_type);
+        }
+        let _ = TreeState::default();
+    }
+
+    #[test]
+    fn trees_need_loaded_ground() {
+        let (w, d) = env("tr_unloaded");
+        let dict = {
+            let t = plant(&w, &d, TREE_APPLE, 10, false).unwrap();
+            t.get_save_dict(&t)
+        };
+        for mx in 0..2 {
+            *w.macro_tiles().get(mx).unwrap().physical_block.borrow_mut() = None;
+        }
+        for (tree_type, object_type) in SPECIES {
+            assert!(plant(&w, &d, tree_type, 12, false).is_none() || tree_type == 11);
+            let _ = new_tree_from_save_dict(object_type, &w, &d, &dict, None, None, None);
+        }
+        assert!(new_tree_from_save_dict(99, &w, &d, &dict, None, None, None).is_none());
+        assert!(plant(&w, &d, 99, 12, false).is_none());
+    }
+}
+
+/// Random disturbances around every species: neighbours appear and vanish, fire, water, saved and reloaded.
+#[cfg(test)]
+mod fuzz_tests {
+    use super::testenv::{env, wipe, GROUND};
+    use super::*;
+    use crate::rng::glibc_rand::srand;
+
+    struct Lcg(u64);
+    impl Lcg {
+        fn next(&mut self) -> u64 {
+            self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            self.0 >> 33
+        }
+        fn pick<T: Copy>(&mut self, v: &[T]) -> T {
+            v[(self.next() % v.len() as u64) as usize]
+        }
+    }
+
+    #[test]
+    fn owner_ids_are_migrated_to_the_wide_field() {
+        let (w, d) = env("tr_fuzz_ids");
+        let t = new_tree_for_type(
+            TREE_APPLE,
+            &w,
+            &d,
+            IntPair { x: 20, y: GROUND + 1 },
+            None,
+            9,
+            5,
+            None,
+            None,
+            true,
+            99_999.0,
+        )
+        .unwrap();
+        let uid = t.unique_id();
+        tl(&t).tree().borrow_mut().max_height_reached = 8;
+        let tile = crate::world::tiles::tile_at_world_position_loaded(21, GROUND + 3, &w).unwrap();
+        tile.update(|x| {
+            x.dynamic_object_owner_old = uid as u32;
+            x.dynamic_object_owner = 0;
+        });
+        tree_update_all_owned_tiles_to_new_id_size(&t);
+        assert_eq!(tile.get().dynamic_object_owner, uid);
+    }
+
+    struct Cn(f64);
+    impl DwNoise for Cn {
+        fn get_x_y_octaves(&self, _x: f64, _y: f64, _o: i32) -> f64 {
+            self.0
+        }
+    }
+
+    #[test]
+    fn disturbed_trees_of_every_species() {
+        disturb_all("tr_fuzz", None);
+    }
+
+    /// The same with noise functions that make every bush tile a fruit slot (or never), so the seasons matter.
+    #[test]
+    fn disturbed_fruit_trees_of_every_species() {
+        disturb_all("tr_fuzzf", Some(0.9));
+        disturb_all("tr_fuzzg", Some(-0.9));
+    }
+
+    const ALL_SPECIES: [i32; 15] = [
+        TREE_APPLE,
+        TREE_MANGO,
+        TREE_MAPLE,
+        TREE_PINE,
+        TREE_CACTUS,
+        TREE_COCONUT,
+        TREE_ORANGE,
+        TREE_CHERRY,
+        TREE_COFFEE,
+        TREE_LIME,
+        11,
+        12,
+        13,
+        14,
+        15,
+    ];
+
+    /// Trees planted on the lowest row of the upper blocks while the blocks below are unloaded, later loaded
+    /// again (air under them: no soil).
+    #[test]
+    fn trees_on_unloaded_ground() {
+        for (k, tree_type) in ALL_SPECIES.into_iter().enumerate() {
+            for (n, noise_value) in [None, Some(0.9)].into_iter().enumerate() {
+                let noise_fn = || -> NoiseRef { noise_value.map(|v| Rc::new(Cn(v)) as Rc<dyn DwNoise>) };
+                let (w, d) = env(&format!("tr_unl_{k}_{n}"));
+                let mt = w.macro_tiles();
+                let saved: Vec<_> = (0..2).map(|i| *mt.get(i).unwrap().physical_block.borrow()).collect();
+                for round in 0..4u32 {
+                    let x = if round % 2 == 0 { 20 } else { 31 };
+                    for i in 0..2 {
+                        *mt.get(i).unwrap().physical_block.borrow_mut() = None;
+                    }
+                    srand(round + 3);
+                    let t = new_tree_for_type(
+                        tree_type,
+                        &w,
+                        &d,
+                        IntPair { x, y: 32 },
+                        None,
+                        200,
+                        200,
+                        noise_fn(),
+                        noise_fn(),
+                        true,
+                        99_999.0,
+                    )
+                    .expect("tree");
+                    for step in 0..12 {
+                        w.set_world_time(f64::from(step) * 700.0);
+                        t.update_accurate_dt_is_simulation(&t, 12.0, 12.0, false);
+                        t.world_changed(&t, &mut vec![IntPair { x, y: 31 }, IntPair { x: x + 1, y: 33 }]);
+                    }
+                    for (i, pb) in saved.iter().enumerate() {
+                        *mt.get(i).unwrap().physical_block.borrow_mut() = *pb;
+                    }
+                    for step in 0..12 {
+                        w.set_world_time(f64::from(step) * 900.0);
+                        t.update_accurate_dt_is_simulation(&t, 12.0, 12.0, step % 5 == 0);
+                        t.world_changed(&t, &mut vec![IntPair { x, y: 31 }, IntPair { x: x - 1, y: 40 }]);
+                    }
+                    t.set_needs_removed(&t, true);
+                    t.remove_from_macro_block(&t);
+                    wipe(&w, x);
+                    for dx in -12..=12 {
+                        for tr in tile_at(&w, x + dx, 32).into_iter() {
+                            tr.update(|t| {
+                                *t = Tile { type_index: 2, back_wall_type_index: 2, sun_light: 255, ..Tile::default() }
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn disturb_all(tag: &str, noise_value: Option<f64>) {
+        let noise_fn = || -> NoiseRef { noise_value.map(|v| Rc::new(Cn(v)) as Rc<dyn DwNoise>) };
+        let species = ALL_SPECIES;
+        let mut r = Lcg(5);
+        for (k, tree_type) in species.into_iter().enumerate() {
+            let (w, d) = env(&format!("{tag}_{k}"));
+            for round in 0..6u32 {
+                let x = if round % 3 == 2 { 31 } else { 20 };
+                srand(round + 1);
+                let t = new_tree_for_type(
+                    tree_type,
+                    &w,
+                    &d,
+                    IntPair { x, y: GROUND + 1 },
+                    None,
+                    if noise_value.is_some() { 200 } else { 9 },
+                    if noise_value.is_some() { 200 } else { 5 },
+                    noise_fn(),
+                    noise_fn(),
+                    round % 2 == 0,
+                    99_999.0,
+                )
+                .expect("tree");
+                let mt = w.macro_tiles();
+                for step in 0..60 {
+                    w.set_world_time(f64::from(round) * 4000.0 + f64::from(step) * 61.0);
+                    // some steps run with part of the world unloaded
+                    let saved: Vec<_> = (0..4).map(|i| *mt.get(i).unwrap().physical_block.borrow()).collect();
+                    let mask = if step % 4 == 1 { r.next() % 8 } else { 0 };
+                    for i in 1..4 {
+                        if mask & (1 << (i - 1)) != 0 {
+                            *mt.get(i).unwrap().physical_block.borrow_mut() = None;
+                        }
+                    }
+                    t.update_accurate_dt_is_simulation(&t, 12.0, 12.0, step % 7 == 0);
+                    for (i, pb) in saved.iter().enumerate() {
+                        *mt.get(i).unwrap().physical_block.borrow_mut() = *pb;
+                    }
+                    if r.next() % 3 == 0 {
+                        let mut changed = vec![];
+                        for _ in 0..(1 + r.next() % 6) {
+                            let p = IntPair { x: x + (r.next() % 13) as i32 - 6, y: GROUND + (r.next() % 14) as i32 };
+                            for tr in crate::world::tiles::tile_at_world_position_loaded(p.x, p.y, &w).into_iter() {
+                                let (ty, fire, contents) = (
+                                    r.pick(&[2u8, 2, 6, 3, 1]),
+                                    r.pick(&[0u8, 0, 0, 1]),
+                                    r.pick(&[0u8, 0, 0, 0x30, 0x03]),
+                                );
+                                if p.y > GROUND && r.next() % 2 == 0 {
+                                    tr.update(|tile| {
+                                        tile.type_index = ty;
+                                        tile.on_fire = fire;
+                                        if tile.dynamic_object_owner == 0 {
+                                            tile.contents = contents;
+                                        }
+                                    });
+                                }
+                                changed.push(p);
+                            }
+                        }
+                        t.world_changed(&t, &mut changed);
+                    }
+                    if step == 30 {
+                        let dict = t.get_save_dict(&t);
+                        w.set_world_time(f64::from(round) * 4000.0 + 20_000.0);
+                        for back in
+                            new_tree_from_save_dict(t.object_type(), &w, &d, &dict, None, noise_fn(), noise_fn())
+                                .into_iter()
+                        {
+                            back.update_accurate_dt_is_simulation(&back, 5.0, 5.0, false);
+                            back.world_changed(&back, &mut vec![IntPair { x, y: GROUND + 2 }]);
+                            back.set_needs_removed(&back, true);
+                            back.remove_from_macro_block(&back);
+                        }
+                    }
+                }
+                t.set_needs_removed(&t, true);
+                t.remove_from_macro_block(&t);
+                for y in GROUND + 1..GROUND + 30 {
+                    for dx in -8..=8 {
+                        for tr in crate::world::tiles::tile_at_world_position_loaded(x + dx, y, &w).into_iter() {
+                            tr.update(|tile| {
+                                tile.type_index = 2;
+                                tile.contents = 0;
+                                tile.foreground_contents = 0;
+                                tile.on_fire = 0;
+                                tile.dynamic_object_owner = 0;
+                                tile.back_wall_type_index = 2;
+                                tile.sun_light = 255;
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Tall trees that are broken, shaded, half unloaded and reloaded from odd save dicts.
+#[cfg(test)]
+mod edge_tests {
+    use super::testenv::{count_contents, env, tile, wipe, GROUND};
+    use super::*;
+    use crate::rng::glibc_rand::srand;
+
+    fn mk(tree_type: i32, w: &Rc<World>, d: &Rc<DynamicWorld>, x: i32, y: i32) -> ObjRef {
+        new_tree_for_type(tree_type, w, d, IntPair { x, y }, None, 255, 255, None, None, true, 99_999.0).expect("tree")
+    }
+
+    /// Force a height and let the species build all of it.
+    fn raise(t: &ObjRef, h: i32) {
+        tree_state(t).borrow_mut().height = h;
+        for _ in 0..3 {
+            tl(t).update_growth(t, true);
+        }
+    }
+
+    #[test]
+    fn non_trees_are_not_trees() {
+        assert!(as_tree(&crate::world::helpers::testutil::dw_obj_of_type(0).obj).is_none());
+    }
+
+    #[test]
+    fn odd_save_dicts() {
+        let (w, d) = env("tr_odd_dicts");
+        srand(4);
+        let t = mk(TREE_APPLE, &w, &d, 20, GROUND + 1);
+        raise(&t, 12);
+        let uid = t.unique_id();
+        let mut owned = vec![];
+        for y in GROUND + 1..GROUND + 14 {
+            for x in 10..30 {
+                if tile(&w, x, y).dynamic_object_owner == uid {
+                    owned.push((x, y));
+                }
+            }
+        }
+        assert!(count_contents(&w, 10, 30, GROUND + 1, GROUND + 14, &[tile(&w, 20, GROUND + 1).contents]) > 0);
+        let mut dict = t.get_save_dict(&t);
+        // no fruit list at all, and a list that is not a list
+        let fruits = dict.map.remove(&"treeFruit".to_string()).unwrap();
+        for v in [None, Some(PlistValue::int(3))] {
+            let mut dd = dict.clone();
+            if let Some(v) = v {
+                dd.map.insert("treeFruit".to_string(), v);
+            }
+            let back = new_tree_from_save_dict(t.object_type(), &w, &d, &dd, None, None, None).unwrap();
+            assert_eq!(tree_state(&back).borrow().fruit_count, 0);
+        }
+        // more entries than slots
+        let PlistValue::Array(mut arr) = fruits else { panic!() };
+        let mut entry = new_mutable_dict();
+        entry.map.insert("pos.x".to_string(), PlistValue::int(owned[0].0 as i64));
+        entry.map.insert("pos.y".to_string(), PlistValue::int(owned[0].1 as i64));
+        arr.items = (0..70).map(|_| PlistValue::Dict(entry.clone())).collect();
+        dict.map.insert("treeFruit".to_string(), PlistValue::Array(arr));
+        let back = new_tree_from_save_dict(t.object_type(), &w, &d, &dict, None, None, None).unwrap();
+        assert_eq!(tree_state(&back).borrow().fruit_count, 64);
+    }
+
+    #[test]
+    fn broken_shaded_and_unloaded_tall_trees() {
+        for (k, tree_type) in [
+            TREE_APPLE,
+            TREE_MANGO,
+            TREE_MAPLE,
+            TREE_PINE,
+            TREE_CACTUS,
+            TREE_COCONUT,
+            TREE_ORANGE,
+            TREE_CHERRY,
+            TREE_COFFEE,
+            TREE_LIME,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let (w, d) = env(&format!("tr_edge_{k}"));
+            let mt = w.macro_tiles();
+            let saved: Vec<_> = (0..4).map(|i| *mt.get(i).unwrap().physical_block.borrow()).collect();
+            for round in 0..14u32 {
+                let x = if round % 2 == 0 { 20 } else { 31 };
+                srand(round + 11);
+                w.set_expert_mode(round % 4 < 2);
+                let t = mk(tree_type, &w, &d, x, GROUND + 1);
+                let h = 22 + (round % 5) as i32 * 3;
+                raise(&t, h);
+                let uid = t.unique_id();
+                // a leaf (owned, not on the trunk column) is replaced by a foreign block: the rest of the row goes
+                let mut leaf = None;
+                for y in (GROUND + 2..GROUND + 2 + h).rev() {
+                    for dx in [-4i32, -3, -2, -1, 1, 2, 3, 4] {
+                        let far = tile(&w, x + dx + dx.signum(), y);
+                        if tile(&w, x + dx, y).dynamic_object_owner == uid && far.dynamic_object_owner == uid {
+                            leaf = Some(IntPair { x: x + dx, y });
+                        }
+                    }
+                }
+                if let Some(p) = leaf {
+                    tile_at(&w, p.x, p.y).unwrap().update(|t| {
+                        t.contents = 0x30;
+                        t.dynamic_object_owner = 0;
+                    });
+                    t.world_changed(&t, &mut vec![p]);
+                }
+                match round % 7 {
+                    1 => {
+                        // shade the top, light the first tile above the root
+                        tile_at(&w, x, GROUND + 1 + h).unwrap().update(|t| t.sun_light = 0);
+                        tile_at(&w, x, GROUND + 2).unwrap().update(|t| t.sun_light = 255);
+                        t.update_accurate_dt_is_simulation(&t, 12.0, 12.0, false);
+                    }
+                    2 => {
+                        // compost below, a tree older than it may be: the age is cut back
+                        tile_at(&w, x, GROUND).unwrap().update(|t| t.type_index = 48);
+                        {
+                            let mut s = tree_state(&t).borrow_mut();
+                            s.age = s.max_age + 5.0;
+                            s.age_counter = 100_000.0;
+                        }
+                        t.update_accurate_dt_is_simulation(&t, 12.0, 12.0, false);
+                        tile_at(&w, x, GROUND).unwrap().update(|t| t.type_index = 6);
+                    }
+                    3 => {
+                        // the root tile above the ground is the last one in a block: the tile above is unloaded
+                        for i in 2..4 {
+                            *mt.get(i).unwrap().physical_block.borrow_mut() = None;
+                        }
+                        t.world_changed(&t, &mut vec![IntPair { x, y: GROUND + 1 }]);
+                        t.update_accurate_dt_is_simulation(&t, 12.0, 12.0, false);
+                        w.set_world_time(1000.0);
+                        tree_state(&t).borrow_mut().max_height_reached = h;
+                        tree_kill_all_owned_tiles(&t);
+                        tree_check_if_dead_tiles_need_removed(&t);
+                        tree_kill_all_owned_tiles_above_y(&t, GROUND);
+                        t.world_changed(&t, &mut (GROUND..GROUND + 40).map(|y| IntPair { x, y }).collect());
+                        tree_update_all_owned_tiles_to_new_id_size(&t);
+                    }
+                    4 => {
+                        for i in [1, 3] {
+                            *mt.get(i).unwrap().physical_block.borrow_mut() = None;
+                        }
+                        w.set_world_time(1000.0);
+                        tree_state(&t).borrow_mut().max_height_reached = h;
+                        tree_kill_all_owned_tiles(&t);
+                        tree_check_if_dead_tiles_need_removed(&t);
+                        tree_kill_all_owned_tiles_above_y(&t, GROUND);
+                        t.world_changed(&t, &mut (GROUND..GROUND + 40).map(|y| IntPair { x: x + 1, y }).collect());
+                        t.update_accurate_dt_is_simulation(&t, 12.0, 12.0, false);
+                        tree_update_all_owned_tiles_to_new_id_size(&t);
+                    }
+                    5 => {
+                        for i in [1, 2, 3] {
+                            *mt.get(i).unwrap().physical_block.borrow_mut() = None;
+                        }
+                        t.set_needs_removed(&t, true);
+                        t.remove_from_macro_block(&t);
+                    }
+                    _ => {
+                        // trunk broken half way
+                        tile_at(&w, x, GROUND + 1 + h / 2).unwrap().update(|t| {
+                            t.contents = 0;
+                            t.dynamic_object_owner = 0;
+                        });
+                        t.world_changed(&t, &mut vec![IntPair { x, y: GROUND + 1 + h / 2 }]);
+                        tile_at(&w, x, GROUND + 1).unwrap().update(|t| {
+                            t.contents = 0;
+                            t.dynamic_object_owner = 0;
+                        });
+                        t.world_changed(&t, &mut vec![IntPair { x, y: GROUND + 1 }]);
+                    }
+                }
+                for (i, pb) in saved.iter().enumerate() {
+                    *mt.get(i).unwrap().physical_block.borrow_mut() = *pb;
+                }
+                t.set_needs_removed(&t, true);
+                t.remove_from_macro_block(&t);
+                wipe(&w, x);
+            }
+            w.set_expert_mode(false);
+        }
+    }
+
+    struct Cn(f64);
+    impl DwNoise for Cn {
+        fn get_x_y_octaves(&self, _x: f64, _y: f64, _o: i32) -> f64 {
+            self.0
+        }
+    }
+
+    /// Trees whose upper blocks are not loaded, and neighbours that take over each other's leaves.
+    #[test]
+    fn trees_at_a_block_border_and_side_by_side() {
+        for (k, tree_type) in ALL_TEN.into_iter().enumerate() {
+            let (w, d) = env(&format!("tr_border_{k}"));
+            let mt = w.macro_tiles();
+            let saved: Vec<_> = (0..4).map(|i| *mt.get(i).unwrap().physical_block.borrow()).collect();
+            for round in 0..3u32 {
+                srand(round + 5);
+                for i in 2..4 {
+                    *mt.get(i).unwrap().physical_block.borrow_mut() = None;
+                }
+                let t = mk(tree_type, &w, &d, 20, 31);
+                raise(&t, 14);
+                t.update_accurate_dt_is_simulation(&t, 12.0, 12.0, false);
+                for (i, pb) in saved.iter().enumerate() {
+                    *mt.get(i).unwrap().physical_block.borrow_mut() = *pb;
+                }
+                t.set_needs_removed(&t, true);
+                t.remove_from_macro_block(&t);
+                for dx in -12..=12 {
+                    for y in 31..60 {
+                        for tr in tile_at(&w, 20 + dx, y).into_iter() {
+                            tr.update(|t| {
+                                *t = Tile { type_index: 2, back_wall_type_index: 2, sun_light: 255, ..Tile::default() }
+                            });
+                        }
+                    }
+                }
+                // two trees two tiles apart: the second one claims the first one's leaves
+                let a = mk(tree_type, &w, &d, 20, GROUND + 1);
+                raise(&a, 12);
+                let b = mk(tree_type, &w, &d, 20 + 1 + round as i32, GROUND + 1);
+                raise(&b, 12);
+                raise(&a, 12);
+                for t in [a, b] {
+                    t.set_needs_removed(&t, true);
+                    t.remove_from_macro_block(&t);
+                }
+                wipe(&w, 20);
+            }
+        }
+    }
+
+    const ALL_TEN: [i32; 10] = [
+        TREE_APPLE,
+        TREE_MANGO,
+        TREE_MAPLE,
+        TREE_PINE,
+        TREE_CACTUS,
+        TREE_COCONUT,
+        TREE_ORANGE,
+        TREE_CHERRY,
+        TREE_COFFEE,
+        TREE_LIME,
+    ];
+
+    /// The apple rescue: a young apple tree whose bush noise is low still gets one fruit slot.
+    #[test]
+    fn young_apples_with_low_noise_get_a_rescue_slot() {
+        for seed in 0..12u32 {
+            let (w, d) = env(&format!("tr_rescue_{seed}"));
+            srand(seed);
+            let low: NoiseRef = Some(Rc::new(Cn(-0.9)));
+            let t = new_tree_for_type(
+                TREE_APPLE,
+                &w,
+                &d,
+                IntPair { x: 20, y: GROUND + 1 },
+                None,
+                255,
+                255,
+                None,
+                low,
+                false,
+                99_999.0,
+            )
+            .expect("tree");
+            tree_state(&t).borrow_mut().fruit_count = 0;
+            raise(&t, 3);
+            t.set_needs_removed(&t, true);
+            t.remove_from_macro_block(&t);
         }
     }
 }

@@ -33,11 +33,11 @@ impl DynamicWorld {
     /// `-hasDynamicObjectsToSaveInMacroPos:` (`client` is always nil here).
     pub fn has_dynamic_objects_to_save_in_macro_pos(&self, macro_pos: IntPair) -> bool {
         for t in 0..MAX_DYNAMIC_OBJECT_TYPES {
-            if self.dynamic_world_changed_macro_positions.borrow()[t].iter().any(|p| *p == macro_pos) {
+            if self.dynamic_world_changed_macro_positions.borrow()[t].contains(&macro_pos) {
                 return true;
             }
         }
-        self.world_changed_macro_positions.borrow().iter().any(|p| *p == macro_pos)
+        self.world_changed_macro_positions.borrow().contains(&macro_pos)
     }
 
     /// `-finishSimulating`: flush all 8 inventory slots of every local blockhead.
@@ -430,10 +430,9 @@ impl DynamicWorld {
                 obj.remove_from_macro_block(&obj);
                 // swap-remove: vec[thisIndex] = vec.back(); vec.pop_back()
                 let mut v = self.partial_update_ordered_objects.borrow_mut();
-                if let Some(last) = v[t].pop() {
-                    if (this_index as usize) < v[t].len() {
-                        v[t][this_index as usize] = last;
-                    }
+                let last = v[t].pop().expect("the object came from this list");
+                if (this_index as usize) < v[t].len() {
+                    v[t][this_index as usize] = last;
                 }
                 object_count -= 1;
             }
@@ -595,5 +594,217 @@ mod tests {
     #[test]
     fn player_dir() {
         assert_eq!(player_dir_for("abcdef"), "players/a/b/cdef/");
+    }
+}
+
+/// Scenario tests of the tick: blockhead lists, the disconnected-client loader, the change fan-out and the rain.
+#[cfg(test)]
+mod scenario_tests {
+    use super::*;
+    use crate::dynworld::state::testutil::*;
+    use crate::foundation::gsdict::GsDict;
+    use crate::foundation::gzip::gzip_deflate;
+    use crate::plist::helpers::data_from_property_list;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    fn int(v: i64) -> PlistValue {
+        PlistValue::int(v)
+    }
+
+    fn setup(name: &str) -> (Rc<DynamicWorld>, Log, Rc<Hk>) {
+        let (d, _scs) = dw_served(name, &["ab1234"]);
+        let log: Log = Rc::new(RefCell::new(vec![]));
+        let h = hk(&log);
+        d.set_hooks(h.clone());
+        (d, log, h)
+    }
+
+    fn records(ids: &[i64]) -> Vec<u8> {
+        let items: Vec<PlistValue> = ids.iter().map(|i| plist_dict(vec![("uniqueID", int(*i))])).collect();
+        let v = plist_dict(vec![("dynamicObjects", PlistValue::array(items))]);
+        gzip_deflate(&data_from_property_list(&v).unwrap())
+    }
+
+    fn inventory() -> Vec<u8> {
+        gzip_deflate(&data_from_property_list(&PlistValue::array(vec![])).unwrap())
+    }
+
+    #[test]
+    fn simulation_helpers() {
+        let (d, log, _h) = setup("up_sim");
+        let b = tobj(24, 1, &log, None, None, None);
+        d.blockheads.borrow_mut().push(b);
+        d.simulate(0.8);
+        d.finish_simulating();
+        assert!(d.world_database.get("blockhead_1_inventory").is_some());
+        d.dynamic_world_changed_macro_positions.borrow_mut()[3].push(IntPair { x: 4, y: 5 });
+        assert!(d.has_dynamic_objects_to_save_in_macro_pos(IntPair { x: 4, y: 5 }));
+        assert!(!d.has_dynamic_objects_to_save_in_macro_pos(IntPair { x: 5, y: 5 }));
+        d.world_changed_macro_positions.borrow_mut().push(IntPair { x: 6, y: 7 });
+        assert!(d.has_dynamic_objects_to_save_in_macro_pos(IntPair { x: 6, y: 7 }));
+        assert_eq!(player_dir_for("a"), "players///");
+        assert_eq!(player_dir_for("ab1234"), "players/a/b/1234/");
+    }
+
+    #[test]
+    fn disconnected_clients_come_back_from_the_database() {
+        let (d, log, h) = setup("up_disc");
+        let mut rules = d.world().custom_rules();
+        rules.custom_rules_enabled = 1;
+        rules.death = 4;
+        d.world().set_custom_rules(rules);
+        *h.save_dir.borrow_mut() = Some("ab1234".to_string());
+        d.world_database.put("ab1234_blockheads", &records(&[5, 6, 7, 8, 9]));
+        for id in [5, 7, 8, 9] {
+            d.world_database.put(&format!("ab1234_blockhead_{id}_inventory"), &inventory());
+        }
+        // 7 is already here; 8 is a stale net blockhead of the same id; 9 fails to load
+        d.net_blockheads_with_disconnected_clients.borrow_mut().push(tobj(24, 7, &log, None, None, None));
+        d.net_blockheads.borrow_mut().push(tobj(24, 8, &log, None, None, None));
+        d.net_blockheads.borrow_mut().push(tobj(24, 100, &log, None, None, None));
+        h.client_of.borrow_mut().push((100, "ab1234".to_string()));
+        // the cache already has an older dict of blockhead 5
+        let mut cache: GsDict<String, Vec<PlistValue>> = GsDict::new();
+        cache.insert("ab1234".to_string(), vec![plist_dict(vec![("uniqueID", int(5))])]);
+        *d.disconnected_clients_cached_save_dicts_not_done.borrow_mut() = Some(cache);
+        *d.disconnected_clients_save_dir_names.borrow_mut() = Some(vec!["ab1234".to_string()]);
+        d.load_any_blockheads_for_disconnected_clients();
+        let ids: Vec<u64> = d.net_blockheads_with_disconnected_clients.borrow().iter().map(|b| b.unique_id()).collect();
+        assert_eq!(ids, vec![7, 5, 8, 9]);
+        assert!(d.net_blockheads.borrow().is_empty());
+        let l = log.borrow().clone();
+        assert!(l.contains(&"client_name(5,Some(\"Alice\"))".to_string()), "{l:?}");
+        assert!(l.contains(&"riding(5)".to_string()) && l.contains(&"die(5)".to_string()));
+        assert!(!l.iter().any(|s| s.starts_with("fullload(6)")));
+        assert!(d.disconnected_clients_save_dir_names.borrow().as_ref().unwrap().is_empty());
+    }
+
+    #[test]
+    fn disconnected_clients_come_back_from_legacy_files() {
+        let (d, log, h) = setup("up_legacy");
+        *h.save_dir.borrow_mut() = Some("ab1234".to_string());
+        let dir = format!("{}players/a/b/1234/", d.world_save_directory);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(format!("{dir}blockheads"), records(&[5, 6])).unwrap();
+        std::fs::write(format!("{dir}blockhead_5_inventory"), inventory()).unwrap();
+        *d.disconnected_clients_save_dir_names.borrow_mut() = Some(vec!["ab1234".to_string()]);
+        d.load_any_blockheads_for_disconnected_clients();
+        assert_eq!(d.net_blockheads_with_disconnected_clients.borrow().len(), 1);
+        // a failing constructor leaves the list alone; a record without blockheads is fine
+        h.fail_blockhead.set(true);
+        d.world_database.put("ab1234_blockheads", &records(&[11]));
+        d.world_database.put("ab1234_blockhead_11_inventory", &inventory());
+        *d.disconnected_clients_save_dir_names.borrow_mut() = Some(vec!["ab1234".to_string()]);
+        d.load_any_blockheads_for_disconnected_clients();
+        assert_eq!(d.net_blockheads_with_disconnected_clients.borrow().len(), 1);
+        // a cache that exists but does not know the directory yet
+        *h.save_dir.borrow_mut() = Some("elsewhere".to_string());
+        h.fail_blockhead.set(false);
+        d.world_database.put("ab1234_blockheads", &records(&[12]));
+        d.world_database.put("ab1234_blockhead_12_inventory", &inventory());
+        *d.disconnected_clients_save_dir_names.borrow_mut() = Some(vec!["ab1234".to_string()]);
+        d.load_any_blockheads_for_disconnected_clients();
+        assert_eq!(d.net_blockheads_with_disconnected_clients.borrow().len(), 2);
+        // a blockhead without a save directory is not cached
+        h.no_dir.borrow_mut().push(13);
+        d.world_database.put("ab1234_blockheads", &records(&[13]));
+        d.world_database.put("ab1234_blockhead_13_inventory", &inventory());
+        *d.disconnected_clients_save_dir_names.borrow_mut() = Some(vec!["ab1234".to_string()]);
+        d.load_any_blockheads_for_disconnected_clients();
+        assert_eq!(d.net_blockheads_with_disconnected_clients.borrow().len(), 3);
+        let none = gzip_deflate(&data_from_property_list(&plist_dict(vec![("x", int(1))])).unwrap());
+        d.world_database.put("zz9999_blockheads", &none);
+        *d.disconnected_clients_save_dir_names.borrow_mut() = Some(vec!["zz9999".to_string(), "q".to_string()]);
+        d.load_any_blockheads_for_disconnected_clients();
+        let _ = log;
+    }
+
+    fn removing(ty: i32, id: u64, log: &Log) -> Rc<Obj> {
+        let o = Obj::new(ty, id, log.clone());
+        o.remove_after_update.set(true);
+        o
+    }
+
+    #[test]
+    fn blockheads_that_ask_to_go_are_unloaded_from_every_list() {
+        let (d, log, _h) = setup("up_tick_bh");
+        let a: ObjRef = removing(24, 1, &log);
+        let b: ObjRef = removing(24, 2, &log);
+        let c: ObjRef = removing(24, 3, &log);
+        d.blockheads.borrow_mut().push(a);
+        d.net_blockheads.borrow_mut().push(b);
+        d.net_blockheads_with_disconnected_clients.borrow_mut().push(c);
+        d.active_blockhead_index.set(4);
+        d.update_accurate_dt(0.1, 0.1);
+        assert!(d.blockheads.borrow().is_empty());
+        assert!(d.net_blockheads.borrow().is_empty());
+        assert!(d.net_blockheads_with_disconnected_clients.borrow().is_empty());
+        assert_eq!(d.active_blockhead_index.get(), 0);
+        let l = log.borrow().clone();
+        for id in 1..=3 {
+            assert!(l.contains(&format!("unload({id})")));
+        }
+        assert!(d.world_database.get("blockheads").is_some());
+    }
+
+    #[test]
+    fn world_changes_fan_out_to_blockheads_and_objects() {
+        let (d, log, _h) = setup("up_fan");
+        d.blockheads.borrow_mut().push(tobj(24, 1, &log, None, None, None));
+        d.do_set(7, 5, tobj(7, 5, &log, None, None, None));
+        d.world_changed_positions.borrow_mut().push(IntPair { x: 1, y: 1 });
+        d.world_contents_changed_positions.borrow_mut().push(IntPair { x: 2, y: 2 });
+        d.water_changed_positions.borrow_mut().push(IntPair { x: 3, y: 3 });
+        d.update_accurate_dt_is_simulation(0.1, 0.1, false);
+        assert!(d.world_changed_positions.borrow().is_empty());
+        assert!(d.world_contents_changed_positions.borrow().is_empty());
+        assert!(d.water_changed_positions.borrow().is_empty());
+        // while simulating, plain world changes wait for the 100th call
+        d.world_changed_positions.borrow_mut().push(IntPair { x: 1, y: 1 });
+        d.update_accurate_dt_is_simulation(0.1, 0.1, true);
+        assert_eq!(d.world_changed_positions.borrow().len(), 1);
+        d.world_changed_simulate_counter.set(100);
+        d.update_accurate_dt_is_simulation(0.1, 0.1, true);
+        assert!(d.world_changed_positions.borrow().is_empty());
+        assert_eq!(d.world_changed_simulate_counter.get(), 0);
+    }
+
+    #[test]
+    fn removed_free_blocks_and_partial_objects_leave_their_indices() {
+        let (d, log, _h) = setup("up_free");
+        let fb: ObjRef = removing(14, 9, &log);
+        fb.base().borrow_mut().pos = IntPair { x: 3, y: 4 };
+        d.do_set(14, 9, fb.clone());
+        d.free_blocks_insert(d.world_index_key(IntPair { x: 3, y: 4 }), &fb);
+        d.update_accurate_dt(0.1, 0.1);
+        assert!(d.free_blocks_by_position.borrow().is_empty());
+        // the last of the partially updated objects goes away without a swap
+        let a: ObjRef = Obj::new(22, 1, log.clone());
+        let b: ObjRef = removing(22, 2, &log);
+        for o in [&a, &b] {
+            d.do_set(22, o.unique_id(), o.clone());
+            d.partial_update_ordered_objects.borrow_mut()[22].push(o.clone());
+        }
+        d.partial_update_current_index.borrow_mut()[22] = 1;
+        d.update_accurate_dt(0.1, 0.1);
+        assert_eq!(d.partial_update_ordered_objects.borrow()[22].len(), 1);
+        // an index beyond the list wraps to the start
+        d.partial_update_current_index.borrow_mut()[22] = 9;
+        d.update_accurate_dt(0.1, 0.1);
+        assert_eq!(d.partial_update_current_index.borrow()[22], 0);
+    }
+
+    #[test]
+    fn rain_reaches_the_snow_surface_blocks() {
+        let (d, log, _h) = setup("up_rain");
+        let o: ObjRef = Obj::new(29, 1, log.clone());
+        d.do_set(29, 1, o.clone());
+        d.partial_update_ordered_objects.borrow_mut()[29].push(o);
+        d.update_accurate_dt(0.1, 0.1);
+        d.world().set_rain_fraction_not_including_snow(0.5);
+        d.update_accurate_dt(0.1, 0.1);
+        d.world().set_fast_forward(true);
+        d.update_accurate_dt(0.1, 0.1);
     }
 }

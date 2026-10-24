@@ -64,9 +64,8 @@ impl Window {
         let me = Self::alloc(world, dw);
         let me_obj: ObjRef = me.clone();
         let (wref, dref): (WorldRef, DynamicWorldRef) = (world.clone(), dw.clone());
-        if !base_init_with_world_dynamic_world_at_position_cache(&me_obj, &wref, &dref, pos, cache) {
-            return None;
-        }
+        // `base_init_with_world_dynamic_world_at_position_cache` answers true on every path
+        let _ = base_init_with_world_dynamic_world_at_position_cache(&me_obj, &wref, &dref, pos, cache);
         me.st.borrow_mut().item_type = item_type;
         if let Some(o) = owner_from_client_or_save(client_id, save_dict) {
             me.base.borrow_mut().owner_id = Some(o);
@@ -84,9 +83,8 @@ impl Window {
         let me = Self::alloc(world, dw);
         let me_obj: ObjRef = me.clone();
         let (wref, dref): (WorldRef, DynamicWorldRef) = (world.clone(), dw.clone());
-        if !base_init_with_world_dynamic_world_save_dict_cache(&me_obj, &wref, &dref, save_dict, cache) {
-            return None;
-        }
+        // `base_init_with_world_dynamic_world_save_dict_cache` answers true on every path
+        let _ = base_init_with_world_dynamic_world_save_dict_cache(&me_obj, &wref, &dref, save_dict, cache);
         me.st.borrow_mut().item_type = save_dict.map.get(&"itemType".to_string()).map_or(0, |v| v.int_value());
         me.base.borrow_mut().owner_id = sd_string(save_dict, "ownerID");
         Some(me_obj)
@@ -243,5 +241,31 @@ mod tests {
         o.set_needs_removed(&o, true);
         o.set_needs_removed(&o, false);
         assert!(!o.needs_removed());
+    }
+}
+
+#[cfg(test)]
+mod more_tests {
+    use super::super::column::testkit::*;
+    use super::*;
+
+    #[test]
+    fn trait_answers_and_lost_net_windows() {
+        let (w, d) = env();
+        let o = Window::init_with_world_dynamic_world_at_position_cache_type_save_dict_placed_by_client(
+            &w,
+            &d,
+            pos(40, 20),
+            None,
+            58,
+            None,
+            None,
+        )
+        .unwrap();
+        let _ = o.class_info();
+        let net = o.update_net_data_for_client(&o, None).unwrap();
+        let mut lost = net.clone();
+        lost[12..16].copy_from_slice(&300u32.to_le_bytes());
+        assert!(Window::init_with_world_dynamic_world_cache_net_data(&w, &d, None, &lost).is_none());
     }
 }

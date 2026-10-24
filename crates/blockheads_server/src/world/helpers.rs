@@ -132,7 +132,7 @@ pub fn tile_contains_usable_elevator(
     }
     let Some(dw) = world.dynamic_world() else { return false };
     match dw.elevator_motor_for_shaft_at_pos(pos) {
-        Some(m) if m.has_required_power => !blacklist.iter().any(|b| *b == m.pos),
+        Some(m) if m.has_required_power => !blacklist.contains(&m.pos),
         _ => false,
     }
 }
@@ -507,8 +507,13 @@ pub(crate) mod testutil {
     pub struct StubObj {
         pub base: RefCell<DynamicObjectBase>,
         pub removable: Cell<bool>,
+        /// `objectType`; `MAX_DYNAMIC_OBJECT_TYPES` (the base answer) by default.
+        pub ty: Cell<i32>,
     }
     impl DynamicObject for StubObj {
+        fn object_type(&self) -> i32 {
+            self.ty.get()
+        }
         fn base(&self) -> &RefCell<DynamicObjectBase> {
             &self.base
         }
@@ -526,12 +531,20 @@ pub(crate) mod testutil {
         handle::alloc_obj(|w| StubObj {
             base: RefCell::new(DynamicObjectBase::alloc_zeroed_with(w)),
             removable: Cell::new(true),
+            ty: Cell::new(crate::objects::base::MAX_DYNAMIC_OBJECT_TYPES),
         })
+    }
+    pub fn dw_obj_of_type(object_type: i32) -> DwObject {
+        let o = dw_obj(0, 0, 0, false, true);
+        let stub = crate::objects::handle::downcast::<StubObj>(&o.obj).unwrap();
+        stub.ty.set(object_type);
+        o
     }
     pub fn dw_obj(item_type: i32, io_type: u16, chest: i32, paintable: bool, removable: bool) -> DwObject {
         let o = handle::alloc_obj(|w| StubObj {
             base: RefCell::new(DynamicObjectBase::alloc_zeroed_with(w)),
             removable: Cell::new(removable),
+            ty: Cell::new(crate::objects::base::MAX_DYNAMIC_OBJECT_TYPES),
         });
         DwObject {
             obj: o,
@@ -872,11 +885,12 @@ mod tests {
                 && object_type_may_have_artifical_light(0x10)
                 && object_type_may_have_artifical_light(0x12)
         );
-        assert!(
-            !object_type_may_have_artifical_light(0x13)
-                || object_type_is_plant(0x13)
-                || object_type_is_interaction_object(0x13)
+        let (light, plant, io) = (
+            object_type_may_have_artifical_light(0x13),
+            object_type_is_plant(0x13),
+            object_type_is_interaction_object(0x13),
         );
+        assert!(!light || plant || io);
     }
 
     #[test]
@@ -923,5 +937,64 @@ mod tests {
         let s = PlacementWorld::interaction_object_at_pos(&*w, 4, 4).unwrap();
         assert_eq!((s.interaction_object_type, s.connection_type.0, s.offset_type.0), (7, 2, 3));
         assert!(!PlacementWorld::tile_is_half_depth_at(&*w, 0, 5000));
+    }
+}
+
+#[cfg(test)]
+mod nil_tests {
+    use super::testutil::*;
+    use super::*;
+    use crate::items::placement::PlacementWorld;
+
+    #[test]
+    fn missing_tiles_and_objects_answer_no() {
+        let (w, dw, pb) = world_with_dw(32);
+        let pos = IntPair { x: 1, y: 1 };
+        let obj = new_obj();
+        assert!(!tile_contains_usable_gate(None, pos, &w, Some(&obj)));
+        assert!(!tile_is_climable(None, pos, &w, None));
+        assert!(!tile_is_tree_trunk(None));
+        assert!(!tile_is_not_unmined_block_so_can_be_removed_on_repair(None));
+        assert!(!tile_is_burnable(None, None, pos));
+        let t = TileRef::new(pb, 0);
+        // not a shaft
+        t.update(|x| x.contents = 0);
+        assert!(!tile_contains_usable_elevator(Some(t), pos, &w, None, &[]));
+        // an interaction object of another kind does not burn
+        dw.io.borrow_mut().insert((1, 1), dw_obj(1043, 2, 0, false, true));
+        let dwr = w.dynamic_world();
+        assert!(!tile_is_burnable(Some(t), dwr.as_ref(), pos));
+        // paintable: an object that is not paintable, one that is not removable, stairs that cannot be removed
+        t.update(|x| {
+            x.type_index = 2;
+            x.back_wall_type_index = 0x20;
+            x.foreground_contents = 0x30;
+        });
+        assert!(!tile_is_paintable(Some(t), pos, &w, Some(&obj)));
+        dw.io.borrow_mut().insert((1, 1), dw_obj(1043, 2, 0, true, false));
+        assert!(!tile_is_paintable(Some(t), pos, &w, Some(&obj)));
+        t.update(|x| {
+            x.foreground_contents = 0;
+            x.contents = 0x65;
+        });
+        dw.stairs.borrow_mut().insert((1, 1), dw_obj(229, 0, 0, false, false));
+        assert!(!tile_is_paintable(Some(t), pos, &w, Some(&obj)));
+        // objects that are not there
+        let elsewhere = IntPair { x: 9, y: 9 };
+        assert!(!tile_is_burnable(Some(t), dwr.as_ref(), elsewhere));
+        t.update(|x| {
+            x.contents = 0x30;
+            x.foreground_contents = 0x30;
+        });
+        assert!(!tile_is_paintable(Some(t), elsewhere, &w, Some(&obj)));
+        assert!(!tile_is_half_depth(Some(t), &w, elsewhere));
+        assert!(!tile_is_half_depth(Some(t), &World::alloc(32), elsewhere));
+        t.update(|x| x.contents = 0);
+        assert!(!tile_is_half_depth(Some(t), &w, elsewhere));
+        // the placement view of a world without a dynamic world
+        let bare = World::alloc(32);
+        assert_eq!(PlacementWorld::interaction_object_type_for_object_at_pos(&*bare, 1, 1), 0);
+        // the stand-in object
+        let _ = obj.class_info();
     }
 }

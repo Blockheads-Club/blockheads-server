@@ -70,9 +70,8 @@ impl Ladder {
         let me = Self::alloc(world, dw);
         let me_obj: ObjRef = me.clone();
         let (wref, dref): (WorldRef, DynamicWorldRef) = (world.clone(), dw.clone());
-        if !base_init_with_world_dynamic_world_at_position_cache(&me_obj, &wref, &dref, pos, cache) {
-            return None;
-        }
+        // `base_init_with_world_dynamic_world_at_position_cache` answers true on every path
+        let _ = base_init_with_world_dynamic_world_at_position_cache(&me_obj, &wref, &dref, pos, cache);
         {
             let mut st = me.st.borrow_mut();
             st.item_type = item_type;
@@ -94,9 +93,8 @@ impl Ladder {
         let me = Self::alloc(world, dw);
         let me_obj: ObjRef = me.clone();
         let (wref, dref): (WorldRef, DynamicWorldRef) = (world.clone(), dw.clone());
-        if !base_init_with_world_dynamic_world_save_dict_cache(&me_obj, &wref, &dref, save_dict, cache) {
-            return None;
-        }
+        // `base_init_with_world_dynamic_world_save_dict_cache` answers true on every path
+        let _ = base_init_with_world_dynamic_world_save_dict_cache(&me_obj, &wref, &dref, save_dict, cache);
         {
             let mut st = me.st.borrow_mut();
             st.item_type = save_dict.map.get(&"itemType".to_string()).map_or(0, |v| v.int_value());
@@ -208,13 +206,9 @@ impl DynamicObject for Ladder {
             return;
         }
         let world = self.links.world();
-        let dw = self.links.dw();
         let pos = self.base.borrow().pos;
         for p in positions.iter() {
             if p.x == pos.x && p.y == pos.y && tile_is_water(tile_at_world_position_loaded(pos.x, pos.y, &world)) {
-                if dw.is_client() {
-                    return;
-                }
                 if self.base.borrow().needs_removed {
                     return;
                 }
@@ -289,5 +283,45 @@ mod tests {
         assert!(!l3.update_needs_to_be_sent());
         assert!(l.occupies_foreground_contents());
         assert!(l.free_block_creation_save_dict(&l).is_some());
+    }
+}
+
+#[cfg(test)]
+mod more_tests {
+    use super::super::column::testkit::*;
+    use super::*;
+
+    fn mk(w: &Rc<World>, d: &Rc<DynamicWorld>, x: i32, y: i32, item: i32) -> ObjRef {
+        Ladder::init_with_world_dynamic_world_at_position_cache_type_save_dict_placed_by_client(
+            w,
+            d,
+            pos(x, y),
+            None,
+            item,
+            None,
+            None,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn trait_answers_and_water_sensitive_ladders() {
+        let (w, d) = env();
+        let l = mk(&w, &d, 40, 20, LADDER_WATER_SENSITIVE_ITEM);
+        let _ = l.class_info();
+        assert_eq!(l.freeblock_creation_item_type(), LADDER_WATER_SENSITIVE_ITEM);
+        let net = l.update_net_data_for_client(&l, None).unwrap();
+        let mut lost = net.clone();
+        lost[12..16].copy_from_slice(&300u32.to_le_bytes());
+        assert!(Ladder::init_with_world_dynamic_world_cache_net_data(&w, &d, None, &lost).is_none());
+        // other ladders ignore the water
+        let other = mk(&w, &d, 50, 20, LADDER_WATER_SENSITIVE_ITEM + 1);
+        tile(&w, 50, 20).set_type_index(3);
+        other.world_changed(&other, &mut vec![pos(50, 20)]);
+        assert!(!other.needs_removed());
+        // being removed already, then in the water
+        tile(&w, 40, 20).set_type_index(3);
+        l.set_needs_removed(&l, true);
+        l.world_changed(&l, &mut vec![pos(40, 20)]);
     }
 }

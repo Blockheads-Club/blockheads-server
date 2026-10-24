@@ -90,11 +90,8 @@ pub fn spawn_altidtude_constraints_for_tree_type(t: TreeType) -> IntPair {
     IntPair { x, y }
 }
 
-/// `growthVigorForTreeTypeAtPos(t, pos, world)`; types outside 1..=10 return 1.0.
+/// `growthVigorForTreeTypeAtPos(t, pos, world)`; types outside 1..=10 return 1.0 (the `_` arm).
 pub fn growth_vigor_for_tree_type_at_pos(t: TreeType, pos: IntPair, world: Option<&World>) -> f32 {
-    if !(1..=10).contains(&t.0) {
-        return 1.0f32;
-    }
     let c = spawn_altidtude_constraints_for_tree_type(t);
     let x = pos.x;
     let y = pos.y;
@@ -176,6 +173,7 @@ pub fn growth_vigor_for_tree_type_at_pos(t: TreeType, pos: IntPair, world: Optio
             let hh = h(50.0, 1.0);
             floor02((1.0f32 - 4.0f32 * tt) * hh)
         }
+        // types outside 1..=10
         _ => 1.0f32,
     }
 }
@@ -392,5 +390,50 @@ mod tests {
         w.set_custom_rules(r);
         assert_eq!(growth_vigor_for_plant_type_at_pos(PlantType(5), ip(256, 0), Some(&w)), 1.0);
         assert_eq!(growth_vigor_for_plant_type_at_pos(PlantType(5), ip(0, 0), Some(&w)), 0.2);
+    }
+}
+
+#[cfg(test)]
+mod range_tests {
+    use super::*;
+
+    /// Every type and spot, with and without a world, in the two temperature modes.
+    #[test]
+    fn vigor_over_all_types_places_and_rules() {
+        let w = World::alloc(32);
+        let mut all = vec![];
+        for mode in [0i8, 2] {
+            let mut r = w.custom_rules();
+            r.temperature = mode;
+            w.set_custom_rules(r);
+            for tree in 0..14u32 {
+                for (x, y) in [(5, 100), (300, 400), (900, 700), (1023, 760), (200, 520), (600, 10)] {
+                    let p = IntPair { x, y };
+                    all.push(growth_vigor_for_tree_type_at_pos(TreeType(tree), p, Some(&w)));
+                    all.push(growth_vigor_for_tree_type_at_pos(TreeType(tree), p, None));
+                }
+            }
+            for plant in 0..12 {
+                for (x, y) in [(5, 100), (300, 600), (900, 700)] {
+                    let p = IntPair { x, y };
+                    all.push(growth_vigor_for_plant_type_at_pos(PlantType(plant), p, Some(&w)));
+                    all.push(growth_vigor_for_plant_type_at_pos(PlantType(plant), p, None));
+                }
+            }
+        }
+        assert_eq!(all.len(), 480);
+        assert_eq!(growth_vigor_for_tree_type_at_pos(TreeType(0), IntPair { x: 1, y: 1 }, None), 1.0);
+        assert_eq!(growth_vigor_for_tree_type_at_pos(TreeType(11), IntPair { x: 1, y: 1 }, None), 1.0);
+    }
+
+    #[test]
+    fn seed_and_promise_tables() {
+        let trees: Vec<u32> = (0..400).map(|i| tree_type_for_seed_item_type(ItemType(i)).0).collect();
+        assert!(trees.contains(&10) && trees.iter().filter(|&&t| t != 0).count() >= 10);
+        let plants: Vec<u32> = (0..400).map(|i| plant_type_for_seed_item_type(ItemType(i)).0).collect();
+        assert!(plants.contains(&10) && plants.iter().filter(|&&t| t != 0).count() >= 10);
+        for c in 100..150 {
+            let _ = tree_type_for_tree_promise(c);
+        }
     }
 }

@@ -690,6 +690,13 @@ mod tests {
     }
 
     #[test]
+    fn removing_sun_light_outside_the_world_does_nothing() {
+        let _rec = install_rec();
+        let w = solid_world();
+        WorldHelper::update_sun_light_removed_for_tile_at_pos_world(None, IntPair { x: 0, y: -50 }, &w);
+    }
+
+    #[test]
     fn decommission_decision_table() {
         let rec = install_rec();
         let w = solid_world();
@@ -729,6 +736,14 @@ mod tests {
         ));
         rec.peers.set(0);
         rec.take();
+        // a peer that becomes interested between the two looks keeps the tile loaded
+        pb.last_required_time.set(reference_time() - 1000.0);
+        *rec.peers_script.borrow_mut() = vec![0, 1];
+        assert!(!WorldHelper::check_if_macro_tile_can_be_decommissioned_world_min_age_block_to_save_physcial_block(
+            &mt, &w, 30.0, false
+        ));
+        assert!(rec.peers_script.borrow().is_empty());
+        assert!(rec.take().is_empty());
         // portal 3x3 is never unloaded
         let near_portal = w.macro_tiles().get(0).unwrap();
         near_portal.physical_block().unwrap().last_required_time.set(reference_time() - 1000.0);
@@ -743,5 +758,303 @@ mod tests {
         assert!(!WorldHelper::check_if_macro_tile_can_be_decommissioned_world_min_age_block_to_save_physcial_block(
             &empty, &w, 30.0, false
         ));
+    }
+}
+
+#[cfg(test)]
+mod fuzz_tests {
+    use super::*;
+    use crate::lighting::artificial_light::testkit::*;
+    use crate::objects::base::{BlockheadApi, DynamicObject, DynamicObjectBase};
+    use crate::objects::handle;
+    use std::cell::RefCell;
+
+    struct Viewer {
+        base: RefCell<DynamicObjectBase>,
+        controlled: bool,
+    }
+    impl DynamicObject for Viewer {
+        fn base(&self) -> &RefCell<DynamicObjectBase> {
+            &self.base
+        }
+        fn class_info(&self) -> &'static crate::objects::class_info::ClassInfo {
+            &crate::objects::class_info::DYNAMIC_OBJECT_CLASS
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+        fn as_blockhead(&self) -> Option<&dyn BlockheadApi> {
+            Some(self)
+        }
+    }
+    impl BlockheadApi for Viewer {
+        fn client_id(&self) -> Option<String> {
+            None
+        }
+        fn local_net_id(&self) -> Option<String> {
+            None
+        }
+        fn is_client_blockhead_being_controlled_by_server(&self) -> bool {
+            self.controlled
+        }
+        fn is_interacting_with_any_interaction_object(&self) -> bool {
+            false
+        }
+        fn set_interaction_object(&self, _o: Option<&ObjRef>) {}
+        fn stop_interacting(&self) {}
+    }
+    fn viewer(x: i32, y: i32, controlled: bool) -> ObjRef {
+        let o: ObjRef =
+            handle::alloc_obj(|w| Viewer { base: RefCell::new(DynamicObjectBase::alloc_zeroed_with(w)), controlled });
+        o.base().borrow_mut().pos = IntPair { x, y };
+        o
+    }
+
+    struct Lcg(u64);
+    impl Lcg {
+        fn next(&mut self) -> u64 {
+            self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            self.0 >> 33
+        }
+        fn pick<T: Copy>(&mut self, v: &[T]) -> T {
+            v[(self.next() % v.len() as u64) as usize]
+        }
+    }
+
+    fn scramble(w: &World, r: &mut Lcg, cx: i32, cy: i32, n: i32) {
+        for y in cy - n..cy + n {
+            for x in cx - n..cx + n {
+                let (ty, bw, bg, fg, c, sun, ex, pl) = (
+                    r.pick(&[2u8, 2, 2, 3, 6, 6, 1, 0x1f]),
+                    r.pick(&[2u8, 2, 3, 6]),
+                    r.pick(&[0u8, 0, 0, 0x45, 0x5f]),
+                    r.pick(&[0u8, 0, 0, 0x34, 0x36, 0x38, 0x3a, 0x3c, 0x31, 0x4d]),
+                    r.pick(&[0u8, 0, 0x5e, 0x90, 0x91, 0x4d]),
+                    r.pick(&[0u8, 0xff, 0x80, 0xf0, 0x20]),
+                    r.pick(&[0u8, 1, 255]),
+                    r.pick(&[0u8, 100, 255]),
+                );
+                tile(w, x, y).update(|t| {
+                    t.type_index = ty;
+                    t.back_wall_type_index = bw;
+                    t.background_contents = bg;
+                    t.foreground_contents = fg;
+                    t.contents = c;
+                    t.sun_light = sun;
+                    t.explored_fraction = ex;
+                    t.partial_content_left = pl;
+                });
+            }
+        }
+    }
+
+    #[test]
+    fn random_worlds_through_every_sunlight_entry_point() {
+        let rec = install_rec();
+        rec.load_light.set(true);
+        let blocks: Vec<(i32, i32)> = (0..4).flat_map(|mx| (0..2).map(move |my| (mx, my))).collect();
+        let w = world_with_blocks(4, &blocks);
+        let mut r = Lcg(42);
+        w.set_start_portal_pos(IntPair { x: 40, y: 40 });
+        for round in 0..400 {
+            scramble(&w, &mut r, 40, 40, 9);
+            let pos = IntPair { x: 40 + (r.next() % 12) as i32 - 6, y: 40 + (r.next() % 12) as i32 - 6 };
+            match round % 4 {
+                0 => WorldHelper::update_sun_light_for_tile_at_pos_world(None, pos, &w),
+                1 => WorldHelper::update_sun_light_removed_for_tile_at_pos_world(None, pos, &w),
+                2 => {
+                    let pb = tile(&w, 40, 40).physical_block();
+                    let bh = match r.next() % 4 {
+                        0 => None,
+                        1 => Some(viewer(40 + (r.next() % 40) as i32 - 20, 40, false)),
+                        2 => Some(viewer(100, 100, false)),
+                        _ => Some(viewer(40, 40, true)),
+                    };
+                    rec.view_radius.set(r.pick(&[1, 4, 9, 22]));
+                    let idx = r.pick(&[-1, 0, 3, 31, 40]);
+                    WorldHelper::recalculate_lighting_for_physical_block_if_needed_world_client_light_block_index_for_blockhead(
+                        Some(&pb),
+                        &w,
+                        idx,
+                        bh.as_ref(),
+                    );
+                }
+                _ => {
+                    rec.peers.set(r.pick(&[0, 1]));
+                    rec.has_save.set(r.next() % 3 == 0);
+                    rec.blockheads.borrow_mut().clear();
+                    if r.next() % 2 == 0 {
+                        let bx = r.pick(&[0, 1, 2, 3]) * 32 + 5;
+                        rec.blockheads.borrow_mut().push(viewer(bx, r.pick(&[5, 40]), false));
+                    }
+                    let mt = w.macro_tiles().get((r.next() % 8) as usize).unwrap();
+                    if let Some(pb) = mt.physical_block() {
+                        pb.last_required_time.set(reference_time() - r.pick(&[0.0, 5.0, 1000.0]));
+                    }
+                    let _ = WorldHelper::check_if_macro_tile_can_be_decommissioned_world_min_age_block_to_save_physcial_block(
+                        &mt,
+                        &w,
+                        r.pick(&[1.0, 30.0, -1.0]),
+                        r.next() % 2 == 0,
+                    );
+                    w.set_start_portal_pos(IntPair { x: r.pick(&[10, 70, 120]), y: r.pick(&[10, 40]) });
+                }
+            }
+            rec.take();
+        }
+        let v = viewer(1, 1, false);
+        let _ = v.class_info();
+        assert!(v.as_any().is::<Viewer>());
+        let b = v.as_blockhead().unwrap();
+        assert!(
+            b.client_id().is_none() && b.local_net_id().is_none() && !b.is_interacting_with_any_interaction_object()
+        );
+        b.set_interaction_object(None);
+        b.stop_interacting();
+        // wrapping around the seam of the world
+        for x in [0, 1, 126, 127] {
+            WorldHelper::update_sun_light_for_tile_at_pos_world(None, IntPair { x, y: 40 }, &w);
+            WorldHelper::update_sun_light_removed_for_tile_at_pos_world(None, IntPair { x, y: 40 }, &w);
+        }
+        // the single step helpers (a negative index wraps to the east end of the bottom row)
+        tile(&w, 127, 0).update(|t| {
+            t.type_index = 6;
+            t.sun_light = 100;
+        });
+        let mut rem = VecDeque::from(vec![-1i32]);
+        WorldHelper::recursively_remove_all_sun_light_with_list_open_indices_light_was_removed_list_remove_indices_world_minx_max_x(
+            &mut rem,
+            &mut IndexSet::new(),
+            &mut VecDeque::new(),
+            &mut IndexSet::new(),
+            &w,
+            0,
+            127,
+        );
+        assert_eq!(tile(&w, 127, 0).get().sun_light, 0);
+        let mut ol = VecDeque::from(vec![0i32]);
+        let mut oi = IndexSet::new();
+        WorldHelper::recursively_update_sun_light_with_list_open_indices_world(&mut ol, &mut oi, &w);
+        WorldHelper::recursively_update_sun_light_with_list_open_indices_world(&mut ol, &mut oi, &w);
+    }
+
+    #[test]
+    fn removal_stops_at_the_horizontal_limits() {
+        install_rec();
+        let blocks: Vec<(i32, i32)> = (0..4).flat_map(|mx| (0..2).map(move |my| (mx, my))).collect();
+        let w = world_with_blocks(4, &blocks);
+        for x in 0..128 {
+            tile(&w, x, 40).update(|t| {
+                t.type_index = 6;
+                t.back_wall_type_index = 6;
+                t.sun_light = 200;
+                t.explored_fraction = 255;
+            });
+        }
+        WorldHelper::update_sun_light_removed_for_tile_at_pos_world(None, IntPair { x: 64, y: 40 }, &w);
+        // at the top of the loaded world the tile above is missing
+        for x in 0..128 {
+            tile(&w, x, 63).update(|t| {
+                t.type_index = 6;
+                t.back_wall_type_index = 6;
+                t.sun_light = 200;
+            });
+        }
+        WorldHelper::update_sun_light_removed_for_tile_at_pos_world(None, IntPair { x: 64, y: 63 }, &w);
+        // the reach is 32 tiles each way
+        assert!(tile(&w, 100, 40).get().sun_light > 0 || tile(&w, 28, 40).get().sun_light > 0);
+    }
+
+    #[test]
+    fn viewers_across_the_seam_and_cold_water() {
+        let rec = install_rec();
+        rec.load_light.set(true);
+        rec.view_radius.set(9);
+        let blocks: Vec<(i32, i32)> = (0..4).flat_map(|mx| (0..2).map(move |my| (mx, my))).collect();
+        let w = world_with_blocks(4, &blocks);
+        // blocks east and west of a viewer at the other end of the world
+        for (bx, viewer_x) in [(40, 120), (100, 2), (100, 40), (10, 120)] {
+            let pb = tile(&w, bx, 40).physical_block();
+            for idx in [-1, 2] {
+                let v = viewer(viewer_x, 40, false);
+                WorldHelper::recalculate_lighting_for_physical_block_if_needed_world_client_light_block_index_for_blockhead(
+                    Some(&pb),
+                    &w,
+                    idx,
+                    Some(&v),
+                );
+            }
+            // a second pass with a lit client block and a stronger viewer
+            rec.view_radius.set(22);
+            let v = viewer(viewer_x, 40, false);
+            WorldHelper::recalculate_lighting_for_physical_block_if_needed_world_client_light_block_index_for_blockhead(
+                Some(&pb),
+                &w,
+                2,
+                Some(&v),
+            );
+        }
+        // unexplored water in the cold freezes
+        rec.weather.set(2.0);
+        let mut froze = false;
+        for t in [0.0, 1350.0, 2700.0, 4050.0] {
+            w.set_world_time(t);
+            tile(&w, 40, 40).update(|t| {
+                t.type_index = 3;
+                t.partial_content_left = 255;
+                t.explored_fraction = 0;
+                t.artificial_heat = -800;
+            });
+            let pb = tile(&w, 40, 40).physical_block();
+            WorldHelper::recalculate_lighting_for_physical_block_if_needed_world_client_light_block_index_for_blockhead(
+                Some(&pb),
+                &w,
+                -1,
+                Some(&viewer(40, 40, false)),
+            );
+            froze |= rec.take().iter().any(|l| l.starts_with("fill(40,40,0x422"));
+        }
+        assert!(froze);
+    }
+
+    #[test]
+    fn blockheads_across_the_seam_keep_blocks_loaded() {
+        let rec = install_rec();
+        let blocks: Vec<(i32, i32)> = (0..4).flat_map(|mx| (0..2).map(move |my| (mx, my))).collect();
+        let w = world_with_blocks(4, &blocks);
+        w.set_start_portal_pos(IntPair { x: 0, y: 0 });
+        let mt = w.macro_tiles().get(7).unwrap(); // macro (3, 1)
+        let pb = mt.physical_block().unwrap();
+        // a blockhead at the far west is still next to this block over the seam
+        pb.last_required_time.set(reference_time() - 1000.0);
+        rec.blockheads.borrow_mut().push(viewer(5, 40, false));
+        assert!(!WorldHelper::check_if_macro_tile_can_be_decommissioned_world_min_age_block_to_save_physcial_block(
+            &mt, &w, 30.0, false
+        ));
+        // one two blocks away is not
+        rec.blockheads.borrow_mut().clear();
+        rec.blockheads.borrow_mut().push(viewer(40, 40, false));
+        assert!(WorldHelper::check_if_macro_tile_can_be_decommissioned_world_min_age_block_to_save_physcial_block(
+            &mt, &w, 30.0, false
+        ));
+    }
+
+    #[test]
+    fn narrow_worlds_wrap_the_light_radius_both_ways() {
+        let rec = install_rec();
+        rec.view_radius.set(22);
+        let w = world_with_blocks(2, &[(0, 0), (1, 0), (0, 1), (1, 1)]);
+        for vx in [0, 10, 31, 32, 50, 63] {
+            for (tx, ty) in [(5, 40), (40, 40)] {
+                let pb = tile(&w, tx, ty).physical_block();
+                let v = viewer(vx, 40, false);
+                WorldHelper::recalculate_lighting_for_physical_block_if_needed_world_client_light_block_index_for_blockhead(
+                    Some(&pb),
+                    &w,
+                    -1,
+                    Some(&v),
+                );
+            }
+        }
     }
 }

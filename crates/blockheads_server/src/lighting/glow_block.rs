@@ -104,9 +104,8 @@ impl GlowBlock {
         let me = Self::alloc(world);
         let me_obj: ObjRef = me.clone();
         let wref: WorldRef = world.clone();
-        if !base_init_with_world_dynamic_world_at_position_cache(&me_obj, &wref, dw, pos, cache.clone()) {
-            return None;
-        }
+        // `base_init_with_world_dynamic_world_at_position_cache` answers true on every path
+        let _ = base_init_with_world_dynamic_world_at_position_cache(&me_obj, &wref, dw, pos, cache.clone());
         let tile_type = tile.type_index() as i32;
         me.st.borrow_mut().tile_type = tile_type;
         let (r, g, b, radius) = glow_color_for_tile(tile_type, tile.contents());
@@ -139,9 +138,8 @@ impl GlowBlock {
         let me = Self::alloc(world);
         let me_obj: ObjRef = me.clone();
         let wref: WorldRef = world.clone();
-        if !base_init_with_world_dynamic_world_save_dict_cache(&me_obj, &wref, dw, save_dict, cache.clone()) {
-            return None;
-        }
+        // `base_init_with_world_dynamic_world_save_dict_cache` answers true on every path
+        let _ = base_init_with_world_dynamic_world_save_dict_cache(&me_obj, &wref, dw, save_dict, cache.clone());
         me.st.borrow_mut().tile_type = save_dict.get(&"tileType".to_string()).map_or(0, |v| v.int_value());
         if let Some(PlistValue::Dict(ld)) = save_dict.get(&"lightDict".to_string()) {
             let light = ArtificialLight::init_with_world_dynamic_world_save_dict_cache_parent_object(
@@ -234,7 +232,7 @@ impl DynamicObject for GlowBlock {
             l.world_changed_positions(positions);
         }
         let pos = self.base.borrow().pos;
-        if !positions.iter().any(|p| *p == pos) {
+        if !positions.contains(&pos) {
             return;
         }
         let world = self.world();
@@ -326,5 +324,71 @@ mod tests {
         assert!(g2.light().is_none());
         let m2: ObjRef = g2.clone();
         assert_eq!(m2.get_light_rgb(), [0.0; 3]);
+    }
+}
+
+#[cfg(test)]
+mod more_tests {
+    use super::*;
+    use crate::lighting::artificial_light::testkit::*;
+
+    #[test]
+    fn save_net_and_trait_answers() {
+        let _rec = install_rec();
+        let world = world_with_blocks(4, &[(0, 0), (1, 0), (0, 1), (1, 1)]);
+        let (_d, dwr) = test_dw();
+        let tile = tile(&world, 40, 40);
+        tile.set_type_index(0x10);
+        let g = GlowBlock::init_with_world_dynamic_world_at_position_cache_tile(
+            &world,
+            &dwr,
+            IntPair { x: 40, y: 40 },
+            None,
+            &tile,
+        )
+        .unwrap();
+        let o: ObjRef = g.clone();
+        let _ = o.class_info();
+        assert!(o.as_any().is::<GlowBlock>());
+        // saved with and without its light
+        let sd = o.get_save_dict(&o);
+        let back = GlowBlock::init_with_world_dynamic_world_save_dict_cache(&world, &dwr, &sd, None).unwrap();
+        assert!(back.light().is_some());
+        let b: ObjRef = back.clone();
+        b.dealloc(&b);
+        let mut bare = sd.clone();
+        bare.map.remove(&"lightDict".to_string());
+        let nolight = GlowBlock::init_with_world_dynamic_world_save_dict_cache(&world, &dwr, &bare, None).unwrap();
+        assert!(nolight.light().is_none());
+        let n: ObjRef = nolight.clone();
+        assert_eq!(n.get_light_rgb(), [0.0; 3]);
+        n.world_changed(&n, &mut vec![IntPair { x: 40, y: 40 }]);
+        n.add_artificial_light_contribution_for_physical_block_loaded_at_x_pos_y_pos(&n, 1, 1);
+        n.remove_from_macro_block(&n);
+        n.dealloc(&n);
+        // net replicas
+        let mut net = vec![0u8; 0x18];
+        net[8..12].copy_from_slice(&40u32.to_le_bytes());
+        net[12..16].copy_from_slice(&40u32.to_le_bytes());
+        let rep = GlowBlock::init_with_world_dynamic_world_cache_net_data(&world, &dwr, None, &net).unwrap();
+        let _ = rep;
+        net[12..16].copy_from_slice(&300u32.to_le_bytes());
+        assert!(GlowBlock::init_with_world_dynamic_world_cache_net_data(&world, &dwr, None, &net).is_none());
+        // lights follow the world
+        o.add_artificial_light_contribution_for_physical_block_loaded_at_x_pos_y_pos(&o, 1, 1);
+        o.world_changed(&o, &mut vec![IntPair { x: 40, y: 41 }]);
+        o.world_changed(&o, &mut vec![IntPair { x: 40, y: 40 }]);
+        assert!(!o.needs_removed());
+        tile.set_type_index(6);
+        o.world_changed(&o, &mut vec![IntPair { x: 40, y: 40 }]);
+        assert!(o.needs_removed());
+        o.set_needs_removed(&o, false);
+        o.remove_from_macro_block(&o);
+        o.dealloc(&o);
+        // its own tile gone
+        let lost = GlowBlock::init_with_world_dynamic_world_save_dict_cache(&world, &dwr, &sd, None).unwrap();
+        lost.base.borrow_mut().pos = IntPair { x: 40, y: 300 };
+        let l: ObjRef = lost.clone();
+        l.world_changed(&l, &mut vec![IntPair { x: 40, y: 300 }]);
     }
 }

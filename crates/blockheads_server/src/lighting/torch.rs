@@ -146,9 +146,8 @@ impl Torch {
         let me = Self::alloc(world);
         let me_obj: ObjRef = me.clone();
         let wref: WorldRef = world.clone();
-        if !base_init_with_world_dynamic_world_at_position_cache(&me_obj, &wref, dw, pos, cache.clone()) {
-            return None;
-        }
+        // `base_init_with_world_dynamic_world_at_position_cache` answers true on every path
+        let _ = base_init_with_world_dynamic_world_at_position_cache(&me_obj, &wref, dw, pos, cache.clone());
         {
             let mut st = me.st.borrow_mut();
             st.item_type = item_type;
@@ -208,9 +207,8 @@ impl Torch {
         let me = Self::alloc(world);
         let me_obj: ObjRef = me.clone();
         let wref: WorldRef = world.clone();
-        if !base_init_with_world_dynamic_world_save_dict_cache(&me_obj, &wref, dw, save_dict, cache.clone()) {
-            return None;
-        }
+        // `base_init_with_world_dynamic_world_save_dict_cache` answers true on every path
+        let _ = base_init_with_world_dynamic_world_save_dict_cache(&me_obj, &wref, dw, save_dict, cache.clone());
         let get = |k: &str| save_dict.get(&k.to_string());
         let geti = |k: &str| get(k).map_or(0, |v| v.int_value());
         {
@@ -749,5 +747,181 @@ mod tests {
         rec.take();
         mt.water_content_changed(&mt, &mut vec![]);
         assert!(rec.take().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod more_tests {
+    use super::*;
+    use crate::lighting::artificial_light::testkit::*;
+
+    struct Lcg(u64);
+    impl Lcg {
+        fn next(&mut self) -> u64 {
+            self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            self.0 >> 33
+        }
+        fn pick<T: Copy>(&mut self, v: &[T]) -> T {
+            v[(self.next() % v.len() as u64) as usize]
+        }
+    }
+
+    const TORCHES: [i32; 18] =
+        [0x11, 0x2f, 0xb7, 0x96, 0xfe, 0x102, 0x94, 0x93, 0x92, 0x91, 0x95, 0x4b, 0x4c, 0x56, 0x57, 0x58, 0x9d, 0x31];
+
+    fn place(world: &Rc<World>, dwr: &DynamicWorldRef, x: i32, y: i32, item: i32, client: Option<&str>) -> Rc<Torch> {
+        Torch::init_with_world_dynamic_world_at_position_cache_type_data_a_data_b_save_dict_placed_by_client(
+            world,
+            dwr,
+            IntPair { x, y },
+            None,
+            item,
+            1,
+            2,
+            None,
+            client,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn every_table_row_and_every_kind_of_torch() {
+        let _rec = install_rec();
+        for i in 0..0x120 {
+            let _ = (light_rgb_for_item(i), radius_heat_for_item(i), derived_flags_for_item(i));
+        }
+        let world = world_with_blocks(4, &[(0, 0), (1, 0), (0, 1), (1, 1)]);
+        let (_d, dwr) = test_dw();
+        for item in TORCHES {
+            let t = place(&world, &dwr, 40, 40, item, if item % 2 == 0 { Some("o") } else { None });
+            let o: ObjRef = t.clone();
+            let _ = o.class_info();
+            assert_eq!(o.freeblock_creation_item_type(), item);
+            assert!(o.free_block_creation_save_dict(&o).is_some());
+            assert_eq!((o.free_block_creation_data_a(), o.free_block_creation_data_b()), (1, 2));
+            assert_eq!(t.get_light_rgb().len(), 3);
+            let _ = (o.is_downlight(), o.is_uplight(), o.occupies_foreground_contents());
+            t.set_data_a(5);
+            t.set_data_b(6);
+            assert_eq!((t.data_a(), t.data_b()), (5, 6));
+            // save and net round trips
+            let sd = o.get_save_dict(&o);
+            let back = Torch::init_with_world_dynamic_world_save_dict_cache(&world, &dwr, &sd, None).unwrap();
+            assert_eq!(back.st.borrow().item_type, item);
+            let mut bare = sd.clone();
+            bare.map.remove(&"lightDict".to_string());
+            let _ = Torch::init_with_world_dynamic_world_save_dict_cache(&world, &dwr, &bare, None).unwrap();
+            let net = o.creation_net_data_for_client(&o, None).unwrap();
+            let replica = Torch::init_with_world_dynamic_world_cache_net_data(&world, &dwr, None, &net).unwrap();
+            let r: ObjRef = replica.clone();
+            r.remote_update(&r, &net);
+            let mut lost = net.clone();
+            lost[12..16].copy_from_slice(&300u32.to_le_bytes());
+            assert!(Torch::init_with_world_dynamic_world_cache_net_data(&world, &dwr, None, &lost).is_none());
+            let _ = Torch::init_with_world_dynamic_world_cache_net_data(&world, &dwr, None, &net[..32]).unwrap();
+            // save dicts can name the owner
+            let mut with_owner = sd.clone();
+            with_owner.map.insert("ownerID".to_string(), PlistValue::string("x"));
+            let _ =
+                Torch::init_with_world_dynamic_world_at_position_cache_type_data_a_data_b_save_dict_placed_by_client(
+                    &world,
+                    &dwr,
+                    IntPair { x: 45, y: 40 },
+                    None,
+                    item,
+                    0,
+                    0,
+                    Some(&with_owner),
+                    None,
+                )
+                .unwrap();
+            o.world_changed(&o, &mut vec![IntPair { x: 40, y: 41 }]);
+            o.add_artificial_light_contribution_for_physical_block_loaded_at_x_pos_y_pos(&o, 1, 1);
+            o.set_needs_removed(&o, true);
+            o.set_needs_removed(&o, true);
+            o.remove_from_macro_block(&o);
+            o.dealloc(&o);
+        }
+    }
+
+    #[test]
+    fn connections_follow_the_surroundings() {
+        let _rec = install_rec();
+        let world = world_with_blocks(4, &[(0, 0), (1, 0), (0, 1), (1, 1)]);
+        let (d, dwr) = test_dw();
+        let mut r = Lcg(77);
+        for item in TORCHES {
+            for y in [0, 40, 63] {
+                for _ in 0..30 {
+                    for dy in -2..=2 {
+                        for dx in -2..=2 {
+                            if y + dy < 0 || y + dy >= 64 {
+                                continue;
+                            }
+                            let (ty, bw, c, fg, pl) = (
+                                r.pick(&[2u8, 2, 6, 3, 9]),
+                                r.pick(&[2u8, 6]),
+                                r.pick(&[0u8, 0, 0x30, 0x2e, 3]),
+                                r.pick(&[0u8, 0, 100, 0x31]),
+                                r.pick(&[0u8, 255]),
+                            );
+                            tile(&world, 40 + dx, y + dy).update(|t| {
+                                t.type_index = ty;
+                                t.back_wall_type_index = bw;
+                                t.contents = c;
+                                t.foreground_contents = fg;
+                                t.partial_content_left = pl;
+                            });
+                        }
+                    }
+                    let t = place(&world, &dwr, 40, y, item, None);
+                    let o: ObjRef = t.clone();
+                    t.st.borrow_mut().connection_type = r.pick(&[-2, -1, 0, 1, 2, 3]);
+                    if r.next() % 5 == 0 {
+                        o.set_needs_removed(&o, true);
+                    }
+                    let p = IntPair { x: 40 + (r.next() % 3) as i32 - 1, y: y + (r.next() % 4) as i32 - 1 };
+                    o.world_contents_changed(&o, &mut vec![p]);
+                    o.water_content_changed(&o, &mut vec![p]);
+                }
+            }
+        }
+        assert!(!d.changed.borrow().is_empty());
+    }
+
+    #[test]
+    fn odd_net_tails_and_a_vanished_dynamic_world() {
+        let _rec = install_rec();
+        let world = world_with_blocks(4, &[(0, 0), (1, 0), (0, 1), (1, 1)]);
+        let (d, dwr) = test_dw();
+        let t = place(&world, &dwr, 40, 40, 0x11, Some("o"));
+        let o: ObjRef = t.clone();
+        let net = o.creation_net_data_for_client(&o, None).unwrap();
+        // a tail that is no gzip, and one that is gzip of no plist
+        let mut junk = net[..32].to_vec();
+        junk.extend_from_slice(b"not gzip at all");
+        assert!(Torch::init_with_world_dynamic_world_cache_net_data(&world, &dwr, None, &junk).is_some());
+        let mut junk = net[..32].to_vec();
+        junk.extend_from_slice(&gzip_deflate(b"((("));
+        assert!(Torch::init_with_world_dynamic_world_cache_net_data(&world, &dwr, None, &junk).is_some());
+        // trait answers
+        assert!(o.as_any().is::<Torch>());
+        o.set_needs_removed(&o, false);
+        assert_eq!(o.get_light_rgb().len(), 3);
+        // a torch that is dropped with its light still attached
+        let t2 = place(&world, &dwr, 50, 40, 0x11, None);
+        let o2: ObjRef = t2.clone();
+        o2.dealloc(&o2);
+        // the world's dynamic world is gone when the connection changes
+        for dy in -1..=1 {
+            tile(&world, 40, 40 + dy).update(|x| {
+                x.type_index = 2;
+                x.back_wall_type_index = 2;
+            });
+        }
+        t.st.borrow_mut().connection_type = 3;
+        drop(d);
+        drop(dwr);
+        o.world_contents_changed(&o, &mut vec![IntPair { x: 40, y: 40 }]);
     }
 }

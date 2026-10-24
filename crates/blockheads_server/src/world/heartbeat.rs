@@ -104,19 +104,8 @@ impl World {
         let credit: f32 = if has_server { core_hooks().server_credit() } else { 0.0 }; // NIL-FLOAT
                                                                                        // `[uiManager gameBlockingUIDisplayed]`: uiManager is nil, so NO
         let local_paused = false;
-        let mut all_paused = false;
-        if has_server {
-            let mut all_clients_paused = local_paused;
-            if all_clients_paused {
-                for id in self.server_client_keys() {
-                    if !core_hooks().server_client_paused(&id) {
-                        all_clients_paused = false;
-                        break;
-                    }
-                }
-            }
-            all_paused = all_clients_paused;
-        }
+        // the server asks every client only when the local player is paused, which is never the case here
+        let all_paused = local_paused;
         let hb = WorldHeartbeat {
             world_time: self.world_time() as f32,
             no_rain_timer: self.no_rain_timer(),
@@ -179,10 +168,8 @@ mod tests {
         property_list_from_data(&gzip_inflate(&pkt[1..]).unwrap()).unwrap()
     }
     fn keys(v: &PlistValue) -> Vec<String> {
-        let mut k = match v {
-            PlistValue::Dict(d) => d.map.keys_in_order(),
-            _ => panic!(),
-        };
+        let PlistValue::Dict(d) = v else { panic!() };
+        let mut k = d.map.keys_in_order();
         k.sort();
         k
     }
@@ -250,6 +237,16 @@ mod tests {
         assert_eq!(v.object_for_key("privacy").unwrap().int_value(), 3);
         assert_eq!(v.object_for_key("supermod").unwrap().int_value(), 2);
         assert_eq!(v.object_for_key("serverPassword").unwrap().as_str(), Some("secret"));
+        assert!(matches!(v.object_for_key("owner"), Some(PlistValue::Bool(true))));
+    }
+
+    #[test]
+    fn an_owner_summary_without_a_server_has_no_privacy_and_no_password() {
+        let f = base_world();
+        let w = &f.world;
+        *w.server.borrow_mut() = None;
+        let v = decode(&w.summary_net_data_for_admin_mod_owner_cloud_mode(false, false, true, 0));
+        assert!(v.object_for_key("privacy").is_none() && v.object_for_key("serverPassword").is_none());
         assert!(matches!(v.object_for_key("owner"), Some(PlistValue::Bool(true))));
     }
 

@@ -638,3 +638,36 @@ mod tests {
         assert_eq!(items, vec![0x413, 0x429, 0xA1, 0x430, 0x432, 0xCF, 0x450, 0x413]);
     }
 }
+
+#[cfg(test)]
+mod sweep_tests {
+    use super::*;
+
+    /// Every tile type with every contents and foreground contents value yields some item (usually 0).
+    #[test]
+    fn drops_for_every_tile_value() {
+        let w = crate::world::state::World::alloc(32);
+        let pb: crate::world::state::PhysicalBlockRef =
+            Box::leak(Box::new(crate::world::state::PhysicalBlock::new_fresh()));
+        let tile = TileRef::new(pb, 0);
+        let pos = IntPair { x: 1, y: 1 };
+        let mut nonzero = 0;
+        for ty in 0..=0x50u8 {
+            for c in 0..=0x7fu8 {
+                tile.update(|t| {
+                    t.type_index = ty;
+                    t.contents = c;
+                    t.foreground_contents = c;
+                    t.background_contents = c;
+                });
+                if item_type_from_tile_is_foregorund(tile, pos, false, &w).0 != 0 {
+                    nonzero += 1;
+                }
+                if item_type_from_tile_is_foregorund(tile, pos, true, &w).0 != 0 {
+                    nonzero += 1;
+                }
+            }
+        }
+        assert!(nonzero > 200);
+    }
+}

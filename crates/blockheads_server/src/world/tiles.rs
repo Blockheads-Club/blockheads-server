@@ -326,9 +326,9 @@ mod tests {
         assert!(Rc::ptr_eq(&b, &mt.get(32 + 31).unwrap()));
     }
 
-    struct Loader {
-        calls: Cell<u32>,
-        valid: bool,
+    pub(super) struct Loader {
+        pub(super) calls: Cell<u32>,
+        pub(super) valid: bool,
     }
     impl WorldOpsHooks for Loader {
         fn load_physical_block_for_macro_tile_at_x_y_load_surrounding_blocks_create_if_not_created(
@@ -448,5 +448,49 @@ mod tests {
         assert!(!macro_tile_has_dynamic_objects_that_need_physical_block(None));
         *mt.dynamic_objects.borrow_mut() = Some(vec![crate::world::helpers::testutil::new_obj()]);
         assert!(!macro_tile_has_dynamic_objects_that_need_physical_block(Some(&mt)));
+    }
+}
+
+#[cfg(test)]
+mod degenerate_tests {
+    use super::*;
+    use crate::world::helpers::testutil::new_obj;
+    use crate::world::state::WorldOpsHooks;
+    use std::cell::Cell;
+
+    #[test]
+    fn zero_and_negative_world_widths() {
+        for width in [0, -1, -3] {
+            let w = World::alloc(width);
+            let mt = w.macro_tiles();
+            assert_eq!(wrap_x(77, wt(&w)), 77);
+            for (x, y) in [(5, 5), (-5, 700), (5000, 31), (0, 0x3ff)] {
+                let _ = (
+                    world_pos_at_world_index(x, &w),
+                    macro_index_at_world_index(x, &w),
+                    macro_pos_for_macro_index(x, &w),
+                    macro_tile_at_macro_postion(x, y / 40, &mt, &w).is_none(),
+                    macro_tile_at_world_postion(x, y, &mt, &w).is_none(),
+                    tile_at_world_position(x, y, &mt, &w).is_none(),
+                    tile_at_world_index(x, &mt, &w).is_none(),
+                );
+            }
+            assert!(tile_at_world_position(-5, 5, &mt, &w).is_none());
+            assert!(tile_at_world_index(-1, &mt, &w).is_none());
+            assert!(tile_at_world_index(w.world_width_macro.wrapping_mul(0x8000) + 1, &mt, &w).is_none());
+        }
+        // a world of the right size rejects indices beyond its end
+        let w = World::alloc(2);
+        assert!(tile_at_world_index(2 * 0x8000, &w.macro_tiles(), &w).is_none());
+        assert!(tile_at_world_index(-1, &w.macro_tiles(), &w).is_none());
+    }
+
+    #[test]
+    fn the_loader_stand_in_answers_its_hooks() {
+        let w = World::alloc(2);
+        let l = super::tests::Loader { calls: Cell::new(0), valid: true };
+        let mt = w.macro_tiles().get(0).unwrap();
+        l.load_dynamic_objects_if_not_already_loaded_for_macro_tile_include_surface_blocks(&w, &mt, true);
+        assert!(l.tile_is_protected_at_pos_against_blockhead(&w, IntPair { x: 0, y: 0 }, &new_obj()));
     }
 }

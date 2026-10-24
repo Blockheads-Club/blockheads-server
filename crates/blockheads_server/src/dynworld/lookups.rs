@@ -17,7 +17,7 @@ use std::rc::Rc;
 use super::state::{DynamicWorld, MAX_DYNAMIC_OBJECT_TYPES};
 use crate::foundation::indexset::IndexSet;
 use crate::items::inventory_item::ItemRef;
-use crate::objects::base::{DynamicWorldApi, DynamicWorldRef};
+use crate::objects::base::DynamicWorldApi;
 use crate::objects::handle::{ptr_eq, ObjRef};
 use crate::objects::type_tables::{
     DYNAMIC_OBJECT_TYPE_BOAT, DYNAMIC_OBJECT_TYPE_DOOR, DYNAMIC_OBJECT_TYPE_ELEVATOR_MOTOR,
@@ -590,11 +590,6 @@ impl DynamicWorldApi for DynamicWorld {
     }
 }
 
-/// Coerce a strong `Rc<DynamicWorld>` to the `DynamicWorldRef` object_model constructors take.
-pub(crate) fn dw_ref(dw: &Rc<DynamicWorld>) -> DynamicWorldRef {
-    dw.clone()
-}
-
 // =====================================================================================================
 // Lookups
 // =====================================================================================================
@@ -1067,20 +1062,16 @@ impl DynamicWorld {
         let ab = self.active_blockhead();
         let item_type = ab.as_ref().map_or(0, |b| hooks.blockhead_current_item_type(b));
         let mut inspect: Option<ObjRef> = None;
-        for npc in &found {
-            let ia = match &ab {
-                Some(b) => hooks.blockhead_goal_interaction_for_npc_chase(b, npc, item_type),
-                None => 0,
-            };
-            if ia == 25 {
-                if let Some(b) = &ab {
-                    if hooks.npc_can_be_fed_by_blockhead(npc, b) {
-                        return Some(npc.clone());
-                    }
+        // without an active blockhead the goal is 0 for every npc, so nothing is fed or inspected
+        if let Some(b) = &ab {
+            for npc in &found {
+                let ia = hooks.blockhead_goal_interaction_for_npc_chase(b, npc, item_type);
+                if ia == 25 && hooks.npc_can_be_fed_by_blockhead(npc, b) {
+                    return Some(npc.clone());
                 }
-            }
-            if ia == 26 {
-                inspect = Some(npc.clone());
+                if ia == 26 {
+                    inspect = Some(npc.clone());
+                }
             }
         }
         inspect.or_else(|| found.last().cloned())
@@ -1511,5 +1502,631 @@ mod tests {
         d.portal_positions.borrow_mut().add_index(u64::MAX);
         d.portal_is_being_removed_at_pos(p(0, 5000)); // wi == -1
         assert_eq!(d.portal_positions().count(), 1);
+    }
+}
+
+/// Scenario tests with scripted hooks: the default hook answers, motors and shafts, doors, taps, NPC and
+/// blockhead queries and the interaction-object probe order.
+#[cfg(test)]
+mod scenario_tests {
+    use super::*;
+    use crate::dynworld::state::testutil::Obj;
+    use crate::trees::tree::testenv::{env, ip};
+    use std::cell::Cell;
+
+    type Log = Rc<RefCell<Vec<String>>>;
+
+    struct Lo {
+        motor_range: Cell<(i32, i32)>,
+        shaft_motor: Cell<IntPair>,
+        door_usable: Cell<bool>,
+        door_open: Cell<bool>,
+        tap: Cell<bool>,
+        goal: Cell<i32>,
+        can_feed: Cell<bool>,
+        crouch: Cell<bool>,
+        tree_h: Cell<i32>,
+        can_mate: Cell<bool>,
+        above: Cell<i32>,
+        below: Cell<i32>,
+        troll_local: Cell<bool>,
+        wb_type: Cell<i32>,
+        log: Log,
+    }
+    impl crate::dynworld::state::DwHooksStub for Lo {
+        fn workbench_type(&self, _w: &ObjRef) -> i32 {
+            self.wb_type.get()
+        }
+    }
+    impl DwOpsHooksStub for Lo {
+        fn elevator_motor_min_y(&self, _m: &ObjRef) -> i32 {
+            self.motor_range.get().0
+        }
+        fn elevator_motor_max_y(&self, _m: &ObjRef) -> i32 {
+            self.motor_range.get().1
+        }
+        fn elevator_shaft_last_known_motor_pos(&self, _s: &ObjRef) -> IntPair {
+            self.shaft_motor.get()
+        }
+        fn door_can_be_used_by_blockhead(&self, _d: &ObjRef, _b: &ObjRef) -> bool {
+            self.door_usable.get()
+        }
+        fn door_is_open(&self, _d: &ObjRef) -> bool {
+            self.door_open.get()
+        }
+        fn door_set_open_direction(&self, _d: &ObjRef, open: bool, dir: i32) {
+            self.log.borrow_mut().push(format!("door({open},{dir})"));
+        }
+        fn tap_is_within_body_radius(&self, _o: &ObjRef, _t: Vector2) -> bool {
+            self.tap.get()
+        }
+        fn blockhead_goal_interaction_for_npc_chase(&self, _b: &ObjRef, _n: &ObjRef, _i: i32) -> i32 {
+            self.goal.get()
+        }
+        fn npc_can_be_fed_by_blockhead(&self, _n: &ObjRef, _b: &ObjRef) -> bool {
+            self.can_feed.get()
+        }
+        fn blockhead_current_item_type(&self, _b: &ObjRef) -> i32 {
+            7
+        }
+        fn blockhead_crouching(&self, _b: &ObjRef) -> bool {
+            self.crouch.get()
+        }
+        fn tree_height(&self, _t: &ObjRef) -> i32 {
+            self.tree_h.get()
+        }
+        fn tree_type(&self, t: &ObjRef) -> i32 {
+            if t.unique_id() == 99 {
+                5
+            } else {
+                1
+            }
+        }
+        fn npc_can_mate(&self, _n: &ObjRef) -> bool {
+            self.can_mate.get()
+        }
+        fn plant_number_of_occupied_tiles_above(&self, _p: &ObjRef) -> i32 {
+            self.above.get()
+        }
+        fn plant_number_of_occupied_tiles_below(&self, _p: &ObjRef) -> i32 {
+            self.below.get()
+        }
+        fn plant_can_breed(&self, _p: &ObjRef) -> bool {
+            true
+        }
+        fn server_player_name_for_player_with_id_including_old_players(&self, id: &str) -> Option<String> {
+            Some(format!("name-of-{id}"))
+        }
+        fn server_player_is_banned_with_id(&self, id: &str) -> bool {
+            id == "bad"
+        }
+        fn cave_troll_control_is_local(&self, _t: &ObjRef) -> bool {
+            self.troll_local.get()
+        }
+    }
+
+    fn fixture(name: &str) -> (Rc<DynamicWorld>, Rc<Lo>, Log) {
+        crate::objects::registry::install();
+        let (_w, d) = env(name);
+        let log: Log = Rc::new(RefCell::new(vec![]));
+        let lo = Rc::new(Lo {
+            motor_range: Cell::new((0, 100)),
+            shaft_motor: Cell::new(ip(0, 0)),
+            door_usable: Cell::new(true),
+            door_open: Cell::new(false),
+            tap: Cell::new(true),
+            goal: Cell::new(0),
+            can_feed: Cell::new(false),
+            crouch: Cell::new(false),
+            tree_h: Cell::new(10),
+            can_mate: Cell::new(true),
+            above: Cell::new(2),
+            below: Cell::new(1),
+            troll_local: Cell::new(true),
+            wb_type: Cell::new(0),
+            log: log.clone(),
+        });
+        set_ops_hooks(lo.clone());
+        d.set_hooks(lo.clone());
+        (d, lo, log)
+    }
+
+    fn mk(ty: i32, id: u64, pos: IntPair, log: &Log) -> ObjRef {
+        let o: ObjRef = Obj::new(ty, id, log.clone());
+        o.base().borrow_mut().pos = pos;
+        o
+    }
+
+    #[test]
+    fn hook_defaults_are_inert() {
+        let (d, _lo, log) = fixture("ls_null");
+        let h: &dyn DwOpsHooks = &NullOpsHooks;
+        let o = mk(1, 1, ip(0, 0), &log);
+        let p = ip(1, 2);
+        let tap = Vector2 { x: 1.0, y: 2.0 };
+        let tile = tile_at_world_position_loaded(1, 12, &d.world()).unwrap();
+        assert!(h.new_tree(&d, 1, p, 1, 1, false, 0.0).is_none());
+        assert!(h.new_plant(&d, 1, p, 1, 1, false).is_none());
+        assert!(h.new_npc(&d, 1, p, None, false, false, None).is_none());
+        assert!(h.new_torch(&d, p, 1, 0, 0, None, None).is_none());
+        assert!(h.new_egg(&d, p, None).is_none());
+        assert!(h.new_painting(&d, p, 1, None, None, None).is_none());
+        assert!(h.new_rail(&d, p, 1, false).is_none());
+        assert!(h.new_boat(&d, p, None, None).is_none());
+        assert!(h.new_train_car(&d, 1, p, None, None).is_none());
+        assert!(h.new_workbench(&d, p, 1, false, None, None, None).is_none());
+        assert!(h.new_trade_portal(&d, p, 1, false, None, None, None).is_none());
+        assert!(h.new_chest(&d, p, 1, false, None, None, None).is_none());
+        assert!(h.new_glow_block(&d, p, tile).is_none());
+        assert!(h.new_blockhead(&d, p, 0, &o, 1).is_none());
+        assert_eq!((h.tree_type(&o), h.tree_height(&o)), (0, 0));
+        assert_eq!((h.tree_max_height_gene_variation(&o), h.tree_growth_rate_gene_variation(&o)), (0, 0));
+        assert!(!h.tree_is_required_soil_type(&o, 6));
+        assert_eq!(h.plant_type(&o), 0);
+        assert_eq!((h.plant_max_age_gene_variation(&o), h.plant_growth_rate_gene_variation(&o)), (0, 0));
+        assert!(!h.plant_is_required_soil_type(&o, 6) && !h.plant_can_breed(&o));
+        assert_eq!((h.plant_number_of_occupied_tiles_above(&o), h.plant_number_of_occupied_tiles_below(&o)), (0, 0));
+        assert!(!h.tap_is_within_body_radius(&o, tap) && !h.npc_can_mate(&o) && !h.npc_can_be_fed_by_blockhead(&o, &o));
+        assert!(!h.cave_troll_control_is_local(&o));
+        assert_eq!((h.blockhead_current_item_type(&o), h.blockhead_goal_interaction_for_npc_chase(&o, &o, 1)), (0, 0));
+        assert!(!h.blockhead_crouching(&o) && !h.blockhead_teleport_to_pos(&o, p));
+        h.blockhead_stop_all_actions(&o);
+        h.blockhead_set_paused(&o, true);
+        h.blockhead_remote_pickup_request_response(&o, true, &[1]);
+        h.blockhead_update_name_text_view(&o);
+        assert!(!h.door_can_be_used_by_blockhead(&o, &o) && !h.door_is_open(&o));
+        h.door_set_open_direction(&o, true, 1);
+        h.elevator_shaft_open(&o);
+        assert_eq!(h.elevator_shaft_last_known_motor_pos(&o), ip(0, 0));
+        assert_eq!((h.elevator_motor_min_y(&o), h.elevator_motor_max_y(&o)), (0, 0));
+        h.train_car_rail_or_station_name_changed(&o);
+        h.train_car_set_paused(&o, true);
+        assert!(h.painting_image_data(&o).is_none());
+        h.painting_image_data_recieved(&o, b"x");
+        h.painting_user_mute_changed(&o, "p");
+        h.painting_user_ban_changed(&o, "p", true);
+        assert!(!h.freeblock_hovers(&o));
+        h.object_update_in_time_since_saved(&o);
+        h.chest_load_inventory_items_from_disk_if_needed(&o);
+        assert!(h.chest_inventory_data(&o, true).is_none() && !h.is_chest(&o));
+        h.chest_remote_inventory_data_recieved(&o, None);
+        h.chest_move_inventory_items_from_array_to_index_count(&o, &mut Vec::new(), 0, 0);
+        h.trade_portal_randomize_local_trade_offsets(&o);
+        assert!(h.interaction_object_land_owner_id(&o).is_none());
+        assert_eq!((h.interaction_object_width_radius(&o), h.interaction_object_height_radius(&o)), (0, 0));
+        h.world_remove_tile_at_world_x_world_y(1, 2);
+        h.world_ownership_sign_was_placed_or_changed_at_pos(p, None, 1, 1, false);
+        assert!(h.world_welcome_back_events_message_for_client_id("c").is_none());
+        h.server_send_network_data_to_peers_reliable(vec![1], &["a".to_string()], true);
+        assert!(h.server_player_name_for_player_with_id_including_old_players("c").is_none());
+        assert!(!h.server_player_is_banned_with_id("c"));
+        assert!(h.found_items_list_snapshot("c").is_none());
+        h.found_items_list_remove_all_indexes("c");
+        h.found_items_list_add_indexes("c", &IndexSet::new());
+        h.particle_emitter_add_particle([0.0; 3], [0.0; 3], [0.0; 4], 0, 0.0, 0.0, [0.0; 4]);
+    }
+
+    #[test]
+    fn out_of_range_types_are_empty() {
+        let (d, _lo, log) = fixture("ls_range");
+        assert!(d.dot_snapshot(-1).is_empty() && d.dot_snapshot(65).is_empty());
+        assert!(d.add_snapshot(-1).is_empty() && d.add_snapshot(65).is_empty());
+        assert!(d.dot_get(65, 1).is_none() && d.add_get(-1, 1).is_none());
+        assert!(!d.by_pos_contains(65, 0) && d.by_pos_get(65, 0).is_none());
+        assert_eq!(d.loaded_count_of_objects_of_type(65), 0);
+        let o = mk(1, 1, ip(0, 0), &log);
+        d.register_to_add(&o, 99);
+        d.by_pos_set(99, 0, &o);
+        assert_eq!(d.ta_len(1), 0);
+        // the DynamicWorldApi view
+        let api: &dyn DynamicWorldApi = &*d;
+        assert_eq!(api.get_next_dynamic_object_id(), 1);
+        api.dynamic_world_changed_at_pos_object_type(ip(1, 1), 14);
+        assert!(!api.is_server() && api.blockheads().is_empty());
+        assert!(api.get_owner_name_for_object_owner_id("x").is_none());
+    }
+
+    #[test]
+    fn elevator_motors_are_found_from_motors_and_shafts() {
+        let (d, lo, log) = fixture("ls_elev");
+        let w = d.world();
+        let set = |x: i32, y: i32, c: u8| tile_at_world_position_loaded(x, y, &w).unwrap().set_contents(c);
+        // a loaded motor in range, one queued, and none
+        lo.motor_range.set((10, 20));
+        d.do_set(55, 1, mk(55, 1, ip(5, 10), &log));
+        assert_eq!(d.elevator_motor_for_shaft_at_pos(ip(5, 15)).unwrap().unique_id(), 1);
+        assert!(d.elevator_motor_for_shaft_at_pos(ip(5, 50)).is_none());
+        d.do_erase(55, 1);
+        d.register_to_add(&mk(55, 2, ip(5, 10), &log), 55);
+        assert_eq!(d.elevator_motor_for_shaft_at_pos(ip(5, 15)).unwrap().unique_id(), 2);
+        d.ta_erase(55, 2);
+        assert!(d.elevator_motor_for_shaft_at_pos(ip(5, 15)).is_none());
+        // a shaft tile at the position, above and below that remembers a motor
+        let motor = mk(55, 3, ip(9, 12), &log);
+        d.by_pos_set(55, d.world_index(ip(9, 12)), &motor);
+        lo.motor_range.set((10, 20));
+        lo.shaft_motor.set(ip(9, 12));
+        for (sx, sy, probe) in [(9, 15, ip(9, 15)), (9, 16, ip(9, 15)), (9, 14, ip(9, 15))] {
+            set(sx, sy, 0x67);
+            d.register_with_pos(&mk(56, 40 + sy as u64, ip(sx, sy), &log), 56, ip(sx, sy));
+            assert_eq!(d.elevator_motor_for_shaft_at_pos(probe).unwrap().unique_id(), 3, "{sy}");
+            set(sx, sy, 0);
+        }
+        // the remembered motor is out of range
+        set(9, 15, 0x67);
+        lo.motor_range.set((50, 60));
+        assert!(d.elevator_motor_for_shaft_at_pos(ip(9, 15)).is_none());
+        assert!(d.elevator_motor_for_shaft_at_pos(ip(9, 16)).is_none());
+        assert!(d.elevator_motor_for_shaft_at_pos(ip(9, 14)).is_none());
+        set(9, 15, 0);
+        // a motor tile above or below returns whatever sits there, even nothing
+        set(30, 21, 0x68);
+        assert!(d.elevator_motor_for_shaft_at_pos(ip(30, 20)).is_none());
+        set(30, 21, 0);
+        set(30, 19, 0x68);
+        assert!(d.elevator_motor_for_shaft_at_pos(ip(30, 20)).is_none());
+        d.register_with_pos(&mk(55, 7, ip(30, 19), &log), 55, ip(30, 19));
+        assert_eq!(d.elevator_motor_for_shaft_at_pos(ip(30, 20)).unwrap().unique_id(), 7);
+    }
+
+    #[test]
+    fn doors_boats_cars_and_plants() {
+        let (d, lo, log) = fixture("ls_doors");
+        let pu = mk(24, 1, ip(5, 12), &log);
+        assert!(!d.door_can_be_used_by_path_user_at_pos(&pu, ip(5, 12)));
+        let world_ops = Rc::new(crate::dynworld::state::testutil::CountingOps(Cell::new(0)));
+        d.world().set_ops_hooks(Some(world_ops.clone()));
+        // a real blockhead can use a door
+        *d.world().distance_ordered_food_types.borrow_mut() = (0..31).collect();
+        d.world().set_is_admin(true);
+        let dwref: crate::objects::base::DynamicWorldRef = d.clone();
+        let bh = crate::blockhead::blockhead::Blockhead::init_with_world_dynamic_world_at_position_cache_blockhead_number_craftable_item_object_unique_id(
+            &d.world(), &dwref, ip(5, 12), None, 0, None, u64::MAX,
+        )
+        .unwrap();
+        assert!(!d.door_can_be_used_by_path_user_at_pos(&bh, ip(5, 12)));
+        d.register_with_pos(&mk(20, 5, ip(5, 12), &log), 20, ip(5, 12));
+        assert!(d.door_can_be_used_by_path_user_at_pos(&bh, ip(5, 12)));
+        assert!(world_ops.0.get() >= 2);
+        // doors stacked on top of each other are not one door
+        d.register_with_pos(&mk(20, 6, ip(5, 13), &log), 20, ip(5, 13));
+        d.register_with_pos(&mk(20, 7, ip(5, 11), &log), 20, ip(5, 11));
+        assert_eq!(d.pos_of_doors_other_block_at_pos(ip(5, 12)), ip(-1, -1));
+        assert!(!d.door_is_open_at_pos(ip(5, 12)));
+        d.set_door_at_pos_to_open_direction(ip(5, 12), true, 1);
+        d.set_door_at_pos_to_open_direction(ip(8, 12), true, 1);
+        assert_eq!(log.borrow().iter().filter(|l| l.starts_with("door(")).count(), 1);
+        lo.door_open.set(true);
+        assert!(d.door_is_open_at_pos(ip(5, 12)));
+        // boats and cars answer taps through the hook
+        d.do_set(32, 1, mk(32, 1, ip(1, 1), &log));
+        assert_eq!(d.check_for_boat_under_tap(Vector2 { x: 1.0, y: 1.0 }).unwrap().unique_id(), 1);
+        assert_eq!(d.boat_with_id(1).unwrap().unique_id(), 1);
+        d.register_to_add(&mk(32, 2, ip(1, 1), &log), 32);
+        assert_eq!(d.boat_with_id(2).unwrap().unique_id(), 2);
+        assert!(d.boat_with_id(3).is_none());
+        d.do_set(43, 3, mk(43, 3, ip(1, 1), &log));
+        d.register_to_add(&mk(44, 4, ip(1, 1), &log), 44);
+        assert_eq!(d.check_for_train_car_under_tap(Vector2 { x: 1.0, y: 1.0 }).unwrap().unique_id(), 3);
+        lo.tap.set(false);
+        assert!(d.check_for_train_car_under_tap(Vector2 { x: 1.0, y: 1.0 }).is_none());
+        assert_eq!(d.train_car_with_id(4).unwrap().unique_id(), 4);
+        assert!(d.train_car_with_id(9).is_none());
+        // trees and plants
+        d.register_with_pos(&mk(3, 6, ip(4, 12), &log), 3, ip(4, 12));
+        assert_eq!(d.tree_at_pos(ip(4, 12)).unwrap().unique_id(), 6);
+        assert!(d.tree_at_pos(ip(5, 12)).is_none());
+        d.do_set(10, 7, mk(10, 7, ip(6, 12), &log));
+        d.register_to_add(&mk(11, 8, ip(7, 12), &log), 11);
+        assert_eq!(d.get_plant_at_pos(ip(6, 14)).unwrap().unique_id(), 7);
+        assert_eq!(d.get_plant_at_pos(ip(6, 11)).unwrap().unique_id(), 7);
+        assert!(d.get_plant_at_pos(ip(6, 15)).is_none());
+        assert!(d.get_plant_at_pos(ip(6, 10)).is_none());
+        assert_eq!(d.get_plant_at_pos(ip(7, 12)).unwrap().unique_id(), 8);
+        assert!(d.get_plant_at_pos(ip(9, 12)).is_none());
+        // plants with no neighbours
+        assert!(d.find_breeding_plant_near_plant(&mk(10, 77, ip(6, 12), &log)).is_some());
+    }
+
+    #[test]
+    fn interaction_objects_are_probed_in_order() {
+        use crate::items::inventory_item::InventoryItem;
+        use crate::types::item_type::{ItemType, ItemType as I};
+        let (d, lo, log) = fixture("ls_inter");
+        let _ = lo;
+        let place = |t: ItemType, pos: IntPair, flipped: bool| {
+            let it = InventoryItem::new(t, 0, 0, None, None);
+            let r = d.interaction_object_placed_at_position_with_item_flipped_save_dict_placed_by_client_client_name(
+                pos,
+                &it.borrow(),
+                flipped,
+                None,
+                None,
+                None,
+            );
+            r
+        };
+        let sign = place(I::ITEM_SIGN, ip(10, 12), false);
+        let osign = place(I::ITEM_OWNERSHIP_SIGN, ip(14, 12), true);
+        let station = place(I::ITEM_TRAIN_STATION, ip(20, 12), false);
+        let portal = place(I::ITEM_TRADE_PORTAL, ip(26, 12), false);
+        let chest = place(I::ITEM_CHEST, ip(30, 12), false);
+        let _ = (&sign, &osign, &station, &portal, &chest, &log);
+        for x in 8..34 {
+            for y in 11..15 {
+                let _ = d.interaction_object_at_pos(ip(x, y));
+                let _ = d.interaction_object_type_for_object_at_pos(ip(x, y));
+            }
+        }
+        let s = sign.unwrap();
+        assert_eq!(d.interaction_object_with_id(s.unique_id()).unwrap().unique_id(), s.unique_id());
+        d.do_set(47, 4711, mk(47, 4711, ip(0, 0), &log));
+        assert_eq!(d.interaction_object_with_id(4711).unwrap().unique_id(), 4711);
+        assert!(d.interaction_object_with_id(424_242).is_none());
+        d.register_to_add(&mk(23, 600, ip(0, 0), &log), 23);
+        assert_eq!(d.interaction_object_with_id(600).unwrap().unique_id(), 600);
+        // removing: nothing there, something there
+        assert!(d.remove_interaction_object_at_pos_remove_blockhead(ip(60, 12), None).is_none());
+        assert!(d.remove_workbench_at_pos_remove_blockhead(ip(60, 12), None).is_none());
+        d.register_with_pos(&mk(45, 601, ip(40, 12), &log), 45, ip(40, 12));
+        assert!(d.workbench_at_pos(ip(40, 12)).is_some());
+        assert!(d.remove_workbench_at_pos_remove_blockhead(ip(40, 12), None).is_some());
+    }
+
+    #[test]
+    fn tapped_npcs_and_blockhead_queries() {
+        let (d, lo, log) = fixture("ls_taps");
+        let tap = Vector2 { x: 1.0, y: 1.0 };
+        let bh = mk(24, 1, ip(5, 12), &log);
+        let net = mk(24, 2, ip(9, 12), &log);
+        d.blockheads.borrow_mut().push(bh.clone());
+        d.net_blockheads.borrow_mut().push(net.clone());
+        // no npc: blockheads answer the tap unless ignored
+        assert_eq!(
+            d.check_for_harmable_dynamic_object_under_tap_ignore_local_blockheads_ignore_all_blockheads(
+                tap, false, false
+            )
+            .unwrap()
+            .unique_id(),
+            1
+        );
+        assert_eq!(
+            d.check_for_harmable_dynamic_object_under_tap_ignore_local_blockheads_ignore_all_blockheads(
+                tap, true, false
+            )
+            .unwrap()
+            .unique_id(),
+            2
+        );
+        assert!(d
+            .check_for_harmable_dynamic_object_under_tap_ignore_local_blockheads_ignore_all_blockheads(tap, true, true)
+            .is_none());
+        // one npc wins directly; several are ranked by what the active blockhead would do
+        d.do_set(13, 10, mk(13, 10, ip(1, 1), &log));
+        assert_eq!(
+            d.check_for_harmable_dynamic_object_under_tap_ignore_local_blockheads_ignore_all_blockheads(
+                tap, false, false
+            )
+            .unwrap()
+            .unique_id(),
+            10
+        );
+        d.do_set(25, 11, mk(25, 11, ip(1, 1), &log));
+        let pick = |d: &DynamicWorld| {
+            d.check_for_harmable_dynamic_object_under_tap_ignore_local_blockheads_ignore_all_blockheads(
+                tap, false, false,
+            )
+            .unwrap()
+            .unique_id()
+        };
+        assert_eq!(pick(&d), 11, "the last one when nobody wants anything");
+        lo.goal.set(26);
+        assert_eq!(pick(&d), 11);
+        lo.goal.set(25);
+        assert_eq!(pick(&d), 11);
+        lo.can_feed.set(true);
+        assert_eq!(pick(&d), 10);
+        d.blockheads.borrow_mut().clear();
+        assert_eq!(pick(&d), 11, "without an active blockhead the goal is 0");
+        // ids
+        assert_eq!(d.npc_with_id(11).unwrap().unique_id(), 11);
+        d.register_to_add(&mk(28, 12, ip(1, 1), &log), 28);
+        assert_eq!(d.npc_with_id(12).unwrap().unique_id(), 12);
+        assert!(d.npc_with_id(13).is_none());
+        assert_eq!(d.harmable_dynamic_object_with_id(10).unwrap().unique_id(), 10);
+        assert_eq!(d.harmable_dynamic_object_with_id(2).unwrap().unique_id(), 2);
+        assert!(d.harmable_dynamic_object_with_id(3).is_none());
+        // positions
+        let n10 = d.npc_with_id(10).unwrap();
+        assert!(d.npc_exists_at_pos_ignore_npc(ip(1, 1), None));
+        assert!(d.npc_exists_at_pos_ignore_npc(ip(1, 1), Some(&n10)));
+        d.do_erase(25, 11);
+        assert!(!d.npc_exists_at_pos_ignore_npc(ip(1, 1), Some(&n10)));
+        assert!(!d.npc_exists_at_pos_ignore_npc(ip(2, 1), None));
+        d.do_set(13, 14, mk(13, 14, ip(2, 2), &log));
+        assert_eq!(d.npc_close_enough_to_breed_with_npc(&n10).unwrap().unique_id(), 14);
+        lo.can_mate.set(false);
+        assert!(d.npc_close_enough_to_breed_with_npc(&n10).is_none());
+        lo.can_mate.set(true);
+        d.do_set(13, 15, mk(13, 15, ip(30, 12), &log));
+        d.do_erase(13, 14);
+        assert!(d.npc_close_enough_to_breed_with_npc(&n10).is_none());
+        // blockheads standing and crouching
+        let c = mk(24, 3, ip(20, 12), &log);
+        d.net_blockheads_with_disconnected_clients.borrow_mut().push(c);
+        assert!(d.blockhead_at_pos(ip(20, 13)).is_some());
+        lo.crouch.set(true);
+        assert!(d.blockhead_at_pos(ip(20, 13)).is_none());
+        assert!(d.blockhead_at_pos(ip(20, 12)).is_some());
+    }
+
+    #[test]
+    fn tree_life_owners_and_path_users() {
+        let (d, lo, log) = fixture("ls_misc");
+        d.do_set(1, 1, mk(1, 1, ip(10, 12), &log));
+        d.do_set(2, 2, mk(2, 2, ip(11, 12), &log));
+        d.do_set(3, 99, mk(3, 99, ip(10, 12), &log)); // a cactus
+        d.do_set(4, 4, mk(4, 4, ip(200, 12), &log)); // out of reach
+        crate::rng::glibc_rand::srand(3);
+        let [life, x, y, z] = d.get_tree_life_fraction_for_pos(ip(10, 12));
+        assert!(life > 0.0 && x >= 10.0 && y == 17.0 && z == 0.0);
+        assert_eq!(d.get_tree_life_fraction_for_pos(ip(100, 12)), [0.0; 4]);
+        // owners and bans need a server
+        assert!(d.get_owner_name_for_object_owner_id("a").is_none());
+        assert!(!d.player_is_banned_with_id("bad"));
+        d.has_lights_to_add();
+        let (main, dwdb) = crate::dynworld::state::testutil::dbs("ls_srv");
+        let _ = (main, dwdb);
+        // path users: cave trolls that are controlled locally are added
+        d.do_set(39, 20, mk(39, 20, ip(1, 1), &log));
+        let bh = mk(24, 1, ip(5, 12), &log);
+        d.blockheads.borrow_mut().push(bh);
+        assert_eq!(d.path_users().len(), 2);
+        lo.troll_local.set(false);
+        assert_eq!(d.path_users().len(), 1);
+        assert_eq!(d.ridable_object_with_id(20).unwrap().unique_id(), 20);
+        assert!(d.ridable_object_with_id(21).is_none());
+        d.connection_to_server_lost();
+        // lights to add: a queued torch
+        assert!(!d.has_lights_to_add());
+        d.register_to_add(&mk(17, 30, ip(1, 1), &log), 17);
+        assert!(d.has_lights_to_add());
+        let _ = d.find_and_subtract_all_power_up_to_for_user(1, &mk(24, 2, ip(0, 0), &log));
+    }
+
+    fn sd(entries: &[(&str, i64)]) -> PlistDict {
+        let mut v = PlistValue::mutable_dict();
+        let PlistValue::Dict(d) = &mut v else { unreachable!() };
+        for (k, val) in entries {
+            d.map.insert(k.to_string(), PlistValue::int(*val));
+        }
+        let PlistValue::Dict(d) = v else { unreachable!() };
+        d
+    }
+
+    fn place(
+        d: &Rc<DynamicWorld>,
+        t: crate::types::item_type::ItemType,
+        pos: IntPair,
+        flipped: bool,
+    ) -> Option<ObjRef> {
+        let it = crate::items::inventory_item::InventoryItem::new(t, 0, 0, None, None);
+        let wide = sd(&[("offsetType", 1)]);
+        let r = d.interaction_object_placed_at_position_with_item_flipped_save_dict_placed_by_client_client_name(
+            pos,
+            &it.borrow(),
+            flipped,
+            Some(&wide),
+            None,
+            None,
+        );
+        r
+    }
+
+    #[test]
+    fn interaction_probe_finds_wide_and_tall_objects() {
+        use crate::types::item_type::ItemType as I;
+        let (d, lo, log) = fixture("ls_probe");
+        let mut placed = Vec::new();
+        let mut x = 6;
+        for (t, flipped) in [
+            (I::ITEM_WOOD_BED, false),
+            (I::ITEM_WOOD_BED, true),
+            (I::ITEM_SIGN, false),
+            (I::ITEM_SIGN, true),
+            (I::ITEM_OWNERSHIP_SIGN, false),
+            (I::ITEM_OWNERSHIP_SIGN, true),
+            (I::ITEM_TRADE_PORTAL, false),
+            (I::ITEM_TRAIN_STATION, false),
+            (I::ITEM_WORKBENCH_PORTAL, false),
+            (I::ITEM_EASEL, false),
+            (I::ITEM_CAMPFIRE, false),
+            (I::ITEM_MIRROR, false),
+            (I::ITEM_CHEST, false),
+        ] {
+            let o = place(&d, t, ip(x, 12), flipped).unwrap();
+            if let Some(sl) = crate::interaction::sign::sign_like(&o) {
+                sl.sign_state().borrow_mut().offset_type = 1;
+                o.as_interaction_object().unwrap().borrow_mut().flipped = flipped;
+            }
+            placed.push((x, o));
+            x += 4;
+        }
+        for wbt in [0, 1, 13] {
+            lo.wb_type.set(wbt);
+            for (px, _) in &placed {
+                for dx in -2..=2 {
+                    for dy in -2..=3 {
+                        let _ = d.interaction_object_at_pos(ip(px + dx, 12 + dy));
+                        let _ = d.workbench_at_pos(ip(px + dx, 12 + dy));
+                    }
+                }
+            }
+        }
+        // portal workbenches are two tiles tall; a start portal is found from the tile below it
+        for (wx, wy, probe) in [(50, 12, ip(50, 13)), (52, 13, ip(52, 12))] {
+            let dict = sd(&[("uniqueID", 9100 + wx), ("pos_x", wx), ("pos_y", wy), ("workbenchType", 13)]);
+            let wb = crate::objects::registry::init_workbench_from_save_dict(&d.world(), &d, &dict, None).unwrap();
+            d.register_with_pos(&wb, 45, ip(wx as i32, wy as i32));
+            lo.wb_type.set(13);
+            assert_eq!(d.workbench_at_pos(probe).unwrap().unique_id(), (9100 + wx) as u64);
+        }
+        // something in use cannot be removed; free things can, whether or not they know about removal
+        let (px, busy) = placed[0].clone();
+        busy.as_interaction_object().unwrap().borrow_mut().is_in_use = true;
+        assert!(d.remove_interaction_object_at_pos_remove_blockhead(ip(px, 12), None).is_none());
+        busy.as_interaction_object().unwrap().borrow_mut().is_in_use = false;
+        assert!(d.remove_interaction_object_at_pos_remove_blockhead(ip(px, 12), None).is_some());
+        d.register_with_pos(&mk(45, 901, ip(100 % 64, 14), &log), 45, ip(100 % 64, 14));
+        assert!(d.remove_workbench_at_pos_remove_blockhead(ip(100 % 64, 14), None).is_some());
+        let _ = d.portal();
+        let _ = d.workbench_has_been_crafted();
+    }
+
+    #[test]
+    fn real_blockheads_answer_taps_and_paintings_are_found() {
+        let (d, _lo, log) = fixture("ls_real");
+        *d.world().distance_ordered_food_types.borrow_mut() = (0..31).collect();
+        d.world().set_is_admin(true);
+        let dwref: crate::objects::base::DynamicWorldRef = d.clone();
+        let bh = crate::blockhead::blockhead::Blockhead::init_with_world_dynamic_world_at_position_cache_blockhead_number_craftable_item_object_unique_id(
+            &d.world(), &dwref, ip(5, 12), None, 0, None, u64::MAX,
+        )
+        .unwrap();
+        let _ = tap_within(&bh, Vector2 { x: 5.5, y: 12.5 });
+        d.do_set(52, 3, mk(52, 3, ip(1, 1), &log));
+        assert_eq!(d.painting_with_id(3).unwrap().unique_id(), 3);
+        d.register_to_add(&mk(52, 4, ip(1, 1), &log), 52);
+        assert_eq!(d.painting_with_id(4).unwrap().unique_id(), 4);
+        assert!(d.painting_with_id(5).is_none());
+    }
+
+    #[test]
+    fn server_backed_lookups() {
+        let (d, scs) = crate::dynworld::state::testutil::dw_served("ls_srv2", &["c1"]);
+        assert_eq!(scs.len(), 1);
+        let lo = Rc::new(Lo {
+            motor_range: Cell::new((0, 0)),
+            shaft_motor: Cell::new(ip(0, 0)),
+            door_usable: Cell::new(true),
+            door_open: Cell::new(false),
+            tap: Cell::new(false),
+            goal: Cell::new(0),
+            can_feed: Cell::new(false),
+            crouch: Cell::new(false),
+            tree_h: Cell::new(0),
+            can_mate: Cell::new(false),
+            above: Cell::new(0),
+            below: Cell::new(0),
+            troll_local: Cell::new(false),
+            wb_type: Cell::new(0),
+            log: Rc::new(RefCell::new(vec![])),
+        });
+        set_ops_hooks(lo);
+        assert!(d.is_server());
+        assert_eq!(d.local_net_id().unwrap(), d.hooks().local_net_id());
+        assert_eq!(d.get_owner_name_for_object_owner_id("x").as_deref(), Some("name-of-x"));
+        assert!(d.player_is_banned_with_id("bad"));
+        assert!(!d.player_is_banned_with_id("good"));
     }
 }

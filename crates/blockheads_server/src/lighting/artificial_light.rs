@@ -530,9 +530,8 @@ impl ArtificialLight {
         let me = Self::alloc(world);
         let me_obj: ObjRef = me.clone();
         let wref: WorldRef = world.clone();
-        if !base_init_with_world_dynamic_world_save_dict_cache(&me_obj, &wref, dynamic_world, save_dict, cache) {
-            return None;
-        }
+        // `base_init_with_world_dynamic_world_save_dict_cache` answers true on every path
+        let _ = base_init_with_world_dynamic_world_save_dict_cache(&me_obj, &wref, dynamic_world, save_dict, cache);
         let geti = |k: &str| save_dict.get(&k.to_string()).map_or(0, |v| v.int_value());
         {
             let mut st = me.st.borrow_mut();
@@ -879,7 +878,11 @@ pub(crate) mod testkit {
         pub blockheads: RefCell<Vec<ObjRef>>,
         pub view_radius: Cell<i32>,
         pub peers: Cell<usize>,
+        /// Answers of the next `peersInterestedInMacroIndex` calls, front first; `peers` once it is empty.
+        pub peers_script: RefCell<Vec<usize>>,
         pub has_save: Cell<bool>,
+        /// When set, `loadLightBlock...` installs an empty per-client light block.
+        pub load_light: Cell<bool>,
     }
     impl Rec {
         pub fn take(&self) -> Vec<String> {
@@ -910,12 +913,30 @@ pub(crate) mod testkit {
         fn get_weather_fraction_for_pos_at_world_time(&self, _w: &World, _p: IntPair, _t: f64) -> f32 {
             self.weather.get()
         }
+        fn load_light_block_for_client_light_block_index_into_physical_block(
+            &self,
+            _w: &World,
+            index: i32,
+            pb: PhysicalBlockRef,
+        ) {
+            self.push(format!("loadLightBlock({index})"));
+            if self.load_light.get() {
+                if let Some(s) = pb.client_light_blocks.borrow_mut().get_mut(index as usize) {
+                    *s = Some(Box::new([0u8; 1024]));
+                }
+            }
+        }
         fn decommision_block_block_to_save_physcial_block(&self, _w: &World, mt: &MacroTileRef, b: bool) {
             let _ = mt;
             self.push(format!("decommission({b})"));
         }
         fn peers_interested_in_macro_index_count(&self, _w: &World, _i: i32) -> usize {
-            self.peers.get()
+            let mut script = self.peers_script.borrow_mut();
+            if script.is_empty() {
+                self.peers.get()
+            } else {
+                script.remove(0)
+            }
         }
         fn remove_water_tile_at_pos(&self, _w: &World, p: IntPair) {
             self.push(format!("removeWater({},{})", p.x, p.y));
@@ -1077,19 +1098,45 @@ mod tests {
     }
 
     fn all_zero(world: &World, x0: i32, y0: i32, n: i32) -> bool {
-        for x in x0..x0 + n {
-            for y in y0..y0 + n {
+        (x0..x0 + n).all(|x| {
+            (y0..y0 + n).all(|y| {
                 let t = tile(world, x, y).get();
-                if t.artificial_light_r != 0
-                    || t.artificial_light_g != 0
-                    || t.artificial_light_b != 0
-                    || t.artificial_heat != 0
-                {
-                    return false;
+                t.artificial_light_r == 0
+                    && t.artificial_light_g == 0
+                    && t.artificial_light_b == 0
+                    && t.artificial_heat == 0
+            })
+        })
+    }
+
+    #[test]
+    fn lights_at_the_edge_of_the_loaded_world_skip_missing_tiles() {
+        install_rec();
+        // only the first block is loaded: the grid reaches into the missing blocks to its right
+        let world = world_with_blocks(4, &[(0, 0), (1, 0)]);
+        let l = mk(&world, 30, 10, 15, LIGHT_DIRECTION_ALL, (100, 100, 100, 1));
+        assert_eq!(tile(&world, 30, 10).get().artificial_light_r, 100);
+        // the right block goes away: removing keeps the grid values, adding again meets them on missing tiles
+        let saved = *world.macro_tiles().get(1).unwrap().physical_block.borrow();
+        l.remove_from_tiles();
+        {
+            // forget everything on the loaded side
+            let mut st = l.st.borrow_mut();
+            let (origin, d) = (st.contribution_grid_origin, st.diameter);
+            for gy in 0..d {
+                for gx in 0..d {
+                    if origin.x + gx < 32 {
+                        st.contribution_grid[((gy * d + gx) * 5) as usize] = 0;
+                    }
                 }
             }
         }
-        true
+        *world.macro_tiles().get(1).unwrap().physical_block.borrow_mut() = None;
+        l.add_to_tiles();
+        *world.macro_tiles().get(1).unwrap().physical_block.borrow_mut() = saved;
+        l.world_changed_positions(&[IntPair { x: 31, y: 10 }, IntPair { x: 30, y: 11 }]);
+        l.remove_from_tiles();
+        assert!(all_zero(&world, 20, 5, 12));
     }
 
     #[test]
@@ -1201,7 +1248,7 @@ mod tests {
         assert_eq!(l2.st.borrow().light_direction, LIGHT_DIRECTION_DOWN);
         assert_eq!(l2.st.borrow().diameter, 12);
         // missing keys -> 0: empty light, no grid
-        let empty = PlistDict { map: crate::foundation::gsdict::GsDict::new(), tag: d.tag.clone() };
+        let empty = PlistDict { map: crate::foundation::gsdict::GsDict::new(), tag: d.tag };
         let l3 = ArtificialLight::init_with_world_dynamic_world_save_dict_cache_parent_object(
             &world, &dwr, &empty, None, None,
         );
@@ -1248,5 +1295,177 @@ mod tests {
         assert_eq!(pen(12, 10, 10), 20); // 120/6
         assert_eq!(pen(3, 10, 10), 10);
         assert_eq!(pen(6, 10, 10), 10); // 60/6 = 10 < 11 -> w
+    }
+}
+
+#[cfg(test)]
+mod default_tests {
+    use super::*;
+    use crate::world::helpers::testutil::new_obj;
+    use crate::world::state::PhysicalBlock;
+
+    #[test]
+    fn every_inert_default_answers() {
+        let s = NullServices;
+        let w = World::alloc(32);
+        let obj = new_obj();
+        let pb: PhysicalBlockRef = Box::leak(Box::new(PhysicalBlock::new_fresh()));
+        let tile = TileRef::new(pb, 0);
+        let mt = w.macro_tiles().get(0).unwrap();
+        LightingServices::save_sunlight_changed_at_pos(&s, &w, IntPair { x: 0, y: 0 });
+        LightingServices::fill_tile_at_pos_with_type(&s, &w, tile, IntPair { x: 0, y: 0 }, 0);
+        let _ = LightingServices::get_weather_fraction_for_pos(&s, &w, IntPair { x: 0, y: 0 });
+        let _ = LightingServices::get_weather_fraction_for_pos_at_world_time(&s, &w, IntPair { x: 0, y: 0 }, 0.0);
+        let _ = LightingServices::get_day_night_fraction_for_x_at_world_time(&s, &w, 0.0, 0.0);
+        LightingServices::load_light_block_for_client_light_block_index_into_physical_block(&s, &w, 0, pb);
+        LightingServices::decommision_block_block_to_save_physcial_block(&s, &w, &mt, false);
+        let _ = LightingServices::peers_interested_in_macro_index_count(&s, &w, 0);
+        LightingServices::remove_water_tile_at_pos(&s, &w, IntPair { x: 0, y: 0 });
+        LightingServices::water_moved_from_from_tile_to_to_tile_amount(
+            &s,
+            &w,
+            IntPair { x: 0, y: 0 },
+            tile,
+            IntPair { x: 0, y: 0 },
+            tile,
+            0,
+        );
+        LightingServices::send_net_data_for_electricity_particle_path_if_required_size_ignore_client(
+            &s,
+            &w,
+            Vec::new(),
+            0.0,
+            None,
+        );
+        LightingServices::light_changed_at_macro_pos_send_reliably(&s, IntPair { x: 0, y: 0 }, false);
+        LightingServices::light_changed_at_macro_pos_send_reliably_send_at_all(
+            &s,
+            IntPair { x: 0, y: 0 },
+            false,
+            false,
+        );
+        LightingServices::explore_light_changed_at_macro_pos_client_light_block_index(&s, IntPair { x: 0, y: 0 }, 0);
+        LightingServices::snow_changed_at_macro_pos(&s, IntPair { x: 0, y: 0 });
+        LightingServices::water_changed_at_pos_full_block(&s, IntPair { x: 0, y: 0 }, false);
+        let _ = LightingServices::has_dynamic_objects_to_save_in_macro_pos(&s, IntPair { x: 0, y: 0 });
+        let _ = LightingServices::blockheads(&s);
+        LightingServices::add_torch_at_pos_of_type_data_a_data_b_save_dict_placed_by_client(
+            &s,
+            IntPair { x: 0, y: 0 },
+            0,
+            0,
+            0,
+            None,
+            None,
+        );
+        LightingServices::create_treasure_chest_or_troll_at_tile_at_pos_load_troll_load_treasure(
+            &s,
+            tile,
+            IntPair { x: 0, y: 0 },
+            false,
+            false,
+        );
+        LightingServices::load_glow_block_if_needed_at_pos_tile(&s, IntPair { x: 0, y: 0 }, tile);
+        LightingServices::load_surface_block_at_pos(&s, IntPair { x: 0, y: 0 });
+        LightingServices::create_free_block_at_position_of_type_data_a_data_b_dynamic_object_save_dict_hovers_play_sound(&s, IntPair { x: 0, y: 0 }, 0, 0, 0, PlistDict { map: crate::foundation::gsdict::GsDict::new(), tag: crate::plist::value::ClassTag { origin: crate::plist::value::Origin::Built, mutable: true, alt: false } }, false, false);
+        LightingServices::remove_standard_object(&s, &obj);
+        let _ = LightingServices::blockhead_view_radius(&s, &obj);
+    }
+}
+
+#[cfg(test)]
+mod seam_tests {
+    use super::testkit::*;
+    use super::*;
+
+    fn light(world: &Rc<World>, dwr: &DynamicWorldRef, x: i32, y: i32, r: i32, dir: i32) -> Rc<ArtificialLight> {
+        ArtificialLight::init_with_world_dynamic_world_at_position_cache_parent_object_color_r_color_g_color_b_heat_radius_light_direction(
+            world,
+            dwr,
+            IntPair { x, y },
+            None,
+            None,
+            253,
+            150,
+            55,
+            1,
+            r,
+            dir,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn lights_over_the_seam_of_a_narrow_world() {
+        let rec = install_rec();
+        let world = world_with_blocks(2, &[(0, 0), (1, 0), (0, 1), (1, 1)]);
+        let (_d, dwr) = test_dw();
+        // gems and chests inside the reach, and a tile that needs a glow block
+        for (i, fg) in [0x34u8, 0x36, 0x38, 0x3a, 0x3c].iter().enumerate() {
+            tile(&world, 1 + i as i32, 40).set_foreground_contents(*fg);
+        }
+        tile(&world, 3, 41).set_contents(0x5e);
+        tile(&world, 4, 41).set_contents(0x91);
+        tile(&world, 5, 41).set_contents(0x90);
+        tile(&world, 6, 41).set_type_index(0x10);
+        for (x, y, dir) in [(2, 40, LIGHT_DIRECTION_ALL), (62, 40, LIGHT_DIRECTION_DOWN), (30, 40, LIGHT_DIRECTION_UP)]
+        {
+            let l = light(&world, &dwr, x, y, 15, dir);
+            let o: ObjRef = l.clone();
+            // trait answers
+            let _ = o.class_info();
+            assert!(o.as_any().is::<ArtificialLight>());
+            o.world_changed(&o, &mut vec![IntPair { x, y: y + 1 }, IntPair { x: x + 1, y }]);
+            o.add_artificial_light_contribution_for_physical_block_loaded_at_x_pos_y_pos(&o, 0, 1);
+            o.add_artificial_light_contribution_for_physical_block_loaded_at_x_pos_y_pos(&o, 1, 0);
+            l.remove_from_tiles();
+            let mut open = VecDeque::from(vec![0u32]);
+            l.recursively_update_light_with_list(&mut open);
+            o.remove_from_macro_block(&o);
+            o.dealloc(&o);
+        }
+        let log = rec.take();
+        assert!(log.iter().any(|l| l.starts_with("addTorch")) && log.iter().any(|l| l.starts_with("chestOrTroll")));
+        assert!(log.iter().any(|l| l.starts_with("glow")));
+        // a light at the top of the loaded world reaches into blocks that are not there
+        let top = light(&world, &dwr, 20, 63, 15, LIGHT_DIRECTION_ALL);
+        top.remove_from_tiles();
+        // blocks that were lit and are gone when the light is removed
+        let l = light(&world, &dwr, 20, 40, 15, LIGHT_DIRECTION_ALL);
+        *world.macro_tiles().get(2).unwrap().physical_block.borrow_mut() = None;
+        l.remove_from_tiles();
+        // a net copy and one on an unloaded tile
+        let mut net = vec![0u8; 0x18];
+        net[8..12].copy_from_slice(&10u32.to_le_bytes());
+        net[12..16].copy_from_slice(&10u32.to_le_bytes());
+        assert!(ArtificialLight::init_with_world_dynamic_world_cache_net_data(&world, &dwr, None, &net).is_some());
+        net[12..16].copy_from_slice(&300u32.to_le_bytes());
+        assert!(ArtificialLight::init_with_world_dynamic_world_cache_net_data(&world, &dwr, None, &net).is_none());
+    }
+
+    #[test]
+    fn the_recorder_answers_every_call() {
+        let rec = Rc::new(Rec::default());
+        let w = World::alloc(2);
+        let pb: PhysicalBlockRef = Box::leak(Box::new(crate::world::state::PhysicalBlock::new_fresh()));
+        let tile = TileRef::new(pb, 0);
+        let p = IntPair { x: 1, y: 2 };
+        for it in [0x422, 0x423, 0x428, 0x414, 0x1] {
+            LightingServices::fill_tile_at_pos_with_type(&*rec, &w, tile, p, it);
+        }
+        let _ = LightingServices::get_weather_fraction_for_pos_at_world_time(&*rec, &w, p, 0.0);
+        LightingServices::load_light_block_for_client_light_block_index_into_physical_block(&*rec, &w, 1, pb);
+        rec.load_light.set(true);
+        LightingServices::load_light_block_for_client_light_block_index_into_physical_block(&*rec, &w, 99, pb);
+        LightingServices::remove_water_tile_at_pos(&*rec, &w, p);
+        LightingServices::water_moved_from_from_tile_to_to_tile_amount(&*rec, &w, p, tile, p, tile, 3);
+        LightingServices::snow_changed_at_macro_pos(&*rec, p);
+        LightingServices::water_changed_at_pos_full_block(&*rec, p, true);
+        LightingServices::load_surface_block_at_pos(&*rec, p);
+        let _ = LightingServices::blockheads(&*rec);
+        let (d, _r) = test_dw();
+        use crate::objects::base::DynamicWorldApi as _;
+        assert!(d.is_server() && d.blockheads().is_empty() && d.get_owner_name_for_object_owner_id("x").is_none());
+        assert!(rec.take().len() >= 8);
     }
 }

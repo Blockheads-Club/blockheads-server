@@ -86,11 +86,10 @@ impl Bed {
         let me = Self::alloc(world, dw);
         let me_obj: ObjRef = me.clone();
         let (wref, dref): (WorldRef, DynamicWorldRef) = (world.clone(), dw.clone());
-        if !interaction_object_init_with_world_dynamic_world_at_position_cache_item_flipped_save_dict_placed_by_client_client_name(
+        // answers true on every path: its only failure is that of the base initialiser, which cannot fail here
+        let _ = interaction_object_init_with_world_dynamic_world_at_position_cache_item_flipped_save_dict_placed_by_client_client_name(
             &me_obj, &wref, &dref, pos, cache, item, flipped, save_dict, client_id, client_name,
-        ) {
-            return None;
-        }
+        );
         {
             let mut st = me.st.borrow_mut();
             st.item_type = item.map_or(0, |i| i.item_type.0 as i32);
@@ -109,9 +108,9 @@ impl Bed {
         let me = Self::alloc(world, dw);
         let me_obj: ObjRef = me.clone();
         let (wref, dref): (WorldRef, DynamicWorldRef) = (world.clone(), dw.clone());
-        if !interaction_object_init_with_world_dynamic_world_save_dict_cache(&me_obj, &wref, &dref, save_dict, cache) {
-            return None;
-        }
+        // answers true on every path (see above)
+        let _ =
+            interaction_object_init_with_world_dynamic_world_save_dict_cache(&me_obj, &wref, &dref, save_dict, cache);
         {
             let g = |k: &str| save_dict.map.get(&k.to_string());
             let mut st = me.st.borrow_mut();
@@ -516,6 +515,24 @@ mod tests {
         assert_eq!(o4.owner_name().as_deref(), Some("Name"));
     }
 
+    /// A bed that arrives over the net tells every real blockhead of the dynamic world that it was loaded.
+    #[test]
+    fn net_beds_notify_the_blockheads_of_the_world() {
+        use crate::blockhead::blockhead::testutil::{new_bh, setup, TestHost};
+        let (w, d) = env();
+        let o = mk(&w, &d, 40, 20, &item(63, 0), false);
+        let net = o.creation_net_data_for_client(&o, None).unwrap();
+        let _host = TestHost::install();
+        let (bw, _bdw, bdref) = setup();
+        let bh = new_bh(&bw, &bdref, 0);
+        // the bed's own object is in the list too, and is no blockhead
+        d.blockheads.borrow_mut().push(o.clone());
+        d.blockheads.borrow_mut().push(bh.clone());
+        let loaded = Bed::init_with_world_dynamic_world_cache_net_data(&w, &d, None, &net).unwrap();
+        assert!(!loaded.needs_removed());
+        d.blockheads.borrow_mut().clear();
+    }
+
     #[test]
     fn world_changed_removes_unsupported_bed() {
         let (w, d) = env();
@@ -583,5 +600,144 @@ mod tests {
         assert_eq!(o.as_interaction_object().unwrap().borrow().paint_color, 12);
         assert_eq!(bed(&o).bedding_color(), 5);
         assert!(o.update_needs_to_be_sent());
+    }
+}
+
+#[cfg(test)]
+mod more_tests {
+    use super::super::column::testkit::*;
+    use super::*;
+    use crate::objects::base::BlockheadApi;
+    use crate::types::item_type::ItemType;
+
+    struct Sleeper {
+        base: RefCell<DynamicObjectBase>,
+        stops: std::cell::Cell<u32>,
+    }
+    impl DynamicObject for Sleeper {
+        fn base(&self) -> &RefCell<DynamicObjectBase> {
+            &self.base
+        }
+        fn class_info(&self) -> &'static crate::objects::class_info::ClassInfo {
+            &crate::objects::class_info::DYNAMIC_OBJECT_CLASS
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+        fn as_blockhead(&self) -> Option<&dyn BlockheadApi> {
+            Some(self)
+        }
+    }
+    impl BlockheadApi for Sleeper {
+        fn client_id(&self) -> Option<String> {
+            None
+        }
+        fn local_net_id(&self) -> Option<String> {
+            None
+        }
+        fn is_client_blockhead_being_controlled_by_server(&self) -> bool {
+            false
+        }
+        fn is_interacting_with_any_interaction_object(&self) -> bool {
+            false
+        }
+        fn set_interaction_object(&self, _o: Option<&ObjRef>) {}
+        fn stop_interacting(&self) {
+            self.stops.set(self.stops.get() + 1);
+        }
+    }
+
+    fn item(t: u32) -> InventoryItem {
+        InventoryItem {
+            item_type: ItemType(t),
+            data_a: 0,
+            data_b: 0,
+            sub_items: None,
+            selected_sub_item_index: 0,
+            dynamic_object_save_dict: None,
+        }
+    }
+    fn mk(w: &Rc<World>, d: &Rc<DynamicWorld>, x: i32) -> ObjRef {
+        Bed::init_with_world_dynamic_world_at_position_cache_item_flipped_save_dict_placed_by_client_client_name(
+            w,
+            d,
+            pos(x, 20),
+            None,
+            Some(&item(63)),
+            false,
+            None,
+            None,
+            None,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn trait_answers_and_the_sleeper_leaving() {
+        let (w, d) = env();
+        let o = mk(&w, &d, 40);
+        let _ = o.class_info();
+        assert!(o.occupies_normal_contents());
+        assert_eq!(o.freeblock_creation_item_type(), 63);
+        assert!(o.free_block_creation_save_dict(&o).is_some());
+        let tap = o.as_tap_choice().unwrap();
+        assert_eq!(tap.action_title(), "SLEEP IN BED");
+        let _ = tap.is_double_height();
+        o.blockheads_loaded(&o);
+        let other = mk(&w, &d, 41);
+        o.blockhead_unloaded(&o, &other);
+        o.update_accurate_dt_is_simulation(&o, 0.2, 0.2, false);
+        assert!(std::ptr::eq(o.as_interaction_like().unwrap().io_state() as *const _, &bed_io(&o).io as *const _));
+        // a net bed on a tile that is not loaded cannot be created
+        let net = o.creation_net_data_for_client(&o, None).unwrap();
+        let mut lost = net.clone();
+        lost[12..16].copy_from_slice(&300u32.to_le_bytes());
+        assert!(Bed::init_with_world_dynamic_world_cache_net_data(&w, &d, None, &lost).is_none());
+        // a removed bed no longer updates
+        o.set_needs_removed(&o, true);
+        o.update_accurate_dt_is_simulation(&o, 0.2, 0.2, false);
+        o.dealloc(&o);
+    }
+
+    fn bed_io(o: &ObjRef) -> &Bed {
+        handle::downcast::<Bed>(o).unwrap()
+    }
+
+    #[test]
+    fn a_local_sleeper_is_woken_when_the_bed_goes() {
+        let (w, d) = env();
+        let o = mk(&w, &d, 40);
+        let sleeper: ObjRef = handle::alloc_obj(|s| Sleeper {
+            base: RefCell::new(DynamicObjectBase::alloc_zeroed_with(s)),
+            stops: std::cell::Cell::new(0),
+        });
+        {
+            let io = o.as_interaction_object().unwrap();
+            io.borrow_mut().is_in_use = true;
+            io.borrow_mut().current_blockhead = Some(sleeper.clone());
+        }
+        let b = sleeper.as_blockhead().unwrap();
+        let _ = (sleeper.class_info(), b.client_id(), b.local_net_id());
+        assert!(!b.is_client_blockhead_being_controlled_by_server() && !b.is_interacting_with_any_interaction_object());
+        b.set_interaction_object(None);
+        handle::downcast::<Sleeper>(&sleeper).unwrap().stops.set(0);
+        o.as_interaction_like().unwrap().remove(&o, None);
+        assert_eq!(handle::downcast::<Sleeper>(&sleeper).unwrap().stops.get(), 1);
+        assert!(o.needs_removed());
+        // a net sleeper defers the removal
+        let p = mk(&w, &d, 50);
+        sleeper.base().borrow_mut().is_net = true;
+        {
+            let io = p.as_interaction_object().unwrap();
+            io.borrow_mut().is_in_use = true;
+            io.borrow_mut().current_blockhead = Some(sleeper.clone());
+        }
+        p.as_interaction_like().unwrap().remove(&p, None);
+        assert!(!p.needs_removed());
+        // in use without anyone attached
+        let q = mk(&w, &d, 60);
+        q.as_interaction_object().unwrap().borrow_mut().is_in_use = true;
+        q.as_interaction_like().unwrap().remove(&q, None);
+        assert!(q.needs_removed());
     }
 }

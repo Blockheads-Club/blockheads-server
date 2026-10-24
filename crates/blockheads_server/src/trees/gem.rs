@@ -297,9 +297,7 @@ impl GemTree {
         sonf: NoiseRef,
     ) -> Option<ObjRef> {
         let me = Self::alloc();
-        if !tree_init_with_world_dynamic_world_save_dict_cache_tdnf_sonf(&me, world, dw, d, cache, tdnf, sonf) {
-            return None;
-        }
+        tree_init_with_world_dynamic_world_save_dict_cache_tdnf_sonf(&me, world, dw, d, cache, tdnf, sonf);
         Some(me)
     }
 
@@ -474,5 +472,110 @@ impl TreeLike for GemTree {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod sweep_tests {
+    use super::*;
+    use crate::trees::tree::testenv::{env, scatter, wipe, GROUND};
+
+    struct Cn(f64);
+    impl crate::dynworld::state::DwNoise for Cn {
+        fn get_x_y_octaves(&self, _x: f64, _y: f64, _o: i32) -> f64 {
+            self.0
+        }
+    }
+
+    fn noise_of(v: f64) -> NoiseRef {
+        Some(Rc::new(Cn(v)))
+    }
+
+    /// Whole gem trees over many seeds, types, noise extremes and obstacle fields, then broken apart.
+    #[test]
+    fn gem_trees_over_obstacles_and_broken_apart() {
+        let (w, d) = env("gem_sweep");
+        let mt = w.macro_tiles();
+        let mut lcg = 99u64;
+        for seed in 0..500u32 {
+            lcg = lcg.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let right = seed % 11 == 7;
+            let x = if right { 31 } else { 14 + (seed % 36) as i32 };
+            let tdnf = noise_of([2.0, 1.0, -1.0, 0.3][(seed % 4) as usize]);
+            let sonf = noise_of([-2.0, 2.0, 0.0, 0.5][((seed / 4) % 4) as usize]);
+            let gt = 11 + (seed % 6) as i32;
+            let high = seed % 7 == 3;
+            let (px, py) = if high { (x, 31) } else { (x, GROUND + 1) };
+            let saved: Vec<_> = (0..4).map(|i| *mt.get(i).unwrap().physical_block.borrow()).collect();
+            let unload: &[usize] = if seed % 11 == 5 {
+                &[2, 3]
+            } else if right {
+                &[1, 3]
+            } else {
+                &[]
+            };
+            for &i in unload {
+                *mt.get(i).unwrap().physical_block.borrow_mut() = None;
+            }
+            scatter(&w, x, lcg >> 7, [0, 4, 12, 30][(seed % 4) as usize]);
+            crate::rng::glibc_rand::srand(seed + 1);
+            let g = GemTree::new(&w, &d, IntPair { x: px, y: py }, None, tdnf, sonf, gt);
+            if let Some(g) = g {
+                let gtr = downcast::<GemTree>(&g).unwrap();
+                let _ = (gtr.gem_tree_type(), gtr.gem_item_type());
+                let uid = g.unique_id();
+                // knock out owned tiles and report them
+                let mut changed = vec![];
+                for y in GROUND + 1..GROUND + 40 {
+                    for dx in -12..=12 {
+                        if let Some(tr) = tile_at(&w, x + dx, y) {
+                            lcg = lcg.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                            if tr.get().dynamic_object_owner == uid && (lcg >> 40) % 5 == 0 {
+                                tr.update(|t| t.contents = 0);
+                                changed.push(IntPair { x: x + dx, y });
+                            }
+                        }
+                    }
+                }
+                tree_state(&g).borrow_mut().height = 6 + (seed % 9) as i32;
+                // a position in an unloaded block, and the soil below the root in an unloaded block
+                changed.push(IntPair { x: 63, y: GROUND + 2 });
+                for i in [0, 1] {
+                    *mt.get(i).unwrap().physical_block.borrow_mut() = None;
+                }
+                as_tree(&g).unwrap().species_world_changed(&g, &mut changed);
+                for (i, pb) in (0..4).zip(&saved) {
+                    *mt.get(i).unwrap().physical_block.borrow_mut() = *pb;
+                }
+                // the flood fill walks into unloaded neighbours
+                for i in [1, 2, 3] {
+                    *mt.get(i).unwrap().physical_block.borrow_mut() = None;
+                }
+                let mut again = vec![IntPair { x: x + 1, y: py + 1 }, IntPair { x: x - 1, y: py + 2 }];
+                again.extend(changed.iter().copied().take(3));
+                as_tree(&g).unwrap().species_world_changed(&g, &mut again);
+                for (i, pb) in (0..4).zip(&saved) {
+                    *mt.get(i).unwrap().physical_block.borrow_mut() = *pb;
+                }
+                if seed % 5 == 0 {
+                    tree_state(&g).borrow_mut().dead = true;
+                    as_tree(&g).unwrap().species_update(&g, 0.2, 0.2, false);
+                    tree_state(&g).borrow_mut().dead = false;
+                }
+                let year = gtr.fruit_year();
+                w.set_world_time(f64::from(year) * 3600.0 + f64::from(seed % 3600));
+                as_tree(&g).unwrap().species_update(&g, 0.2, 0.2, false);
+                g.set_needs_removed(&g, true);
+                g.remove_from_macro_block(&g);
+            }
+            for (i, pb) in (0..4).zip(saved) {
+                *mt.get(i).unwrap().physical_block.borrow_mut() = pb;
+            }
+            wipe(&w, x);
+        }
+        // type 16 and 0 use the default table column
+        assert_eq!(gem_table(16).0, 87);
+        assert_eq!(clamp_u8(-3), 0);
+        assert_eq!(clamp_u8(300), 255);
     }
 }

@@ -64,9 +64,6 @@ class!(CHILLI_PLANT_CLASS, "ChilliPlant");
 class!(WHEAT_PLANT_CLASS, "WheatPlant");
 class!(TOMATO_PLANT_CLASS, "TomatoPlant");
 
-fn never(_s: i32) -> bool {
-    false
-}
 fn always(_s: i32) -> bool {
     true
 }
@@ -216,10 +213,6 @@ static CONFIGS: [NormalPlantConfig; 7] = [
         emits_light: EmitsLight::Never,
     },
 ];
-
-/// Silences "unused" for the table helper predicate kept for documentation (`NormalPlant` default `floweringSeason:`).
-#[allow(dead_code)]
-const _DEFAULT_FLOWERING: fn(i32) -> bool = never;
 
 /// The table of (one row per kind).
 pub fn config_for_kind(k: NormalPlantKind) -> &'static NormalPlantConfig {

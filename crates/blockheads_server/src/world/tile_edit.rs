@@ -796,11 +796,11 @@ impl World {
         if ty == ItemType::ITEM_TRAIN_STATION {
             tile.set_foreground_contents(0x62);
             let set = |dx: i32, dy: i32, fg: bool| {
-                if let Some(t) = self.tile_at(x + dx, y + dy) {
-                    t.set_contents(0x30);
-                    if fg {
-                        t.set_foreground_contents(0x62);
-                    }
+                // the five neighbours were all fetched with `must` above
+                let Some(t) = self.tile_at(x + dx, y + dy) else { unreachable!() };
+                t.set_contents(0x30);
+                if fg {
+                    t.set_foreground_contents(0x62);
                 }
             };
             set(-1, 0, true);
@@ -1040,15 +1040,12 @@ impl World {
             1062 => block(0x30, &mut handled),
             1051 => block(7, &mut handled),
             1075 => block(0x3a, &mut handled),
-            1047 => block(1, &mut handled),
             1024 => block(0xa, &mut handled),
             1026 => block(0xb, &mut handled),
             1094 => block(0x46, &mut handled),
-            1027 => block(0xc, &mut handled),
             1028 => block(0xd, &mut handled),
             1103 => block(0x4c, &mut handled),
             1105 => block(0x4d, &mut handled),
-            1029 => block(0xe, &mut handled),
             1030 => block(0xf, &mut handled),
             1045 => block(0x1a, &mut handled),
             1098..=1102 => block(0x47 + (ty - 1098) as u8, &mut handled),
@@ -1058,16 +1055,10 @@ impl World {
             1066..=1070 => block(0x35 + (ty - 1066) as u8, &mut handled),
             1049 => block(9, &mut handled),
             1057 => block(0x20, &mut handled),
-            1035 => block(0x11, &mut handled),
             1036 => block(0x12, &mut handled),
-            1037 => block(0x13, &mut handled),
             1038 => block(0x14, &mut handled),
-            1039 => block(0x15, &mut handled),
-            1040 => block(0x16, &mut handled),
-            1041 => block(0x17, &mut handled),
             1042 => block(0x18, &mut handled),
             1076 => block(0x3b, &mut handled),
-            1053 => block(0x1d, &mut handled),
             1054 => block(0x1e, &mut handled),
             1063 => block(0x34, &mut handled),
             1064 => block(TILE_BASALT_UNMINED, &mut handled),
@@ -1302,12 +1293,7 @@ impl World {
             let mut fill_bw = false;
             if back_wall_is_mutable(Some(tile)) && !matches!(ty, I_WATER | I_WATER_BUCKET | I_MELT_WATER) {
                 if matches!(tile.back_wall_type_index(), 3 | 5 | 2) {
-                    tile.update(|t| {
-                        t.back_wall_type_index = t.type_index;
-                        if matches!(t.back_wall_type_index, 3 | 5) {
-                            t.back_wall_type_index = 2;
-                        }
-                    });
+                    tile.update(|t| t.back_wall_type_index = t.type_index);
                     fill_bw = true;
                 }
             }
@@ -1319,12 +1305,7 @@ impl World {
             }
             if let Some(t2) = tile2 {
                 if back_wall_is_mutable(Some(t2)) && matches!(t2.back_wall_type_index(), 3 | 5 | 2) {
-                    t2.update(|t| {
-                        t.back_wall_type_index = t.type_index;
-                        if matches!(t.back_wall_type_index, 3 | 5) {
-                            t.back_wall_type_index = 2;
-                        }
-                    });
+                    t2.update(|t| t.back_wall_type_index = t.type_index);
                 }
                 t2.update(|t| {
                     t.partial_content_left = 0xff;
@@ -1369,13 +1350,7 @@ impl World {
                             && matches!(t.back_wall_type_index(), 2 | 3 | 5)
                         {
                             let bw = tile.back_wall_type_index();
-                            t.update(|t| {
-                                t.back_wall_type_index = bw;
-                                t.back_wall_type_index = grass_remap(t.back_wall_type_index);
-                                if matches!(t.back_wall_type_index, 3 | 5) {
-                                    t.back_wall_type_index = 2;
-                                }
-                            });
+                            t.update(|t| t.back_wall_type_index = grass_remap(bw));
                         } else {
                             // Note: the remap field is the back wall.
                             t.update(|t| t.back_wall_type_index = grass_remap(t.back_wall_type_index));
@@ -1677,12 +1652,12 @@ mod tests {
     use crate::world::state::{BHServer, DynamicWorld, WorldTileLoader};
     use std::rc::Rc;
 
-    fn ip(x: i32, y: i32) -> IntPair {
+    pub(super) fn ip(x: i32, y: i32) -> IntPair {
         IntPair { x, y }
     }
 
     /// A world whose macro blocks (0..=2, 0..=2) are loaded and filled with air (back wall air too).
-    fn air_world(rec: &Rc<testkit::Rec>) -> (Rc<World>, Rc<FakeDw>) {
+    pub(super) fn air_world(rec: &Rc<testkit::Rec>) -> (Rc<World>, Rc<FakeDw>) {
         let w = World::alloc(32);
         let fake = Rc::new(FakeDw::default());
         *w.dynamic_world.borrow_mut() = Some(Rc::new(DynamicWorld::new(Box::new(fake.clone()))));
@@ -1709,7 +1684,7 @@ mod tests {
         (w, fake)
     }
 
-    fn at(w: &World, x: i32, y: i32) -> TileRef {
+    pub(super) fn at(w: &World, x: i32, y: i32) -> TileRef {
         tile_at_world_position_loaded(x, y, w).unwrap()
     }
 
@@ -1981,9 +1956,10 @@ mod tests {
             )
         };
         w.fill_tile_at_pos_with_type(Some(&t), ip(x, y), ItemType::ITEM_WATER_BUCKET);
-        assert_eq!(t.type_index(), if temp < 0.0 { 4 } else { 3 });
+        assert_eq!(t.type_index(), 3);
         let log = rec.take();
-        if temp >= 0.0 {
+        assert!(temp >= 0.0);
+        {
             assert!(log.contains(&"waterChanged(40,40)true".to_string()), "{:?}", log);
             // right, left, below neighbours that are air get a surface block, in that order
             let idx: Vec<_> = ["loadSurface(41,40)", "loadSurface(39,40)", "loadSurface(40,39)"]
@@ -1996,7 +1972,7 @@ mod tests {
         let (x, y) = (50, 40);
         let t = at(&w, x, y);
         at(&w, x, y - 1).set_type_index(TILE_LAVA);
-        if temp >= 0.0 {
+        {
             w.fill_tile_at_pos_with_type(Some(&t), ip(x, y), ItemType::ITEM_WATER_BUCKET);
             assert_eq!(t.type_index(), TILE_BASALT_UNMINED);
             rec.take();
@@ -2135,13 +2111,13 @@ mod tests {
         install_deps(Rc::new(NullDeps));
     }
 
-    fn server_world(rec: &Rc<testkit::Rec>) -> (Rc<World>, Rc<FakeDw>) {
+    pub(super) fn server_world(rec: &Rc<testkit::Rec>) -> (Rc<World>, Rc<FakeDw>) {
         let (w, fake) = air_world(rec);
         *w.server.borrow_mut() = Some(Rc::new(BHServer { api: None }));
         (w, fake)
     }
 
-    fn remove_payload(x: u32, y: u32, cc: u8, fc: u8, water: u8, oc: u8, ofg: u8, z: u8) -> Vec<u8> {
+    pub(super) fn remove_payload(x: u32, y: u32, cc: u8, fc: u8, water: u8, oc: u8, ofg: u8, z: u8) -> Vec<u8> {
         let mut b = vec![0u8; 0x18];
         b[8..12].copy_from_slice(&x.to_le_bytes());
         b[12..16].copy_from_slice(&y.to_le_bytes());
@@ -2197,7 +2173,7 @@ mod tests {
         install_deps(Rc::new(NullDeps));
     }
 
-    fn fill_payload(x: u32, y: u32, ty: u16, a: u16, b: u16, z: u8) -> Vec<u8> {
+    pub(super) fn fill_payload(x: u32, y: u32, ty: u16, a: u16, b: u16, z: u8) -> Vec<u8> {
         let mut v = vec![0u8; 16];
         v[0..4].copy_from_slice(&x.to_le_bytes());
         v[4..8].copy_from_slice(&y.to_le_bytes());
@@ -2380,7 +2356,7 @@ mod tests {
         install_deps(Rc::new(NullDeps));
     }
 
-    fn gather_payload(x: u32, y: u32, g: u8) -> Vec<u8> {
+    pub(super) fn gather_payload(x: u32, y: u32, g: u8) -> Vec<u8> {
         let mut v = vec![0u8; 16];
         v[0..4].copy_from_slice(&x.to_le_bytes());
         v[4..8].copy_from_slice(&y.to_le_bytes());
@@ -2550,5 +2526,833 @@ mod tests {
         let rec = testkit::install();
         let (w, _) = air_world(&rec);
         w.fill_tile_at_pos_with_type(None, ip(1, 5000), ItemType::ITEM_DIRT);
+    }
+}
+
+/// Broader scenarios: mod hooks, protection, crystals, fluids, every fill item in random surroundings, paint
+/// objects and the start portal repair.
+#[cfg(test)]
+mod more_tests {
+    use super::tests::{air_world, at, fill_payload, ip, remove_payload, server_world};
+    use super::*;
+    use crate::dynworld::state::testutil::ModSpy;
+    use crate::foundation::gzip::gzip_deflate;
+    use crate::plist::xml_write::write_xml;
+    use crate::world::helpers::testutil::{dw_obj, new_obj};
+    use crate::world::misc::{install_deps, testkit, NullDeps};
+    use std::rc::Rc;
+
+    fn protect(w: &World) {
+        let mut cr = w.custom_rules.get();
+        cr.custom_rules_enabled = 1;
+        cr.world_modifcation = 1;
+        w.custom_rules.set(cr);
+    }
+
+    fn back_wall_payload(id: u64, x: u32, y: u32) -> Vec<u8> {
+        let mut v = id.to_le_bytes().to_vec();
+        v.extend_from_slice(&x.to_le_bytes());
+        v.extend_from_slice(&y.to_le_bytes());
+        v
+    }
+
+    fn gz(entries: Vec<(&str, PlistValue)>) -> Vec<u8> {
+        let mut d = crate::foundation::gsdict::GsDict::new();
+        for (k, v) in entries {
+            d.insert(k.to_string(), v);
+        }
+        gzip_deflate(&write_xml(&PlistValue::dict(d)))
+    }
+
+    #[test]
+    fn back_wall_requests() {
+        let rec = testkit::install();
+        let (w, _) = server_world(&rec);
+        assert!(!w.should_be_crystal_block_at_pos(ip(1, 1)));
+        let spy = Rc::new(ModSpy::default());
+        crate::mods::install(Some(spy.clone()));
+        *rec.bh_by_id.borrow_mut() = Some(new_obj());
+        let t = at(&w, 40, 40);
+        t.set_back_wall_type_index(6);
+        // a cancelling mod keeps the wall
+        spy.cancel.set(true);
+        let idx = w.remote_remove_back_wall_request_from_client(&back_wall_payload(0, 40, 40), Some("bob"));
+        assert_eq!(idx, 40 * 1024 + 40);
+        assert_eq!(t.back_wall_type_index(), 6);
+        // a mod that lets it through, with a blockhead
+        spy.cancel.set(false);
+        w.remote_remove_back_wall_request_from_client(&back_wall_payload(7, 40, 40), Some("bob"));
+        assert_eq!(t.back_wall_type_index(), TILE_AIR);
+        assert!(spy.log.borrow().iter().any(|l| l.starts_with("break(bob,40,40,true,")));
+        crate::mods::install(None);
+        // protected tiles are ignored
+        protect(&w);
+        t.set_back_wall_type_index(6);
+        w.remote_remove_back_wall_request_from_client(&back_wall_payload(0, 40, 40), Some("bob"));
+        assert_eq!(t.back_wall_type_index(), 6);
+        // background contents of a tile go to a free block
+        t.set_background_contents(0x45);
+        rec.take();
+        w.remove_any_background_contents_for_tile_at_pos_remove_blockhead(&t, ip(40, 40), None);
+        assert_eq!(t.background_contents(), 0);
+        assert!(rec.take().contains(&"bgFreeBlock(40,40)".to_string()));
+        install_deps(Rc::new(NullDeps));
+    }
+
+    #[test]
+    fn remove_request_with_mods() {
+        let rec = testkit::install();
+        let (w, _) = server_world(&rec);
+        let spy = Rc::new(ModSpy::default());
+        crate::mods::install(Some(spy.clone()));
+        let t = at(&w, 40, 40);
+        t.set_type_index(6);
+        spy.cancel.set(true);
+        w.remote_remove_request_from_client(&remove_payload(40, 40, 1, 0, 0, 0, 0, 0), Some("bob"));
+        assert_eq!(t.type_index(), 6);
+        spy.cancel.set(false);
+        w.remote_remove_request_from_client(&remove_payload(40, 40, 1, 0, 0, 0, 0, 0), Some("bob"));
+        assert_eq!(t.type_index(), TILE_AIR);
+        // fills through a mod
+        spy.cancel.set(true);
+        w.remote_fill_request_placed_by_client(&fill_payload(40, 40, 1048, 0, 0, 0), Some("bob"));
+        assert_eq!(t.type_index(), TILE_AIR);
+        spy.cancel.set(false);
+        w.remote_fill_request_placed_by_client(&fill_payload(40, 40, 1048, 0, 0, 0), Some("bob"));
+        assert_eq!(t.type_index(), 6);
+        crate::mods::install(None);
+        install_deps(Rc::new(NullDeps));
+    }
+
+    #[test]
+    fn time_crystal_mining_paths() {
+        let rec = testkit::install();
+        let (w, _) = server_world(&rec);
+        let bh = new_obj();
+        let t = at(&w, 40, 40);
+        let mine = |cc: i32, bh: Option<&ObjRef>| {
+            t.update(|v| {
+                v.type_index = TILE_TIME_CRYSTAL;
+                v.contents = 0;
+            });
+            rec.take();
+            w.remove_tile_at_world_x_world_y_create_contents_freeblock_count_create_foreground_contents_freeblock_count_remove_blockhead(40, 40, cc, 0, bh);
+            rec.take()
+        };
+        // a net blockhead's crystal is not accounted here
+        rec.net_bh.set(true);
+        let log = mine(2, Some(&bh));
+        assert!(!log.iter().any(|l| l.starts_with("crystal") || l.starts_with("freeBlock")), "{:?}", log);
+        rec.net_bh.set(false);
+        // a server controlled blockhead only adds to the discrepancy
+        rec.controlled_bh.set(true);
+        let log = mine(3, Some(&bh));
+        assert!(log.contains(&"crystalDiscrepency(3)".to_string()), "{:?}", log);
+        rec.controlled_bh.set(false);
+        // a local blockhead is accounted and checked for warping
+        let log = mine(2, Some(&bh));
+        assert!(log.iter().any(|l| l.starts_with("crystal.modify")), "{:?}", log);
+        install_deps(Rc::new(NullDeps));
+    }
+
+    #[test]
+    fn fluids_wake_up_around_removed_tiles() {
+        let rec = testkit::install();
+        let (w, _) = server_world(&rec);
+        let water = |x: i32, y: i32, amount: u8| {
+            at(&w, x, y).update(|v| {
+                v.type_index = TILE_WATER;
+                v.partial_content_left = amount;
+            });
+        };
+        let remove = |x: i32, y: i32| {
+            at(&w, x, y).set_type_index(6);
+            rec.take();
+            w.remove_tile_at_world_x_world_y_create_contents_freeblock_count_create_foreground_contents_freeblock_count_remove_blockhead(x, y, 0, 0, None);
+            rec.take()
+        };
+        water(40, 51, 9);
+        assert!(remove(40, 50).contains(&"loadSurface(40,50)".to_string()));
+        water(44, 50, 3);
+        assert!(remove(45, 50).contains(&"loadSurface(45,50)".to_string()));
+        water(51, 50, 3);
+        assert!(remove(50, 50).contains(&"loadSurface(50,50)".to_string()));
+        // water below the air tile: snow surface
+        water(60, 49, 9);
+        assert!(remove(60, 50).contains(&"loadSnowSurface(60,50)false".to_string()));
+        // removing water itself wakes the neighbours too
+        water(70, 51, 9);
+        at(&w, 70, 50).update(|v| {
+            v.type_index = TILE_WATER;
+            v.partial_content_left = 4;
+        });
+        rec.take();
+        w.remove_water_tile_at_pos(ip(70, 50));
+        assert!(rec.take().contains(&"loadSurface(70,50)".to_string()));
+        install_deps(Rc::new(NullDeps));
+    }
+
+    #[test]
+    fn back_walls_follow_removed_blocks_downwards() {
+        let rec = testkit::install();
+        let (w, _) = server_world(&rec);
+        let setup = |x: i32, top_bw: u8, top_ty: u8, lower: &[(u8, u8)]| {
+            let t = at(&w, x, 40);
+            t.update(|v| {
+                v.type_index = top_ty;
+                v.back_wall_type_index = top_bw;
+            });
+            at(&w, x, 41).update(|v| {
+                v.type_index = TILE_AIR;
+                v.back_wall_type_index = TILE_AIR;
+            });
+            for (i, (ty, bw)) in lower.iter().enumerate() {
+                at(&w, x, 39 - i as i32).update(|v| {
+                    v.type_index = *ty;
+                    v.back_wall_type_index = *bw;
+                });
+            }
+            rec.take();
+            w.remove_tile_at_world_x_world_y_create_contents_freeblock_count_create_foreground_contents_freeblock_count_remove_blockhead(x, 40, 0, 0, None);
+            (t, rec.take())
+        };
+        // stone with a wall: wall removed, air tiles below with walls lose them as well
+        let (t, log) = setup(40, 6, 6, &[(TILE_AIR, 6), (TILE_AIR, 6), (6, 6)]);
+        assert_eq!(t.back_wall_type_index(), TILE_AIR);
+        assert_eq!(at(&w, 40, 39).back_wall_type_index(), TILE_AIR);
+        assert_eq!(at(&w, 40, 38).back_wall_type_index(), TILE_AIR);
+        assert!(log.contains(&"worldChanged(40,39)true".to_string()), "{:?}", log);
+        // a background object on those tiles is dropped
+        at(&w, 41, 39).set_background_contents(0x45);
+        let (_, log) = setup(41, 6, 6, &[(TILE_AIR, 6), (6, 6)]);
+        assert!(log.contains(&"bgFreeBlock(41,39)".to_string()), "{:?}", log);
+        // an immutable wall below stops it
+        let (_, _) = setup(42, 6, 6, &[(TILE_AIR, 1)]);
+        assert_eq!(at(&w, 42, 39).back_wall_type_index(), 1);
+        // a platform tile stops it
+        let (_, _) = setup(43, 0x20, TILE_WOODEN_PLATFORM, &[(TILE_AIR, 6)]);
+        assert_eq!(at(&w, 43, 39).back_wall_type_index(), 6);
+        // a platform below is not air-like
+        let (_, _) = setup(44, 6, 6, &[(TILE_WOODEN_PLATFORM, 6)]);
+        // air below with the air wall
+        let (_, _) = setup(45, 6, 6, &[(TILE_AIR, TILE_AIR)]);
+        // the top of the world: no tile above
+        let t = at(&w, 46, 95);
+        t.update(|v| {
+            v.type_index = 6;
+            v.back_wall_type_index = 6;
+        });
+        w.remove_tile_at_world_x_world_y_create_contents_freeblock_count_create_foreground_contents_freeblock_count_remove_blockhead(46, 95, 0, 0, None);
+        install_deps(Rc::new(NullDeps));
+    }
+
+    #[test]
+    fn workbench_requests() {
+        let rec = testkit::install();
+        let (w, _) = server_world(&rec);
+        rec.alias.borrow_mut().insert("bob".into(), "Bobby".into());
+        let spy = Rc::new(ModSpy::default());
+        let req = |x: u32, y: u32, ty: u8, plist: Option<Vec<u8>>| {
+            let mut v = vec![0u8; 0x10];
+            v[0..4].copy_from_slice(&x.to_le_bytes());
+            v[4..8].copy_from_slice(&y.to_le_bytes());
+            v[8] = ty;
+            if let Some(p) = plist {
+                v.extend(p);
+            }
+            v
+        };
+        // plain request with a trailing plist and an inventory change
+        let inv = gz(vec![
+            ("saveDict", PlistValue::dict(crate::foundation::gsdict::GsDict::new())),
+            ("blockhead_inventory_change", PlistValue::data(vec![1u8, 2, 3])),
+            ("blockhead_uniqueID", PlistValue::int(5)),
+        ]);
+        w.remote_place_workbench_request_from_peer(&req(40, 40, 3, Some(inv)), Some("bob"));
+        assert_eq!(at(&w, 40, 40).contents(), 0x2f);
+        // no plist at all, a short plist and no client
+        w.remote_place_workbench_request_from_peer(&req(41, 40, 3, None), None);
+        w.remote_place_workbench_request_from_peer(&req(42, 40, 3, Some(vec![1, 2, 3])), Some("bob"));
+        w.remote_place_workbench_request_from_peer(&req(43, 40, 3, Some(gz(vec![("x", PlistValue::int(1))]))), None);
+        // mods
+        crate::mods::install(Some(spy.clone()));
+        spy.cancel.set(true);
+        w.remote_place_workbench_request_from_peer(&req(44, 40, 3, None), Some("bob"));
+        assert_eq!(at(&w, 44, 40).contents(), 0);
+        spy.cancel.set(false);
+        w.remote_place_workbench_request_from_peer(&req(44, 40, 3, None), Some("bob"));
+        assert_eq!(at(&w, 44, 40).contents(), 0x2f);
+        crate::mods::install(None);
+        // protection
+        protect(&w);
+        w.remote_place_workbench_request_from_peer(&req(45, 40, 3, None), Some("bob"));
+        assert_eq!(at(&w, 45, 40).contents(), 0);
+        install_deps(Rc::new(NullDeps));
+    }
+
+    #[test]
+    fn workbench_placement_blockers() {
+        let rec = testkit::install();
+        let (w, _) = server_world(&rec);
+        let place = |t: WorkbenchType, x: i32, y: i32| {
+            w.place_workbench_of_type_at_pos_save_dict_placed_by_client_placed_by_blockhead_placed_by_client_name(
+                t,
+                ip(x, y),
+                None,
+                None,
+                None,
+                None,
+            );
+        };
+        // the placed portal needs a free base
+        at(&w, 40, 40).set_contents(5);
+        place(WorkbenchType::WORKBENCH_PLACED_PORTAL, 40, 40);
+        at(&w, 41, 40).set_type_index(6);
+        place(WorkbenchType::WORKBENCH_PLACED_PORTAL, 41, 40);
+        // a double height bench with an occupied tile above
+        at(&w, 50, 41).set_contents(3);
+        place(WorkbenchType::WORKBENCH_BASIC_PORTAL, 50, 40);
+        install_deps(Rc::new(NullDeps));
+    }
+
+    fn io_request(x: u32, y: u32, item: Option<ItemType>, extra: Vec<(&str, PlistValue)>) -> Vec<u8> {
+        let mut v = vec![0u8; 8];
+        v[0..4].copy_from_slice(&x.to_le_bytes());
+        v[4..8].copy_from_slice(&y.to_le_bytes());
+        let mut e = extra;
+        if let Some(it) = item {
+            let item = InventoryItem::new(it, 0, 0, None, None);
+            e.push(("item", PlistValue::data(item.borrow().save_data())));
+        }
+        if !e.is_empty() {
+            v.extend(gz(e));
+        }
+        v
+    }
+
+    #[test]
+    fn interaction_object_requests() {
+        let rec = testkit::install();
+        let (w, _) = server_world(&rec);
+        rec.alias.borrow_mut().insert("bob".into(), "Bobby".into());
+        let inv = vec![
+            ("blockhead_inventory_change", PlistValue::data(vec![1u8, 2, 3])),
+            ("blockhead_uniqueID", PlistValue::int(5)),
+            ("saveDict", PlistValue::dict(crate::foundation::gsdict::GsDict::new())),
+        ];
+        w.remote_place_interaction_object_request_from_peer(
+            &io_request(40, 40, Some(ItemType::ITEM_CHEST), inv),
+            Some("bob"),
+        );
+        assert_eq!(at(&w, 40, 40).contents(), 0x30);
+        // nothing in the plist: an empty item
+        w.remote_place_interaction_object_request_from_peer(&io_request(41, 40, None, vec![]), None);
+        w.remote_place_interaction_object_request_from_peer(
+            &io_request(42, 40, None, vec![("a", PlistValue::int(1))]),
+            None,
+        );
+        // an ownership sign needs an admin
+        w.remote_place_interaction_object_request_from_peer(
+            &io_request(43, 40, Some(ItemType::ITEM_OWNERSHIP_SIGN), vec![]),
+            Some("bob"),
+        );
+        assert_eq!(at(&w, 43, 40).contents(), 0);
+        rec.admin.borrow_mut().push("bob".into());
+        w.remote_place_interaction_object_request_from_peer(
+            &io_request(43, 40, Some(ItemType::ITEM_OWNERSHIP_SIGN), vec![]),
+            Some("bob"),
+        );
+        // mods
+        let spy = Rc::new(ModSpy::default());
+        crate::mods::install(Some(spy.clone()));
+        spy.cancel.set(true);
+        w.remote_place_interaction_object_request_from_peer(
+            &io_request(44, 40, Some(ItemType::ITEM_CHEST), vec![]),
+            Some("bob"),
+        );
+        assert_eq!(at(&w, 44, 40).contents(), 0);
+        crate::mods::install(None);
+        protect(&w);
+        rec.admin.borrow_mut().clear();
+        w.remote_place_interaction_object_request_from_peer(
+            &io_request(45, 40, Some(ItemType::ITEM_CHEST), vec![]),
+            Some("bob"),
+        );
+        assert_eq!(at(&w, 45, 40).contents(), 0);
+        install_deps(Rc::new(NullDeps));
+    }
+
+    #[test]
+    fn interaction_object_blockers() {
+        let rec = testkit::install();
+        let (w, _) = server_world(&rec);
+        let place = |it: ItemType, x: i32, y: i32| {
+            let item = InventoryItem::new(it, 0, 0, None, None);
+            let r = w.place_interaction_object_with_item_at_pos_save_dict_placed_by_client_placed_by_blockhead_placed_by_client_name(&item.borrow(), ip(x, y), None, None, None, None);
+            rec.take();
+            r
+        };
+        // trade portal: solid base, blocked above
+        at(&w, 40, 40).set_type_index(6);
+        place(ItemType::ITEM_TRADE_PORTAL, 40, 40);
+        place(ItemType::ITEM_TRADE_PORTAL, 41, 40);
+        at(&w, 52, 42).set_contents(3);
+        place(ItemType::ITEM_TRADE_PORTAL, 52, 40);
+        place(ItemType::ITEM_MIRROR, 53, 41);
+        at(&w, 54, 42).set_contents(3);
+        place(ItemType::ITEM_MIRROR, 54, 41);
+        // two blocks wide: both neighbours blocked, the left one solid or with contents
+        let bed = ItemType::ITEM_WOOD_BED;
+        at(&w, 61, 40).set_type_index(6);
+        at(&w, 59, 40).set_type_index(6);
+        place(bed, 60, 40);
+        at(&w, 59, 40).set_type_index(TILE_AIR);
+        at(&w, 59, 40).set_contents(4);
+        place(bed, 60, 40);
+        at(&w, 59, 40).set_contents(0);
+        // left side free but nothing to stand on
+        place(bed, 60, 40);
+        // foreground occupation
+        at(&w, 70, 40).set_foreground_contents(0x30);
+        place(ItemType::ITEM_CHEST, 70, 40);
+        place(bed, 70, 40);
+        place(ItemType::ITEM_TRAIN_STATION, 70, 40);
+        // train station: every neighbour blocking
+        for (dx, dy) in [(-1, 0), (-1, 1), (0, 1), (1, 0), (1, 1)] {
+            at(&w, 80 + dx, 40 + dy).set_contents(3);
+            place(ItemType::ITEM_TRAIN_STATION, 80, 40);
+            at(&w, 80 + dx, 40 + dy).set_contents(0);
+        }
+        at(&w, 79, 40).set_foreground_contents(0x30);
+        place(ItemType::ITEM_TRAIN_STATION, 80, 40);
+        at(&w, 79, 40).set_foreground_contents(0);
+        at(&w, 81, 40).set_foreground_contents(0x30);
+        place(ItemType::ITEM_TRAIN_STATION, 80, 40);
+        install_deps(Rc::new(NullDeps));
+    }
+
+    struct Lcg(u64);
+    impl Lcg {
+        fn next(&mut self) -> u64 {
+            self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            self.0 >> 33
+        }
+        fn pick<T: Copy>(&mut self, v: &[T]) -> T {
+            v[(self.next() % v.len() as u64) as usize]
+        }
+    }
+
+    fn scramble(w: &World, r: &mut Lcg, cx: i32, cy: i32) {
+        const TYPES: [u8; 22] =
+            [2, 2, 2, 3, 4, 6, 6, 1, 0x1f, 0x10, 0x39, 0x45, 0x44, 0x19, 0x1b, 0x1c, 0x31, 0x32, 0x30, 0x20, 0x33, 9];
+        const CONTENTS: [u8; 8] = [0, 0, 0, 0x30, 0x65, 0x67, 0x03, 0x07];
+        const FG: [u8; 8] = [0, 0, 0, 0x64, 0x30, 0x42, 0x43, 0x62];
+        const BG: [u8; 5] = [0, 0, 0, 0x45, 0x5f];
+        const BW: [u8; 9] = [2, 2, 3, 5, 6, 1, 0x20, 0x1f, 0x31];
+        for dy in -3..=4 {
+            for dx in -2..=2 {
+                let (ty, c, f, b, bw) = (r.pick(&TYPES), r.pick(&CONTENTS), r.pick(&FG), r.pick(&BG), r.pick(&BW));
+                let pl = r.pick(&[0u8, 3, 9, 255]);
+                at(w, cx + dx, cy + dy).update(|t| {
+                    *t = Default::default();
+                    t.type_index = ty;
+                    t.contents = c;
+                    t.foreground_contents = f;
+                    t.background_contents = b;
+                    t.back_wall_type_index = bw;
+                    t.partial_content_left = pl;
+                });
+            }
+        }
+    }
+
+    #[test]
+    fn fill_every_item_in_random_surroundings() {
+        let rec = testkit::install();
+        let (w, _) = server_world(&rec);
+        let mut r = Lcg(7);
+        for round in 0..30 {
+            for ty in 0..1110u32 {
+                scramble(&w, &mut r, 40, 40);
+                let tile = at(&w, 40, 40);
+                if round % 3 == 0 {
+                    tile.set_type_index(TILE_AIR);
+                    tile.set_contents(0);
+                    tile.set_foreground_contents(0);
+                    tile.set_background_contents(0);
+                }
+                let da = (r.next() % 3) as u16;
+                w.fill_tile_at_pos_with_type_data_a_data_b_placed_by_client_save_dict_placed_by_client_name(
+                    Some(&tile),
+                    ip(40, 40),
+                    ItemType(ty),
+                    da,
+                    0,
+                    Some("bob"),
+                    None,
+                    Some("Bobby"),
+                );
+                rec.take();
+            }
+        }
+        // the water bucket in the cold
+        w.world_time.set(0.0);
+        install_deps(Rc::new(NullDeps));
+    }
+
+    #[test]
+    fn remove_tiles_in_random_surroundings() {
+        let rec = testkit::install();
+        let (w, _) = server_world(&rec);
+        let bh = new_obj();
+        let mut r = Lcg(11);
+        for i in 0..4000 {
+            scramble(&w, &mut r, 40, 40);
+            let flags = r.next();
+            w.remove_tile_at_world_x_world_y_create_contents_freeblock_count_create_foreground_contents_freeblock_count_remove_blockhead_only_remove_c_ontents_only_remove_foreground_contents_send_world_changed_notifcation_dont_remove_contents(
+                40,
+                40,
+                (flags % 3) as i32,
+                ((flags >> 2) % 3) as i32,
+                if flags & 16 != 0 { Some(&bh) } else { None },
+                flags & 32 != 0,
+                flags & 64 != 0,
+                flags & 128 != 0,
+                flags & 256 != 0,
+            );
+            if i % 7 == 0 {
+                w.remove_back_wall_at_pos_remove_blockhead(ip(40, 40), None);
+                w.do_repair_for_tile_at_pos(ip(40, 40));
+            }
+            rec.take();
+        }
+        install_deps(Rc::new(NullDeps));
+    }
+
+    #[test]
+    fn paint_objects_and_gates() {
+        let rec = testkit::install();
+        let (w, fake) = server_world(&rec);
+        let bh = new_obj();
+        let t = at(&w, 40, 40);
+        // a ladder through the ladder object
+        t.update(|v| {
+            *v = Default::default();
+            v.type_index = TILE_AIR;
+            v.foreground_contents = 0x42;
+        });
+        fake.ladder.borrow_mut().insert((40, 40), dw_obj(53, 0, 0, true, true));
+        w.paint_tile_at_pos_color_index_face_index_paint_blockhead(&t, ip(40, 40), 3, 0, Some(&bh));
+        w.paint_tile_at_pos_color_index_face_index_paint_blockhead(&t, ip(40, 40), 3, 0, None);
+        // an interaction object that cannot be painted, then one that can
+        t.update(|v| {
+            v.foreground_contents = 0x30;
+        });
+        fake.io.borrow_mut().insert((40, 40), dw_obj(1043, 2, 0, false, true));
+        w.paint_tile_at_pos_color_index_face_index_paint_blockhead(&t, ip(40, 40), 4, 1, None);
+        rec.paintable.set(true);
+        w.paint_tile_at_pos_color_index_face_index_paint_blockhead(&t, ip(40, 40), 4, 1, None);
+        t.update(|v| {
+            v.foreground_contents = 0;
+            v.contents = 0x30;
+        });
+        w.paint_tile_at_pos_color_index_face_index_paint_blockhead(&t, ip(40, 40), 4, 1, Some(&bh));
+        // a blockhead that may not remove the object
+        rec.cannot_remove.set(true);
+        w.paint_tile_at_pos_color_index_face_index_paint_blockhead(&t, ip(40, 40), 5, 2, Some(&bh));
+        rec.cannot_remove.set(false);
+        // stairs and shafts
+        t.update(|v| {
+            v.contents = 0x65;
+        });
+        fake.stairs.borrow_mut().insert((40, 40), dw_obj(229, 0, 0, true, true));
+        w.paint_tile_at_pos_color_index_face_index_paint_blockhead(&t, ip(40, 40), 6, 3, None);
+        t.update(|v| {
+            v.contents = 0x67;
+        });
+        fake.shaft.borrow_mut().insert((40, 40), dw_obj(1087, 0, 0, true, true));
+        w.paint_tile_at_pos_color_index_face_index_paint_blockhead(&t, ip(40, 40), 6, 3, None);
+        // missing object with a blockhead falls through to the face paint
+        t.update(|v| {
+            v.contents = 0x65;
+        });
+        fake.stairs.borrow_mut().clear();
+        w.paint_tile_at_pos_color_index_face_index_paint_blockhead(&t, ip(40, 40), 7, 4, Some(&bh));
+        // paint requests
+        let paint = |id: u64, x: u32, y: u32, c: u16, f: u8| {
+            let mut v = id.to_le_bytes().to_vec();
+            v.extend_from_slice(&x.to_le_bytes());
+            v.extend_from_slice(&y.to_le_bytes());
+            v.extend_from_slice(&c.to_le_bytes());
+            v.push(f);
+            v
+        };
+        *rec.bh_by_id.borrow_mut() = Some(bh.clone());
+        w.remote_paint_request_from_client(&paint(0, 41, 40, 9, 1), Some("bob"));
+        w.remote_paint_request_from_client(&paint(3, 41, 40, 9, 1), Some("bob"));
+        assert_eq!(at(&w, 41, 40).get().paint_left, 9);
+        protect(&w);
+        w.remote_paint_request_from_client(&paint(0, 42, 40, 9, 1), Some("bob"));
+        assert_eq!(at(&w, 42, 40).get().paint_left, 0);
+        install_deps(Rc::new(NullDeps));
+    }
+
+    #[test]
+    fn repair_restores_the_start_portal_levels() {
+        let rec = testkit::install();
+        let (w, _) = server_world(&rec);
+        w.start_portal_pos.set(ip(40, 40));
+        let below = at(&w, 40, 39);
+        // no workbench yet: placed through the stub and level 0
+        w.do_repair_for_tile_at_pos(ip(40, 39));
+        assert_eq!(below.type_index(), 0x19);
+        *rec.wb.borrow_mut() = Some(new_obj());
+        for (level, ty) in [(1, 0x21u8), (2, 0x22), (3, 0x23), (4, 0x24), (5, 0x25), (6, 0x19)] {
+            rec.wb_level.set(level);
+            below.set_type_index(6);
+            w.do_repair_for_tile_at_pos(ip(40, 39));
+            assert_eq!(below.type_index(), ty, "level {level}");
+        }
+        // the workbench type decides a conflicting block
+        rec.wb_type.set(1);
+        at(&w, 41, 40).set_type_index(6);
+        let item = InventoryItem::new(ItemType::ITEM_DIRT, 0, 0, None, None);
+        let _ = item;
+        install_deps(Rc::new(NullDeps));
+    }
+
+    #[test]
+    fn requests_with_and_without_server_client_and_mods() {
+        for server in [false, true] {
+            for hooked in [false, true] {
+                for client in [None, Some("bob")] {
+                    let rec = testkit::install();
+                    let (w, _) = if server { server_world(&rec) } else { air_world(&rec) };
+                    rec.alias.borrow_mut().insert("bob".into(), "Bobby".into());
+                    if hooked {
+                        crate::mods::install(Some(Rc::new(ModSpy::default())));
+                    }
+                    let t = at(&w, 40, 40);
+                    t.update(|v| {
+                        v.type_index = 6;
+                        v.back_wall_type_index = 6;
+                    });
+                    w.remote_remove_back_wall_request_from_client(&back_wall_payload(0, 40, 40), client);
+                    w.remote_remove_request_from_client(&remove_payload(40, 40, 1, 0, 0, 0, 0, 1), client);
+                    w.remote_fill_request_placed_by_client(&fill_payload(40, 40, 1048, 0, 0, 1), client);
+                    let mut with_plist = fill_payload(41, 40, 1048, 0, 0, 0);
+                    with_plist.extend(write_xml(&PlistValue::dict({
+                        let mut d = crate::foundation::gsdict::GsDict::new();
+                        d.insert("placeSaveDict".to_string(), PlistValue::int(3));
+                        d.insert("blockhead_inventory_change".to_string(), PlistValue::data(vec![1u8]));
+                        d
+                    })));
+                    w.remote_fill_request_placed_by_client(&with_plist, client);
+                    let mut paint = back_wall_payload(0, 40, 40);
+                    paint.extend_from_slice(&[1, 0, 1, 0, 0, 0, 0, 0]);
+                    w.remote_paint_request_from_client(&paint, client);
+                    w.remote_place_workbench_request_from_peer(
+                        &{
+                            let mut v = vec![0u8; 0x10];
+                            v[0..4].copy_from_slice(&45u32.to_le_bytes());
+                            v[4..8].copy_from_slice(&40u32.to_le_bytes());
+                            v[8] = 3;
+                            v
+                        },
+                        client,
+                    );
+                    w.remote_place_interaction_object_request_from_peer(
+                        &io_request(46, 40, Some(ItemType::ITEM_CHEST), vec![]),
+                        client,
+                    );
+                    w.send_gather_notification_for_tile_at_pos(&t, ip(40, 40));
+                    crate::mods::install(None);
+                    install_deps(Rc::new(NullDeps));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn edges_of_the_loaded_world() {
+        let rec = testkit::install();
+        let (w, fake) = server_world(&rec);
+        // missing tiles
+        w.remove_back_wall_at_pos_remove_blockhead(ip(40, 5000), None);
+        w.remove_water_tile_at_pos(ip(40, 5000));
+        w.update_tile_graphic_for_workbench_of_type_at_pos_level(WorkbenchType(3), ip(40, 5000), 0);
+        w.do_repair_for_tile_at_pos(ip(40, 5000));
+        // a solid tile keeps its back wall
+        at(&w, 40, 40).set_type_index(6);
+        at(&w, 40, 40).set_back_wall_type_index(6);
+        w.remove_back_wall_at_pos_remove_blockhead(ip(40, 40), None);
+        assert_eq!(at(&w, 40, 40).back_wall_type_index(), 6);
+        let place = |t: WorkbenchType, x: i32, y: i32| {
+            w.place_workbench_of_type_at_pos_save_dict_placed_by_client_placed_by_blockhead_placed_by_client_name(
+                t,
+                ip(x, y),
+                None,
+                None,
+                None,
+                None,
+            );
+        };
+        // placed portal at the bottom edge: no base tile; a workbench off the loaded world; a double height one at the top
+        place(WorkbenchType::WORKBENCH_PLACED_PORTAL, 40, -1);
+        place(WorkbenchType(3), 40, 5000);
+        at(&w, 50, 1023).set_type_index(TILE_AIR);
+        place(WorkbenchType::WORKBENCH_BASIC_PORTAL, 50, 1023);
+        // an interaction object on the workbench spot
+        fake.io.borrow_mut().insert((60, 40), dw_obj(1043, 2, 0, false, true));
+        place(WorkbenchType(3), 60, 40);
+        // an interaction object that is a sign on an occupied foreground, rails, torches
+        let place_item = |it: ItemType, x: i32, y: i32| {
+            let item = InventoryItem::new(it, 0, 0, None, None);
+            w.place_interaction_object_with_item_at_pos_save_dict_placed_by_client_placed_by_blockhead_placed_by_client_name(&item.borrow(), ip(x, y), None, None, None, None);
+            rec.take();
+        };
+        place_item(ItemType::ITEM_TRADE_PORTAL, 70, -1);
+        at(&w, 71, 40).set_foreground_contents(0x30);
+        place_item(ItemType::ITEM_SIGN, 71, 40);
+        place_item(ItemType::ITEM_OWNERSHIP_SIGN, 71, 40);
+        // a two blocks wide bed at the west edge of the world, blocked on the right
+        at(&w, 1, 0).set_type_index(6);
+        place_item(ItemType::ITEM_WOOD_BED, 0, 0);
+        // the same where the tile on the left is in a block that is not loaded
+        rec.load_makes_valid.set(false);
+        at(&w, 65, 40).set_type_index(6);
+        unload(&w, 1, 1);
+        place_item(ItemType::ITEM_WOOD_BED, 64, 40);
+        rec.load_makes_valid.set(true);
+        // a boat or a stairs item on a sign tile
+        install_deps(Rc::new(NullDeps));
+    }
+
+    fn unload(w: &World, mx: usize, my: usize) {
+        *w.macro_tiles().get(my * 32 + mx).unwrap().physical_block.borrow_mut() = None;
+    }
+
+    #[test]
+    fn fill_edges_climate_and_displaced_water() {
+        let rec = testkit::install();
+        let (w, fake) = server_world(&rec);
+        let fill = |it: u32, x: i32, y: i32| {
+            let t = at(&w, x, y);
+            w.fill_tile_at_pos_with_type(Some(&t), ip(x, y), ItemType(it));
+            rec.take();
+        };
+        // a bucket high up in the cold freezes
+        let t = at(&w, 40, 1000);
+        t.update(|v| {
+            v.type_index = TILE_AIR;
+            v.sun_light = 255;
+        });
+        fill(I_WATER_BUCKET, 40, 1000);
+        assert_eq!(t.type_index(), TILE_ICE);
+        // a bucket in the warm onto lava turns into basalt, onto the ground into water
+        let t = at(&w, 40, 40);
+        at(&w, 40, 39).set_type_index(TILE_LAVA);
+        fill(I_WATER_BUCKET, 40, 40);
+        assert_eq!(t.type_index(), TILE_BASALT_UNMINED);
+        t.set_type_index(TILE_AIR);
+        at(&w, 40, 39).set_type_index(6);
+        fill(I_WATER_BUCKET, 40, 40);
+        assert_eq!(t.type_index(), TILE_WATER);
+        // a plank of ice
+        at(&w, 41, 40).set_type_index(TILE_AIR);
+        at(&w, 41, 39).set_type_index(TILE_LAVA);
+        fill(I_ICE, 41, 40);
+        assert_eq!(at(&w, 41, 40).type_index(), TILE_BASALT_UNMINED);
+        // an interaction object of type 0x32 blocks any fill
+        fake.io.borrow_mut().insert((50, 40), crate::world::helpers::testutil::dw_obj_of_type(0x32));
+        fill(1048, 50, 40);
+        assert_eq!(at(&w, 50, 40).type_index(), TILE_AIR);
+        // dirt onto water pushes the water up, into water above too
+        let t = at(&w, 60, 40);
+        t.update(|v| {
+            v.type_index = TILE_WATER;
+            v.partial_content_left = 200;
+        });
+        at(&w, 60, 41).update(|v| {
+            v.type_index = TILE_WATER;
+            v.partial_content_left = 100;
+        });
+        fill(1048, 60, 40);
+        assert_eq!(t.type_index(), 6);
+        assert_eq!(at(&w, 60, 41).partial_content_left(), 255);
+        assert_eq!(at(&w, 60, 42).type_index(), TILE_WATER);
+        // doors at the edges of the world
+        for ty in [52u32, 164, 69, 165] {
+            for y in [0, 1022, 1023, 40] {
+                at(&w, 70, y).set_type_index(TILE_AIR);
+                fill(ty, 70, y);
+            }
+        }
+        // a door whose neighbours are not loaded
+        rec.load_makes_valid.set(false);
+        unload(&w, 1, 1);
+        for ty in [69u32, 165] {
+            at(&w, 64, 40).set_type_index(TILE_AIR);
+            fill(ty, 64, 40);
+        }
+        unload(&w, 2, 1);
+        rec.load_makes_valid.set(true);
+        install_deps(Rc::new(NullDeps));
+    }
+
+    #[cfg(not(feature = "faithful-crashes"))]
+    #[test]
+    #[should_panic(expected = "UB-PARITY")]
+    fn interaction_object_on_a_null_tile_is_ub() {
+        let rec = testkit::install();
+        let (w, _) = air_world(&rec);
+        let item = InventoryItem::new(ItemType::ITEM_CHEST, 0, 0, None, None);
+        w.place_interaction_object_with_item_at_pos_save_dict_placed_by_client_placed_by_blockhead_placed_by_client_name(&item.borrow(), ip(1, 5000), None, None, None, None);
+    }
+
+    #[cfg(not(feature = "faithful-crashes"))]
+    #[test]
+    #[should_panic(expected = "UB-PARITY")]
+    fn freezing_water_on_a_null_tile_is_ub() {
+        let rec = testkit::install();
+        let (w, _) = air_world(&rec);
+        w.fill_tile_at_pos_with_type(None, ip(1, 5000), ItemType::ITEM_FREEZE_WATER);
+    }
+
+    #[test]
+    fn gather_paint_and_repair_edges() {
+        let rec = testkit::install();
+        let (w, fake) = server_world(&rec);
+        // no tile
+        w.remote_gather_request(&super::tests::gather_payload(40, 5000, 3));
+        // a sign-like interaction tile without an object
+        let t = at(&w, 40, 40);
+        t.update(|v| {
+            v.foreground_contents = 0x30;
+        });
+        w.paint_tile_at_pos_color_index_face_index_paint_blockhead(&t, ip(40, 40), 4, 1, None);
+        let _ = &fake;
+        // repair far from the start portal
+        w.start_portal_pos.set(ip(40, 40));
+        w.do_repair_for_tile_at_pos(ip(40, 30));
+        // the platform of a train station set up by hand
+        install_deps(Rc::new(NullDeps));
+    }
+
+    #[test]
+    fn gather_payload_edge_cases() {
+        let rec = testkit::install();
+        let (w, _) = server_world(&rec);
+        // the same item on a workbench tile that is a basic portal conflicts
+        let t = at(&w, 40, 40);
+        t.update(|v| {
+            v.type_index = TILE_AIR;
+            v.contents = 0x2f;
+        });
+        *rec.wb.borrow_mut() = Some(new_obj());
+        rec.wb_type.set(1);
+        w.fill_tile_at_pos_with_type(Some(&t), ip(40, 40), ItemType::ITEM_DIRT);
+        assert_eq!(t.type_index(), TILE_AIR);
+        install_deps(Rc::new(NullDeps));
     }
 }

@@ -88,9 +88,8 @@ impl Stairs {
         let me = Self::alloc(world, dw);
         let me_obj: ObjRef = me.clone();
         let (wref, dref): (WorldRef, DynamicWorldRef) = (world.clone(), dw.clone());
-        if !base_init_with_world_dynamic_world_at_position_cache(&me_obj, &wref, &dref, pos, cache) {
-            return None;
-        }
+        // `base_init_with_world_dynamic_world_at_position_cache` answers true on every path
+        let _ = base_init_with_world_dynamic_world_at_position_cache(&me_obj, &wref, &dref, pos, cache);
         me.st.borrow_mut().item_type = item_type;
         if let Some(o) = owner_from_client_or_save(client_id, save_dict) {
             me.base.borrow_mut().owner_id = Some(o);
@@ -111,9 +110,8 @@ impl Stairs {
         let me = Self::alloc(world, dw);
         let me_obj: ObjRef = me.clone();
         let (wref, dref): (WorldRef, DynamicWorldRef) = (world.clone(), dw.clone());
-        if !base_init_with_world_dynamic_world_save_dict_cache(&me_obj, &wref, &dref, save_dict, cache) {
-            return None;
-        }
+        // `base_init_with_world_dynamic_world_save_dict_cache` answers true on every path
+        let _ = base_init_with_world_dynamic_world_save_dict_cache(&me_obj, &wref, &dref, save_dict, cache);
         let g = |k: &str| save_dict.map.get(&k.to_string());
         {
             let mut st = me.st.borrow_mut();
@@ -338,7 +336,6 @@ impl DynamicObject for Stairs {
     /// `-[Stairs worldChanged:]`.
     fn world_changed(&self, me: &ObjRef, positions: &mut Vec<IntPair>) {
         let world = self.links.world();
-        let dw = self.links.dw();
         let pos = self.base.borrow().pos;
         for p in positions.iter() {
             let dx = wrap_dx(p.x.wrapping_sub(pos.x), world.world_width_macro());
@@ -349,9 +346,6 @@ impl DynamicObject for Stairs {
                     let no_back_wall = tile_at_world_position_loaded(pos.x, pos.y, &world)
                         .map_or(false, |t| t.back_wall_type_index() == 2);
                     if no_back_wall {
-                        if dw.is_client() {
-                            return;
-                        }
                         if self.base.borrow().needs_removed {
                             return;
                         }
@@ -480,5 +474,87 @@ mod tests {
         tile(&w, 50, 20).set_back_wall_type_index(1);
         b.world_changed(&b, &mut vec![pos(50, 19)]);
         assert!(!b.needs_removed());
+    }
+}
+
+#[cfg(test)]
+mod more_tests {
+    use super::super::column::fuzz::*;
+    use super::super::column::testkit::*;
+    use super::*;
+
+    fn mk(w: &Rc<World>, d: &Rc<DynamicWorld>, x: i32, y: i32, item: i32) -> ObjRef {
+        Stairs::init_with_world_dynamic_world_at_position_cache_type_save_dict_placed_by_client(
+            w,
+            d,
+            pos(x, y),
+            None,
+            item,
+            None,
+            None,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn trait_answers_paint_and_net_updates() {
+        let (w, d) = env();
+        let s = mk(&w, &d, 40, 20, 229);
+        let st = handle::downcast::<Stairs>(&s).unwrap();
+        let _ = s.class_info();
+        assert_eq!(s.freeblock_creation_item_type(), 229);
+        assert!(s.free_block_creation_save_dict(&s).is_some());
+        st.paint(&s, 5);
+        assert_eq!(st.st.borrow().paint_color, 5);
+        let mut net = s.update_net_data_for_client(&s, None).unwrap();
+        net[0x1a] = (st.st.borrow().current_configuration as u8).wrapping_add(1);
+        net[0x1c] = 9;
+        s.remote_update(&s, &net);
+        assert_eq!((st.st.borrow().current_configuration, st.st.borrow().paint_color), (net[0x1a] as i32, 9));
+        s.remote_update(&s, &net);
+        // a stair whose own tile is not there
+        let gone = mk(&w, &d, 41, 20, 229);
+        gone.base().borrow_mut().pos = pos(41, 300);
+        handle::downcast::<Stairs>(&gone).unwrap().update_configuration(&gone);
+        // a net stair on a tile that is not loaded cannot be created
+        let mut lost = net.clone();
+        lost[12..16].copy_from_slice(&300u32.to_le_bytes());
+        assert!(Stairs::init_with_world_dynamic_world_cache_net_data(&w, &d, None, &lost).is_none());
+        // a net stair is not sent back when painted
+        let n = Stairs::init_with_world_dynamic_world_cache_net_data(&w, &d, None, &net).unwrap();
+        handle::downcast::<Stairs>(&n).unwrap().paint(&n, 2);
+    }
+
+    #[test]
+    fn ice_stairs_melt() {
+        let (w, d) = env();
+        let s = mk(&w, &d, 40, 20, ITEM_ICE_STAIRS);
+        handle::downcast::<Stairs>(&s).unwrap().st.borrow_mut().ice_melt_timer = 9.0;
+        s.update_accurate_dt_is_simulation(&s, 1.0, 1.0, false);
+        assert!(s.needs_removed());
+        s.update_accurate_dt_is_simulation(&s, 1.0, 1.0, false);
+        let plain = mk(&w, &d, 50, 20, 229);
+        plain.update_accurate_dt_is_simulation(&plain, 1.0, 1.0, false);
+        assert!(!plain.needs_removed());
+    }
+
+    #[test]
+    fn every_neighbourhood_gives_a_configuration() {
+        let (w, d) = env();
+        let mut r = Lcg(3);
+        let mut seen = std::collections::HashSet::new();
+        for y in [0, 1, 30, 62, 63] {
+            for _ in 0..400 {
+                scramble(&w, &mut r, 40, y, &[2, 2, 6, 1], &[0, 0, CONTENTS_STAIRS], &[0]);
+                let s = mk(&w, &d, 40, y, 229);
+                let st = handle::downcast::<Stairs>(&s).unwrap();
+                seen.insert(st.st.borrow().current_configuration);
+                if r.next() % 3 == 0 {
+                    s.set_needs_removed(&s, true);
+                }
+                s.world_changed(&s, &mut vec![pos(40 + (r.next() % 5) as i32 - 2, y + (r.next() % 3) as i32 - 1)]);
+            }
+        }
+        assert!(seen.len() >= 4, "{seen:?}");
     }
 }

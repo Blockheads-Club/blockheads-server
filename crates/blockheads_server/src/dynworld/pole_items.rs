@@ -213,5 +213,66 @@ mod tests {
         assert_eq!(d.pole_item_x(0x8e), 0);
         // h = 100 < 0x201 -> 0x200 + 0x10
         assert_eq!(d.pole_item_pos(32).y, 0x210);
+        assert!(Gen.tree_positions().borrow().is_empty());
+        assert!(Gen.npc_positions().borrow().is_empty());
+        assert!(Gen.plant_positions().borrow().is_empty());
+    }
+
+    /// Phase A marks missing pole items as taken, phase B puts expired ones back (once, hovering).
+    #[test]
+    fn missing_items_are_noticed_and_respawned() {
+        use crate::dynworld::lookups::{set_ops_hooks, DwOpsHooksStub};
+        use crate::trees::tree::testenv::env;
+        struct Hover;
+        impl DwOpsHooksStub for Hover {
+            fn freeblock_hovers(&self, _f: &crate::objects::handle::ObjRef) -> bool {
+                true
+            }
+        }
+        set_ops_hooks(Rc::new(Hover));
+        let (_w, d) = env("pole_flow");
+        let log: Log = Rc::new(RefCell::new(vec![]));
+        let h = hk(&log);
+        d.set_hooks(h.clone());
+        // phase A: nothing hovers at the poles, so all four items are recorded as taken now
+        d.pole_item_restore_recheck_timer.set(3.0);
+        d.pole_item_restore_add_timer.set(21.0);
+        d.world().set_world_time(500.0);
+        d.check_and_restore_pole_items(0.1);
+        assert_eq!(d.pole_item_taken_times.borrow().as_ref().unwrap().len(), 4);
+        // an item that hovers already is not recorded again
+        d.pole_item_taken_times.borrow_mut().as_mut().unwrap().remove(&"142".to_string());
+        let pos = d.pole_item_pos(0);
+        let fb = tobj(14, 70, &log, None, None, None);
+        fb.base().borrow_mut().pos = pos;
+        d.free_blocks_insert(d.world_index_key(pos), &fb);
+        h.item.set(142);
+        d.pole_item_restore_recheck_timer.set(3.0);
+        d.pole_item_restore_add_timer.set(21.0);
+        d.check_and_restore_pole_items(0.1);
+        assert!(d.pole_item_taken_times.borrow().as_ref().unwrap().get(&"142".to_string()).is_none());
+        // phase B: after ten hours the items come back, unless one hovers there already or the spot is solid
+        d.world().set_world_time(500.0 + 36001.0);
+        let solid = d.pole_item_pos(d.pole_item_x(0x8d));
+        crate::world::tiles::tile_at_world_position_loaded(solid.x, solid.y, &d.world())
+            .unwrap()
+            .update(|t| t.type_index = 6);
+        d.pole_item_taken_times.borrow_mut().as_mut().unwrap().insert("142".to_string(), PlistValue::real_f64(0.0));
+        d.pole_item_restore_recheck_timer.set(3.0);
+        d.pole_item_restore_add_timer.set(0.0);
+        d.check_and_restore_pole_items(0.1);
+        let left = d.pole_item_taken_times.borrow().as_ref().unwrap().len();
+        assert_eq!(left, 1, "only the solid spot keeps its entry");
+        assert_eq!(log.borrow().iter().filter(|l| l.starts_with("freeblock")).count(), 2);
+    }
+
+    /// Phase B with nothing recorded does nothing.
+    #[test]
+    fn nothing_to_restore() {
+        let d = dw("pole_empty", 1);
+        d.pole_item_restore_recheck_timer.set(3.0);
+        d.pole_item_restore_add_timer.set(0.0);
+        d.check_and_restore_pole_items(0.1);
+        assert!(d.pole_item_taken_times.borrow().is_none());
     }
 }

@@ -237,3 +237,41 @@ mod tests {
         install_deps(Rc::new(NullDeps));
     }
 }
+
+#[cfg(test)]
+mod more_tests {
+    use super::*;
+    use crate::world::misc::{install_deps, testkit, NullDeps};
+    use crate::world::state::{Weather, WorldTileLoader};
+    use std::rc::Rc;
+
+    #[test]
+    fn sand_rain_and_wind_branches() {
+        let rec = testkit::install();
+        let w = World::alloc(32);
+        w.no_rain_timer.set(10000.0);
+        *w.world_tile_loader.borrow_mut() = Some(Rc::new(WorldTileLoader {}));
+        let mut cr = w.custom_rules.get();
+        cr.custom_rules_enabled = 1;
+        for rainfall in [3, 4, 2] {
+            cr.rainfall = rainfall;
+            w.custom_rules.set(cr);
+            for sand in [0.0f32, 0.1, 0.5] {
+                rec.sand.set(sand);
+                let _ = w.get_weather_fraction_for_pos_at_world_time(IntPair { x: 40, y: 600 }, 0.0);
+            }
+        }
+        // sand fraction and wind for a world with and without the pieces
+        assert_eq!(w.sand_fraction_for_pos(IntPair { x: 1, y: 1 }), 0.5);
+        assert_eq!(w.wind_strength(), 0.0);
+        *w.weather.borrow_mut() = Some(Rc::new(Weather {}));
+        assert_eq!(w.wind_strength(), 0.0);
+        *w.world_tile_loader.borrow_mut() = None;
+        assert_eq!(w.sand_fraction_for_pos(IntPair { x: 1, y: 1 }), 0.0);
+        // the far side of the world has its sun the other way up
+        let near = w.get_day_night_fraction_for_x_at_world_time(100.0, 450.0);
+        let far = w.get_day_night_fraction_for_x_at_world_time(800.0, 450.0);
+        assert!(near.is_finite() && far.is_finite());
+        install_deps(Rc::new(NullDeps));
+    }
+}

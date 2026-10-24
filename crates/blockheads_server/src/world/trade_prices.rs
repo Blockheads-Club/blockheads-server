@@ -227,3 +227,37 @@ mod tests {
         assert_eq!(mult(w, "1"), Some(0.5));
     }
 }
+
+#[cfg(test)]
+mod more_tests {
+    use super::*;
+    use crate::foundation::gzip::gzip_deflate;
+    use crate::world::lifecycle::testkit::*;
+
+    #[test]
+    fn existing_multipliers_are_kept_and_missing_ones_tolerated() {
+        let g = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let home = format!("{}/bhtp_{}", std::env::temp_dir().display(), std::process::id());
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(format!("{home}/GNUstep/Library/ApplicationSupport/TheBlockheads/saves/sv")).unwrap();
+        crate::foundation::paths::set_home_for_test(&home);
+        let f = fixture(32);
+        let w = &f.world;
+        // nothing loaded yet: the update tolerates it
+        w.update_price_for_item_bought_or_sold_of_type_key_sold_count("5", 3.0);
+        w.update_trade_prices_if_needed();
+        let before = w.world_price_multipliers.borrow().as_ref().unwrap().map.len();
+        w.update_trade_prices_if_needed();
+        assert_eq!(w.world_price_multipliers.borrow().as_ref().unwrap().map.len(), before);
+        // offsets from the server: into a world without a table, with something that is not a table
+        *w.world_price_multipliers.borrow_mut() = None;
+        let mut d = new_mutable_dict();
+        d.map.insert("7".to_string(), PlistValue::real_f64(0.5));
+        let bytes = gzip_deflate(&crate::plist::helpers::data_from_property_list(&PlistValue::Dict(d)).unwrap());
+        w.world_price_offsets_recieved_from_server(&bytes);
+        assert!(w.world_price_multipliers.borrow().is_none());
+        let junk = gzip_deflate(&crate::plist::helpers::data_from_property_list(&PlistValue::int(3)).unwrap());
+        w.world_price_offsets_recieved_from_server(&junk);
+        drop(g);
+    }
+}

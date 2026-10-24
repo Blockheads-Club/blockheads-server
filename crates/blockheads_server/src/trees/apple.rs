@@ -129,9 +129,7 @@ impl AppleTree {
         sonf: NoiseRef,
     ) -> Option<ObjRef> {
         let me = Self::alloc();
-        if !tree_init_with_world_dynamic_world_save_dict_cache_tdnf_sonf(&me, world, dw, d, cache, tdnf, sonf) {
-            return None;
-        }
+        tree_init_with_world_dynamic_world_save_dict_cache_tdnf_sonf(&me, world, dw, d, cache, tdnf, sonf);
         let v = d.map.get(&"availableFood".to_string());
         downcast::<AppleTree>(&me).unwrap().available_food.set(v.map_or(0.0, |v| v.float_value()));
         Some(me)
@@ -191,5 +189,20 @@ impl TreeLike for AppleTree {
     }
     fn extend_save_dict(&self, d: &mut PlistDict) {
         d.map.insert("availableFood".to_string(), PlistValue::real_f32(self.available_food.get()));
+    }
+}
+
+#[cfg(test)]
+mod scenario_tests {
+    use super::*;
+    use crate::trees::tree::testenv::gauntlet;
+
+    #[test]
+    fn apple_trees_over_obstacles_and_unloaded_blocks() {
+        gauntlet(TREE_APPLE, "apple_gauntlet", 90, &|t, seed| {
+            let a = downcast::<AppleTree>(t).unwrap();
+            a.set_available_food(t, if seed % 2 == 0 { 2000.0 } else { 3.0 });
+            assert!(a.available_food() > 0.0);
+        });
     }
 }

@@ -150,21 +150,20 @@ impl KelpPlant {
             None
         };
         let (mut weather, mut day, mut season) = (0.0f32, 0.0f32, 0.0f32);
-        let tile = tile_loaded(world, p.x, p.y);
-        if let Some(t) = tile {
-            if adult {
-                let e = adult_environment(world, p);
-                weather = e.0;
-                day = e.1;
-                season = e.2;
-                let temp = current_temperature_for_tile_at_world_pos(&t.get(), p, season, day, weather, Some(world));
-                if temp < 1.0f32 {
-                    return fail(&me_obj);
-                }
-            }
-            if !tile_is_water(Some(t)) {
+        // `plant_init_at_position` only succeeds on a loaded tile
+        let t = tile_loaded(world, p.x, p.y).expect("loaded tile");
+        if adult {
+            let e = adult_environment(world, p);
+            weather = e.0;
+            day = e.1;
+            season = e.2;
+            let temp = current_temperature_for_tile_at_world_pos(&t.get(), p, season, day, weather, Some(world));
+            if temp < 1.0f32 {
                 return fail(&me_obj);
             }
+        }
+        if !tile_is_water(Some(t)) {
+            return fail(&me_obj);
         }
         match tile_loaded(world, p.x, p.y.wrapping_sub(1)) {
             Some(b) if me.is_required_soil_type(b.type_index()) => {}
@@ -240,9 +239,7 @@ impl KelpPlant {
     ) -> Option<Rc<KelpPlant>> {
         let me = Self::alloc(world, dw);
         let me_obj: ObjRef = me.clone();
-        if !plant_init_save_dict(&me_obj, world, dw, save_dict, cache, tdnf, sonf) {
-            return None;
-        }
+        plant_init_save_dict(&me_obj, world, dw, save_dict, cache, tdnf, sonf);
         me.set_n(dict_int(save_dict, "numberOfOccupiedTilesAbove"));
         me.kelp.borrow_mut().growth_timer = dict_float(save_dict, "growthTimer");
         me.init_sub_derived_items(&me_obj);
@@ -690,5 +687,323 @@ mod tests {
     fn soil_and_class() {
         assert!(KELP_PLANT_CLASS.is_kind_of(&PLANT_CLASS));
         let _ = Tile::default();
+    }
+}
+
+/// Scenario tests: kelp rooted in a pond, growth, food and fish, freezing, catch-up on load, harvest and death.
+#[cfg(test)]
+mod scenario_tests {
+    use super::*;
+    use crate::plist::value::PlistValue;
+    use crate::rng::glibc_rand::srand;
+    use crate::trees::tree::testenv::env;
+    use crate::world::tiles::tile_at_world_position_loaded;
+
+    const X: i32 = 20;
+    const ROOT: i32 = 10;
+
+    /// Water over the dirt (rows 10..=26, columns 18..=22); the kelp root is row 10.
+    fn pond(w: &Rc<World>) {
+        for y in ROOT..=26 {
+            for x in 18..=22 {
+                tile_at_world_position_loaded(x, y, w).unwrap().update(|t| {
+                    t.type_index = 3;
+                    t.foreground_contents = 0;
+                    t.sun_light = 255;
+                });
+            }
+        }
+    }
+
+    fn tile(w: &Rc<World>, y: i32) -> crate::world::state::TileRef {
+        tile_at_world_position_loaded(X, y, w).unwrap()
+    }
+
+    fn kelp_at(d: &Rc<DynamicWorld>, y: i32, adult: bool) -> Option<Rc<KelpPlant>> {
+        KelpPlant::init_with_world_dynamic_world_at_position_cache_max_age_gene_growth_rate_gene_tree_density_noise_function_season_offset_noise_function_adult_plant(
+            &d.world(), d, IntPair { x: X, y }, None, 128, 128, None, None, adult,
+        )
+    }
+
+    fn kelp(d: &Rc<DynamicWorld>) -> Rc<KelpPlant> {
+        kelp_at(d, ROOT, false).expect("kelp")
+    }
+
+    #[test]
+    fn kelp_grows_up_feeds_fish_and_freezes() {
+        let (w, d) = env("kp_grow");
+        pond(&w);
+        let k = kelp(&d);
+        let me: ObjRef = k.clone();
+        assert_eq!(tile(&w, ROOT).foreground_contents(), FG_KELP);
+        for _ in 0..70 {
+            k.update_accurate_dt_is_simulation(&me, 400.0, 400.0, false);
+        }
+        assert!(k.n() > 0);
+        // the long ticks also aged the plant; start the next steps young again
+        k.plant.borrow_mut().age_counter = 0.0;
+        k.plant.borrow_mut().age = 0.0;
+        // lots of food: a fish appears (nothing builds it without constructors, but the food is spent)
+        k.kelp.borrow_mut().available_food = 5000.0;
+        srand(4);
+        k.update_accurate_dt_is_simulation(&me, 0.1, 0.1, false);
+        k.set_n(14);
+        k.kelp.borrow_mut().available_food = 5000.0;
+        k.update_accurate_dt_is_simulation(&me, 0.1, 0.1, false);
+        k.set_n(1);
+        k.kelp.borrow_mut().available_food = 5000.0;
+        k.update_accurate_dt_is_simulation(&me, 0.1, 0.1, false);
+        // ice on the root or higher up freezes the plant: no growth, no food
+        tile(&w, ROOT + 3).set_type_index(4);
+        k.set_n(5);
+        k.kelp.borrow_mut().check_weather_count = 59;
+        k.update_accurate_dt_is_simulation(&me, 0.1, 0.1, false);
+        assert!(k.plant.borrow().frozen);
+        k.update_accurate_dt_is_simulation(&me, 0.1, 0.1, false);
+        tile(&w, ROOT + 3).set_type_index(3);
+        k.kelp.borrow_mut().check_weather_count = 59;
+        k.update_accurate_dt_is_simulation(&me, 0.1, 0.1, false);
+        assert!(!k.plant.borrow().frozen);
+        tile(&w, ROOT).set_type_index(4);
+        k.kelp.borrow_mut().check_weather_count = 59;
+        k.update_accurate_dt_is_simulation(&me, 0.1, 0.1, false);
+        assert!(k.plant.borrow().frozen);
+        // accessors
+        k.set_available_food(2.0);
+        assert_eq!(k.available_food(), 2.0);
+        assert_eq!(k.dropped_item_type(), ITEM_KELP);
+        let above = IntPair { x: X, y: ROOT + 2 };
+        k.set_gather_progress_for_tile(6, above);
+        assert_eq!(k.gather_progress_for_tile(above), 6);
+        k.set_gather_progress_for_tile(8, IntPair { x: X, y: ROOT });
+        assert_eq!(k.gather_progress_for_tile(IntPair { x: X, y: ROOT }), 8);
+        k.set_gather_progress_for_tile(9, IntPair { x: X, y: ROOT + 40 });
+        assert_eq!(k.gather_progress_for_tile(IntPair { x: X, y: ROOT + 40 }), 8);
+    }
+
+    #[test]
+    fn kelp_dies_out_of_water_and_of_old_age() {
+        let (w, d) = env("kp_dry");
+        pond(&w);
+        let k = kelp(&d);
+        let me: ObjRef = k.clone();
+        k.set_n(4);
+        for y in (ROOT + 1)..=(ROOT + 4) {
+            tile(&w, y).set_foreground_contents(FG_KELP);
+        }
+        // a dry tile in the stalk pulls the plant down to it
+        tile(&w, ROOT + 3).set_type_index(2);
+        k.kelp.borrow_mut().check_weather_count = 59;
+        k.update_accurate_dt_is_simulation(&me, 0.1, 0.1, false);
+        assert!(k.n() < 4);
+        // a dry root removes the plant
+        tile(&w, ROOT).set_type_index(2);
+        k.kelp.borrow_mut().check_weather_count = 59;
+        k.update_accurate_dt_is_simulation(&me, 0.1, 0.1, false);
+        assert!(me.needs_removed());
+        // old age: either resowed or starts again
+        let mut seen = (false, false);
+        for seed in 1..60u32 {
+            pond(&w);
+            let k = kelp(&d);
+            let me: ObjRef = k.clone();
+            k.set_n(2);
+            tile(&w, ROOT + 1).set_foreground_contents(FG_KELP);
+            tile(&w, ROOT + 2).set_foreground_contents(FG_KELP);
+            k.plant.borrow_mut().age = 1.0e6;
+            k.plant.borrow_mut().max_age = 5.0;
+            srand(seed);
+            k.update_accurate_dt_is_simulation(&me, 0.1, 0.1, false);
+            if me.needs_removed() {
+                seen.0 = true;
+            } else if k.n() == 0 {
+                seen.1 = true;
+            }
+        }
+        assert!(seen.0 && seen.1, "{seen:?}");
+    }
+
+    #[test]
+    fn adult_kelp_needs_warm_water_over_solid_ground() {
+        let (w, d) = env("kp_adult");
+        let mut lengths = Vec::new();
+        for seed in 1..40u32 {
+            pond(&w);
+            if seed % 3 == 0 {
+                tile(&w, ROOT + 3).set_foreground_contents(1);
+            }
+            srand(seed);
+            lengths.push(kelp_at(&d, ROOT, true).expect("kelp").n());
+        }
+        assert!(lengths.iter().any(|n| *n > 1) && lengths.contains(&2), "{lengths:?}");
+        // water that is too cold, a root that is not wet, a root over air or water
+        pond(&w);
+        tile(&w, 1000).update(|t| {
+            t.type_index = 3;
+            t.sun_light = 255;
+        });
+        tile(&w, 999).set_type_index(6);
+        assert!(kelp_at(&d, 1000, true).is_none());
+        assert!(kelp_at(&d, 5, false).is_none());
+        tile(&w, ROOT - 1).set_type_index(3);
+        assert!(kelp_at(&d, ROOT, false).is_none());
+    }
+
+    #[test]
+    fn saved_kelp_catches_up_and_replicas_follow() {
+        let (w, d) = env("kp_load");
+        pond(&w);
+        let k = kelp(&d);
+        let me: ObjRef = k.clone();
+        k.plant.borrow_mut().age = 100.0;
+        let mut dict = k.get_save_dict(&me);
+        dict.map.insert("saveTime".to_string(), PlistValue::real_f64(w.world_time() - 3000.0));
+        put_float(&mut dict, "availableFood", 0.0);
+        put_float(&mut dict, "growthTimer", 400.0);
+        let back = KelpPlant::init_with_world_dynamic_world_save_dict_cache_tree_density_noise_function_season_offset_noise_function(&w, &d, &dict, None, None, None).unwrap();
+        assert!(back.n() > 0);
+        // blocked growth resets the timer
+        pond(&w);
+        tile(&w, ROOT + 1).set_foreground_contents(1);
+        let blocked = KelpPlant::init_with_world_dynamic_world_save_dict_cache_tree_density_noise_function_season_offset_noise_function(&w, &d, &dict, None, None, None).unwrap();
+        assert_eq!(blocked.kelp.borrow().growth_timer, 0.0);
+        // frozen plants are not caught up; very old ones die; those in compost age to the limit
+        let mut frozen = dict.clone();
+        frozen.map.insert("frozen".to_string(), PlistValue::boolean(true));
+        assert!(KelpPlant::init_with_world_dynamic_world_save_dict_cache_tree_density_noise_function_season_offset_noise_function(&w, &d, &frozen, None, None, None).is_some());
+        let mut old = dict.clone();
+        old.map.insert("saveTime".to_string(), PlistValue::real_f64(w.world_time() - 1.0e9));
+        srand(2);
+        assert!(KelpPlant::init_with_world_dynamic_world_save_dict_cache_tree_density_noise_function_season_offset_noise_function(&w, &d, &old, None, None, None).is_some());
+        tile(&w, ROOT - 1).set_type_index(0x31);
+        assert!(KelpPlant::init_with_world_dynamic_world_save_dict_cache_tree_density_noise_function_season_offset_noise_function(&w, &d, &old, None, None, None).is_some());
+        // replicas
+        let mut net = k.plant_creation_net_data(&me);
+        net.extra_data = 3;
+        let copy = KelpPlant::init_with_net_data(&w, &d, None, &net.to_vec()).unwrap();
+        assert_eq!(copy.n(), 3);
+        k.remote_update(&me, &net.to_vec());
+        assert_eq!(k.n(), 3);
+        net.extra_data = 1;
+        k.remote_update(&me, &net.to_vec());
+        assert_eq!(k.n(), 1);
+        k.remote_update(&me, &net.to_vec());
+        // a replica cannot be built in a block that is not loaded
+        for mx in 0..2 {
+            *w.macro_tiles().get(mx).unwrap().physical_block.borrow_mut() = None;
+        }
+        assert!(KelpPlant::init_with_net_data(&w, &d, None, &net.to_vec()).is_none());
+        net.extra_data = 4;
+        k.remote_update(&me, &net.to_vec());
+        assert!(kelp_at(&d, ROOT, false).is_none());
+        k.init_sub_derived_items(&me);
+        let copy_ref: ObjRef = copy.clone();
+        copy.update_accurate_dt_is_simulation(&copy_ref, 1000.0, 1000.0, false);
+        assert_eq!(KELP_PLANT_CLASS.name, "KelpPlant");
+        assert_eq!(k.class_info().name, "KelpPlant");
+    }
+
+    #[test]
+    fn kelp_harvests_cascade_upwards() {
+        let (w, d) = env("kp_harvest");
+        for seed in 1..40u32 {
+            pond(&w);
+            let k = kelp(&d);
+            let me: ObjRef = k.clone();
+            k.plant.borrow_mut().age = 5000.0;
+            k.set_n(8);
+            for y in (ROOT + 1)..=(ROOT + 8) {
+                tile(&w, y).set_foreground_contents(FG_KELP);
+            }
+            srand(seed);
+            k.tile_harvested_remove_blockhead_correct_tool_multiplier(&me, IntPair { x: X, y: ROOT + 3 }, None, 2);
+            assert_eq!(k.n(), 2);
+        }
+        pond(&w);
+        let k = kelp(&d);
+        let me: ObjRef = k.clone();
+        // wrong column, below the root, bare tiles, far above, the root itself
+        assert_eq!(
+            k.tile_harvested_remove_blockhead_correct_tool_multiplier(&me, IntPair { x: X + 1, y: ROOT + 1 }, None, 1),
+            0
+        );
+        assert_eq!(
+            k.tile_harvested_remove_blockhead_correct_tool_multiplier(&me, IntPair { x: X, y: ROOT - 1 }, None, 1),
+            0
+        );
+        k.set_n(3);
+        assert_eq!(
+            k.tile_harvested_remove_blockhead_correct_tool_multiplier(&me, IntPair { x: X, y: ROOT + 2 }, None, 1),
+            0
+        );
+        assert_eq!(
+            k.tile_harvested_remove_blockhead_correct_tool_multiplier(&me, IntPair { x: X, y: ROOT + 20 }, None, 1),
+            0
+        );
+        assert_eq!(
+            k.tile_harvested_remove_blockhead_correct_tool_multiplier(&me, IntPair { x: X, y: ROOT }, None, 1),
+            1
+        );
+        assert!(me.needs_removed());
+        // blocks that are gone while harvesting
+        pond(&w);
+        let k = kelp(&d);
+        let me: ObjRef = k.clone();
+        k.set_n(3);
+        for mx in 0..2 {
+            *w.macro_tiles().get(mx).unwrap().physical_block.borrow_mut() = None;
+        }
+        assert_eq!(
+            k.tile_harvested_remove_blockhead_correct_tool_multiplier(&me, IntPair { x: X, y: ROOT + 2 }, None, 1),
+            0
+        );
+    }
+
+    #[test]
+    fn kelp_at_the_top_of_the_loaded_world_and_other_corners() {
+        let (w, d) = env("kp_corner");
+        pond(&w);
+        for y in (ROOT + 1)..=(ROOT + 3) {
+            tile(&w, y).set_foreground_contents(FG_KELP);
+        }
+        let k = kelp(&d);
+        assert_eq!(tile(&w, ROOT + 1).foreground_contents(), 0);
+        assert_eq!(k.plant_type(), PLANT_KELP);
+        // a short offline time leaves the growth timer too small to grow
+        let me: ObjRef = k.clone();
+        let mut dict = k.get_save_dict(&me);
+        dict.map.insert("saveTime".to_string(), PlistValue::real_f64(w.world_time() - 1.0));
+        put_float(&mut dict, "growthTimer", 1.0);
+        put_float(&mut dict, "availableFood", 100.0);
+        let back = KelpPlant::init_with_world_dynamic_world_save_dict_cache_tree_density_noise_function_season_offset_noise_function(&w, &d, &dict, None, None, None).unwrap();
+        assert_eq!(back.n(), 0);
+        // rows above the loaded world stop an adult stalk
+        for y in 28..=31 {
+            tile(&w, y).update(|t| {
+                t.type_index = if y == 28 { 6 } else { 3 };
+                t.sun_light = 255;
+            });
+        }
+        for mx in 0..2 {
+            *w.macro_tiles().get(2 + mx).unwrap().physical_block.borrow_mut() = None;
+        }
+        let mut stopped = false;
+        for seed in 1..80u32 {
+            srand(seed);
+            for k in kelp_at(&d, 29, true).into_iter() {
+                stopped |= k.n() > 0 && k.n() < 15;
+                // the stalk reaches into the unloaded rows: dying of old age skips them, growth finds no water
+                let me: ObjRef = k.clone();
+                k.set_n(3);
+                k.die_of_old_age(&me);
+                k.set_n(3);
+                k.kelp.borrow_mut().growth_timer = 1.0e6;
+                k.update_accurate_dt_is_simulation(&me, 300.0, 300.0, false);
+            }
+            for y in 30..=31 {
+                tile(&w, y).set_foreground_contents(0);
+            }
+        }
+        assert!(stopped);
     }
 }

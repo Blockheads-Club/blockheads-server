@@ -291,10 +291,9 @@ impl Terrain {
         let mut f = fabsf(noise_xy(&self.fault, x_f as f64, y_f as f64, 1) as f32);
         if 0.0f32 < f {
             if 0.2f32 <= f {
-                let mut t = (f - 0.2f32) * 2.0f32;
-                if t <= 0.0f32 {
-                    t = 0.0f32;
-                }
+                // f >= 0.2 makes `t` non-negative, so the original's `if (t <= 0.0f) t = 0.0f` only ever stores +0.0
+                // over +0.0
+                let t = (f - 0.2f32) * 2.0f32;
                 f = 0.5f32 * mix + powf(t, 2.0f32);
             } else {
                 f = powf(2.0f32 * f, 2.0f32);
@@ -1130,5 +1129,118 @@ mod tests {
         assert_eq!(t.get_rock_and_dirt_height(&p, 1024), (0, 1));
         assert_eq!(t.max_of_rock_and_dirt_height(&p, -1), 1024);
         assert_eq!(t.lake_height(&p, -1), 1025);
+    }
+
+    /// Corner cases of the per-column tables and of the flow-out passes on hand-made terrain.
+    #[test]
+    fn table_lookups_wrap_and_flat_worlds_have_no_ground() {
+        let (t, p) = sample_terrain();
+        let wt = p.wt();
+        // x one past the end wraps once
+        assert_eq!(t.max_of_rock_and_dirt_height(&p, wt + 1), t.max_of_rock_and_dirt_height(&p, 1));
+        assert_eq!(t.lake_height(&p, wt + 1), t.lake_height(&p, 1));
+        // a world without any rock or dirt has no ground level
+        let flat = Terrain::new_empty(32, 1);
+        assert_eq!(flat.unmodified_ground_level(&p, 10), 0);
+        // W == 0 gives an empty terrain instead of an endless shift
+        let none = Terrain::new_empty(0, 1);
+        assert!(none.rock_heights.is_empty());
+    }
+
+    /// Hand-made heights: negative and out-of-range neighbours of the double index, caves under the surface of
+    /// the neighbour columns.
+    #[test]
+    fn refine_terrain_over_hand_made_heights_and_caves() {
+        use crate::trees::tree::testenv::env;
+        let (world, _d) = env("tr_refine");
+        let w = world.clone();
+        for seed in 1..40i32 {
+            let mut t = Terrain::new_empty(2, 5);
+            let mk = |fx, fy, amp, s| {
+                Some(Rc::new(
+                    NoiseFunction::init_with_frequency_x_frequency_y_frequency_z_amplitude_seed_tileable_x_tileable_y_loop_persistance(
+                        fx, fy, 1, amp, s, true, false, false, 1.5,
+                    ),
+                ))
+            };
+            t.cave_a = mk(2, 3, 1.0, seed);
+            t.cave_b = mk(4, 8, 1.0, seed + 50);
+            t.fault = mk(2, 8, 0.9, seed + 90);
+            let wt = 64usize;
+            for x in 0..wt {
+                let r = if x % 2 == 0 { 40 } else { 20 };
+                t.rock_heights[x] = if seed % 7 == 0 && x == 5 { -7 } else { r };
+                t.dirt_heights[x] = t.rock_heights[x];
+                t.lake_heights[x] = if seed % 7 == 0 && x == 5 {
+                    -100
+                } else if x % 3 == 0 {
+                    55
+                } else {
+                    0
+                };
+            }
+            // (a world with a negative rock height has no caves to flood)
+            let caves = if seed % 7 == 0 {
+                0
+            } else if seed % 2 == 0 {
+                2
+            } else {
+                1
+            };
+            let rules = CustomRules { caves, ..CustomRules::default() };
+            let p = GenParams { w: 2, rules, expert: false };
+            glibc_rand::srand(seed as u32);
+            for slice in 0..8 {
+                t.refine_terrain_slice(&p, &world, slice * 8);
+            }
+        }
+        let flowing = Terrain::new_empty(2, 5);
+        let p = GenParams { w: 2, rules: CustomRules::default(), expert: false };
+        let tile = tile_at_world_position_loaded(10, 10, &w).unwrap();
+        // at the bottom row nothing flows; elsewhere the loaded neighbours are dirt-filled, unloaded ones skipped
+        flowing.recursively_flow_out_dirt_from_tile(&p, &w, &tile, IntPair { x: 10, y: 0 });
+        for mx in 0..2 {
+            *w.macro_tiles().get(mx).unwrap().physical_block.borrow_mut() = None;
+        }
+        for seed in 1..10u32 {
+            glibc_rand::srand(seed);
+            flowing.recursively_flow_out_dirt_from_tile(&p, &w, &tile, IntPair { x: 10, y: 10 });
+        }
+    }
+
+    /// Beach sand on the rock line above the treasure height gets flint chests in a narrow noise window that depends
+    /// on the treasure rule.
+    #[test]
+    fn beach_treasure_windows_of_every_rule() {
+        let world = World::alloc(32);
+        let mut found = 0;
+        for treasure in [1u8, 2, 3] {
+            for rainfall in [0u8, 2, 4] {
+                for seed in 1..3i32 {
+                    let (mut t, mut p) = sample_terrain();
+                    let mk = |fx, fy, amp, s| {
+                        Some(Rc::new(
+                            NoiseFunction::init_with_frequency_x_frequency_y_frequency_z_amplitude_seed_tileable_x_tileable_y_loop_persistance(
+                                fx, fy, 1, amp, s, true, false, false, 1.5,
+                            ),
+                        ))
+                    };
+                    t.sand = mk(2, 2, 1.0 + f64::from(seed) * 0.2, seed);
+                    t.flint = mk(2, 2, 1.0 + f64::from(seed) * 0.4, seed + 40);
+                    t.rock_heights = vec![500; 1024];
+                    t.dirt_heights = vec![520; 1024];
+                    p.rules.treasure = treasure as _;
+                    p.rules.rainfall = rainfall as _;
+                    for x_pos in (0..32).step_by(16) {
+                        let pb = world.take_physical_block();
+                        pb.x_pos.set(x_pos);
+                        pb.y_pos.set(15);
+                        t.generate_block_tiles(&p, pb, x_pos, 15, Some(&world));
+                        found += pb.tiles.iter().filter(|c| c.get().contents == 0x5e).count();
+                    }
+                }
+            }
+        }
+        assert!(found > 0);
     }
 }

@@ -864,13 +864,11 @@ impl World {
     /// block; graveyard.push(pb) }` (at most ONE block per call).
     pub fn trim_free_physical_blocks(&self) {
         if self.free_physical_blocks.borrow().len() > FREE_BLOCK_KEEP {
-            let pb = self.free_physical_blocks.borrow_mut().pop_front();
-            if let Some(pb) = pb {
-                for c in pb.client_light_blocks.borrow_mut().iter_mut() {
-                    *c = None;
-                }
-                self.graveyard.borrow_mut().push(pb);
+            let pb = self.free_physical_blocks.borrow_mut().pop_front().expect("more than FREE_BLOCK_KEEP free blocks");
+            for c in pb.client_light_blocks.borrow_mut().iter_mut() {
+                *c = None;
             }
+            self.graveyard.borrow_mut().push(pb);
         }
     }
 
@@ -1078,5 +1076,67 @@ mod tests {
             IntPair { x: 0, y: 0 },
             &crate::world::helpers::testutil::new_obj()
         ));
+    }
+}
+
+/// Accessors and the `WorldApi` view that no other test touches.
+#[cfg(test)]
+mod accessor_tests {
+    use super::*;
+    use crate::objects::base::WorldApi;
+    use crate::world::helpers::testutil::new_obj;
+
+    #[test]
+    fn tile_accessors_debug_and_macro_tiles() {
+        let pb: PhysicalBlockRef = Box::leak(Box::new(PhysicalBlock::new_fresh()));
+        let t = TileRef::new(pb, 3);
+        t.update(|x| {
+            x.zone_type_index = 1;
+            x.season_offset = 2;
+            x.terrain_slow_factor = 3;
+            x.artificial_light_r = 4;
+            x.artificial_light_g = 5;
+            x.artificial_light_b = 6;
+            x.artificial_heat = -7;
+        });
+        assert_eq!((t.zone_type_index(), t.season_offset(), t.terrain_slow_factor()), (1, 2, 3));
+        assert_eq!((t.artificial_light_r(), t.artificial_light_g(), t.artificial_light_b()), (4, 5, 6));
+        assert_eq!(t.artificial_heat(), -7);
+        assert!(format!("{:?}", t).starts_with("TileRef("));
+        let mt = MacroTileArray::new_zeroed(2);
+        assert!(!mt.is_empty() && mt.len() == 2);
+        assert!(MacroTileArray::new_zeroed(0).is_empty());
+    }
+
+    #[test]
+    fn world_getters_and_the_api_view() {
+        let w = World::alloc(32);
+        assert!(w.world_name().is_none() && w.welcome_message().is_none());
+        assert!(w.server_password().is_none() && w.client_password().is_none());
+        assert!(w.global_prices().is_none() && w.world_price_multipliers().is_none());
+        assert!(w.portal_chest_manager().is_none());
+        assert!(w.server_clients().borrow().is_none());
+        assert!(w.found_items_list().borrow().is_none());
+        assert!(w.app_database().is_none());
+        assert!(w.client_tile_loader().is_none() && w.cloud_interface().is_none() && w.cache().is_none());
+        assert!(w.multiplayer_load_dict().is_none() && w.dynamic_object_id_request_info_dicts().is_none());
+        // the world api without hooks
+        let obj = new_obj();
+        assert!(!WorldApi::tile_is_protected_at_pos_against_blockhead(&*w, IntPair { x: 1, y: 1 }, &obj));
+        let mt: crate::objects::base::MacroTileRef = w.macro_tiles().get(0).unwrap();
+        assert!(!WorldApi::load_physical_block_for_macro_tile_at_x_y_load_surrounding_blocks_create_if_not_created(
+            &*w, &mt, 0, 5000, false, false
+        ));
+        // and with the block hooks installed
+        crate::world::blocks::install_ops_hooks(&w);
+        assert!(!WorldApi::tile_is_protected_at_pos_against_blockhead(&*w, IntPair { x: 1, y: 1 }, &obj));
+        // trimming drops one free block beyond the 32 kept
+        let taken: Vec<_> = (0..FREE_BLOCK_KEEP + 2).map(|_| w.take_physical_block()).collect();
+        for pb in taken {
+            w.free_physical_blocks.borrow_mut().push_back(pb);
+        }
+        let before = w.free_physical_blocks_len();
+        w.trim_free_physical_blocks();
+        assert_eq!(w.free_physical_blocks_len(), before - 1);
     }
 }

@@ -120,17 +120,14 @@ pub trait PlantLike: DynamicObject {
     fn tile_is_kind_of_self(&self, _tile: &Tile) -> bool {
         false
     }
-    /// `-tileHarvested:removeBlockhead:correctToolMultiplier:` (Plant: remove the plant, 0 items).
+    /// `-tileHarvested:removeBlockhead:correctToolMultiplier:` (every concrete plant overrides it).
     fn tile_harvested_remove_blockhead_correct_tool_multiplier(
         &self,
         me: &ObjRef,
-        _tile_pos: IntPair,
-        _remove_blockhead: Option<&ObjRef>,
-        _correct_tool_multiplier: i32,
-    ) -> i32 {
-        plant_remove_plant_without_creating_freeblocks(me);
-        0
-    }
+        tile_pos: IntPair,
+        remove_blockhead: Option<&ObjRef>,
+        correct_tool_multiplier: i32,
+    ) -> i32;
     /// `-gatherProgressForTile:` (Plant: the plain ivar).
     fn gather_progress_for_tile(&self, _tile_pos: IntPair) -> i32 {
         self.plant_state().borrow().gather_progress
@@ -399,9 +396,8 @@ pub fn plant_init_with_world_dynamic_world_at_position_cache_max_age_gene_growth
 ) -> bool {
     let wref: WorldRef = world.clone();
     let dref: DynamicWorldRef = dw.clone();
-    if !base_init_with_world_dynamic_world_at_position_cache(me, &wref, &dref, pos, cache) {
-        return false;
-    }
+    // `base_init_with_world_dynamic_world_at_position_cache` answers true on every path
+    let _ = base_init_with_world_dynamic_world_at_position_cache(me, &wref, &dref, pos, cache);
     let p = me.pos();
     let tile = tile_loaded(world, p.x, p.y);
     let blocked = match tile {
@@ -467,12 +463,11 @@ pub fn plant_init_with_world_dynamic_world_save_dict_cache_tree_density_noise_fu
     cache: CacheRef,
     tdnf: Option<Rc<NoiseFunction>>,
     sonf: Option<Rc<NoiseFunction>>,
-) -> bool {
+) {
     let wref: WorldRef = world.clone();
     let dref: DynamicWorldRef = dw.clone();
-    if !base_init_with_world_dynamic_world_save_dict_cache(me, &wref, &dref, save_dict, cache) {
-        return false;
-    }
+    // `base_init_with_world_dynamic_world_save_dict_cache` answers true on every path
+    let _ = base_init_with_world_dynamic_world_save_dict_cache(me, &wref, &dref, save_dict, cache);
     {
         let mut st = pl(me).plant_state().borrow_mut();
         st.tree_density_noise_function = tdnf;
@@ -480,7 +475,6 @@ pub fn plant_init_with_world_dynamic_world_save_dict_cache_tree_density_noise_fu
     }
     plant_load_save_dict_values(me, save_dict);
     dw_changed(me);
-    true
 }
 
 /// `-[Plant initWithWorld:dynamicWorld:cache:netData:]` (client replica path).
@@ -1375,5 +1369,386 @@ mod integration_tests {
 
     fn new_mutable_dict_for_test() -> PlistDict {
         crate::objects::base::new_mutable_dict()
+    }
+}
+
+/// Scenario tests of the shared plant plumbing: the base class defaults, neighbour changes and the class tables.
+#[cfg(test)]
+mod scenario_tests {
+    use super::*;
+    use crate::objects::base::DynamicObjectBase;
+    use crate::objects::handle;
+    use crate::plants::kelp::KelpPlant;
+    use crate::plants::simple_plants::NormalPlantKind;
+    use crate::trees::tree::testenv::env;
+    use crate::world::tiles::tile_at_world_position_loaded;
+
+    /// A plant that keeps every `Plant` default.
+    struct Bare {
+        base: RefCell<DynamicObjectBase>,
+        st: RefCell<PlantState>,
+        world: Rc<World>,
+        dw: Rc<DynamicWorld>,
+    }
+    impl DynamicObject for Bare {
+        fn base(&self) -> &RefCell<DynamicObjectBase> {
+            &self.base
+        }
+        fn class_info(&self) -> &'static ClassInfo {
+            &PLANT_CLASS
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+    impl PlantLike for Bare {
+        fn plant_state(&self) -> &RefCell<PlantState> {
+            &self.st
+        }
+        fn plant_world(&self) -> Rc<World> {
+            self.world.clone()
+        }
+        fn plant_dw(&self) -> Rc<DynamicWorld> {
+            self.dw.clone()
+        }
+        fn tile_harvested_remove_blockhead_correct_tool_multiplier(
+            &self,
+            _me: &ObjRef,
+            _tile_pos: IntPair,
+            _remove_blockhead: Option<&ObjRef>,
+            _correct_tool_multiplier: i32,
+        ) -> i32 {
+            0
+        }
+    }
+
+    #[test]
+    fn the_base_class_defaults() {
+        let (w, d) = env("pl_bare");
+        let bare = handle::alloc_obj(|sw| Bare {
+            base: RefCell::new(DynamicObjectBase::alloc_zeroed_with(sw)),
+            st: RefCell::new(PlantState::default()),
+            world: w.clone(),
+            dw: d.clone(),
+        });
+        let me: ObjRef = bare.clone();
+        me.base().borrow_mut().pos = IntPair { x: 20, y: 10 };
+        assert_eq!(bare.plant_type(), PLANT_NOTHING);
+        assert!(bare.is_required_soil_type(6) && !bare.is_required_soil_type(1));
+        assert!(!bare.tile_is_kind_of_self(&Tile::default()));
+        bare.set_gather_progress_for_tile(4, IntPair { x: 0, y: 0 });
+        assert_eq!(bare.gather_progress_for_tile(IntPair { x: 0, y: 0 }), 4);
+        assert_eq!(bare.dropped_item_type(), 0);
+        assert!(!bare.can_breed());
+        assert_eq!((bare.number_of_occupied_tiles_above(), bare.number_of_occupied_tiles_below()), (0, 0));
+        assert!(!bare.is_growing_in_compost(&me));
+        tile_at_world_position_loaded(20, 9, &w).unwrap().set_type_index(48);
+        assert!(bare.is_growing_in_compost(&me));
+        bare.set_flowering(&me, true);
+        assert!(bare.is_flowering());
+        assert_eq!(bare.available_food(), 0.0);
+        bare.set_available_food(3.0);
+        // tiles that are not loaded are no compost
+        for mx in 0..2 {
+            *w.macro_tiles().get(mx).unwrap().physical_block.borrow_mut() = None;
+        }
+        assert!(!bare.is_growing_in_compost(&me));
+        // the remaining default selectors
+        assert_eq!(me.class_info().name, "Plant");
+        assert!(me.as_any().is::<Bare>());
+        assert!(Rc::ptr_eq(&bare.plant_dw(), &d));
+        assert_eq!(
+            bare.tile_harvested_remove_blockhead_correct_tool_multiplier(&me, IntPair { x: 0, y: 0 }, None, 1),
+            0
+        );
+    }
+
+    /// Plants that stand on the lowest row of a block while the block below is not loaded.
+    #[test]
+    fn plants_above_unloaded_blocks_and_odd_objects() {
+        let (w, d) = env("pl_unloaded_below");
+        assert!(as_plant(&crate::world::helpers::testutil::dw_obj_of_type(0).obj).is_none());
+        assert!(plant_environment_ok(IntPair { x: 20, y: 32 }, None, &w, 0.0));
+        let flax = NormalPlant::init_with_world_dynamic_world_at_position_cache_max_age_gene_growth_rate_gene_tree_density_noise_function_season_offset_noise_function_adult_plant(
+            NormalPlantKind::Flax, &w, &d, IntPair { x: 20, y: 32 }, None, 128, 128, None, None, false,
+        );
+        let flax_ref: ObjRef = flax.clone().expect("flax on the lowest loaded row");
+        assert!(flax_ref.occupies_foreground_contents());
+        let _ = (plant_growth_rate_gene_variation(&flax_ref), plant_is_growing_in_compost(&flax_ref));
+        for mx in 0..2 {
+            *w.macro_tiles().get(mx).unwrap().physical_block.borrow_mut() = None;
+        }
+        flax_ref.world_changed(&flax_ref, &mut vec![IntPair { x: 20, y: 31 }]);
+        assert!(!flax_ref.needs_removed());
+        {
+            let p = as_plant(&flax_ref).unwrap();
+            p.plant_state().borrow_mut().age_counter = 1_000_000.0;
+        }
+        plant_update(&flax_ref, 1.0, 1.0, false);
+    }
+
+    #[test]
+    fn neighbour_changes_pull_plants_that_lost_their_soil_or_room() {
+        let (w, d) = env("pl_world_changed");
+        let tile = |x, y| tile_at_world_position_loaded(x, y, &w).unwrap();
+        // flax loses the soil below it
+        let flax = NormalPlant::init_with_world_dynamic_world_at_position_cache_max_age_gene_growth_rate_gene_tree_density_noise_function_season_offset_noise_function_adult_plant(
+            NormalPlantKind::Flax, &w, &d, IntPair { x: 20, y: 10 }, None, 128, 128, None, None, false,
+        )
+        .unwrap();
+        let flax_ref: ObjRef = flax.clone();
+        flax_ref.world_changed(&flax_ref, &mut vec![IntPair { x: 20, y: 9 }]);
+        assert!(!flax_ref.needs_removed());
+        tile(20, 9).set_type_index(2);
+        flax_ref.world_changed(&flax_ref, &mut vec![IntPair { x: 21, y: 9 }, IntPair { x: 20, y: 9 }]);
+        assert!(flax_ref.needs_removed());
+        // removed plants and vines ignore changes
+        flax_ref.world_changed(&flax_ref, &mut vec![IntPair { x: 20, y: 9 }]);
+        // kelp with something solid in its stalk
+        tile(20, 9).set_type_index(6);
+        for y in 10..=14 {
+            tile(20, y).update(|t| {
+                t.type_index = 3;
+                t.foreground_contents = 0;
+            });
+        }
+        let kelp = KelpPlant::init_with_world_dynamic_world_at_position_cache_max_age_gene_growth_rate_gene_tree_density_noise_function_season_offset_noise_function_adult_plant(
+            &w, &d, IntPair { x: 20, y: 10 }, None, 128, 128, None, None, false,
+        )
+        .unwrap();
+        let kelp_ref: ObjRef = kelp.clone();
+        kelp.kelp.borrow_mut().number_of_occupied_tiles_above = 4;
+        tile(20, 12).set_type_index(6);
+        kelp_ref.world_changed(&kelp_ref, &mut vec![IntPair { x: 20, y: 12 }]);
+        assert!(kelp.kelp.borrow().number_of_occupied_tiles_above < 4);
+        let vine_ref: ObjRef = crate::plants::vine::VinePlant::init_with_net_data(&w, &d, None, &{
+            let mut n = kelp.plant_creation_net_data(&kelp_ref);
+            n.dynamic_object_net_data.pos_x = 25;
+            n.dynamic_object_net_data.pos_y = 20;
+            crate::types::structs::WireStruct::to_vec(&n)
+        })
+        .unwrap();
+        vine_ref.world_changed(&vine_ref, &mut vec![IntPair { x: 25, y: 19 }]);
+    }
+
+    #[test]
+    fn the_class_tables_build_every_plant_type() {
+        let (w, d) = env("pl_tables");
+        for (i, ty) in [10, 11, 12, 27, 33, 34, 58, 59, 61, 62].iter().enumerate() {
+            let x = 22 + 2 * i as i32;
+            let pos = IntPair { x, y: 10 };
+            let plant_type = (1..=10).find(|p| plant_object_type_for_plant_type(*p) == *ty).unwrap();
+            if *ty == 34 {
+                tile_at_world_position_loaded(x, 10, &w).unwrap().set_type_index(3);
+            }
+            if *ty == 58 {
+                tile_at_world_position_loaded(x, 10, &w).unwrap().set_type_index(6);
+            }
+            let made = new_plant_for_type(plant_type, &w, &d, pos, None, 128, 128, None, None, false);
+            let obj = made.expect("plant");
+            assert_eq!(obj.object_type(), *ty);
+            let dict = obj.get_save_dict(&obj);
+            assert!(new_plant_from_save_dict(*ty, &w, &d, &dict, None, None, None).is_some());
+            let net = plant_creation_net_data_of(&obj);
+            assert!(new_plant_from_net_data(*ty, &w, &d, None, &net).is_some());
+        }
+        assert!(new_plant_for_type(99, &w, &d, IntPair { x: 3, y: 10 }, None, 1, 1, None, None, false).is_none());
+        let PlistValue::Dict(empty) = PlistValue::mutable_dict() else { unreachable!() };
+        assert!(new_plant_from_save_dict(99, &w, &d, &empty, None, None, None).is_none());
+        assert!(new_plant_from_net_data(99, &w, &d, None, &[0u8; 0x28]).is_none());
+    }
+
+    fn plant_creation_net_data_of(o: &ObjRef) -> Vec<u8> {
+        crate::types::structs::WireStruct::to_vec(&pl(o).plant_creation_net_data(o))
+    }
+
+    /// Every plant class over odd soils, water, unloaded neighbours and block borders, saved and loaded again.
+    #[test]
+    fn plants_over_odd_places_and_unloaded_blocks() {
+        use crate::rng::glibc_rand::srand;
+        use crate::trees::tree::testenv::wipe;
+        let (w, d) = env("pl_gauntlet");
+        let mt = w.macro_tiles();
+        let saved: Vec<_> = (0..4).map(|i| *mt.get(i).unwrap().physical_block.borrow()).collect();
+        let at = |x: i32, y: i32| tile_at_world_position_loaded(x, y, &w);
+        let mut lcg = 7u64;
+        let mut pick = |n: u64| {
+            lcg = lcg.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            ((lcg >> 33) % n) as usize
+        };
+        for seed in 0..900u32 {
+            let plant_type = 1 + (seed % 10) as i32;
+            let x = [20, 31, 32, 20, 33][pick(5)];
+            let y = [10, 32, 10, 31, 10, 33][pick(6)];
+            let soil = [6u8, 7, 6, 48, 27, 58][pick(6)];
+            for tr in at(x, y - 1).into_iter() {
+                tr.update(|t| t.type_index = soil);
+            }
+            // water above the root (kelp), sometimes a lid on it
+            if pick(4) < 2 {
+                for dy in 0..8 {
+                    for tr in at(x, y + dy).into_iter() {
+                        tr.update(|t| {
+                            t.type_index = 3;
+                            t.foreground_contents = 0;
+                        });
+                    }
+                }
+            }
+            if pick(4) == 1 {
+                for tr in at(x, y + 5).into_iter() {
+                    tr.update(|t| t.type_index = 6);
+                }
+            }
+            // vines hang from a ceiling
+            if pick(5) == 0 {
+                for tr in at(x, y + 1).into_iter() {
+                    tr.update(|t| t.type_index = 6);
+                }
+            }
+            let unload: &[usize] = [&[][..], &[1, 3], &[2, 3], &[0, 1], &[0], &[1], &[2], &[3]][pick(8)];
+            if pick(4) == 3 {
+                for &i in unload {
+                    *mt.get(i).unwrap().physical_block.borrow_mut() = None;
+                }
+            }
+            srand(seed + 1);
+            w.set_world_time(f64::from(seed) * 3000.0);
+            let adult = pick(3) != 1;
+            let Some(p) = new_plant_for_type(plant_type, &w, &d, IntPair { x, y }, None, 128, 128, None, None, adult)
+            else {
+                for tr in at(x, y - 1).into_iter() {
+                    tr.update(|t| t.type_index = 6);
+                }
+                wipe(&w, x);
+                continue;
+            };
+            let pl = as_plant(&p).unwrap();
+            for step in 0..330u32 {
+                if step == 5 || step == 60 {
+                    for &i in unload {
+                        *mt.get(i).unwrap().physical_block.borrow_mut() = None;
+                    }
+                }
+                if step == 40 || step == 120 {
+                    for (i, pb) in saved.iter().enumerate() {
+                        *mt.get(i).unwrap().physical_block.borrow_mut() = *pb;
+                    }
+                }
+                {
+                    let mut st = pl.plant_state().borrow_mut();
+                    if step % 11 == 6 {
+                        st.age_counter = 1_000_000.0;
+                    }
+                    if step % 29 == 3 {
+                        st.age = st.max_age + 1.0;
+                    }
+                }
+                w.set_world_time(f64::from(seed) * 3000.0 + f64::from(step) * 40.0);
+                p.update_accurate_dt_is_simulation(&p, 1.0, 1.0, step % 5 == 0);
+                if step % 37 == 0 {
+                    p.world_changed(
+                        &p,
+                        &mut vec![IntPair { x, y: y - 1 }, IntPair { x, y: y + 2 }, IntPair { x: x + 1, y }],
+                    );
+                }
+                if step == 200 {
+                    let dict = p.get_save_dict(&p);
+                    for back in new_plant_from_save_dict(p.object_type(), &w, &d, &dict, None, None, None).into_iter() {
+                        back.update_accurate_dt_is_simulation(&back, 1.0, 1.0, false);
+                        back.set_needs_removed(&back, true);
+                        back.remove_from_macro_block(&back);
+                    }
+                }
+            }
+            for (i, pb) in saved.iter().enumerate() {
+                *mt.get(i).unwrap().physical_block.borrow_mut() = *pb;
+            }
+            p.set_needs_removed(&p, true);
+            p.remove_from_macro_block(&p);
+            for tr in at(x, y - 1).into_iter() {
+                tr.update(|t| t.type_index = 6);
+            }
+            wipe(&w, x);
+            for yy in 29..36 {
+                for tr in at(x, yy).into_iter() {
+                    tr.update(|t| {
+                        *t = Tile {
+                            type_index: if yy < 32 { 6 } else { 2 },
+                            back_wall_type_index: 2,
+                            sun_light: 255,
+                            ..Tile::default()
+                        }
+                    });
+                }
+            }
+        }
+    }
+
+    /// Normal plants whose neighbouring rows are not loaded: saved flowering, flowering switches, NPC spawns and
+    /// the regrow of old plants.
+    #[test]
+    fn normal_plants_beside_unloaded_rows() {
+        use crate::objects::handle::downcast;
+        use crate::rng::glibc_rand::srand;
+        let (w, d) = env("pl_normal_unloaded");
+        let mt = w.macro_tiles();
+        let saved: Vec<_> = (0..4).map(|i| *mt.get(i).unwrap().physical_block.borrow()).collect();
+        let restore = || {
+            for (i, pb) in saved.iter().enumerate() {
+                *mt.get(i).unwrap().physical_block.borrow_mut() = *pb;
+            }
+        };
+        let unload = |set: &[usize]| {
+            for &i in set {
+                *mt.get(i).unwrap().physical_block.borrow_mut() = None;
+            }
+        };
+        for tr in tile_at_world_position_loaded(20, 30, &w).into_iter() {
+            tr.set_type_index(6);
+        }
+        for plant_type in [1, 2, 3, 4, 5, 9, 10] {
+            srand(3);
+            let p = new_plant_for_type(plant_type, &w, &d, IntPair { x: 20, y: 31 }, None, 128, 128, None, None, false)
+                .expect("plant");
+            let np = downcast::<NormalPlant>(&p).unwrap();
+            // a flowering plant is loaded while the row above it is gone
+            np.plant.borrow_mut().flowering = true;
+            let dict = p.get_save_dict(&p);
+            unload(&[2, 3]);
+            let back = new_plant_from_save_dict(p.object_type(), &w, &d, &dict, None, None, None).unwrap();
+            assert!(downcast::<NormalPlant>(&back).unwrap().plant.borrow().flowering);
+            back.set_needs_removed(&back, true);
+            back.remove_from_macro_block(&back);
+            // the flowering switch finds no tile above
+            np.set_flowering(&p, false);
+            np.set_flowering(&p, true);
+            restore();
+            // old plants regrow, with the row above missing
+            for step in 0..40u32 {
+                for seed in 1..4u32 {
+                    srand(seed);
+                    unload(&[2, 3]);
+                    {
+                        let mut st = np.plant.borrow_mut();
+                        st.age = 5000.0;
+                        st.max_age = 100.0;
+                    }
+                    w.set_world_time(f64::from(step) * 1700.0);
+                    p.update_accurate_dt_is_simulation(&p, 1.0, 1.0, false);
+                    restore();
+                }
+            }
+            // the plant's own tile is gone while it feeds an animal
+            for seed in 1..40u32 {
+                srand(seed);
+                unload(&[0, 1]);
+                np.set_available_food(5000.0);
+                p.update_accurate_dt_is_simulation(&p, 1.0, 1.0, false);
+                restore();
+            }
+            p.set_needs_removed(&p, true);
+            p.remove_from_macro_block(&p);
+        }
     }
 }

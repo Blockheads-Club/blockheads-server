@@ -31,6 +31,14 @@ fn object_at_index<'a>(v: &'a PlistValue, i: usize) -> &'a PlistValue {
     }
 }
 
+/// An `NSMutableArray` holding `items`.
+fn mutable_array_of(items: Vec<PlistValue>) -> PlistValue {
+    let mut a = PlistValue::mutable_array();
+    let PlistValue::Array(x) = &mut a else { unreachable!() };
+    x.items = items;
+    a
+}
+
 fn data_bytes(v: &PlistValue) -> Option<&[u8]> {
     match v {
         PlistValue::Data(d) => Some(&d.bytes),
@@ -83,13 +91,8 @@ impl DynamicWorld {
         }
         let Some(PlistValue::Dict(client_dict)) = live.get_mut(&pid_key) else { return };
         if !client_dict.map.contains_key(&file_name) {
-            let mut arr = PlistValue::mutable_array();
-            if let PlistValue::Array(a) = &mut arr {
-                for _ in 0..8 {
-                    a.items.push(PlistValue::mutable_array());
-                }
-            }
-            client_dict.map.insert(file_name.clone(), arr);
+            let empty_slots = (0..8).map(|_| PlistValue::mutable_array()).collect();
+            client_dict.map.insert(file_name.clone(), mutable_array_of(empty_slots));
         }
         let Some(PlistValue::Array(current)) = client_dict.map.get_mut(&file_name) else { return };
         for i in 0..8usize {
@@ -117,26 +120,18 @@ impl DynamicWorld {
                                 let idx = crate::foundation::nsstring::int_value(k);
                                 item.borrow().update_sub_item_slot(&slot_data, idx);
                             }
-                            let new_save = item.borrow().save_data();
-                            if mem.items.is_empty() {
-                                mem.items.push(PlistValue::data(new_save));
-                            } else {
-                                mem.items[0] = PlistValue::data(new_save);
-                            }
+                            // the container was read from slot 0 of this very array
+                            mem.items[0] = PlistValue::data(item.borrow().save_data());
                         }
                     }
                 }
                 _ => {} // anything else (e.g. NSNull): slot untouched
             }
         }
-        let current_slots = client_dict.map.get(&file_name).cloned();
+        let current_slots = client_dict.map.get(&file_name).cloned().expect("inserted above");
         drop(live);
-        if let Some(cs) = current_slots {
-            if let Some(xml) = data_from_property_list(&cs) {
-                let gz = gzip_deflate(&xml);
-                self.client_blockhead_inventories_to_save.borrow_mut().insert(file_name, gz);
-            }
-        }
+        let xml = data_from_property_list(&current_slots).expect("property lists serialise");
+        self.client_blockhead_inventories_to_save.borrow_mut().insert(file_name, gzip_deflate(&xml));
     }
 
     /// `-loadClientBlockheadsDataForPlayerID:`: the join blob (XML plist, NOT gzipped) with keys
@@ -179,16 +174,15 @@ impl DynamicWorld {
             let player_dir = format!("players/{}/{}/{}/", sub(0, 1), sub(1, 1), sub(2, n.saturating_sub(2)));
             let dir_path = append_path_component(&self.world_save_directory, &player_dir);
             if let Ok(rd) = std::fs::read_dir(&dir_path) {
-                for entry in rd.flatten() {
-                    let file_name = entry.file_name().to_string_lossy().to_string();
-                    if file_name.contains("blockhead") {
-                        let file_path = append_path_component(&dir_path, &file_name);
-                        let db_key = format!("{}_{}", player_id, file_name);
-                        if !self.world_database.has_key(Some(&db_key)) {
-                            if let Ok(d) = std::fs::read(&file_path) {
-                                files.insert(format!("{}_{}", player_id, last_path_component(&file_path)), d);
-                            }
-                        }
+                let names = rd.flatten().map(|e| e.file_name().to_string_lossy().to_string());
+                // blockhead files that the database does not hold already
+                let wanted = |n: &String| {
+                    n.contains("blockhead") && !self.world_database.has_key(Some(&format!("{}_{}", player_id, n)))
+                };
+                for file_name in names.filter(wanted) {
+                    let file_path = append_path_component(&dir_path, &file_name);
+                    if let Ok(d) = std::fs::read(&file_path) {
+                        files.insert(format!("{}_{}", player_id, last_path_component(&file_path)), d);
                     }
                 }
             }
@@ -211,25 +205,21 @@ impl DynamicWorld {
                     match plist {
                         None => nslog!("Error loading blockhead inventory to memory"),
                         Some(plist) => {
-                            let mut slots = PlistValue::mutable_array();
-                            if let PlistValue::Array(sa) = &mut slots {
-                                for i in 0..8usize {
-                                    let mut s = PlistValue::mutable_array();
-                                    let src = object_at_index(&plist, i);
-                                    if let (PlistValue::Array(sv), PlistValue::Array(src)) = (&mut s, src) {
-                                        sv.items.extend(src.items.iter().cloned());
-                                    }
-                                    sa.items.push(s);
+                            let mut per_slot = Vec::new();
+                            for i in 0..8usize {
+                                let mut items = Vec::new();
+                                if let PlistValue::Array(src) = object_at_index(&plist, i) {
+                                    items.extend(src.items.iter().cloned());
                                 }
+                                per_slot.push(mutable_array_of(items));
                             }
+                            let slots = mutable_array_of(per_slot);
+                            // `live[playerID]` was created before the parse
                             let mut live = self.live_server_client_blockhead_inventories.borrow_mut();
-                            let pid_key = player_id.to_string();
-                            if !live.contains_key(&pid_key) {
-                                live.insert(pid_key.clone(), PlistValue::mutable_dict());
-                            }
-                            if let Some(PlistValue::Dict(cd)) = live.get_mut(&pid_key) {
-                                cd.map.insert(key.clone(), slots);
-                            }
+                            let Some(PlistValue::Dict(cd)) = live.get_mut(&player_id.to_string()) else {
+                                unreachable!()
+                            };
+                            cd.map.insert(key.clone(), slots);
                         }
                     }
                 }
@@ -264,19 +254,15 @@ impl DynamicWorld {
         }
 
         let mut return_dict = PlistValue::mutable_dict();
-        if let PlistValue::Dict(rd) = &mut return_dict {
-            let mut bf = PlistValue::mutable_dict();
-            if let PlistValue::Dict(b) = &mut bf {
-                for k in files.keys_in_order() {
-                    if let Some(v) = files.get(&k) {
-                        b.map.insert(k, PlistValue::data(v.clone()));
-                    }
-                }
-            }
-            rd.map.insert("blockheadFiles".to_string(), bf);
-            for (k, v) in return_extra {
-                rd.map.insert(k.to_string(), v);
-            }
+        let PlistValue::Dict(rd) = &mut return_dict else { unreachable!() };
+        let mut bf = PlistValue::mutable_dict();
+        let PlistValue::Dict(b) = &mut bf else { unreachable!() };
+        for (k, v) in files.iter() {
+            b.map.insert(k.clone(), PlistValue::data(v.clone()));
+        }
+        rd.map.insert("blockheadFiles".to_string(), bf);
+        for (k, v) in return_extra {
+            rd.map.insert(k.to_string(), v);
         }
         data_from_property_list(&return_dict)
     }
@@ -363,9 +349,9 @@ impl DynamicWorld {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dynworld::lookups::{set_ops_hooks, DwOpsHooks};
+    use crate::dynworld::lookups::set_ops_hooks;
     use crate::dynworld::state::testutil::*;
-    use crate::dynworld::state::{DwHooks, DwServer};
+
     use crate::foundation::exception::catch_ns;
     use crate::plist::value::PlistValue;
     use crate::types::structs::IntPair;
@@ -396,16 +382,8 @@ mod tests {
             let live = d.live_server_client_blockhead_inventories.borrow();
             let cd = live.get(&"p1".to_string()).unwrap();
             let slots = cd.object_for_key("p1_blockhead_7_inventory").unwrap();
-            if let PlistValue::Array(a) = slots {
-                assert_eq!(a.items.len(), 8);
-                if let PlistValue::Array(s0) = &a.items[0] {
-                    assert_eq!(s0.items.len(), 1);
-                } else {
-                    panic!()
-                }
-            } else {
-                panic!()
-            }
+            assert!(matches!(slots, PlistValue::Array(a) if a.items.len() == 8
+                && matches!(&a.items[0], PlistValue::Array(s0) if s0.items.len() == 1)));
         }
         // saved gzip(xml plist of the 8-array)
         let saved = d
@@ -440,11 +418,8 @@ mod tests {
         d.client_blockhead_inventory_recieved_for_player_id_blockhead_id_data("p2", 1, &gz_plist(&arr(v)));
         let live = d.live_server_client_blockhead_inventories.borrow();
         let slots = live.get(&"p2".to_string()).unwrap().object_for_key("p2_blockhead_1_inventory").unwrap();
-        if let PlistValue::Array(a) = slots {
-            for s in a.items.iter() {
-                assert!(matches!(s, PlistValue::Array(x) if x.items.is_empty()));
-            }
-        }
+        assert!(matches!(slots, PlistValue::Array(a)
+            if a.items.iter().all(|s| matches!(s, PlistValue::Array(x) if x.items.is_empty()))));
     }
 
     /// stored bytes equal the uploaded gzip; garbage not stored.
@@ -555,21 +530,6 @@ mod tests {
         assert_eq!(words, vec![0x171e8f, 0, 302, 1024, 72]);
     }
 
-    struct Srv {
-        admin: bool,
-    }
-    impl DwServer for Srv {
-        fn player_info_for_peer_id(&self, _p: &str) -> Option<PlistValue> {
-            None
-        }
-        fn player_is_admin_with_id(&self, _c: &str) -> bool {
-            self.admin
-        }
-        fn player_update(&self) -> Option<String> {
-            None
-        }
-        fn notify_players_changed(&self) {}
-    }
     struct Hk;
     impl crate::dynworld::state::DwHooksStub for Hk {
         fn blockhead_client_id(&self, b: &ObjRef) -> Option<String> {
@@ -646,5 +606,254 @@ mod tests {
         let safe2 = obj(46, 1);
         d2.send_chest_inventory_for_chest_to_client_owning_blockhead_with_id(&safe2, 8);
         assert_eq!(so.sent.borrow().len(), 2);
+    }
+}
+
+/// Scenario tests of the per-player files: sub item uploads, the legacy file migration and the join blob.
+#[cfg(test)]
+mod scenario_tests {
+    use super::*;
+    use crate::dynworld::lookups::{set_ops_hooks, DwOpsHooksStub};
+    use crate::dynworld::state::testutil::*;
+    use crate::foundation::exception::catch_ns;
+    use crate::types::item_type::ItemType;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    fn gz(v: &PlistValue) -> Vec<u8> {
+        gzip_deflate(&data_from_property_list(v).unwrap())
+    }
+
+    fn eight(first: PlistValue) -> PlistValue {
+        let mut v = vec![first];
+        for _ in 1..8 {
+            v.push(PlistValue::array(vec![]));
+        }
+        PlistValue::array(v)
+    }
+
+    struct Wb;
+    impl DwOpsHooksStub for Wb {
+        fn world_welcome_back_events_message_for_client_id(&self, _c: &str) -> Option<PlistValue> {
+            Some(PlistValue::string("welcome back"))
+        }
+    }
+
+    #[test]
+    fn sub_item_uploads_rewrite_the_container() {
+        let d = dw("ps_sub", 1);
+        let item = InventoryItem::new(ItemType::ITEM_WOOD_BED, 0, 0, None, None);
+        let bytes = item.borrow().save_data();
+        let first = eight(PlistValue::array(vec![PlistValue::data(bytes.clone())]));
+        d.client_blockhead_inventory_recieved_for_player_id_blockhead_id_data("p1", 1, &gz(&first));
+        // slot 0 now changes one sub slot of its container; slot 1 is a dict without a container
+        let slot_change = plist_dict(vec![
+            ("0", PlistValue::array(vec![PlistValue::data(bytes.clone())])),
+            ("x", PlistValue::int(1)),
+        ]);
+        let mut v = vec![slot_change, plist_dict(vec![])];
+        for _ in 2..8 {
+            v.push(PlistValue::array(vec![]));
+        }
+        d.client_blockhead_inventory_recieved_for_player_id_blockhead_id_data("p1", 1, &gz(&PlistValue::array(v)));
+        let live = d.live_server_client_blockhead_inventories.borrow();
+        let slots = live.get(&"p1".to_string()).unwrap().object_for_key("p1_blockhead_1_inventory").unwrap();
+        let PlistValue::Array(a) = slots else { panic!() };
+        let PlistValue::Array(slot0) = &a.items[0] else { panic!() };
+        assert_eq!(slot0.items.len(), 1);
+        // an upload that is not an array at all is a type error
+        drop(live);
+        let e = catch_ns(|| {
+            d.client_blockhead_inventory_recieved_for_player_id_blockhead_id_data(
+                "p1",
+                2,
+                &gz(&PlistValue::string("nope")),
+            )
+        })
+        .unwrap_err();
+        assert_eq!(e.name, "NSInvalidArgumentException");
+    }
+
+    #[test]
+    fn join_blob_reads_legacy_files_and_grants_found_items() {
+        let d = dw("ps_legacy", 1);
+        set_ops_hooks(Rc::new(Wb));
+        let dir = format!("{}players/c/d/ef12/", d.world_save_directory);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(format!("{dir}blockheads"), b"legacy-blockheads").unwrap();
+        std::fs::write(format!("{dir}blockhead_3_inventory"), gz(&eight(PlistValue::array(vec![])))).unwrap();
+        std::fs::write(format!("{dir}blockhead_4_inventory"), b"garbage").unwrap();
+        std::fs::write(format!("{dir}notes.txt"), b"x").unwrap();
+        // the database already has this blockhead file, so the legacy copy is ignored
+        d.world_database.put("cdef12_blockhead_4_inventory", &gz(&eight(PlistValue::array(vec![]))));
+        let blob = d.load_client_blockheads_data_for_player_id("cdef12").unwrap();
+        let v = property_list_from_data(&blob).unwrap();
+        let files = v.object_for_key("blockheadFiles").unwrap();
+        assert!(files.object_for_key("cdef12_blockheads").is_some());
+        assert!(files.object_for_key("cdef12_blockhead_3_inventory").is_some());
+        assert!(files.object_for_key("cdef12_blockhead_4_inventory").is_none());
+        assert!(files.object_for_key("cdef12_notes.txt").is_none());
+        assert!(v.object_for_key("welcomeBackEvents").is_some());
+        // no found-items record but blockhead files: the default grant, in both encodings
+        assert!(v.object_for_key("foundItems").is_some() && v.object_for_key("foundItems_v2").is_some());
+        // short ids cannot name a directory
+        let e = catch_ns(|| {
+            d.load_client_blockheads_data_for_player_id("x");
+        })
+        .unwrap_err();
+        assert_eq!(e.name, "NSRangeException");
+        // a two character id has an empty tail
+        d.world().set_has_finished_database_migration_to17(false);
+        assert!(d.load_client_blockheads_data_for_player_id("ab").is_some());
+    }
+
+    #[test]
+    fn join_blob_survives_bad_inventories_and_found_items() {
+        let d = dw("ps_bad", 1);
+        d.world().set_has_finished_database_migration_to17(true);
+        set_ops_hooks(Rc::new(Wb));
+        let root = plist_dict(vec![(
+            "dynamicObjects",
+            PlistValue::array(vec![
+                plist_dict(vec![("uniqueID", PlistValue::int(1))]),
+                plist_dict(vec![("uniqueID", PlistValue::int(2))]),
+                plist_dict(vec![("uniqueID", PlistValue::int(3))]),
+            ]),
+        )]);
+        d.client_blockheads_recieved_for_player_id_data("pq", &gz(&root));
+        // inventory 1 is garbage, 2 has a slot that is not an array, 3 is missing
+        d.world_database.put("pq_blockhead_1_inventory", b"garbage");
+        let mut slots = vec![PlistValue::Null];
+        for _ in 1..8 {
+            slots.push(PlistValue::array(vec![PlistValue::int(5)]));
+        }
+        d.world_database.put("pq_blockhead_2_inventory", &gz(&PlistValue::array(slots)));
+        d.world_database.put("pq_foundItems", b"not an archive");
+        let blob = d.load_client_blockheads_data_for_player_id("pq").unwrap();
+        let v = property_list_from_data(&blob).unwrap();
+        assert!(v.object_for_key("foundItems").is_some());
+        assert!(v.object_for_key("foundItems_v2").is_none());
+        let live = d.live_server_client_blockhead_inventories.borrow();
+        assert!(live.get(&"pq".to_string()).unwrap().object_for_key("pq_blockhead_2_inventory").is_some());
+    }
+
+    #[test]
+    fn containers_must_start_with_item_data() {
+        let d = dw("ps_container", 1);
+        // slot 0 holds something that is not data, so a sub item change finds no container
+        let first = eight(PlistValue::array(vec![PlistValue::int(5)]));
+        d.client_blockhead_inventory_recieved_for_player_id_blockhead_id_data("p9", 1, &gz(&first));
+        let change = plist_dict(vec![("0", PlistValue::array(vec![]))]);
+        let mut v = vec![change];
+        for _ in 1..8 {
+            v.push(PlistValue::array(vec![]));
+        }
+        d.client_blockhead_inventory_recieved_for_player_id_blockhead_id_data("p9", 1, &gz(&PlistValue::array(v)));
+        let live = d.live_server_client_blockhead_inventories.borrow();
+        let slots = live.get(&"p9".to_string()).unwrap().object_for_key("p9_blockhead_1_inventory").unwrap();
+        assert!(
+            matches!(slots, PlistValue::Array(a) if matches!(&a.items[0], PlistValue::Array(s) if s.items.len() == 1))
+        );
+    }
+
+    #[test]
+    fn join_blob_ignores_unreadable_records_and_files() {
+        let d = dw("ps_unreadable", 1);
+        set_ops_hooks(Rc::new(Wb));
+        let dir = format!("{}players/g/h/ij/", d.world_save_directory);
+        std::fs::create_dir_all(format!("{dir}blockhead_dir")).unwrap();
+        // not a plist: the record is kept as a file but names no blockheads
+        d.world_database.put("ghij_blockheads", b"junk");
+        let blob = d.load_client_blockheads_data_for_player_id("ghij").unwrap();
+        let v = property_list_from_data(&blob).unwrap();
+        let files = v.object_for_key("blockheadFiles").unwrap();
+        assert!(files.object_for_key("ghij_blockheads").is_some());
+        assert!(files.object_for_key("ghij_blockhead_dir").is_none());
+    }
+
+    struct Net {
+        sent: RefCell<Vec<Vec<u8>>>,
+        empty_image: bool,
+    }
+    impl DwOpsHooksStub for Net {
+        fn painting_image_data(&self, _p: &ObjRef) -> Option<Vec<u8>> {
+            Some(if self.empty_image { vec![] } else { vec![1] })
+        }
+        fn painting_image_data_recieved(&self, p: &ObjRef, data: &[u8]) {
+            self.sent.borrow_mut().push([&p.unique_id().to_le_bytes()[..1], data].concat());
+        }
+        fn is_chest(&self, o: &ObjRef) -> bool {
+            o.object_type() == 46
+        }
+        fn chest_remote_inventory_data_recieved(&self, c: &ObjRef, data: Option<&[u8]>) {
+            self.sent.borrow_mut().push([&[c.unique_id() as u8][..], data.unwrap_or(&[255])].concat());
+        }
+        fn server_send_network_data_to_peers_reliable(&self, d: Vec<u8>, _p: &[String], _r: bool) {
+            self.sent.borrow_mut().push(d);
+        }
+    }
+
+    #[test]
+    fn paintings_and_chests_cross_the_wire() {
+        let (d, _scs) = dw_served("ps_wire", &["c1"]);
+        let net = Rc::new(Net { sent: RefCell::new(vec![]), empty_image: true });
+        set_ops_hooks(net.clone());
+        let log: Log = Rc::new(RefCell::new(vec![]));
+        let painting = tobj(52, 5, &log, None, None, None);
+        d.do_set(52, 5, painting.clone());
+        // an empty image is never sent
+        d.send_painting_data_for_painting_with_id_to_client(5, "c1");
+        assert!(net.sent.borrow().is_empty());
+        d.request_painting_data_for_painting(&painting);
+        // incoming data: unknown painting, painting without image bytes, painting with image bytes
+        let mut data = 6u64.to_le_bytes().to_vec();
+        d.painting_data_recieved_from_server(&data);
+        data = 5u64.to_le_bytes().to_vec();
+        d.painting_data_recieved_from_server(&data);
+        data.extend_from_slice(&[7, 7]);
+        d.painting_data_recieved_from_server(&data);
+        assert_eq!(*net.sent.borrow(), vec![vec![5, 7, 7]]);
+        // chests: an unknown chest, one that is no chest, a chest without and with inventory
+        net.sent.borrow_mut().clear();
+        let chest = tobj(46, 8, &log, None, None, None);
+        let sign = tobj(47, 9, &log, None, None, None);
+        d.do_set(46, 8, chest);
+        d.do_set(47, 9, sign);
+        for (id, extra) in [(7u64, vec![]), (9, vec![]), (8, vec![]), (8, vec![1, 2])] {
+            let mut data = id.to_le_bytes().to_vec();
+            data.extend_from_slice(&extra);
+            d.chest_inventory_data_recieved_from_server(&data);
+        }
+        assert_eq!(*net.sent.borrow(), vec![vec![8, 255], vec![8, 1, 2]]);
+    }
+
+    struct Bh;
+    impl crate::dynworld::state::DwHooksStub for Bh {
+        fn blockhead_client_id(&self, b: &ObjRef) -> Option<String> {
+            Some(format!("c{}", b.unique_id()))
+        }
+        fn chest_type(&self, c: &ObjRef) -> i32 {
+            c.unique_id() as i32
+        }
+    }
+
+    #[test]
+    fn admins_may_read_other_peoples_safes() {
+        let (d, _scs) = dw_served("ps_admin", &["c1"]);
+        d.set_server_server_clients(Some(Rc::new(Srv { admin: true })), None);
+        d.set_hooks(Rc::new(Bh));
+        let net = Rc::new(Net { sent: RefCell::new(vec![]), empty_image: false });
+        set_ops_hooks(net.clone());
+        let log: Log = Rc::new(RefCell::new(vec![]));
+        d.net_blockheads.borrow_mut().push(tobj(24, 7, &log, None, None, None));
+        let safe = tobj(46, 1, &log, None, None, None);
+        d.send_chest_inventory_for_chest_to_client_owning_blockhead_with_id(&safe, 7);
+        assert_eq!(net.sent.borrow().len(), 1);
+        // ordinary chests are open to everybody
+        d.send_chest_inventory_for_chest_to_client_owning_blockhead_with_id(&tobj(46, 2, &log, None, None, None), 7);
+        assert_eq!(net.sent.borrow().len(), 2);
+        d.do_set(52, 3, tobj(52, 3, &log, None, None, None));
+        d.send_painting_data_for_painting_with_id_to_client(3, "c1");
+        assert_eq!(net.sent.borrow().len(), 3);
     }
 }

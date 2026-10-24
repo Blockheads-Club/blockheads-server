@@ -124,7 +124,6 @@ pub struct WorldTileLoader {
     pub(crate) world: Weak<World>,
     pub(crate) t: Terrain,
     pub(crate) refine_terrain_count: Cell<i32>,
-    pub(crate) has_refined_terrain: Cell<bool>,
     pub(crate) needs_to_exit: Cell<bool>,
     pub(crate) block_directory: String,
     /// Released first in `dealloc` (its drop commits a pending bulk transaction), then the environment.
@@ -284,7 +283,6 @@ impl WorldTileLoader {
             world: Rc::downgrade(world),
             t,
             refine_terrain_count: Cell::new(0),
-            has_refined_terrain: Cell::new(false),
             needs_to_exit: Cell::new(false),
             block_directory,
             light_block_database: RefCell::new(light_db),
@@ -625,10 +623,9 @@ impl WorldTileLoader {
         let stride = p.wt() / 8;
         self.refine_terrain_count.set(start + stride);
         host().decommision_all_blocks(&world);
-        if self.refine_terrain_count.get() == p.wt() - 1 {
-            // R4: never true (count advances in steps of WT/8); dead state kept for fidelity.
-            self.has_refined_terrain.set(true);
-        }
+        // The original also tests `count == WT - 1` and then sets `hasRefinedTerrain`: never true, because `count`
+        // only takes multiples of WT/8 (a multiple of 4 since WT is a multiple of 32) and WT - 1 is 3 mod 4. The
+        // flag is not read anywhere.
     }
 
     // ------------------------------------------------------------------------------------------------
@@ -961,6 +958,8 @@ pub(crate) mod testutil {
         pub fully_loaded: RefCell<Vec<(IntPair, i32)>>,
         pub chests: RefCell<Vec<(IntPair, bool, bool)>>,
         pub decommisions: Cell<u32>,
+        /// A block whose client light blocks the next `fully_load_if_needed_around_pos` throws away.
+        pub clobber: RefCell<Option<crate::world::state::PhysicalBlockRef>>,
     }
 
     impl WorldgenHost for FakeHost {
@@ -1009,6 +1008,9 @@ pub(crate) mod testutil {
         }
         fn fully_load_if_needed_around_pos(&self, _w: &World, pos: IntPair, i: i32) {
             self.fully_loaded.borrow_mut().push((pos, i));
+            for pb in self.clobber.borrow().iter() {
+                pb.client_light_blocks.borrow_mut().iter_mut().for_each(|b| *b = None);
+            }
         }
     }
 
@@ -1044,7 +1046,6 @@ pub(crate) mod testutil {
             world: Rc::downgrade(world),
             t: Terrain::new_empty(world.world_width_macro(), 1),
             refine_terrain_count: Cell::new(0),
-            has_refined_terrain: Cell::new(false),
             needs_to_exit: Cell::new(false),
             block_directory: format!("{}/blocks/", dir.display()),
             light_block_database: RefCell::new(Some(db)),
@@ -1059,5 +1060,492 @@ pub(crate) mod testutil {
         let server = Rc::new(BHServer { api: None });
         *world.server.borrow_mut() = Some(server.clone());
         (world, server)
+    }
+}
+
+/// Whole-world generation over many rule sets: terrain, spawn tables, islands, ores, gems and the blocks themselves.
+#[cfg(test)]
+pub(crate) mod sweep_tests {
+    use super::*;
+    use crate::types::structs::CustomRules;
+    use crate::world::custom_rules::default_custom_rules;
+    use crate::worldgen::block_io::LoadOutcome;
+    use crate::worldgen::terrain::GenParams;
+
+    /// `World` block loading for tests: the loader answers, the outcome is applied to the macro tile (R9).
+    pub(crate) struct GenOps {
+        pub(crate) loader: RefCell<Option<Rc<WorldTileLoader>>>,
+    }
+    impl crate::world::state::WorldOpsHooks for GenOps {
+        fn load_physical_block_for_macro_tile_at_x_y_load_surrounding_blocks_create_if_not_created(
+            &self,
+            world: &World,
+            mt: &crate::world::state::MacroTileRef,
+            mx: i32,
+            my: i32,
+            _load_surrounding_blocks: bool,
+            create_if_not_created: bool,
+        ) -> bool {
+            if mt.physical_block().is_none() || mt.dirty.get() != 0 {
+                let pb = mt.physical_block().unwrap_or_else(|| world.take_physical_block());
+                let l = self.loader.borrow().clone().unwrap();
+                match l.load_physical_block_at_x_pos_y_pos_create_if_not_created(
+                    pb,
+                    mx,
+                    my,
+                    create_if_not_created,
+                    mt.unexplored.get() != 0,
+                ) {
+                    LoadOutcome::Loaded | LoadOutcome::Generated => {
+                        *mt.physical_block.borrow_mut() = Some(pb);
+                        mt.unexplored.set(0);
+                        mt.dynamic_objects_loaded.set(false);
+                    }
+                    LoadOutcome::NotFound => mt.unexplored.set(1),
+                    LoadOutcome::Skipped => {}
+                }
+            }
+            true
+        }
+        fn load_dynamic_objects_if_not_already_loaded_for_macro_tile_include_surface_blocks(
+            &self,
+            _world: &World,
+            _mt: &crate::world::state::MacroTileRef,
+            _include_surface_blocks: bool,
+        ) {
+        }
+        fn tile_is_protected_at_pos_against_blockhead(
+            &self,
+            _world: &World,
+            _pos: IntPair,
+            _b: &crate::objects::handle::ObjRef,
+        ) -> bool {
+            false
+        }
+    }
+
+    fn generate(w: i32, seed: u32, rules: CustomRules, expert: bool, is_new: bool) -> (Rc<World>, Rc<WorldTileLoader>) {
+        let world = World::alloc(w);
+        world.set_custom_rules(rules);
+        world.set_expert_mode(expert);
+        let ops = Rc::new(GenOps { loader: RefCell::new(None) });
+        world.set_ops_hooks(Some(ops.clone()));
+        glibc_rand::srand(seed);
+        let l = WorldTileLoader::init_with_world_random_seed_is_new_world_save_id_loaded_version_block_database(
+            &world,
+            seed,
+            is_new,
+            "wgtest_sweep",
+            0,
+            None,
+        );
+        *ops.loader.borrow_mut() = Some(l.clone());
+        glibc_rand::srand(l.random_seed());
+        for _ in 0..8 {
+            l.refine_terrain();
+        }
+        (world, l)
+    }
+
+    /// The block loading double answers every outcome and its other two hooks are inert.
+    #[test]
+    fn the_block_loading_double_applies_every_outcome() {
+        let (world, _l) = generate(32, 31, rules_with(|_| {}), false, true);
+        let ops = world.ops_hooks().unwrap();
+        let mt = world.macro_tiles().get(40).unwrap();
+        // nothing stored, not created: the tile stays unexplored
+        assert!(ops.load_physical_block_for_macro_tile_at_x_y_load_surrounding_blocks_create_if_not_created(
+            &world, &mt, 8, 1, false, false
+        ));
+        assert_eq!(mt.unexplored.get(), 1);
+        // already explored, nothing to create: skipped
+        assert!(ops.load_physical_block_for_macro_tile_at_x_y_load_surrounding_blocks_create_if_not_created(
+            &world, &mt, 8, 1, false, false
+        ));
+        assert!(mt.physical_block().is_none());
+        // created on demand
+        assert!(ops.load_physical_block_for_macro_tile_at_x_y_load_surrounding_blocks_create_if_not_created(
+            &world, &mt, 8, 1, false, true
+        ));
+        assert!(mt.physical_block().is_some());
+        // a loaded clean tile is left alone
+        assert!(ops.load_physical_block_for_macro_tile_at_x_y_load_surrounding_blocks_create_if_not_created(
+            &world, &mt, 8, 1, false, true
+        ));
+        ops.load_dynamic_objects_if_not_already_loaded_for_macro_tile_include_surface_blocks(&world, &mt, true);
+        let o = crate::world::helpers::testutil::dw_obj_of_type(0).obj;
+        assert!(!ops.tile_is_protected_at_pos_against_blockhead(&world, IntPair { x: 1, y: 1 }, &o));
+    }
+
+    fn rules_with(f: impl FnOnce(&mut CustomRules)) -> CustomRules {
+        let mut r = default_custom_rules(false);
+        r.custom_rules_enabled = 1;
+        f(&mut r);
+        r
+    }
+
+    /// Loads a spread of blocks of the world (surface, caves, sky, depths).
+    fn load_blocks(world: &Rc<World>, step: i32) {
+        let w = world.world_width_macro();
+        for my in (0..32).step_by(step as usize) {
+            for mx in (0..w).step_by((w / 4).max(1) as usize) {
+                crate::world::tiles::load_block_at_macro_pos(IntPair { x: mx, y: my }, world);
+            }
+        }
+    }
+
+    #[test]
+    fn terrain_queries_outside_the_world_and_in_odd_settings() {
+        for (k, rainfall) in [0i8, 1, 2, 3, 4, 5].into_iter().enumerate() {
+            let (world, l) = generate(
+                32,
+                200 + k as u32,
+                rules_with(|r| {
+                    r.rainfall = rainfall;
+                    r.caves = (k % 4) as i8;
+                    r.lakes = 2;
+                }),
+                false,
+                true,
+            );
+            let p = GenParams::from_world(&world);
+            let wt = p.wt();
+            let t = l.terrain();
+            for x in [-5, -wt - 5, wt + 5, 2 * wt + 9, 3, wt - 1, wt] {
+                let _ = t.sand_fraction_for_pos(&p, IntPair { x, y: 520 }, true);
+            }
+            for x in [-5, wt + 3, 7, wt] {
+                let _ = (
+                    t.max_of_rock_and_dirt_height(&p, x.min(wt - 1).max(-wt)),
+                    t.lake_height(&p, x.min(wt - 1).max(-wt)),
+                );
+            }
+            for x in 0..wt {
+                let _ = t.unmodified_ground_level(&p, x);
+            }
+            if k % 2 == 0 {
+                for isl in 0..=12u32 {
+                    for wx in (0..1024).step_by(23) {
+                        for wy in (0..1024).step_by(29) {
+                            let mut tile = crate::types::tile::Tile::default();
+                            t.place_gems_in_cave_tile(&p, &mut tile, wx, wy, isl);
+                        }
+                    }
+                }
+            }
+            for y in [0, 100, 300, 600, 900] {
+                for x in [10, 400, 900] {
+                    let fo = t.fault_offset(&p, x, y);
+                    let _ = (
+                        t.is_cave(&p, x, y, fo),
+                        t.is_floating_island_cave(&p, x, y),
+                        t.limestone_fraction(&p, x, y, fo),
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn dirt_flows_down_through_air_and_water() {
+        let (world, l) = generate(32, 300, rules_with(|_| {}), false, true);
+        let p = GenParams::from_world(&world);
+        crate::world::tiles::load_block_at_macro_pos(IntPair { x: 3, y: 10 }, &world);
+        crate::world::tiles::load_block_at_macro_pos(IntPair { x: 0, y: 10 }, &world);
+        crate::world::tiles::load_block_at_macro_pos(IntPair { x: 31, y: 10 }, &world);
+        for x0 in [96 + 3, 1, 1020i32] {
+            for dy in 0..6 {
+                for dx in -4..=4 {
+                    let x = (x0 + dx).rem_euclid(p.wt());
+                    for t in crate::world::tiles::tile_at_world_position_loaded(x, 330 + dy, &world).into_iter() {
+                        t.update(|v| {
+                            v.type_index = if dx % 2 == 0 { 2 } else { 3 };
+                            v.zone_type_index = 1;
+                        });
+                    }
+                }
+            }
+            for seed in 1..8u32 {
+                glibc_rand::srand(seed);
+                let start = crate::world::tiles::tile_at_world_position_loaded(x0, 335, &world).unwrap();
+                l.terrain().recursively_flow_out_dirt_from_tile(&p, &world, &start, IntPair { x: x0, y: 335 });
+            }
+        }
+    }
+
+    #[test]
+    fn blocks_that_are_not_there_stay_unexplored() {
+        let (world, l) = generate(32, 99, rules_with(|_| {}), false, true);
+        let ops = world.ops_hooks().unwrap();
+        let mt = world.macro_tiles().get(5 * 32 + 7).unwrap();
+        // nothing stored and not asked to create: unexplored; asked again: skipped
+        assert!(ops.load_physical_block_for_macro_tile_at_x_y_load_surrounding_blocks_create_if_not_created(
+            &world, &mt, 7, 5, false, false
+        ));
+        mt.unexplored.set(1);
+        assert!(ops.load_physical_block_for_macro_tile_at_x_y_load_surrounding_blocks_create_if_not_created(
+            &world, &mt, 7, 5, false, false
+        ));
+        let b = crate::world::helpers::testutil::new_obj();
+        let o: crate::objects::handle::ObjRef = b;
+        ops.load_dynamic_objects_if_not_already_loaded_for_macro_tile_include_surface_blocks(&world, &mt, true);
+        assert!(!ops.tile_is_protected_at_pos_against_blockhead(&world, IntPair { x: 1, y: 1 }, &o));
+        let h = testutil::install_host();
+        let tile = TileRef::new(world.take_physical_block(), 0);
+        h.create_treasure_chest_or_troll_at_tile(&world, tile, IntPair { x: 0, y: 0 }, false, true);
+        h.decommision_all_blocks(&world);
+        assert_eq!(h.decommisions.get(), 1);
+        set_host(None);
+        let _ = l;
+    }
+
+    #[test]
+    fn every_rule_in_every_setting() {
+        let cases: Vec<(i32, u32, CustomRules, bool)> = vec![
+            (32, 1792182287, rules_with(|_| {}), false),
+            (32, 11, rules_with(|r| r.sky_islands = 3), false),
+            (32, 12, rules_with(|r| r.sky_islands = 1), true),
+            (32, 13, rules_with(|r| r.ore_quantity = 0), false),
+            (32, 14, rules_with(|r| r.ore_quantity = 1), false),
+            (32, 15, rules_with(|r| r.ore_quantity = 3), true),
+            (32, 16, rules_with(|r| r.gems = 3), false),
+            (32, 17, rules_with(|r| r.gems = 1), false),
+            (32, 18, rules_with(|r| r.treasure = 3), false),
+            (32, 19, rules_with(|r| r.treasure = 1), false),
+            (32, 20, rules_with(|r| r.caves = 3), false),
+            (32, 21, rules_with(|r| r.caves = 1), false),
+            (32, 22, rules_with(|r| r.lakes = 3), false),
+            (32, 23, rules_with(|r| r.lakes = 1), false),
+            (32, 24, rules_with(|r| r.oceans = 4), false),
+            (32, 25, rules_with(|r| r.oceans = 1), false),
+            (32, 26, rules_with(|r| r.oceans = 3), false),
+            (32, 27, rules_with(|r| r.oceans = 0), false),
+            (32, 28, rules_with(|r| r.terrain_type = 1), false),
+            (32, 29, rules_with(|r| r.terrain_type = 3), false),
+            (32, 30, rules_with(|r| r.terrain_type = 0), false),
+            (32, 31, rules_with(|r| r.temperature = 0), false),
+            (32, 32, rules_with(|r| r.temperature = 4), false),
+            (32, 33, rules_with(|r| r.rainfall = 3), false),
+            (32, 34, rules_with(|r| r.rainfall = 1), false),
+            (32, 35, rules_with(|r| r.plants = 3), false),
+            (32, 36, rules_with(|r| r.plants = 0), false),
+            (32, 37, rules_with(|r| r.trees = 0), false),
+            (32, 38, rules_with(|r| r.trees = 1), false),
+            (32, 39, rules_with(|r| r.trees = 3), false),
+            (32, 40, rules_with(|r| r.ore_distribution = 0), false),
+            (32, 41, rules_with(|r| r.ore_distribution = 2), false),
+            (32, 42, rules_with(|r| r.trees = 5), false),
+            (32, 43, rules_with(|r| r.plants = 1), false),
+            (32, 44, rules_with(|r| r.treasure = 0), false),
+            (32, 45, rules_with(|r| r.caves = 2), true),
+            (32, 46, rules_with(|r| r.sky_islands = 3), true),
+            (64, 47, rules_with(|r| r.sky_islands = 3), false),
+            (64, 48, rules_with(|r| r.sky_islands = 3), false),
+            (32, 49, rules_with(|r| r.sky_islands = 3), false),
+            (32, 50, rules_with(|r| r.sky_islands = 3), false),
+            (32, 51, rules_with(|r| r.sky_islands = 3), false),
+            (32, 52, rules_with(|r| r.sky_islands = 3), false),
+            (32, 53, rules_with(|r| r.sky_islands = 3), false),
+        ];
+        for (w, seed, rules, expert) in cases {
+            let (world, l) = generate(w, seed, rules, expert, true);
+            load_blocks(&world, 2);
+            // blocks of an old version are brought up to date: chests, black sand, platinum and titanium
+            let w = world.world_width_macro();
+            for my in (14..20).step_by(1) {
+                for mx in (0..w).step_by((w / 4).max(1) as usize) {
+                    if let Some(pb) = world.macro_tiles().get((my * w + mx) as usize).and_then(|m| m.physical_block()) {
+                        pb.version.set(0);
+                        l.update_physical_block_to_latest_version(pb);
+                    }
+                }
+            }
+            let _ = (l.highest_point(), l.best_start_position());
+        }
+        // a world that is reloaded rather than created
+        let (world, _l) = generate(32, 77, rules_with(|_| {}), false, false);
+        load_blocks(&world, 4);
+    }
+}
+
+#[cfg(test)]
+mod loader_more_tests {
+    use super::*;
+    use crate::types::structs::CustomRules;
+    use crate::world::custom_rules::default_custom_rules;
+    use crate::worldgen::terrain::GenParams;
+
+    #[test]
+    fn the_null_host_and_the_accessors() {
+        let h = NullHost;
+        let w = World::alloc(2);
+        let server = Rc::new(BHServer { api: None });
+        let pb: crate::world::state::PhysicalBlockRef =
+            Box::leak(Box::new(crate::world::state::PhysicalBlock::new_fresh()));
+        let tile = TileRef::new(pb, 0);
+        let p = IntPair { x: 0, y: 0 };
+        assert!(h.client_info(&w, "c").is_none() && h.client_receipts(&w, "c", p).is_none());
+        assert!(!h.client_contains_light_block_index(&w, "c", 1) && !h.player_is_admin_with_id(&server, "c"));
+        h.client_add_light_block_index(&w, "c", 1);
+        h.client_save_light_block_indices(&w, "c");
+        h.send_network_data_to_peers_reliable(&server, &[], &[], true);
+        assert!(h.initial_dynamic_objects_net_data(&w, 0, "c").is_none());
+        h.create_treasure_chest_or_troll_at_tile(&w, tile, p, true, true);
+        h.fully_load_if_needed_around_pos(&w, p, -1);
+        h.decommision_all_blocks(&w);
+    }
+
+    fn quick_loader() -> (Rc<World>, Rc<WorldTileLoader>) {
+        let world = World::alloc(32);
+        let mut r: CustomRules = default_custom_rules(false);
+        r.custom_rules_enabled = 1;
+        world.set_custom_rules(r);
+        glibc_rand::srand(1792182287);
+        let l = WorldTileLoader::init_with_world_random_seed_is_new_world_save_id_loaded_version_block_database(
+            &world,
+            1792182287,
+            true,
+            "wgtest_more",
+            0,
+            None,
+        );
+        (world, l)
+    }
+
+    #[test]
+    fn every_accessor_answers() {
+        let (world, l) = quick_loader();
+        let _ = (l.tree_density_noise_function(), l.season_offset_noise_function());
+        assert_eq!(l.npc_positions().len(), 1024);
+        assert_eq!(l.plant_positions().len(), 1024);
+        assert!(!l.needs_to_exit());
+        l.set_needs_to_exit(true);
+        assert!(l.needs_to_exit());
+        assert!(l.block_directory().ends_with("blocks/"));
+        assert!(l.world().is_some());
+        let _ = l.gen_params();
+        let p = IntPair { x: 300, y: 520 };
+        let _ = (
+            l.unmodified_ground_level_for_x(300),
+            l.max_of_rock_and_dirt_height_for_x(300),
+            l.lake_height_for_x(300),
+            l.get_rock_and_dirt_height_for_x_rock_height_dirt_height(300),
+            l.get_initial_rock_and_dirt_height_for_x_rock_height_dirt_height(300),
+            l.sand_fraction_for_pos_high_res(p, true),
+            l.sand_fraction_for_pos_height_high_res(p, 520, false),
+            l.is_cave_for_x_y_fault_offset(300, 100, 0),
+            l.is_floating_island_cave_for_x_y(300, 800),
+            l.fault_offset_for_x_y(300, 100),
+            l.get_cloud_height_for_x(300),
+            l.limestone_fraction_for_x_y_fault_offset(300, 100, 0),
+            l.sandstone_fraction_for_x_y_fault_offset_limestone_fraction(300, 100, 0, 0.5),
+            l.is_desert_for_pos_height(p, 520),
+            l.is_beach_for_pos_height(p, 520),
+            l.is_desert_or_beach_for_pos_height(p, 520),
+            l.find_best_start_position(),
+        );
+        // pouring water and dirt into a block
+        let pb = world.take_physical_block();
+        pb.valid.set(true);
+        let t = TileRef::new(pb, 5);
+        l.fill_dirt_tile_world_pos_world_dirt_height_parent_type(&t, IntPair { x: 5, y: 10 }, 12, 6);
+        l.place_gems_in_cave_for_physical_block_tile_index_world_x_world_y_floating_island_type(pb, 7, 300, 800, 0);
+        l.recursively_flow_out_water_from_tile_at_pos(IntPair { x: 5, y: 10 });
+        l.dealloc();
+        // a loader whose world is gone refines nothing
+        let (world, l) = quick_loader();
+        drop(world);
+        l.refine_terrain();
+        assert!(l.world().is_none());
+        let _ = l.gen_params();
+        l.recursively_flow_out_water_from_tile_at_pos(IntPair { x: 5, y: 10 });
+    }
+
+    #[test]
+    fn legacy_light_blocks_that_cannot_move_are_dropped() {
+        let dir = testutil::scratch("migrate2");
+        let id = "0123456789abcdef0123456789abcdef";
+        let id2 = "1123456789abcdef0123456789abcdef";
+        // a folder and a file whose destinations exist already
+        std::fs::create_dir_all(dir.join(id)).unwrap();
+        std::fs::write(dir.join(id).join("inner"), b"x").unwrap();
+        std::fs::write(dir.join(id2), b"y").unwrap();
+        std::fs::create_dir_all(dir.join(format!("playerLightBlocks/0/1/{}", &id[2..]))).unwrap();
+        std::fs::create_dir_all(dir.join(format!("playerLightBlocks/1/1/{}", &id2[2..]))).unwrap();
+        WorldTileLoader::migrate_legacy_light_block_files(&format!("{}/", dir.display()));
+        assert!(!dir.join(id).exists() && !dir.join(id2).exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn heights_are_rebuilt_when_the_world_changes_size() {
+        let mut t = Terrain::new_empty(16, 5);
+        let mut r = default_custom_rules(false);
+        r.custom_rules_enabled = 1;
+        let p = GenParams { w: 32, rules: r, expert: false };
+        WorldTileLoader::step_a_noise(&mut t, &p);
+        WorldTileLoader::step_b_c_heights_and_lakes(&mut t, &p);
+        assert_eq!(t.rock_heights.len(), 1024);
+    }
+
+    #[test]
+    fn a_server_world_keeps_light_blocks_in_its_own_database() {
+        let g = crate::world::lifecycle::testkit::HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let home = format!("{}/bhwg_server_{}", std::env::temp_dir().display(), std::process::id());
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).unwrap();
+        crate::foundation::paths::set_home_for_test(&home);
+        let (world, _s) = testutil::world_with_server(32);
+        let mut r = default_custom_rules(false);
+        r.custom_rules_enabled = 1;
+        world.set_custom_rules(r);
+        glibc_rand::srand(5);
+        let l = WorldTileLoader::init_with_world_random_seed_is_new_world_save_id_loaded_version_block_database(
+            &world, 5, false, "wgserver", 0, None,
+        );
+        assert!(l.light_block_database.borrow().is_some());
+        l.dealloc();
+        drop(g);
+    }
+
+    /// A world without lakes skips the reverse lake pass.
+    #[test]
+    fn worlds_without_lakes_have_no_reverse_pass() {
+        let mut t = Terrain::new_empty(16, 5);
+        let mut r = default_custom_rules(false);
+        r.custom_rules_enabled = 1;
+        r.lakes = 0;
+        let p = GenParams { w: 32, rules: r, expert: false };
+        WorldTileLoader::step_a_noise(&mut t, &p);
+        WorldTileLoader::step_b_c_heights_and_lakes(&mut t, &p);
+        assert!(t.lake_heights.iter().all(|&h| h == 0));
+    }
+
+    /// The light block database of a server world cannot be opened when its directory path is blocked by a file.
+    #[test]
+    fn a_blocked_light_block_directory_is_logged_and_survived() {
+        let g = crate::world::lifecycle::testkit::HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let home = format!("{}/bhwg_blocked_{}", std::env::temp_dir().display(), std::process::id());
+        let _ = std::fs::remove_dir_all(&home);
+        let saves = format!("{home}/GNUstep/Library/ApplicationSupport/TheBlockheads/saves");
+        std::fs::create_dir_all(&saves).unwrap();
+        std::fs::write(format!("{saves}/wgblocked"), b"in the way").unwrap();
+        crate::foundation::paths::set_home_for_test(&home);
+        let (world, _s) = testutil::world_with_server(32);
+        let mut r = default_custom_rules(false);
+        r.custom_rules_enabled = 1;
+        world.set_custom_rules(r);
+        glibc_rand::srand(5);
+        let l = WorldTileLoader::init_with_world_random_seed_is_new_world_save_id_loaded_version_block_database(
+            &world,
+            5,
+            false,
+            "wgblocked",
+            0,
+            None,
+        );
+        assert!(l.light_block_database.borrow().is_none());
+        l.dealloc();
+        drop(g);
     }
 }

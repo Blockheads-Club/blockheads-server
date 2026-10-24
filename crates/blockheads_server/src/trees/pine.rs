@@ -147,9 +147,7 @@ impl PineTree {
         sonf: NoiseRef,
     ) -> Option<ObjRef> {
         let me = Self::alloc();
-        if !tree_init_with_world_dynamic_world_save_dict_cache_tdnf_sonf(&me, world, dw, d, cache, tdnf, sonf) {
-            return None;
-        }
+        tree_init_with_world_dynamic_world_save_dict_cache_tdnf_sonf(&me, world, dw, d, cache, tdnf, sonf);
         let get = |k: &str| d.map.get(&k.to_string());
         let food = get("availableFood").map_or(0.0f32, |v| v.float_value());
         let save_time = get("saveTime").map_or(0.0f32, |v| v.float_value());
@@ -224,5 +222,40 @@ impl TreeLike for PineTree {
     }
     fn extend_save_dict(&self, d: &mut PlistDict) {
         d.map.insert("availableFood".to_string(), PlistValue::real_f32(self.available_food.get()));
+    }
+}
+
+/// Pines feed the animals that live in them once they are tall enough.
+#[cfg(test)]
+mod scenario_tests {
+    use super::*;
+    use crate::rng::glibc_rand::srand;
+    use crate::trees::tree::testenv::{env, GROUND};
+
+    #[test]
+    fn well_fed_tall_pines_release_an_animal() {
+        for seed in 1..40u32 {
+            let (w, d) = env(&format!("pine_food_{seed}"));
+            srand(seed);
+            let t = PineTree::new(&w, &d, IntPair { x: 20, y: GROUND + 1 }, None, 12, 5, None, None, true, 99_999.0)
+                .expect("pine");
+            let pine = downcast::<PineTree>(&t).unwrap();
+            pine.tree.borrow_mut().height = 10;
+            for _ in 0..4 {
+                pine.available_food.set(5000.0);
+                t.update_accurate_dt_is_simulation(&t, 5.0, 5.0, false);
+            }
+            assert!(pine.available_food() < 5000.0);
+            pine.tree.borrow_mut().dead = true;
+            t.update_accurate_dt_is_simulation(&t, 5.0, 5.0, false);
+            t.set_needs_removed(&t, true);
+        }
+    }
+
+    #[test]
+    fn pines_over_obstacles_and_unloaded_blocks() {
+        crate::trees::tree::testenv::gauntlet(TREE_PINE, "pine_gauntlet", 90, &|t, seed| {
+            downcast::<PineTree>(t).unwrap().available_food.set(if seed % 2 == 0 { 2000.0 } else { 3.0 });
+        });
     }
 }
