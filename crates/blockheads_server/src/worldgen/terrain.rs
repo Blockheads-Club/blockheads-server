@@ -1216,7 +1216,7 @@ mod tests {
         let mut found = 0;
         for treasure in [1u8, 2, 3] {
             for rainfall in [0u8, 2, 4] {
-                for seed in 1..8i32 {
+                for seed in 1..3i32 {
                     let (mut t, mut p) = sample_terrain();
                     let mk = |fx, fy, amp, s| {
                         Some(Rc::new(

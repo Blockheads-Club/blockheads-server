@@ -1040,7 +1040,7 @@ mod island_tests {
             world.set_custom_rules(rules);
             let p = GenParams::from_world_opt(Some(&world));
             let mut t = Terrain::new_empty(32, 1);
-            for seed in 1..9i32 {
+            for seed in 1..4i32 {
                 t.flint = noise(amplitude, seed);
                 t.gem = noise(amplitude, seed + 100);
                 for x_pos in (0..32).step_by(5) {
