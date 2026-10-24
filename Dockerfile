@@ -17,6 +17,8 @@ COPY crates crates
 RUN cargo build --release --locked -p blockheads_server --bin blockheads_server \
     && strip target/release/blockheads_server
 
+# The image is built WITHOUT the `jvm` feature (no JRE inside; JVM mods need the CLI archive or a host with Java).
+#
 # Small runtime: glibc, libgcc and libstdc++ (distroless/cc ships libstdc++.so.6; Luau, the mod runtime, is C++ and
 # links it dynamically), non-root (uid 65532).
 FROM gcr.io/distroless/cc-debian12:nonroot AS runtime-base

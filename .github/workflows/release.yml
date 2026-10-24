@@ -3,6 +3,11 @@ name: Release
 # Push a tag `vX.Y.Z` (or `vX.Y.Z-pre.N`) to build every asset (CLI per target, app bundles, APK) and attach it
 # to a DRAFT GitHub release for that tag (prerelease only for -pre tags such as v0.2.0-rc.1), then push the docker image.
 # Publish the draft by hand once CI is green. Manual runs (workflow_dispatch) take the tag as input.
+#
+# JVM mods: the CLI archives and the desktop app bundles are built with `--features jvm` (needs a JDK at build time
+# for the Java SDK, installed by actions/setup-java; the JRE is loaded at run time and only with BLOCKHEADS_JVM=1 /
+# the app's Java switch). The Android APK and the docker image are built WITHOUT it: there is no JRE to load on
+# Android, and a JRE would make the distroless image several times larger.
 
 on:
   push:
@@ -78,8 +83,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ${{ matrix.packages }}
           echo "CARGO_TARGET_$(echo '${{ matrix.target }}' | tr 'a-z-' 'A-Z_')_LINKER=${{ matrix.linker }}" >> "$GITHUB_ENV"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: "21"
       - name: Build
-        run: cargo build --release --locked -p blockheads_server --bin blockheads_server --target ${{ matrix.target }}
+        run: cargo build --release --locked -p blockheads_server --bin blockheads_server --features jvm --target ${{ matrix.target }}
       - name: Package (unix)
         if: runner.os != 'Windows'
         shell: bash
@@ -100,7 +109,11 @@ jobs:
         with:
           name: cli-${{ matrix.target }}
           path: dist/*
-      # The docker job re-packs the Linux binaries per platform.
+      # The docker job re-packs the Linux binaries per platform. The image has no JRE, so it gets a build without
+      # the `jvm` feature (only the server crate and the mod host are recompiled).
+      - name: Build the docker binary (no jvm)
+        if: runner.os == 'Linux'
+        run: cargo build --release --locked -p blockheads_server --bin blockheads_server --target ${{ matrix.target }}
       - name: Keep the raw Linux binary for docker
         if: runner.os == 'Linux'
         run: |
@@ -153,6 +166,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: app-${{ matrix.name }}
+      - uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: "21"
       - uses: oven-sh/setup-bun@v2
       - name: Linux system libraries
         if: runner.os == 'Linux'
@@ -171,7 +188,7 @@ jobs:
           bun install --frozen-lockfile
           # Stamp the release version into the bundle (not committed).
           bun -e 'const f="src-tauri/tauri.conf.json";const j=JSON.parse(await Bun.file(f).text());j.version="${{ needs.plan.outputs.version }}";await Bun.write(f,JSON.stringify(j,null,2))'
-          bun run tauri build ${{ matrix.args }}
+          bun run tauri build ${{ matrix.args }} --features jvm
       - name: Collect bundles
         shell: bash
         run: |

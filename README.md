@@ -18,7 +18,7 @@
 ---
 
 ## 🚀 Project Status
-**Current Status:** Alpha (v0.1.1 pre-release). A from-scratch rewrite of the official Blockheads 1.7.1 dedicated
+**Current Status:** Alpha (v0.2.0 pre-release). A from-scratch rewrite of the official Blockheads 1.7.1 dedicated
 server: same network protocol, same save files, same commands. Existing game clients and worlds work unchanged.
 
 It comes as a command-line server (like the original) and as the **Blockheads Server** app for desktop and Android,
@@ -47,7 +47,7 @@ Download from the [latest release](https://github.com/Blockheads-Club/blockheads
 - **Docker:**
 
 ```bash
-docker run -i --rm -p 15151:15151/udp -v bh-data:/data ghcr.io/blockheads-club/blockheads-server:0.1.1 --new MYWORLD
+docker run -i --rm -p 15151:15151/udp -v bh-data:/data ghcr.io/blockheads-club/blockheads-server:0.2.0 --new MYWORLD
 ```
 
 Players join with Join World -> Advanced... -> Online IP/Port. On Android 10+ the game client needs the popup fix from
@@ -83,7 +83,8 @@ with Patcher ...", shown by the game as its welcome popup) and are dropped 20 se
 by a plain disconnect (no rejection text, so the popup stays the only message). A client mod that needs `native` is listed (with its SHA-256, so a server can require it) but its bytes are never sent: the player installs it from the public index and confirms it.
 
 **JVM mods** (Java, Kotlin, ...) are unsandboxed code, so they are off twice over: build with `--features jvm` (needs a
-JDK for the Java SDK that is compiled in) and start the server with `BLOCKHEADS_JVM=1`, which loads the machine's JRE
+JDK for the Java SDK that is compiled in; the release CLI archives and desktop app bundles already are, the Android APK and
+the docker image are not: Android has no JRE to load, and a JRE would make the distroless image several times larger) and start the server with `BLOCKHEADS_JVM=1`, which loads the machine's JRE
 (8 or newer; `BLOCKHEADS_JAVA_HOME` picks one, `BLOCKHEADS_JVM_HEAP_MB` sets the heap, default 256). The mod then needs
 `native` in its `mods.toml` grant. The desktop/Android host app has the same switch in **Settings > Java mods** (off by default, with a red warning;
 it sets `BLOCKHEADS_JVM` / `BLOCKHEADS_JAVA_HOME` for the server it starts) and only works in an app built with

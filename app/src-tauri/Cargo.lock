@@ -365,7 +365,7 @@ dependencies = [
 
 [[package]]
 name = "blockheads-server-app"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "bhmod-core",
  "bhmod-manifest",
@@ -390,7 +390,7 @@ dependencies = [
 
 [[package]]
 name = "blockheads_server"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "bhmod-content",
