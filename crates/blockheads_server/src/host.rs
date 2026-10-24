@@ -112,10 +112,50 @@ fn describe(ex: &NsException) -> String {
     format!("{}: {}", ex.name, ex.reason_or_null())
 }
 
+/// The first `World load complete.` line turns `Starting` into `Running` and releases the commands queued for
+/// that moment; later lines, and a server that is already stopping, change nothing.
+fn note_ready(status: &Mutex<Status>, line: &str, ready_cmds: &[String], tx: &Sender<Vec<u8>>) {
+    if line.ends_with("World load complete.") {
+        let mut g = status.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if *g == Status::Starting {
+            *g = Status::Running;
+            for c in ready_cmds {
+                let mut b = c.as_bytes().to_vec();
+                b.push(b'\n');
+                let _ = tx.send(b);
+            }
+        }
+    }
+}
+
+/// How a server thread ended: an exit unwinds with [`HostExit`], an escaped exception or panic is a failure.
+fn end_status(result: std::thread::Result<Result<bool, NsException>>) -> Status {
+    match result {
+        Ok(Ok(_)) => Status::Stopped(0),
+        Ok(Err(ex)) => Status::Failed(describe(&ex)),
+        Err(payload) => match payload.downcast::<HostExit>() {
+            Ok(code) => Status::Stopped(code.0),
+            Err(other) => {
+                let msg = other
+                    .downcast_ref::<&str>()
+                    .map(|s| s.to_string())
+                    .or_else(|| other.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| "panic".to_string());
+                Status::Failed(msg)
+            }
+        },
+    }
+}
+
 fn prepare_thread(data_dir: Option<&Path>, log: Option<LogCallback>) {
     sys::set_hosted(true);
     paths::set_data_dir_override(data_dir.map(|d| d.to_string_lossy().into_owned()));
     nslog::set_thread_sink(log);
+}
+
+/// A sink that drops every line (worker threads of the world management calls have no log).
+fn silent_sink() -> LogCallback {
+    Arc::new(|_| {})
 }
 
 /// Run `f` on a fresh hosted thread and return its result (`None` if it panicked or exited).
@@ -123,7 +163,7 @@ fn on_worker<T: Send + 'static>(data_dir: Option<PathBuf>, f: impl FnOnce() -> T
     std::thread::Builder::new()
         .name("bh-host-op".into())
         .spawn(move || {
-            prepare_thread(data_dir.as_deref(), Some(Arc::new(|_| {})));
+            prepare_thread(data_dir.as_deref(), Some(silent_sink()));
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).ok()
         })
         .ok()?
@@ -143,17 +183,7 @@ pub fn start(cfg: HostConfig, log: LogCallback) -> std::io::Result<ServerHandle>
         let ready_tx = tx_ready;
         let ready_cmds = cfg.on_ready_commands.clone();
         let sink: LogCallback = Arc::new(move |line: &str| {
-            if line.ends_with("World load complete.") {
-                let mut g = st_log.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-                if *g == Status::Starting {
-                    *g = Status::Running;
-                    for c in &ready_cmds {
-                        let mut b = c.as_bytes().to_vec();
-                        b.push(b'\n');
-                        let _ = ready_tx.send(b);
-                    }
-                }
-            }
+            note_ready(&st_log, line, &ready_cmds, &ready_tx);
             user_log(line);
         });
         prepare_thread(cfg.data_dir.as_deref(), Some(sink));
@@ -193,25 +223,10 @@ pub fn start(cfg: HostConfig, log: LogCallback) -> std::io::Result<ServerHandle>
                 delegate.is_some()
             })
         }));
-        let end = match result {
-            Ok(Ok(_)) => Status::Stopped(0),
-            Ok(Err(ex)) => Status::Failed(describe(&ex)),
-            Err(payload) => match payload.downcast::<HostExit>() {
-                Ok(code) => Status::Stopped(code.0),
-                Err(other) => {
-                    let msg = other
-                        .downcast_ref::<&str>()
-                        .map(|s| s.to_string())
-                        .or_else(|| other.downcast_ref::<String>().cloned())
-                        .unwrap_or_else(|| "panic".to_string());
-                    Status::Failed(msg)
-                }
-            },
-        };
-        set_status(&st, end);
+        set_status(&st, end_status(result));
         nslog::set_thread_sink(None);
-    })?;
-    Ok(ServerHandle { cmd: tx, status, join: Some(join) })
+    });
+    join.map(|join| ServerHandle { cmd: tx, status, join: Some(join) })
 }
 
 impl ServerHandle {
@@ -289,4 +304,93 @@ pub fn create_world(
 pub fn delete_world(data_dir: Option<&Path>, id_or_name: &str) -> bool {
     let n = id_or_name.to_string();
     on_worker(data_dir.map(Path::to_path_buf), move || delegate::delete_saved_world(&n)).unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_first_ready_line_runs_the_queued_commands_once() {
+        let (tx, rx) = channel::<Vec<u8>>();
+        let status = Mutex::new(Status::Starting);
+        let cmds = vec!["/a".to_string(), "/b".to_string()];
+        note_ready(&status, "something else", &cmds, &tx);
+        assert_eq!(*status.lock().unwrap(), Status::Starting);
+        note_ready(&status, "2026 [1] World load complete.", &cmds, &tx);
+        assert_eq!(*status.lock().unwrap(), Status::Running);
+        assert_eq!(rx.try_iter().collect::<Vec<_>>(), [b"/a\n".to_vec(), b"/b\n".to_vec()]);
+        note_ready(&status, "World load complete.", &cmds, &tx);
+        assert!(rx.try_recv().is_err());
+        *status.lock().unwrap() = Status::Stopping;
+        note_ready(&status, "World load complete.", &cmds, &tx);
+        assert_eq!(*status.lock().unwrap(), Status::Stopping);
+    }
+
+    #[test]
+    fn every_way_a_server_thread_can_end() {
+        let ex = NsException { name: "NSRangeException".into(), reason: Some("r".into()) };
+        assert_eq!(end_status(Ok(Ok(true))), Status::Stopped(0));
+        assert_eq!(end_status(Ok(Err(ex))), Status::Failed("NSRangeException: r".to_string()));
+        assert_eq!(end_status(Err(Box::new(HostExit(7)))), Status::Stopped(7));
+        assert_eq!(end_status(Err(Box::new("static message"))), Status::Failed("static message".to_string()));
+        assert_eq!(
+            end_status(Err(Box::new(String::from("owned message")))),
+            Status::Failed("owned message".to_string())
+        );
+        assert_eq!(end_status(Err(Box::new(5u8))), Status::Failed("panic".to_string()));
+    }
+
+    #[test]
+    fn worker_operations_swallow_panics_and_log_into_the_void() {
+        let dir = std::env::temp_dir().join(format!("bh_host_unit_{}", std::process::id()));
+        assert_eq!(on_worker(Some(dir.clone()), || 5), Some(5));
+        assert_eq!(on_worker(Some(dir.clone()), || crate::nslog!("goes to the silent sink")), Some(()));
+        assert_eq!(on_worker(None, || None::<i32>.unwrap()), None);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn worlds_can_be_managed_without_a_server() {
+        let dir = std::env::temp_dir().join(format!("bh_host_worlds_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(list_worlds(Some(&dir)).is_empty());
+        let w = create_world(Some(&dir), "managed", 116, false).unwrap();
+        assert_eq!(w.name, "MANAGED");
+        assert_eq!(list_worlds(Some(&dir)), vec![w.clone()]);
+        assert!(!delete_world(Some(&dir), "nothing"));
+        assert!(delete_world(Some(&dir), &w.id));
+        assert!(list_worlds(Some(&dir)).is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn dropping_a_running_handle_stops_it() {
+        let dir = std::env::temp_dir().join(format!("bh_host_drop_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let cfg = HostConfig {
+            data_dir: Some(dir.clone()),
+            world: WorldSelect::New { name: "drop".into(), width_multiplier: 116 },
+            port: Some(std::net::UdpSocket::bind("0.0.0.0:0").unwrap().local_addr().unwrap().port()),
+            ..HostConfig::default()
+        };
+        let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+        let s2 = seen.clone();
+        let h = start(cfg, Arc::new(move |l: &str| s2.lock().unwrap().push(l.to_string()))).unwrap();
+        // A load of an unknown world ends by itself without a failure.
+        let mut gone = start(
+            HostConfig {
+                data_dir: Some(dir.clone()),
+                world: WorldSelect::Load("nothing".into()),
+                ..HostConfig::default()
+            },
+            Arc::new(|_| {}),
+        )
+        .unwrap();
+        assert_eq!(gone.wait(), Status::Stopped(0));
+        assert!(!gone.is_alive());
+        drop(h); // stops the server and waits for it
+        assert!(seen.lock().unwrap().iter().any(|l| l.contains("Exiting World.")));
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }

@@ -339,6 +339,12 @@ mod tests {
         (g, RunLoop::current())
     }
 
+    /// A callback adding `by` to a counter: one closure shared by every use, so it runs in some of them.
+    fn bump(c: &Rc<Cell<i32>>, by: i32) -> Box<dyn FnMut()> {
+        let c = c.clone();
+        Box::new(move || c.set(c.get() + by))
+    }
+
     fn near(a: f64, b: f64) -> bool {
         (a - b).abs() < 1e-6
     }
@@ -426,9 +432,9 @@ mod tests {
         let (_g, rl) = setup();
         let hits = Rc::new(Cell::new(0));
         let h = hits.clone();
-        rl.perform_after_delay(2.0, Box::new(move || h.set(h.get() + 1)));
+        rl.perform_after_delay(2.0, bump(&h, 1));
         let h = hits.clone();
-        let id = rl.perform_after_delay(1.0, Box::new(move || h.set(h.get() + 100)));
+        let id = rl.perform_after_delay(1.0, bump(&h, 100));
         rl.invalidate(id);
         rl.invalidate(id);
         let owned = Rc::new(Cell::new(0));
@@ -489,15 +495,15 @@ mod tests {
         let (_g, rl) = setup();
         let hits = Rc::new(Cell::new(0));
         let h = hits.clone();
-        let id = perform_after_delay(0.0, Box::new(move || h.set(h.get() + 1)));
+        let id = perform_after_delay(0.0, bump(&h, 1));
         invalidate(id);
         let h = hits.clone();
-        perform_after_delay(0.0, Box::new(move || h.set(h.get() + 10)));
+        perform_after_delay(0.0, bump(&h, 10));
         let h = hits.clone();
-        let st = rl.scheduled_timer(0.1, false, Box::new(move || h.set(h.get() + 100)));
+        let st = rl.scheduled_timer(0.1, false, bump(&h, 100));
         let sched: &dyn TimerScheduler = &*rl;
         let h = hits.clone();
-        let rep = sched.schedule_repeating(0.1, Box::new(move || h.set(h.get() + 1000)));
+        let rep = sched.schedule_repeating(0.1, bump(&h, 1000));
         sched.invalidate(rep);
         let _ = st;
         for _ in 0..4 {
@@ -528,7 +534,7 @@ mod tests {
         rl.fire(999, now); // unknown id
         let hits = Rc::new(Cell::new(0));
         let h = hits.clone();
-        let id = rl.add_timer(now + 10.0, 1.0, true, Box::new(move || h.set(h.get() + 1)));
+        let id = rl.add_timer(now + 10.0, 1.0, true, bump(&h, 1));
         rl.fire(id, now); // not due yet
         rl.invalidate(id);
         rl.fire(id, now + 20.0); // invalidated
@@ -541,7 +547,7 @@ mod tests {
         }
         // Rescheduling after a long stall lands on the grid, strictly after now.
         let h = hits.clone();
-        let id = rl.add_timer(now + 1.0, 1.0, true, Box::new(move || h.set(h.get() + 1)));
+        let id = rl.add_timer(now + 1.0, 1.0, true, bump(&h, 1));
         for t in [now + 1.0, now + 3.5, now + 5.0] {
             rl.fire(id, t);
         }

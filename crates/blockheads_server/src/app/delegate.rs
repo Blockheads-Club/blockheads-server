@@ -432,21 +432,20 @@ impl CommandLineDelegate {
         if len <= 1 {
             return;
         }
+        // Without a game controller the message goes to nil, which does nothing.
         let gc = self.game_controller.borrow().clone();
-        let gc = match gc {
-            Some(g) => g,
-            None => return, // nil receiver
-        };
-        let starts_with_slash = nsstring::range_of_string(&s, "/").map(|r| r.0) == Some(0);
-        if !starts_with_slash && !gc.is_waiting_for_multi_part_command_response() {
-            let mut msg = s.clone();
-            if nsstring::range_of_string(&s, "\n").map(|r| r.0) == Some(len - 1) {
-                msg = nsstring::substring_to_index(&s, len - 1);
+        for gc in gc {
+            let starts_with_slash = nsstring::range_of_string(&s, "/").map(|r| r.0) == Some(0);
+            if !starts_with_slash && !gc.is_waiting_for_multi_part_command_response() {
+                let mut msg = s.clone();
+                if nsstring::range_of_string(&s, "\n").map(|r| r.0) == Some(len - 1) {
+                    msg = nsstring::substring_to_index(&s, len - 1);
+                }
+                gc.send_chat_message_send_to_clients(Some(&msg), None);
+            } else {
+                gc.handle_command_issue_client(&s, None);
             }
-            gc.send_chat_message_send_to_clients(Some(&msg), None);
-            return;
         }
-        gc.handle_command_issue_client(&s, None);
     }
 
     /// `-gameSaves`: newest first, may raise (`nil argument for compare:`).
@@ -535,29 +534,19 @@ impl CommandLineDelegate {
             db.as_ref().and_then(|db| db.data_for_key(Some("worldv2"))).and_then(|d| property_list_from_data(&d));
         if save_dict.is_none() {
             let f = paths::append_path_component(&full, "worldv2");
-            if Path::new(&f).exists() {
-                if let Ok(bytes) = std::fs::read(&f) {
-                    save_dict = property_list_from_data(&bytes);
-                }
-            }
+            save_dict = std::fs::read(&f).ok().and_then(|bytes| property_list_from_data(&bytes));
         }
-        match save_dict {
-            None => nslog!("Unable to load world data to update"),
-            Some(PlistValue::Dict(d)) => {
-                let mut m = PlistDict {
-                    map: GsDict::copy_from(&d.map),
-                    tag: ClassTag { origin: Origin::Built, mutable: true, alt: false },
-                };
-                m.map.insert(key.to_string(), value);
-                let blob = data_from_property_list(&PlistValue::Dict(m));
-                if let Some(db) = &db {
-                    db.set_data(blob.as_deref(), Some("worldv2"));
-                }
-            }
-            Some(_) => {
-                // Note: a non-dictionary plist would make `initWithDictionary:` raise; not observed.
-                nslog!("Unable to load world data to update");
-            }
+        // A missing record and a non-dictionary one are reported alike (a non-dictionary plist would make
+        // `initWithDictionary:` raise in the original; not observed).
+        let Some(PlistValue::Dict(d)) = save_dict else { return nslog!("Unable to load world data to update") };
+        let mut m = PlistDict {
+            map: GsDict::copy_from(&d.map),
+            tag: ClassTag { origin: Origin::Built, mutable: true, alt: false },
+        };
+        m.map.insert(key.to_string(), value);
+        let blob = data_from_property_list(&PlistValue::Dict(m));
+        for db in &db {
+            db.set_data(blob.as_deref(), Some("worldv2"));
         }
     }
 
@@ -997,5 +986,36 @@ mod tests {
         d.command_typed(b"\n");
         d.command_typed(b"hello\n"); // no game controller: the nil receiver swallows it
         assert!(d.done());
+    }
+
+    #[test]
+    fn typed_lines_reach_the_hosted_world() {
+        let _root = data_dir("typed2");
+        let w = create_saved_world("typed", 116, false).unwrap();
+        let d = detached_delegate();
+        let free = std::net::UdpSocket::bind("0.0.0.0:0").unwrap().local_addr().unwrap().port().to_string();
+        let me: Weak<dyn GameControllerDelegate> = Rc::downgrade(&d) as Weak<CommandLineDelegate>;
+        let gc = GameController::init(GameControllerArgs {
+            name: Some(w.name),
+            save_id: Some(w.id),
+            app_delegate: me,
+            port: Some(free),
+            max_players: 0,
+            save_delay: 10,
+            world_width_macro: 32,
+            credit: 0,
+            cloud_salt: None,
+            owner_name: None,
+            privacy: None,
+            convert_to_custom_rules: false,
+            expert_mode: false,
+            no_exit: true,
+        });
+        *d.game_controller.borrow_mut() = gc;
+        d.command_typed(b"hello\n"); // chat with the newline stripped
+        d.command_typed(b"no newline"); // chat as typed
+        d.command_typed(b"/pvp-off\n"); // a command
+        d.command_typed(b"x"); // too short
+        assert!(!d.done());
     }
 }
