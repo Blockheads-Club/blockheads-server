@@ -263,7 +263,7 @@ fn cmd_decode(a: &Args) -> i32 {
             return 2;
         }
     };
-    for r in recs.iter().filter(|r| filter.map_or(true, |t| r.ty == t)) {
+    for r in recs.iter().filter(|r| filter.is_none_or(|t| r.ty == t)) {
         if a.has("json") {
             let d = decode_packet(r.dir, &r.data);
             println!(

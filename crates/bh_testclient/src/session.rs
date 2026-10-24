@@ -594,6 +594,7 @@ impl Session {
                 self.state.approved = true;
             }
             ServerMsg::PlayerList(p) => self.state.players = p,
+            #[allow(clippy::collapsible_match)] // keeps one arm per message kind
             ServerMsg::Chat(p) => {
                 if let Some(p) = p {
                     self.state.chat.push(p);

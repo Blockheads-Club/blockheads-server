@@ -51,13 +51,13 @@ fn parse(args: &[String]) -> Opts {
                 o.server_args = args[i + 1..].to_vec();
                 break;
             }
-            "--limit" => o.limit = take(&args, &mut i).parse().unwrap_or_else(|_| die(USAGE)),
-            "--out" => o.out = Some(PathBuf::from(take(&args, &mut i))),
-            "--clock" => o.clock = Some(take(&args, &mut i).parse().unwrap_or_else(|_| die(USAGE))),
+            "--limit" => o.limit = take(args, &mut i).parse().unwrap_or_else(|_| die(USAGE)),
+            "--out" => o.out = Some(PathBuf::from(take(args, &mut i))),
+            "--clock" => o.clock = Some(take(args, &mut i).parse().unwrap_or_else(|_| die(USAGE))),
             "--context" => {
-                let _ = take(&args, &mut i);
+                let _ = take(args, &mut i);
             }
-            "-o" => o.o = Some(PathBuf::from(take(&args, &mut i))),
+            "-o" => o.o = Some(PathBuf::from(take(args, &mut i))),
             "--require-equal-len" => o.require_equal_len = true,
             s if s.starts_with("--") => die(USAGE),
             s => o.pos.push(s.to_string()),
