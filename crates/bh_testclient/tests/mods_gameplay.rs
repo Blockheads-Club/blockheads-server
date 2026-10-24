@@ -102,7 +102,7 @@ impl Running {
             data_dir: Some(data.to_path_buf()),
             world: WorldSelect::Load(world.to_string()),
             port: Some(port),
-            mods: ModsConfig { dir: Some(mods), disabled: false },
+            mods: ModsConfig { dir: Some(mods), disabled: false, variant_blocks: false },
             ..HostConfig::default()
         };
         let handle = host::start(cfg, Arc::new(move |s| l2.lock().unwrap().push(s.to_string()))).unwrap();

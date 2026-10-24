@@ -131,7 +131,7 @@ fn lua_mods_on_a_live_server() {
     let data = tmp.path().join("TheBlockheads");
     let w = host::create_world(Some(&data), "Modded", 104, false).expect("create");
     let mods = mods_dir(tmp.path());
-    let cfg = ModsConfig { dir: Some(mods.clone()), disabled: false };
+    let cfg = ModsConfig { dir: Some(mods.clone()), disabled: false, variant_blocks: false };
     let mut srv = start(&data, &w.id, 15400, cfg.clone());
     assert!(
         srv.log_has("[mods] loaded 3 mod(s): chat-filter 0.1.0, hello-lua 0.1.0, scheduler-lua 0.1.0"),
@@ -216,10 +216,10 @@ fn no_mods_means_no_trace() {
     std::fs::write(only_disabled.join("mods.toml"), "[hello-lua]\nenabled = false\n").unwrap();
     let full = mods_dir(tmp.path());
     let cases = [
-        ModsConfig { dir: Some(tmp.path().join("missing")), disabled: false },
-        ModsConfig { dir: Some(empty), disabled: false },
-        ModsConfig { dir: Some(only_disabled), disabled: false },
-        ModsConfig { dir: Some(full), disabled: true },
+        ModsConfig { dir: Some(tmp.path().join("missing")), disabled: false, variant_blocks: false },
+        ModsConfig { dir: Some(empty), disabled: false, variant_blocks: false },
+        ModsConfig { dir: Some(only_disabled), disabled: false, variant_blocks: false },
+        ModsConfig { dir: Some(full), disabled: true, variant_blocks: false },
         // The default: `<data dir>/mods`, which does not exist here.
         ModsConfig::default(),
     ];
@@ -283,7 +283,7 @@ fn roles_kicks_and_stale_players() {
     .unwrap();
     std::fs::write(d.join("server/main.luau"), ADMIN_TOOLS).unwrap();
     std::fs::write(mods.join("mods.toml"), "[admin-tools]\ngrant = [\"players:kick\"]\n").unwrap();
-    let cfg = ModsConfig { dir: Some(mods), disabled: false };
+    let cfg = ModsConfig { dir: Some(mods), disabled: false, variant_blocks: false };
     let mut srv = start_with(&data, &w.id, 15420, cfg, Some("OWNY"));
     assert!(srv.wait_log("[mods] admin-tools: enabled", 10), "{}", srv.log());
     srv.handle.send_command("/admin ADDY");
@@ -327,7 +327,7 @@ fn wasm_mod_on_a_live_server() {
     let mods = tmp.path().join("mods");
     copy_dir(&fixtures().join("hello-rust"), &mods.join("hello-rust"));
     std::fs::write(mods.join("mods.toml"), "[hello-rust]\ngrant = [\"players:chat\"]\n").unwrap();
-    let cfg = ModsConfig { dir: Some(mods.clone()), disabled: false };
+    let cfg = ModsConfig { dir: Some(mods.clone()), disabled: false, variant_blocks: false };
     let mut srv = start(&data, &w.id, 15430, cfg.clone());
     assert!(srv.log_has("[mods] loaded 1 mod(s): hello-rust 0.1.0"), "{}", srv.log());
     assert!(srv.wait_log("[mods] hello-rust: hello-rust enabled", 10), "{}", srv.log());
