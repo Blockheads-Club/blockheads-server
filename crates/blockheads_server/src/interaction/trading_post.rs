@@ -1032,6 +1032,16 @@ mod tests {
         assert_eq!((copy.item_type, copy.data_a, copy.data_b), (ItemType(0xc), 1, 2));
         assert!(Rc::ptr_eq(&copy.sub_items.as_ref().unwrap()[0], &basket.borrow().sub_items.as_ref().unwrap()[0]));
         assert_eq!(sub_items_owned(&basket.borrow()).unwrap().len(), 4);
+        basket.borrow().sub_items.as_ref().unwrap()[1].borrow_mut().push(InventoryItem::new(
+            ItemType(5),
+            3,
+            4,
+            None,
+            None,
+        ));
+        let owned = sub_items_owned(&basket.borrow()).unwrap();
+        assert_eq!((owned[0].len(), owned[1].len()), (0, 1));
+        assert_eq!((owned[1][0].item_type, owned[1][0].data_a, owned[1][0].data_b), (ItemType(5), 3, 4));
         assert!(sub_items_owned(&InventoryItem::new(ItemType(5), 0, 0, None, None).borrow()).is_none());
     }
 

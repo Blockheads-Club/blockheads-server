@@ -75,7 +75,7 @@ impl Ladder {
         {
             let mut st = me.st.borrow_mut();
             st.item_type = item_type;
-            st.paint_color = sd_get(save_dict, "paintColor").map_or(0, |v| v.unsigned_int_value()) as u16;
+            st.paint_color = sd_get(save_dict, "paintColor").map_or(0, PlistValue::unsigned_int_value) as u16;
         }
         if let Some(o) = owner_from_client_or_save(client_id, save_dict) {
             me.base.borrow_mut().owner_id = Some(o);

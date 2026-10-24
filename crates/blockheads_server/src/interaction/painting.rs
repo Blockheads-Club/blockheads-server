@@ -247,7 +247,7 @@ impl Painting {
                 dict.as_ref().and_then(|d| d.object_for_key("hiddenDueToServerBan")).map_or(false, |v| v.bool_value());
             st.image_data = image;
         }
-        let need = me.st.borrow().image_data.as_ref().map_or(true, |i| i.is_empty());
+        let need = me.st.borrow().image_data.as_ref().map_or(true, Vec::is_empty);
         if need {
             dw.request_painting_data_for_painting(&me_obj);
         }

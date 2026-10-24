@@ -129,8 +129,8 @@ impl World {
                     let owner = hooks.server_player_name_for_player_with_id_including_old_players(cid.as_deref());
                     nslog!(
                         "Blockhead named {} owned by player {} was harmed by player {}.",
-                        hooks.blockhead_name(&b).unwrap_or_else(|| "(null)".to_string()),
-                        owner.unwrap_or_else(|| "(null)".to_string()),
+                        hooks.blockhead_name(&b).unwrap_or("(null)".to_string()),
+                        owner.unwrap_or("(null)".to_string()),
                         by
                     );
                 }

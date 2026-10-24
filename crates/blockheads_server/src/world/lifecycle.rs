@@ -1650,7 +1650,7 @@ pub(crate) mod testkit {
             }
         }
         fn dynamic_world_save_game_with_world_data_sign_ownership_data(&self, w: Option<&[u8]>, s: Option<&[u8]>) {
-            self.saved.borrow_mut().push((w.map(|x| x.to_vec()), s.map(|x| x.to_vec())));
+            self.saved.borrow_mut().push((w.map(<[u8]>::to_vec), s.map(<[u8]>::to_vec)));
         }
         fn dynamic_world_conversion_pump(&self) {
             self.note("pump");
@@ -1781,7 +1781,7 @@ pub(crate) mod testkit {
 
     /// Run `f` while capturing NSLog output (global sink, serialised).
     pub fn capture_log(f: impl FnOnce()) -> String {
-        let _g = crate::foundation::nslog::TEST_SINK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::foundation::nslog::TEST_SINK_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let sink = Arc::new(Mutex::new(Vec::new()));
         crate::foundation::nslog::set_test_sink(Some(sink.clone()));
         f();
@@ -1859,7 +1859,7 @@ mod tests {
     use crate::types::structs::WireStruct;
 
     fn sandbox_home(tag: &str) -> (std::sync::MutexGuard<'static, ()>, String) {
-        let g = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let g = HOME_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let home = format!("{}/bhwc_{}_{}", std::env::temp_dir().display(), tag, std::process::id());
         let _ = std::fs::remove_dir_all(&home);
         std::fs::create_dir_all(&home).unwrap();
@@ -1927,7 +1927,7 @@ mod tests {
         });
         let lines = strip_log(&log);
         assert!(lines.contains(&"using seed:-1879048192".to_string()), "{:?}", lines);
-        let pos = |s: &str| lines.iter().position(|l| l == s).unwrap_or_else(|| panic!("missing {}: {:?}", s, lines));
+        let pos = |s: &str| lines.iter().position(|l| l == s).expect("the line is in the log");
         assert!(pos("using seed:-1879048192") < pos("save delay:10"));
         assert!(pos("save delay:10") < pos("best start pos:700.0 100.0"));
         assert!(!w.did_load_game());
@@ -2025,7 +2025,7 @@ mod tests {
         *w.server_password.borrow_mut() = Some("pw".into());
         *w.distance_ordered_food_types.borrow_mut() = (0..31).collect();
         *w.circum_navigate_booleans.borrow_mut() = Some(IndexSet::new());
-        let _cl = clock::TEST_CLOCK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _cl = clock::TEST_CLOCK_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         clock::set_virtual(Some(1_000_000_000.0));
         w.save_all();
         clock::set_virtual(None);
@@ -2407,7 +2407,7 @@ mod lifecycle_scenarios {
     use super::*;
 
     fn sandbox(tag: &str) -> (std::sync::MutexGuard<'static, ()>, String) {
-        let g = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let g = HOME_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let home = format!("{}/bhls_{}_{}", std::env::temp_dir().display(), tag, std::process::id());
         let _ = std::fs::remove_dir_all(&home);
         std::fs::create_dir_all(&home).unwrap();

@@ -224,7 +224,7 @@ mod convertor_tests {
     /// database environment: every branch of the tick is taken.
     #[test]
     fn ticks_with_a_convertor_and_an_app_environment() {
-        let g = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let g = HOME_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let home = format!("{}/bhpu_{}", std::env::temp_dir().display(), std::process::id());
         let _ = std::fs::remove_dir_all(&home);
         std::fs::create_dir_all(&home).unwrap();

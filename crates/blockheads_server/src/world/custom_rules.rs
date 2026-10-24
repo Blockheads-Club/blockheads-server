@@ -855,7 +855,7 @@ mod tests {
             (1016, r.teleportation),
             (1017, r.meditation),
         ];
-        table.iter().find(|(c, _)| *c == cat).map(|(_, v)| *v).unwrap_or_else(|| panic!("cat {}", cat))
+        table.iter().find(|(c, _)| *c == cat).map(|(_, v)| *v).expect("the category is in the table")
     }
 
     #[test]
@@ -973,7 +973,7 @@ mod tests {
 
     fn capture<T>(f: impl FnOnce() -> T) -> (T, String) {
         use std::sync::{Arc, Mutex};
-        let _g = crate::foundation::nslog::TEST_SINK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::foundation::nslog::TEST_SINK_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let sink = Arc::new(Mutex::new(Vec::new()));
         crate::foundation::nslog::set_test_sink(Some(sink.clone()));
         let r = f();

@@ -709,7 +709,7 @@ mod tests {
         m2.world_contents_changed(&m2, &mut vec![IntPair { x: 41, y: 40 }]);
         assert_eq!(t2.st.borrow().connection_type, -1);
         assert!(m2.update_needs_to_be_sent());
-        assert!(rec.take().iter().all(|s| !s.starts_with("freeBlock")));
+        assert!(!format!("|{}", rec.take().join("|")).contains("|freeBlock"));
         // out-of-window change is ignored
         tile(&w, 39, 40).update(|t| t.type_index = 2);
         m2.world_contents_changed(&m2, &mut vec![IntPair { x: 45, y: 40 }]);

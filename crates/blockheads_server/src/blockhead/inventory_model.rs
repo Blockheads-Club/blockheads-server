@@ -448,7 +448,7 @@ impl Blockhead {
     pub fn inventory_needs_saving(&self) -> bool {
         let f = self.bh.borrow();
         if f.inventory_needs_saving {
-            f.unconfirmed_pickups.as_ref().map_or(0, |m| m.len()) == 0
+            f.unconfirmed_pickups.as_ref().map_or(0, std::collections::BTreeMap::len) == 0
         } else {
             false
         }
@@ -1109,7 +1109,7 @@ impl Blockhead {
                 {
                     0
                 } else {
-                    self.bh.borrow().path_extra_data.as_ref().map_or(0, |d| d.int_for_key("craftCountOrExtraData"))
+                    self.craft_count_or_extra_data()
                 };
                 let fgs = self.bh.borrow().final_goal_square;
                 let tile = world.as_ref().and_then(|w| tile_at_world_position_loaded(fgs.x, fgs.y, w));

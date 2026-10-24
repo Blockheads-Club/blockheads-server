@@ -983,6 +983,23 @@ mod tests {
     }
 
     #[test]
+    fn app_database_asks_the_delegate() {
+        struct NoDatabase;
+        impl WorldDelegate for NoDatabase {
+            fn app_database(&self) -> Option<Rc<Database>> {
+                None
+            }
+        }
+        let w = World::alloc(32);
+        assert!(w.app_database().is_none(), "no delegate");
+        let delegate: Rc<dyn WorldDelegate> = Rc::new(NoDatabase);
+        *w.delegate.borrow_mut() = Some(Rc::downgrade(&delegate));
+        assert!(w.app_database().is_none(), "a delegate without a database");
+        drop(delegate);
+        assert!(w.app_database().is_none(), "a delegate that is gone");
+    }
+
+    #[test]
     fn tile_ref_shares_writes() {
         let w = World::alloc(32);
         let pb = w.take_physical_block();

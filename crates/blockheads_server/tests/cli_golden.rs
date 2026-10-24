@@ -238,7 +238,8 @@ fn run_case(c: &Value, norm: &Norm, dynamic: bool) -> Result<bool, String> {
         return Ok(false);
     }
     let fixed_port = setup["docker_network"] == "none";
-    let _guard = if fixed_port { Some(FIXED_PORT_LOCK.lock().unwrap_or_else(|e| e.into_inner())) } else { None };
+    let _guard =
+        if fixed_port { Some(FIXED_PORT_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner)) } else { None };
     if fixed_port && (udp_busy(15151) || udp_busy(16001)) {
         return Ok(false);
     }

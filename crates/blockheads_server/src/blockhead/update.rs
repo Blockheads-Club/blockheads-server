@@ -1718,7 +1718,7 @@ fn u6_place(c: &Ctx, itype: u32, prev: f32, timer: f32) {
         None => {}
         Some(false) => b.stop_interacting(),
         Some(true) => {
-            let item = b.bh.borrow().interaction_item.clone().unwrap_or_else(|| item.unwrap());
+            let item = b.bh.borrow().interaction_item.clone().or(item).unwrap();
             let pt = item.borrow().item_type.0;
             if c.sim_or_ctl {
                 c.event(3, SimulationEventExtra::ItemType(pt as i32));

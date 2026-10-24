@@ -679,6 +679,14 @@ pub struct Blockhead {
 }
 
 impl Blockhead {
+    /// The item type of the item being interacted with (0 without one).
+    pub(crate) fn interaction_item_type(&self) -> i32 {
+        self.bh.borrow().interaction_item.as_ref().map_or(0, |i| i.borrow().item_type.0 as i32)
+    }
+    /// `[pathExtraData[@"craftCountOrExtraData"] intValue]` (0 without path extra data).
+    pub(crate) fn craft_count_or_extra_data(&self) -> i32 {
+        self.bh.borrow().path_extra_data.as_ref().map_or(0, |d| d.int_for_key("craftCountOrExtraData"))
+    }
     /// `[Blockhead alloc]`: zeroed ivars vectors).
     pub fn alloc(self_weak: ObjWeak) -> Blockhead {
         Blockhead {
@@ -1775,7 +1783,11 @@ pub trait BlockheadHost, stub BlockheadHostStub {
     /// `-[Sign text]` length (SignTextDynamicObject): the number of UTF-16 units.
     #[provided]
     fn sign_text_length(&self, o: &ObjRef) -> usize {
-        o.as_sign_text().and_then(|s| s.text()).map_or(0, |t| t.encode_utf16().count())
+        o.as_sign_text()
+            .and_then(crate::objects::protocols::SignTextDynamicObject::text)
+            .unwrap_or_default()
+            .encode_utf16()
+            .count()
     }
     /// `[rideObject blockheadCanRide:self usingItem:t]`
     #[provided]

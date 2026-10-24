@@ -2195,7 +2195,7 @@ mod scenario_tests {
         let mt = w.macro_tiles().get(0).unwrap();
         mt.dynamic_objects_loaded.set(false);
         d.load_glow_block_if_needed_at_pos_tile(ip(5, 12), &t);
-        assert!(!log.borrow().iter().any(|l| l.starts_with("glow")));
+        assert!(!format!("|{}", log.borrow().join("|")).contains("|glow"));
         mt.dynamic_objects_loaded.set(true);
         d.load_glow_block_if_needed_at_pos_tile(ip(5, 12), &t);
         d.load_glow_block_if_needed_at_pos_tile(ip(5, 12), &t);
@@ -2258,7 +2258,7 @@ mod scenario_tests {
                 d.sow_plant_near_parent(&parent);
             }
         }
-        assert!(log.borrow().iter().all(|l| !l.starts_with("plant")));
+        assert!(!format!("|{}", log.borrow().join("|")).contains("|plant"));
     }
 
     #[test]

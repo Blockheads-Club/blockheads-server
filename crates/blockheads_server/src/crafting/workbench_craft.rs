@@ -1045,7 +1045,7 @@ mod tests {
         f.deps.log.borrow_mut().clear();
         wb.st.borrow_mut().source_items[0] = Some(vec![]);
         wb.abort_craft(&me);
-        assert_eq!(f.deps.log.borrow().iter().filter(|l| l.starts_with("free(")).count(), 0);
+        assert!(!format!("|{}", f.deps.log.borrow().join("|")).contains("|free("));
     }
 
     #[test]
@@ -1681,7 +1681,7 @@ mod tests {
         wb.st.borrow_mut().fuel_counter = 0.0;
         tick(&wb, &me, 1.0);
         assert_eq!(wb.available_electricity(), 70);
-        assert!(!f.host.log.borrow().iter().any(|l| l.starts_with("findPower")));
+        assert!(!format!("|{}", f.host.log.borrow().join("|")).contains("|findPower"));
         // low and the network has nothing: stays empty
         wb.st.borrow_mut().available_electricity = 10;
         wb.st.borrow_mut().fuel_counter = 0.0;
@@ -1833,7 +1833,7 @@ mod tests {
         let (wb, me) = make(&f, WB_FLYWHEEL as u32, 10, 10);
         wb.st.borrow_mut().fuel_counter = 0.0;
         tick(&wb, &me, 4.0);
-        assert!(!f.host.log.borrow().iter().any(|l| l.starts_with("findPower")));
+        assert!(!format!("|{}", f.host.log.borrow().join("|")).contains("|findPower"));
         tick(&wb, &me, 2.0);
         assert!(f.host.log.borrow().iter().any(|l| l == "findPower(8192)"));
         assert_eq!(wb.st.borrow().time_since_found_electricty, 5.0);
@@ -1961,7 +1961,7 @@ mod tests {
         // a user but nothing is being crafted
         wb.io.borrow_mut().current_blockhead = Some(blockhead(5, false));
         wb.abort_immediately_and_restore_blockhead_items(&me);
-        assert!(f.host.log.borrow().iter().all(|l| !l.starts_with("craftItemFinished")));
+        assert!(!format!("|{}", f.host.log.borrow().join("|")).contains("|craftItemFinished"));
     }
 
     #[test]

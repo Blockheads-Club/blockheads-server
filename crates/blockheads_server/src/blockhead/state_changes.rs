@@ -60,9 +60,7 @@ impl Blockhead {
         }
         let is_net = self.is_net();
         let ctl = self.is_client_blockhead_being_controlled_by_server();
-        let item_type_of_interaction_item = |s: &Blockhead| -> i32 {
-            s.bh.borrow().interaction_item.as_ref().map_or(0, |i| i.borrow().item_type.0 as i32)
-        };
+        let item_type_of_interaction_item = |s: &Blockhead| -> i32 { s.interaction_item_type() };
 
         // 3. RIDE, 4. RIDE_BOAT, 6. RIDE_TRAIN_CAR without proxy
         if t == it::RIDE
@@ -842,7 +840,12 @@ impl Blockhead {
         if d.interaction_workbench_id == 0 {
             self.bh.borrow_mut().interaction_workbench = None;
         } else {
-            let cur = self.bh.borrow().interaction_workbench.as_ref().map_or(0, |o| o.unique_id());
+            let cur = self
+                .bh
+                .borrow()
+                .interaction_workbench
+                .as_deref()
+                .map_or(0, <dyn crate::objects::base::DynamicObject>::unique_id);
             if cur != d.interaction_workbench_id {
                 let o = h.interaction_object_with_id(d.interaction_workbench_id as i64);
                 self.bh.borrow_mut().interaction_workbench = o;
@@ -1156,10 +1159,7 @@ impl Blockhead {
         let mut rejected = false;
         let (extra, item) = {
             let f = self.bh.borrow();
-            (
-                f.path_extra_data.as_ref().map_or(0, |e| e.int_for_key("craftCountOrExtraData")),
-                f.interaction_item.clone(),
-            )
+            (self.craft_count_or_extra_data(), f.interaction_item.clone())
         };
         // 3.
         let tr = t.copied();

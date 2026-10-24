@@ -587,7 +587,7 @@ mod tests {
         let w = &f.world;
         with_dw(w);
         *w.server.borrow_mut() = None;
-        let _cl = crate::foundation::clock::TEST_CLOCK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _cl = crate::foundation::clock::TEST_CLOCK_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         crate::foundation::clock::set_virtual(Some(1_800_000_000.0));
         let now = crate::foundation::clock::reference_time();
         w.set_last_update_time(now - 100000.0); // more than a day: clamped
@@ -669,7 +669,7 @@ mod more_tests {
         let w = &f.world;
         with_dw(w);
         *w.server.borrow_mut() = None;
-        let _cl = crate::foundation::clock::TEST_CLOCK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _cl = crate::foundation::clock::TEST_CLOCK_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         crate::foundation::clock::set_virtual(Some(1_800_000_000.0));
         let now = crate::foundation::clock::reference_time();
         w.set_last_update_time(now - 50.0);
@@ -696,7 +696,7 @@ mod more_tests {
         let f = fixture(32);
         let w = &f.world;
         with_dw(w);
-        let _cl = crate::foundation::clock::TEST_CLOCK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _cl = crate::foundation::clock::TEST_CLOCK_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         crate::foundation::clock::set_virtual(Some(1_800_000_000.0));
         // sleepers, meditators, regenerators, collapsed and busy blockheads
         let _ = bh(&f, 1, |b| b.asleep = true);

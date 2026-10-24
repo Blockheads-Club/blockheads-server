@@ -2,22 +2,19 @@
 # Line coverage gate for the workspace (CI: coverage job). Runs the whole test suite once with cargo-llvm-cov, writes
 # lcov.info and summary.txt, and fails when a gate below is missed. Needs cargo-llvm-cov.
 #
-# Policy is 100 % line coverage. Today:
-#   * the mod host seam and the 0xBC protocol (crates/blockheads_server/src/mods/) and the test client's modded mode
-#     (crates/bh_testclient/src/modded.rs) are gated at 100 %, file by file;
-#   * the rest of the port (about 24 500 server lines, mostly branches of the ported game logic that no test reaches
-#     yet) is gated at a per-crate floor: the measured number (server 81.0 %, test client library 70.6 % in CI) less slack
-#     for platform and timing differences. Floors only go up: raise one in the commit that adds the tests.
+# Policy is 100 % line coverage of the whole workspace, gated per crate (blockheads_server, bh_testclient at 100) and,
+# as a second net, file by file for the mod host seam and the 0xBC protocol (crates/blockheads_server/src/mods/) and the
+# test client's modded mode (crates/bh_testclient/src/modded.rs). The floors never go down.
 # Left out of the measurement (not game code, nothing in them can run without a person or the private reference
-# environment): the probe tools (crates/bh_tools) and the thin command-line mains of the test client
-# (crates/bh_testclient/src/bin). The harness parts that need docker and the reference server (refenv, save/trace
-# diff, gdb) skip without them and are counted as they are.
+# environment): the probe tools (crates/bh_tools), the thin command-line mains of the test client
+# (crates/bh_testclient/src/bin) and the *_golden.rs tests, which replay oracle fixtures and skip in CI. The harness
+# parts that need docker and the reference server (refenv, save/trace diff, gdb) skip without them.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-FLOOR_blockheads_server=80
-FLOOR_bh_testclient=70
-IGNORE='crates/bh_tools/|crates/bh_testclient/src/bin/'
+FLOOR_blockheads_server=100
+FLOOR_bh_testclient=100
+IGNORE='crates/bh_tools/|crates/bh_testclient/src/bin/|_golden\.rs'
 
 cargo llvm-cov --workspace --lcov --output-path lcov.info --ignore-filename-regex "$IGNORE"
 cargo llvm-cov report --summary-only --ignore-filename-regex "$IGNORE" | tee summary.txt

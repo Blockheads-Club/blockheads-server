@@ -99,7 +99,7 @@ impl ElevatorShaft {
         let own_pos = me.base.borrow().pos;
         {
             let mut st = me.st.borrow_mut();
-            st.paint_color = sd_get(save_dict, "paintColor").map_or(0, |v| v.unsigned_int_value()) as u16;
+            st.paint_color = sd_get(save_dict, "paintColor").map_or(0, PlistValue::unsigned_int_value) as u16;
             st.last_known_motor_pos = own_pos;
         }
         me.init_sub_derived_items();

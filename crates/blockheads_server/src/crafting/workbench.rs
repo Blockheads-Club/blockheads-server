@@ -2546,7 +2546,7 @@ mod tests {
         let (wb, me) = make(&f, 1, 10, 10);
         wb.remove(&me, None);
         assert!(!me.needs_removed());
-        assert!(f.deps.log.borrow().iter().all(|l| !l.starts_with("free(")));
+        assert!(!format!("|{}", f.deps.log.borrow().join("|")).contains("|free("));
         let (wb2, me2) = make(&f, 13, 20, 10);
         wb2.remove(&me2, None);
         assert!(me2.needs_removed());
