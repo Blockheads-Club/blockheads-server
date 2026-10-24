@@ -107,7 +107,7 @@ dependencies = [
 [[package]]
 name = "bhmod-content"
 version = "0.2.0"
-source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=47ab9140ca051524bcdc9637a8d09191b53a364a#47ab9140ca051524bcdc9637a8d09191b53a364a"
+source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=b32ff67afcab73494f7e2f69d44ebcaba14a9049#b32ff67afcab73494f7e2f69d44ebcaba14a9049"
 dependencies = [
  "bhmod-manifest",
  "bhmod-proto",
@@ -118,7 +118,7 @@ dependencies = [
 [[package]]
 name = "bhmod-core"
 version = "0.2.0"
-source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=47ab9140ca051524bcdc9637a8d09191b53a364a#47ab9140ca051524bcdc9637a8d09191b53a364a"
+source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=b32ff67afcab73494f7e2f69d44ebcaba14a9049#b32ff67afcab73494f7e2f69d44ebcaba14a9049"
 dependencies = [
  "bhmod-manifest",
  "bhmod-proto",
@@ -133,7 +133,7 @@ dependencies = [
 [[package]]
 name = "bhmod-manifest"
 version = "0.2.0"
-source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=47ab9140ca051524bcdc9637a8d09191b53a364a#47ab9140ca051524bcdc9637a8d09191b53a364a"
+source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=b32ff67afcab73494f7e2f69d44ebcaba14a9049#b32ff67afcab73494f7e2f69d44ebcaba14a9049"
 dependencies = [
  "semver",
  "serde",
@@ -145,7 +145,7 @@ dependencies = [
 [[package]]
 name = "bhmod-proto"
 version = "0.2.0"
-source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=47ab9140ca051524bcdc9637a8d09191b53a364a#47ab9140ca051524bcdc9637a8d09191b53a364a"
+source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=b32ff67afcab73494f7e2f69d44ebcaba14a9049#b32ff67afcab73494f7e2f69d44ebcaba14a9049"
 dependencies = [
  "sha2",
 ]
@@ -153,7 +153,7 @@ dependencies = [
 [[package]]
 name = "bhmod-wasm"
 version = "0.2.0"
-source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=47ab9140ca051524bcdc9637a8d09191b53a364a#47ab9140ca051524bcdc9637a8d09191b53a364a"
+source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=b32ff67afcab73494f7e2f69d44ebcaba14a9049#b32ff67afcab73494f7e2f69d44ebcaba14a9049"
 dependencies = [
  "bhmod-core",
  "bhmod-manifest",

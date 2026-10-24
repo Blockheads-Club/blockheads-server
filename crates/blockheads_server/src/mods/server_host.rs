@@ -81,6 +81,11 @@ impl Link for SrvLink<'_> {
     fn alive(&self, peer: &str) -> bool {
         self.approved(peer) || self.0.unapproved_clients.borrow().iter().any(|e| e == peer)
     }
+    fn players(&self) -> Option<(u32, u32)> {
+        // The same limit `full()` applies: the configured maximum, never more than 32.
+        let capacity = u32::try_from(self.0.max_players.get()).ok().filter(|c| *c > 0)?.min(32);
+        Some((u32::try_from(self.0.connected_clients.borrow().len()).unwrap_or(u32::MAX), capacity))
+    }
 }
 
 /// The game as seen by mods.
@@ -666,6 +671,9 @@ mod tests {
         }
         fn alive(&self, _: &str) -> bool {
             true
+        }
+        fn players(&self) -> Option<(u32, u32)> {
+            None
         }
     }
 
