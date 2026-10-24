@@ -3,6 +3,7 @@
 //!  No other module may call
 //! `SystemTime::now()` / `Instant::now()`; everything goes through here.
 
+#[cfg(not(test))]
 use std::sync::Mutex;
 
 /// 2001-01-01T00:00:00Z as Unix seconds (NSDate reference epoch).

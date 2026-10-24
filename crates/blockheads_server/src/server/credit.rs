@@ -88,7 +88,7 @@ mod tests {
         assert_eq!(&pk[0][..2], &[0x26, 0x0d]);
         assert_eq!(h.delayed.borrow()[0].0, 4.0);
         h.run_delayed();
-        assert_eq!(h.m.disconnected.borrow().as_slice(), &[pid.clone()]);
+        assert_eq!(h.m.disconnected.borrow().as_slice(), std::slice::from_ref(&pid));
         let calls = h.w.calls.borrow().clone();
         assert!(calls.contains(&format!("client_disconnected {} false", pid)));
     }

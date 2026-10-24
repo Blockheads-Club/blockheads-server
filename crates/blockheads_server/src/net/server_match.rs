@@ -768,10 +768,14 @@ mod tests {
         // server -> client by ENet id; single connection => channel 0; empty data => empty packet
         assert!(m.send_data_to_players_with_data_mode_error(
             Some(b"hello"),
-            &[enet_id.clone()],
+            std::slice::from_ref(&enet_id),
             SendDataMode::Reliable
         ));
-        assert!(m.send_data_to_players_with_data_mode_error(None, &[enet_id.clone()], SendDataMode::Unreliable));
+        assert!(m.send_data_to_players_with_data_mode_error(
+            None,
+            std::slice::from_ref(&enet_id),
+            SendDataMode::Unreliable
+        ));
         let got = pump(&m, &mut [&mut c], || false);
         let got: Vec<_> = got.into_iter().map(|(_, ch, d)| (ch, d)).collect();
         assert_eq!(got, [(0u8, b"hello".to_vec()), (0u8, vec![])]);
@@ -796,7 +800,7 @@ mod tests {
         assert!(Rc::ptr_eq(&m.load_info_for_player(&pid).unwrap(), &info));
         assert_eq!(d.log.borrow().last().unwrap(), &format!("info {pid}"));
         // send by persistent id now reaches the peer
-        m.send_data_to_players_with_data_mode_error(Some(b"x"), &[pid.clone()], SendDataMode::Reliable);
+        m.send_data_to_players_with_data_mode_error(Some(b"x"), std::slice::from_ref(&pid), SendDataMode::Reliable);
         let got = pump(&m, &mut [&mut c], || false);
         assert_eq!(got.len(), 1);
         // alias "SERVER" rejected; missing alias rejected; duplicate alias from other connection rejected

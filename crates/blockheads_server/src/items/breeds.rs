@@ -318,7 +318,7 @@ mod tests {
             return if 0.5 <= y { breed } else { devolve_breed_for_breed(DodoBreed(breed)).0 };
         }
         let b = if breed > 32 { 0 } else { breed };
-        let mut t = |n: u16, cur: u16, rnd: &mut dyn FnMut() -> f64| if rnd() < 0.2 { n } else { cur };
+        let t = |n: u16, cur: u16, rnd: &mut dyn FnMut() -> f64| if rnd() < 0.2 { n } else { cur };
         match b {
             0 => {
                 let z = rnd();
@@ -372,7 +372,7 @@ mod tests {
             19 => t(20, 19, rnd),
             21 => 22,
             22 => t(23, 22, rnd),
-            23 | 24 | 25 => t(b + 1, b, rnd),
+            23..=25 => t(b + 1, b, rnd),
             27..=31 => t(b + 1, b, rnd),
             o => o,
         }
