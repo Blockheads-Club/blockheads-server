@@ -1371,7 +1371,7 @@ impl DynamicWorld {
         // SERVER: uncompressed XML plist
         self.world_db_put(
             "blockheads",
-            &serialize_or_raise(&save_data_dict, "Failed to save blockheads.", false, || {}),
+            &serialize_or_raise(&save_data_dict, "Failed to save blockheads.", false, &|| {}),
         );
         let cache_nonempty =
             self.disconnected_clients_cached_save_dicts_not_done.borrow().as_ref().map_or(false, |c| !c.is_empty());
@@ -1407,7 +1407,7 @@ impl DynamicWorld {
                     .cloned()
                     .unwrap_or_default();
                 let sd2 = dict_of(vec![("dynamicObjects", PlistValue::array(arr))]);
-                let xml = serialize_or_raise(&sd2, "Failed to save disconnected blockheads.", false, || {});
+                let xml = serialize_or_raise(&sd2, "Failed to save disconnected blockheads.", false, &|| {});
                 self.world_db_put(&format!("{}_blockheads", dir), &gzip_deflate(&xml));
             }
             let mut unactive: Vec<String> = dirs;
@@ -1427,7 +1427,7 @@ impl DynamicWorld {
     pub fn save_blockhead_inventory(&self, blockhead: &ObjRef) {
         let hooks = self.hooks();
         let slots = hooks.blockhead_save_item_slots_array(blockhead);
-        let data = serialize_or_raise(&slots, "Failed to save blockhead inventory.", false, || {});
+        let data = serialize_or_raise(&slots, "Failed to save blockhead inventory.", false, &|| {});
         let uid = blockhead.unique_id() as i64;
         match hooks.blockhead_client_save_dir(blockhead) {
             None => self.world_db_put(&format!("blockhead_{}_inventory", uid), &data),
@@ -1559,7 +1559,7 @@ impl DynamicWorld {
             }
         }
         let pl = dict_of(vec![("dynamicObjects", PlistValue::array(dicts))]);
-        let data = serialize_or_raise(&pl, "Failed to save dynamic world object data.", true, || {});
+        let data = serialize_or_raise(&pl, "Failed to save dynamic world object data.", true, &|| {});
         self.dw_db_put(&format!("{}_{}/{}", x_pos, y_pos, object_type), &data);
         if let Some(pc) = per_client {
             for (client_id, arr) in pc.iter() {
@@ -1570,7 +1570,7 @@ impl DynamicWorld {
                     let sc = self.server_client(client_id).expect("registered client");
                     sc.world_indices_containing_tamed_animals().borrow_mut()[ot].remove(&macro_index);
                 }
-                let data2 = serialize_or_raise(&pl2, "Failed to save dynamic world object data.", true, || {});
+                let data2 = serialize_or_raise(&pl2, "Failed to save dynamic world object data.", true, &|| {});
                 self.dw_db_put(&format!("{}_{}_{}/{}", client_id, x_pos, y_pos, object_type), &data2);
             }
         }
@@ -1579,7 +1579,7 @@ impl DynamicWorld {
 
 /// `dataFromPropertyList:` of a save record; `DataSaveException` when it fails. `hook` runs inside the `@try` of the
 /// serializer (the seam the tests use to make it fail). `log` adds the "error compressing" line some callers print.
-fn serialize_or_raise(v: &PlistValue, reason: &str, log: bool, hook: impl FnOnce()) -> Vec<u8> {
+fn serialize_or_raise(v: &PlistValue, reason: &str, log: bool, hook: &dyn Fn()) -> Vec<u8> {
     match data_from_property_list_hooked(v, hook) {
         Some(d) => d,
         None => {
@@ -3678,18 +3678,18 @@ mod load_save_tests {
     fn serializer_failures_raise_data_save_exceptions() {
         let v = dict_with(vec![("a", 1)]);
         let ex = raised(|| {
-            serialize_or_raise(&v, "Failed to save blockheads.", false, || {
+            serialize_or_raise(&v, "Failed to save blockheads.", false, &|| {
                 crate::foundation::exception::ns_raise("NSInvalidArgumentException", "boom")
             });
         });
         assert_eq!((ex.name.as_str(), ex.reason_or_null()), ("DataSaveException", "Failed to save blockheads."));
         let ex = raised(|| {
-            serialize_or_raise(&v, "Failed to save dynamic world object data.", true, || {
+            serialize_or_raise(&v, "Failed to save dynamic world object data.", true, &|| {
                 crate::foundation::exception::ns_raise("NSInvalidArgumentException", "boom")
             });
         });
         assert_eq!(ex.reason_or_null(), "Failed to save dynamic world object data.");
-        assert!(!serialize_or_raise(&v, "unused", true, || {}).is_empty());
+        assert!(!serialize_or_raise(&v, "unused", true, &|| {}).is_empty());
     }
 
     /// The incremental flush needs a server; unknown macro positions are skipped without being dropped.
