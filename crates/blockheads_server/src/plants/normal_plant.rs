@@ -260,9 +260,7 @@ impl NormalPlant {
     ) -> Option<Rc<NormalPlant>> {
         let me = Self::alloc(kind, world, dw);
         let me_obj: ObjRef = me.clone();
-        if !plant_init_save_dict(&me_obj, world, dw, save_dict, cache, tdnf, sonf) {
-            return None;
-        }
+        plant_init_save_dict(&me_obj, world, dw, save_dict, cache, tdnf, sonf);
         me.init_sub_derived_items(&me_obj);
         let flowering = me.plant.borrow().flowering;
         if flowering {

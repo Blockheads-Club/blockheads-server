@@ -154,12 +154,12 @@ impl TulipPlant {
         }
         let p = me_obj.pos();
         if adult {
-            if let Some(tile) = tile_loaded(world, p.x, p.y) {
-                if !plant_environment_ok(p, Some(&tile), world, -20.0f32) {
-                    me_obj.remove_from_macro_block(&me_obj);
-                    me_obj.dealloc(&me_obj);
-                    return None;
-                }
+            // `plant_init_at_position` only succeeds on a loaded tile
+            let tile = tile_loaded(world, p.x, p.y).expect("loaded tile");
+            if !plant_environment_ok(p, Some(&tile), world, -20.0f32) {
+                me_obj.remove_from_macro_block(&me_obj);
+                me_obj.dealloc(&me_obj);
+                return None;
             }
         }
         let wm = world.world_width_macro() as f32;
@@ -189,9 +189,7 @@ impl TulipPlant {
     ) -> Option<Rc<TulipPlant>> {
         let me = Self::alloc(world, dw);
         let me_obj: ObjRef = me.clone();
-        if !plant_init_save_dict(&me_obj, world, dw, save_dict, cache, tdnf, sonf) {
-            return None;
-        }
+        plant_init_save_dict(&me_obj, world, dw, save_dict, cache, tdnf, sonf);
         {
             let mut t = me.tulip.borrow_mut();
             t.available_food = dict_float(save_dict, "availableFood");
@@ -578,44 +576,45 @@ mod tests {
         glibc_rand::srand(5);
         let out = t.color_genes_variation();
         let after = glibc_rand::rand();
-        if a % 100 != 0 {
-            // exactly one draw consumed: the next value is the stream's second value
-            glibc_rand::srand(5);
-            let _ = glibc_rand::rand();
-            assert_eq!(after, glibc_rand::rand());
-            assert_eq!(out, 0x3333);
-        }
+        assert_ne!(a % 100, 0);
+        // exactly one draw consumed: the next value is the stream's second value
+        glibc_rand::srand(5);
+        let _ = glibc_rand::rand();
+        assert_eq!(after, glibc_rand::rand());
+        assert_eq!(out, 0x3333);
     }
 
     ///  U11: differing genes consume the two crossing draws first.
     #[test]
     fn color_variation_crossing() {
         let t = mk(0x1111, 0x4444, 0);
-        for seed in 1..200u32 {
+        let no_mutation = |s: &u32| {
+            glibc_rand::srand(*s);
+            let _ = (glibc_rand::r01(), glibc_rand::r01());
+            glibc_rand::rand() % 100 != 0
+        };
+        for seed in (1..200u32).filter(no_mutation) {
             glibc_rand::srand(seed);
             let r1 = glibc_rand::r01();
             let r2 = glibc_rand::r01();
-            let m = glibc_rand::rand();
             glibc_rand::srand(seed);
             let out = t.color_genes_variation();
-            if m % 100 != 0 {
-                let (mut d_t, mut r_t, mut d_b, mut r_b) = (1u16, 1u16, 1u16, 1u16);
-                if r1 > 0.5 {
-                    if r1 <= 0.75 {
-                        d_t = if tulip_gene_order_for_pigment(4) < tulip_gene_order_for_pigment(1) { 4 } else { d_t };
-                    } else {
-                        r_t = if tulip_gene_order_for_pigment(4) < tulip_gene_order_for_pigment(1) { 4 } else { r_t };
-                    }
+            let (mut d_t, mut r_t, mut d_b, mut r_b) = (1u16, 1u16, 1u16, 1u16);
+            if r1 > 0.5 {
+                if r1 <= 0.75 {
+                    d_t = if tulip_gene_order_for_pigment(4) < tulip_gene_order_for_pigment(1) { 4 } else { d_t };
+                } else {
+                    r_t = if tulip_gene_order_for_pigment(4) < tulip_gene_order_for_pigment(1) { 4 } else { r_t };
                 }
-                if r2 > 0.5 {
-                    if r2 <= 0.75 {
-                        d_b = if tulip_gene_order_for_pigment(4) < tulip_gene_order_for_pigment(1) { 4 } else { d_b };
-                    } else {
-                        r_b = if tulip_gene_order_for_pigment(4) < tulip_gene_order_for_pigment(1) { 4 } else { r_b };
-                    }
-                }
-                assert_eq!(out, r_b | (d_t << 12) | (r_t << 8) | (d_b << 4), "seed {seed}");
             }
+            if r2 > 0.5 {
+                if r2 <= 0.75 {
+                    d_b = if tulip_gene_order_for_pigment(4) < tulip_gene_order_for_pigment(1) { 4 } else { d_b };
+                } else {
+                    r_b = if tulip_gene_order_for_pigment(4) < tulip_gene_order_for_pigment(1) { 4 } else { r_b };
+                }
+            }
+            assert_eq!(out, r_b | (d_t << 12) | (r_t << 8) | (d_b << 4), "seed {seed}");
         }
     }
 
@@ -672,6 +671,39 @@ mod scenario_tests {
         )
     }
 
+    /// Every plant may breed.
+    struct Breed;
+    impl crate::dynworld::lookups::DwOpsHooksStub for Breed {
+        fn plant_can_breed(&self, _p: &ObjRef) -> bool {
+            true
+        }
+    }
+
+    /// The mutation roll hits a zero at the right draw and the colour roll falls in the rare bands.
+    #[test]
+    fn rare_mutation_colours_appear() {
+        let (w, d) = env("tp_rare");
+        let t = tulip_at(&w, &d, X, 0x3333, false).unwrap();
+        t.tulip.borrow_mut().mate_color_genes = 0x3333;
+        let mut seen = std::collections::HashSet::new();
+        for seed in 1..4_000_000u32 {
+            srand(seed);
+            let before = glibc_rand::rand_tagged("probe") % 100;
+            if before != 0 {
+                continue;
+            }
+            srand(seed);
+            let out = t.color_genes_variation();
+            for nibble in [(out >> 12) & 0xf, (out >> 8) & 0xf, (out >> 4) & 0xf, out & 0xf] {
+                seen.insert(nibble);
+            }
+            if seen.contains(&2) && seen.contains(&6) && seen.contains(&7) {
+                break;
+            }
+        }
+        assert!(seen.contains(&2) && seen.contains(&6));
+    }
+
     fn tile(w: &Rc<World>, x: i32, y: i32) -> crate::world::state::TileRef {
         tile_at_world_position_loaded(x, y, w).unwrap()
     }
@@ -679,6 +711,7 @@ mod scenario_tests {
     #[test]
     fn tulips_flower_pair_up_and_get_picked() {
         let (w, d) = env("tp_flow");
+        crate::dynworld::lookups::set_ops_hooks(Rc::new(Breed));
         let t1 = tulip_at(&w, &d, X, 0x3456, false).unwrap();
         let m1: ObjRef = t1.clone();
         let t2 = tulip_at(&w, &d, X + 2, 0x4321, false).unwrap();
@@ -757,9 +790,6 @@ mod scenario_tests {
             srand(seed);
             if before == 0 {
                 slots.insert(t.color_genes_variation());
-            }
-            if slots.len() > 40 {
-                break;
             }
         }
         assert!(!slots.is_empty());

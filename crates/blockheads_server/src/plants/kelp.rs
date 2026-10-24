@@ -150,21 +150,20 @@ impl KelpPlant {
             None
         };
         let (mut weather, mut day, mut season) = (0.0f32, 0.0f32, 0.0f32);
-        let tile = tile_loaded(world, p.x, p.y);
-        if let Some(t) = tile {
-            if adult {
-                let e = adult_environment(world, p);
-                weather = e.0;
-                day = e.1;
-                season = e.2;
-                let temp = current_temperature_for_tile_at_world_pos(&t.get(), p, season, day, weather, Some(world));
-                if temp < 1.0f32 {
-                    return fail(&me_obj);
-                }
-            }
-            if !tile_is_water(Some(t)) {
+        // `plant_init_at_position` only succeeds on a loaded tile
+        let t = tile_loaded(world, p.x, p.y).expect("loaded tile");
+        if adult {
+            let e = adult_environment(world, p);
+            weather = e.0;
+            day = e.1;
+            season = e.2;
+            let temp = current_temperature_for_tile_at_world_pos(&t.get(), p, season, day, weather, Some(world));
+            if temp < 1.0f32 {
                 return fail(&me_obj);
             }
+        }
+        if !tile_is_water(Some(t)) {
+            return fail(&me_obj);
         }
         match tile_loaded(world, p.x, p.y.wrapping_sub(1)) {
             Some(b) if me.is_required_soil_type(b.type_index()) => {}
@@ -240,9 +239,7 @@ impl KelpPlant {
     ) -> Option<Rc<KelpPlant>> {
         let me = Self::alloc(world, dw);
         let me_obj: ObjRef = me.clone();
-        if !plant_init_save_dict(&me_obj, world, dw, save_dict, cache, tdnf, sonf) {
-            return None;
-        }
+        plant_init_save_dict(&me_obj, world, dw, save_dict, cache, tdnf, sonf);
         me.set_n(dict_int(save_dict, "numberOfOccupiedTilesAbove"));
         me.kelp.borrow_mut().growth_timer = dict_float(save_dict, "growthTimer");
         me.init_sub_derived_items(&me_obj);
@@ -993,8 +990,15 @@ mod scenario_tests {
         let mut stopped = false;
         for seed in 1..80u32 {
             srand(seed);
-            if let Some(k) = kelp_at(&d, 29, true) {
+            for k in kelp_at(&d, 29, true) {
                 stopped |= k.n() > 0 && k.n() < 15;
+                // the stalk reaches into the unloaded rows: dying of old age skips them, growth finds no water
+                let me: ObjRef = k.clone();
+                k.set_n(3);
+                k.die_of_old_age(&me);
+                k.set_n(3);
+                k.kelp.borrow_mut().growth_timer = 1.0e6;
+                k.update_accurate_dt_is_simulation(&me, 300.0, 300.0, false);
             }
             for y in 30..=31 {
                 tile(&w, y).set_foreground_contents(0);

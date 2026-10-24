@@ -153,20 +153,20 @@ impl VinePlant {
             None
         };
         let (mut weather, mut day, mut season) = (0.0f32, 0.0f32, 0.0f32);
-        if let Some(t) = tile_loaded(world, p.x, p.y) {
-            if adult {
-                let e = adult_environment(world, p);
-                weather = e.0;
-                day = e.1;
-                season = e.2;
-                let temp = current_temperature_for_tile_at_world_pos(&t.get(), p, season, day, weather, Some(world));
-                if temp < 1.0f32 {
-                    return fail(&me_obj);
-                }
-            }
-            if !me.is_required_soil_type(t.type_index()) {
+        // `plant_init_at_position` only succeeds on a loaded tile
+        let t = tile_loaded(world, p.x, p.y).expect("loaded tile");
+        if adult {
+            let e = adult_environment(world, p);
+            weather = e.0;
+            day = e.1;
+            season = e.2;
+            let temp = current_temperature_for_tile_at_world_pos(&t.get(), p, season, day, weather, Some(world));
+            if temp < 1.0f32 {
                 return fail(&me_obj);
             }
+        }
+        if !me.is_required_soil_type(t.type_index()) {
+            return fail(&me_obj);
         }
         let wm = world.world_width_macro() as f32;
         let xf = ((p.x as f32) / 32.0f32) / wm;
@@ -238,9 +238,7 @@ impl VinePlant {
     ) -> Option<Rc<VinePlant>> {
         let me = Self::alloc(world, dw);
         let me_obj: ObjRef = me.clone();
-        if !plant_init_save_dict(&me_obj, world, dw, save_dict, cache, tdnf, sonf) {
-            return None;
-        }
+        plant_init_save_dict(&me_obj, world, dw, save_dict, cache, tdnf, sonf);
         me.set_n(dict_int(save_dict, "numberOfOccupiedTilesBelow"));
         me.vine.borrow_mut().growth_timer = dict_float(save_dict, "growthTimer");
         me.init_sub_derived_items(&me_obj);
@@ -994,6 +992,19 @@ mod scenario_tests {
             vine.tile_harvested_remove_blockhead_correct_tool_multiplier(&me, IntPair { x: X, y: HEAD - 2 }, None, 1);
         }
         assert_eq!(vine_at(&d, false).unwrap().class_info().name, "VinePlant");
+    }
+
+    #[test]
+    fn harvest_cascades_stop_at_unloaded_rows() {
+        let (w, d) = env("vn_cascade_unloaded");
+        cave(&w);
+        let vine = vine_at(&d, false).unwrap();
+        let me: ObjRef = vine.clone();
+        vine.set_n(10);
+        for mx in 0..2 {
+            *w.macro_tiles().get(mx).unwrap().physical_block.borrow_mut() = None;
+        }
+        vine.tile_harvested_remove_blockhead_correct_tool_multiplier(&me, IntPair { x: X, y: HEAD - 2 }, None, 1);
     }
 
     #[test]
