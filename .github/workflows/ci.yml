@@ -57,8 +57,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - { name: linux-x86_64, os: ubuntu-latest, args: "--workspace" }
+          - { name: linux-aarch64, os: ubuntu-24.04-arm, args: "--workspace" }
           - { name: macos-aarch64, os: macos-latest, args: "--workspace" }
           # bh_testclient / bh_tools are Unix-only developer tools.
+          - { name: windows-x86_64, os: windows-latest, args: "-p blockheads_server" }
+          - { name: windows-aarch64, os: windows-11-arm, args: "-p blockheads_server" }
           - { name: macos-x86_64, os: macos-15-intel, args: "--workspace" }
     steps:
       - uses: actions/checkout@v4
@@ -67,7 +71,7 @@ jobs:
       # --no-fail-fast: a failing unit-test binary must not hide the integration tests behind it.
       # On the unix runners this includes bh_testclient's docker-free gameplay scenarios (tests/scenarios_ours.rs:
       # our server in-process against reference fixtures); the differential suite itself runs in parity.yml.
-      - run: cargo test --no-fail-fast -p bh_testclient
+      - run: cargo test --no-fail-fast ${{ matrix.args }}
         env:
           BH_SCENARIO_TIMEOUT: "900"
 
@@ -164,8 +168,8 @@ jobs:
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@cargo-llvm-cov
-      # Policy is 100 % line coverage; scripts/coverage-gate.sh holds the gates (mod host at 100 %, per-crate floors
-      # for the rest, only ever raised) and fails the job below them.
+      # Policy is 100 % line coverage of the whole workspace; scripts/coverage-gate.sh holds the gates (both crates at
+      # 100 %, the mod host file by file as well) and fails the job below them. See docs/development.md.
       - name: Measure
         run: |
           status=0

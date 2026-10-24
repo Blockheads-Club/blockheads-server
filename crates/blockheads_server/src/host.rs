@@ -222,7 +222,11 @@ pub fn start(cfg: HostConfig, log: LogCallback) -> std::io::Result<ServerHandle>
                     let handle = StdinHandle::from_channel(rx);
                     d.attach_console(handle);
                     let rl = RunLoop::current();
-                    while !d.done() && rl.run_mode_default_before_distant_future() {}
+                    while !d.done() && rl.run_mode_default_before_distant_future() {
+                        if cfg.no_exit {
+                            d.exit_when_stopped();
+                        }
+                    }
                 }
                 delegate.is_some()
             })
