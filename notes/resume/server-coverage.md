@@ -46,3 +46,10 @@ messages.rs 4, enum_ext 3, paths 2.
 ## Open question
 scripts/mods-coverage.sh on test/limbo-no-match (cb1f50c) still reports server_host.rs at 99.83 % (1 line); the coordinator
 said he will find it himself (likely a never-run closure: use fnmiss.sh on server_host.rs).
+
+## Final state (agent A, 2026-10-24)
+- Private HOME rule: unit tests use set_home_for_test under HOME_LOCK; processes use HOME=~/.cache/bhcov/a-home. Never write ~/GNUstep.
+- Measure with ~/.cache/bhcov/full3.sh (single workspace llvm-cov invocation), then tot.py. Gate scores one instantiation per function: make each fn fully covered within ONE binary (prefer server unit tests); generic fns -> non-generic body + thin wrapper; avoid never-run closures / panic!() arms.
+- Left in my scope (15 lines): integration.rs 4, enum_ext 2, hook_fixture 2, blockhead_host 1, messages 1, nsstring 1, dispatch_tests 1, gsdict 1, bh_testclient session 1 / scenario 1. Mostly region/best-copy phantoms.
+- Not mine: world/dynworld still use unwrap_or_else(|e| e.into_inner()) closures.
+- Known failing: bh_testclient servers_without_service_mods_ignore_service_packets (new), session_save_after, 3 parity_worldgen timing cases (pre-existing).
