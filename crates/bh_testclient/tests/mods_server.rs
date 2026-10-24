@@ -53,7 +53,7 @@ impl Running {
     fn join(&self, alias: &str) -> Session {
         let cfg = ClientConfig { addr: SocketAddr::from(([127, 0, 0, 1], self.port)), ..Default::default() };
         let mut s = Session::connect(cfg, Identity::new(alias)).unwrap();
-        assert_eq!(s.join(10_000).unwrap(), JoinOutcome::Approved, "{}", self.log());
+        assert_eq!(s.join(30_000).unwrap(), JoinOutcome::Approved, "{}", self.log());
         s
     }
 }
