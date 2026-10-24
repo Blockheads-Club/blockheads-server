@@ -22,6 +22,7 @@ fn start() -> (HostServer, ClientConfig) {
             "1/16",
             "--owner",
             "Boss",
+            "--no-exit",
         ]
         .iter()
         .map(|s| s.to_string())

@@ -23,13 +23,15 @@ pub struct HostServer {
 
 /// The subset of the CLI the scenarios use, mapped onto [`HostConfig`].
 pub fn host_config(args: &[String]) -> Result<HostConfig> {
-    let mut cfg = HostConfig { save_delay: 1, no_exit: true, ..HostConfig::default() };
+    let mut cfg = HostConfig { save_delay: 1, ..HostConfig::default() };
     let mut name = None;
     let mut width = 1;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         let mut val = || it.next().cloned().ok_or_else(|| HarnessError::Usage(format!("{} needs a value", a)));
         match a.as_str() {
+            // The server keeps running when the last client has left (the vanilla server exits then).
+            "--no-exit" => cfg.no_exit = true,
             "--new" => name = Some(val()?),
             "--load" => cfg.world = WorldSelect::Load(val()?),
             "--world_id" => cfg.world_id = Some(val()?),
@@ -197,12 +199,14 @@ mod tests {
             "7",
             "--owner",
             "O",
+            "--no-exit",
         ]))
         .unwrap();
         assert!(matches!(c.world, WorldSelect::New { ref name, width_multiplier: 104 } if name == "x"));
         assert_eq!(c.world_id.as_deref(), Some("abc"));
         assert_eq!(c.custom_rules_json.as_deref(), Some("{}"));
         assert_eq!((c.save_delay, c.max_players, c.owner_name.as_deref()), (3, 7, Some("O")));
+        assert!(c.no_exit);
         let c = host_config(&a(&["--load", "abc"])).unwrap();
         assert!(matches!(c.world, WorldSelect::Load(ref n) if n == "abc"));
         for w in ["1", "4", "16", "1/16"] {
@@ -220,7 +224,7 @@ mod tests {
     fn host_server_lifecycle() {
         let spec = |tag: &str| RunSpec {
             tag: tag.into(),
-            args: a(&["--new", "x", "--world_id", "w1", "--world_width", "1/16"]),
+            args: a(&["--new", "x", "--world_id", "w1", "--world_width", "1/16", "--no-exit"]),
             ..Default::default()
         };
         let mut s = HostServer::start(&spec("inproc")).unwrap();
