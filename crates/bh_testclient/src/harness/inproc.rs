@@ -23,7 +23,7 @@ pub struct HostServer {
 
 /// The subset of the CLI the scenarios use, mapped onto [`HostConfig`].
 pub fn host_config(args: &[String]) -> Result<HostConfig> {
-    let mut cfg = HostConfig { save_delay: 1, ..HostConfig::default() };
+    let mut cfg = HostConfig { save_delay: 1, no_exit: true, ..HostConfig::default() };
     let mut name = None;
     let mut width = 1;
     let mut it = args.iter();
@@ -105,13 +105,7 @@ impl ServerHandle for HostServer {
         self.log.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
     }
     fn is_running(&mut self) -> bool {
-        let r = self.h.as_ref().is_some_and(|h| h.is_alive());
-        if !r {
-            let l = self.log();
-            let t: Vec<&str> = l.lines().rev().take(40).collect();
-            eprintln!("DIAG not alive: {:?}\n{}", self.h.as_ref().map(|h| h.status()), t.into_iter().rev().collect::<Vec<_>>().join("\n"));
-        }
-        r
+        self.h.as_ref().is_some_and(|h| h.is_alive())
     }
     fn wait_for_log(&mut self, needle: &str, timeout: Duration) -> Result<()> {
         let end = Instant::now() + timeout;

@@ -61,6 +61,8 @@ pub struct HostConfig {
     /// Mods (not in the original). The default loads mods from `BLOCKHEADS_MODS_DIR` or `<data dir>/mods` when
     /// that directory exists; without mods the server behaves exactly like vanilla.
     pub mods: crate::mods::ModsConfig,
+    /// The CLI's `-N`: do not stop the server when the last client has left (the vanilla server exits then).
+    pub no_exit: bool,
 }
 
 impl Default for HostConfig {
@@ -78,6 +80,7 @@ impl Default for HostConfig {
             on_ready_commands: Vec::new(),
             world_id: None,
             mods: crate::mods::ModsConfig::default(),
+            no_exit: false,
         }
     }
 }
@@ -130,7 +133,6 @@ fn note_ready(status: &Mutex<Status>, line: &str, ready_cmds: &[String], tx: &Se
 
 /// How a server thread ended: an exit unwinds with [`HostExit`], an escaped exception or panic is a failure.
 fn end_status(result: std::thread::Result<Result<bool, NsException>>) -> Status {
-    eprintln!("DIAG end_status: {:?}", match &result { Ok(Ok(b)) => format!("ok {b}"), Ok(Err(e)) => describe(e), Err(p) => match p.downcast_ref::<HostExit>() { Some(c) => format!("exit {}", c.0), None => "panic".into() } });
     match result {
         Ok(Ok(_)) => Status::Stopped(0),
         Ok(Err(ex)) => Status::Failed(describe(&ex)),
@@ -209,6 +211,7 @@ pub fn start(cfg: HostConfig, log: LogCallback) -> std::io::Result<ServerHandle>
             expert_mode: cfg.expert_mode,
             world_id: cfg.world_id.clone(),
             custom_rules_json: cfg.custom_rules_json.clone(),
+            no_exit: cfg.no_exit,
             ..InitParams::default()
         };
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {

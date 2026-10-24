@@ -141,10 +141,7 @@ fn failing_scripts_report_the_line_and_the_reason() {
         assert!(e.starts_with("FAIL "), "{step}: {e}");
     }
     assert!(failure(&cfg, "client A\nwait 55 100\n").contains("timeout: wait for 0x55 (100 ms)"));
-    let e55 = failure(&cfg, "client A\nexpect 55\n");
-    eprintln!("DIAG e55 = {e55}");
-    eprintln!("DIAG log = {}", _server.log());
-    assert!(e55.contains("expected a 0x55 packet, none received"));
+    assert!(failure(&cfg, "client A\nexpect 55\n").contains("expected a 0x55 packet, none received"));
     assert!(failure(&cfg, "client A\ninitial-data\nexpect-none 06 1200\n")
         .contains("unexpected 0x06 packet within 1200 ms"));
     // rejected joins are recorded, not fatal
@@ -158,15 +155,11 @@ fn failing_scripts_report_the_line_and_the_reason() {
             && ok.notes.iter().any(|n| n.contains("join rejected 2"))
     );
     // the server may hang up before the rejection arrives (a disconnect drops what is still queued): try again
-    // (on macOS CI the rejection did not show up in ten tries: only Linux asserts it)
-    #[cfg(target_os = "linux")]
-    {
-        let wrong = (0..10)
-            .map(|_| failure(&cfg, "client ABCDEFGHIJKLMNOPQ\nexpect-reject 3\n"))
-            .find(|e| e.contains("expected rejection 3"))
-            .expect("rejection 14 seen in ten tries");
-        assert!(wrong.contains("expected rejection 3, got Some(14)"), "{wrong}");
-    }
+    let wrong = (0..10)
+        .map(|_| failure(&cfg, "client ABCDEFGHIJKLMNOPQ\nexpect-reject 3\n"))
+        .find(|e| e.contains("expected rejection 3"))
+        .expect("rejection 14 seen in ten tries");
+    assert!(wrong.contains("expected rejection 3, got Some(14)"), "{wrong}");
     // join-raw stops after the contact packet; a second 0x1f is sent by hand
     run(&cfg, "join-raw R\nsleep 100\nexpect 23\ndisconnect\n", &fast()).unwrap();
 }
