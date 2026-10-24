@@ -67,6 +67,38 @@ pub struct Settings {
     /// App update preferences (older settings files have none: defaults).
     #[serde(default)]
     pub updates: UpdatePrefs,
+    /// Mod runtime options (older settings files have none: defaults, everything off).
+    #[serde(default)]
+    pub mods: ModsPrefs,
+}
+
+/// Mod runtime options. JVM mods are unsandboxed code, so they are off unless the owner turns them on.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ModsPrefs {
+    /// Run JVM (Java/Kotlin) mods. Only does something in a build with the `jvm` feature.
+    pub jvm: bool,
+    /// The Java installation to use (empty: `JAVA_HOME`, then `java` on the `PATH`).
+    pub java_home: String,
+}
+
+/// The server reads its JVM options from the environment (`BLOCKHEADS_JVM`, `BLOCKHEADS_JAVA_HOME`) when a world
+/// loads; the app owns those two variables and sets them from the settings before it starts the server.
+pub fn jvm_env(p: &ModsPrefs) -> [(&'static str, Option<String>); 2] {
+    let home = p.java_home.trim();
+    [
+        ("BLOCKHEADS_JVM", p.jvm.then(|| "1".to_string())),
+        ("BLOCKHEADS_JAVA_HOME", (p.jvm && !home.is_empty()).then(|| home.to_string())),
+    ]
+}
+
+fn apply_jvm_env(p: &ModsPrefs) {
+    for (key, value) in jvm_env(p) {
+        match value {
+            Some(v) => std::env::set_var(key, v),
+            None => std::env::remove_var(key),
+        }
+    }
 }
 
 /// How the app looks for its own updates (the game server is not involved).
@@ -359,6 +391,7 @@ impl Core {
             s.mods = crate::mods::Live::default();
             s.push(&format!("--- starting world {} on port {} ---", o.world_id, o.port));
         }
+        apply_jvm_env(&self.get_settings().mods);
         let shared = self.shared.clone();
         *lock(&self.mods_loaded) = Some(crate::mods::snapshot(&self.mods_dir()));
         let cfg = HostConfig {
@@ -808,6 +841,29 @@ mod tests {
         assert_eq!(width_for("normal"), Ok(1));
         assert_eq!(width_for("tiny"), Ok(116));
         assert!(width_for("x").is_err());
+    }
+
+    #[test]
+    fn jvm_prefs_set_the_server_environment() {
+        assert_eq!(ModsPrefs::default(), ModsPrefs { jvm: false, java_home: String::new() });
+        let off = jvm_env(&ModsPrefs { jvm: false, java_home: "/opt/jdk".into() });
+        assert_eq!(off, [("BLOCKHEADS_JVM", None), ("BLOCKHEADS_JAVA_HOME", None)]);
+        let on = jvm_env(&ModsPrefs { jvm: true, java_home: " /opt/jdk ".into() });
+        assert_eq!(on, [("BLOCKHEADS_JVM", Some("1".into())), ("BLOCKHEADS_JAVA_HOME", Some("/opt/jdk".into()))]);
+        let on = jvm_env(&ModsPrefs { jvm: true, java_home: "  ".into() });
+        assert_eq!(on, [("BLOCKHEADS_JVM", Some("1".into())), ("BLOCKHEADS_JAVA_HOME", None)]);
+        let saved: Vec<_> = ["BLOCKHEADS_JVM", "BLOCKHEADS_JAVA_HOME"].iter().map(|k| (*k, std::env::var_os(k))).collect();
+        apply_jvm_env(&ModsPrefs { jvm: true, java_home: "/opt/jdk".into() });
+        assert_eq!(std::env::var("BLOCKHEADS_JVM").unwrap(), "1");
+        assert_eq!(std::env::var("BLOCKHEADS_JAVA_HOME").unwrap(), "/opt/jdk");
+        apply_jvm_env(&ModsPrefs::default());
+        assert!(std::env::var_os("BLOCKHEADS_JVM").is_none() && std::env::var_os("BLOCKHEADS_JAVA_HOME").is_none());
+        for (k, v) in saved {
+            match v {
+                Some(v) => std::env::set_var(k, v),
+                None => std::env::remove_var(k),
+            }
+        }
     }
 
     #[test]
