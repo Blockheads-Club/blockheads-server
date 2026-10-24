@@ -9,16 +9,21 @@ use std::rc::{Rc, Weak};
 use std::time::Instant;
 
 use bhmod_content::Kind;
+use bhmod_core::host::split_command;
+use bhmod_core::host::{ModState, ReloadOutcome};
 use bhmod_core::remote::{RemoteCall, RemoteError, RemoteTarget};
 use bhmod_core::storage::{KvBackend, StorageProvider};
 use bhmod_core::types::{
     ApiError, BreakLayer, ChannelSource, ChannelTarget, CommandSender, ContentKind, Event, EventKind, LogLevel,
     ObjectKind, Pos, RejectReason, Role, SavePhase, Side,
 };
+use bhmod_core::watch::Watcher;
 use bhmod_core::{GameBridge, HostOptions, ModHost};
 use bhmod_manifest::content::SLOTS;
 use bhmod_wasm::{WasmConfig, WasmRuntime};
 
+use super::admin::{self, Reply};
+use super::catalog;
 use super::net::{pre_login_text, Inbound, Link, ModNet};
 use super::{ChatVerdict, LoaderKey, ModHooks, Optional, LIMBO_GRACE};
 use crate::server::bhserver::BHServer;
@@ -44,6 +49,7 @@ pub const BUILTIN_COMMANDS: &[&str] = &[
     "list-whitelist",
     "load-lists",
     "mod",
+    "mods",
     "players",
     "pvp-off",
     "pvp-on",
@@ -89,9 +95,9 @@ impl Link for SrvLink<'_> {
 }
 
 /// The game as seen by mods.
-struct Bridge {
-    srv: Weak<BHServer>,
-    net: Rc<RefCell<ModNet>>,
+pub(super) struct Bridge {
+    pub(super) srv: Weak<BHServer>,
+    pub(super) net: Rc<RefCell<ModNet>>,
 }
 
 impl Bridge {
@@ -304,12 +310,74 @@ impl StorageProvider for LmdbStorage {
     }
 }
 
+/// The arguments of a `/mods` line (`None` for any other line).
+fn mods_args(line: &str) -> Option<Vec<String>> {
+    split_command(line).filter(|(name, _)| name == "mods").map(|(_, args)| args)
+}
+
 /// The installed host.
 struct ServerMods {
     host: RefCell<ModHost>,
     srv: Weak<BHServer>,
     joined: RefCell<BTreeSet<String>>,
     net: Rc<RefCell<ModNet>>,
+    /// The mods directory (what a reload reads again).
+    dir: PathBuf,
+    /// The developer file watcher (`BLOCKHEADS_MODS_WATCH`).
+    watch: RefCell<Option<Watcher>>,
+}
+
+impl ServerMods {
+    fn bridge(&self) -> Bridge {
+        Bridge { srv: self.srv.clone(), net: self.net.clone() }
+    }
+
+    /// `/mods ...` from the console or a player: admins only.
+    fn mods_command(&self, issuer: Option<&str>, args: &[String]) {
+        let allowed = issuer.is_none_or(|p| self.bridge().player_role(p) >= Role::Admin);
+        let reply = if allowed {
+            let reply = self.with(Reply::busy(), |h| admin::run(h, args));
+            if reply.changed {
+                self.refresh_catalog();
+            }
+            reply
+        } else {
+            Reply { lines: vec!["You do not have permission to use /mods.".to_string()], changed: false }
+        };
+        if let Some(s) = self.srv.upgrade() {
+            for line in &reply.lines {
+                s.reply_to(line, issuer);
+            }
+        }
+    }
+
+    /// Builds the offered packages again after mods were reloaded, so players who join from now on are offered the
+    /// new client halves. Players already in the game keep what they run. Content registered in the world (ids of
+    /// cosmetics, items, blocks) is not rebuilt: changes there need a restart.
+    fn refresh_catalog(&self) {
+        let running: Vec<String> = self.with(Vec::new(), |h| {
+            h.mods().into_iter().filter(|m| !matches!(m.state, ModState::Disabled(_))).map(|m| m.id).collect()
+        });
+        let bridge = self.bridge();
+        let catalog = catalog::build(&self.dir, &running, &mut |m| GameBridge::log(&bridge, None, LogLevel::Warn, &m));
+        self.net.borrow_mut().catalog = catalog;
+    }
+
+    /// The developer watcher found a change: reload what changed and log it.
+    fn watched_reload(&self) {
+        let results = self.with(Vec::new(), |h| h.reload(None));
+        let bridge = self.bridge();
+        let mut changed = false;
+        for r in results.iter().filter(|r| r.outcome != ReloadOutcome::Unchanged) {
+            let failed = matches!(r.outcome, ReloadOutcome::Failed(_));
+            changed |= !failed;
+            let level = if failed { LogLevel::Warn } else { LogLevel::Info };
+            GameBridge::log(&bridge, None, level, &format!("watch: {r}"));
+        }
+        if changed {
+            self.refresh_catalog();
+        }
+    }
 }
 
 impl ServerMods {
@@ -375,9 +443,13 @@ impl ModHooks for ServerMods {
         })
     }
     fn owns_command(&self, line: &str) -> bool {
-        self.with(false, |h| h.owns_command(line))
+        mods_args(line).is_some() || self.with(false, |h| h.owns_command(line))
     }
     fn command(&self, issuer: Option<&str>, line: &str) -> bool {
+        if let Some(args) = mods_args(line) {
+            self.mods_command(issuer, &args);
+            return true;
+        }
         let sender = issuer.map_or(CommandSender::Console, |p| CommandSender::Player(p.to_string()));
         let Some(replies) = self.with(None, |h| h.command(sender, line)) else { return false };
         let Some(s) = self.srv.upgrade() else { return true };
@@ -391,6 +463,9 @@ impl ModHooks for ServerMods {
     }
     fn poll(&self) {
         self.with((), |h| h.poll());
+        if self.watch.borrow_mut().as_mut().is_some_and(|w| w.changed(Instant::now())) {
+            self.watched_reload();
+        }
         self.drop_expired_limbo(Instant::now());
         if !self.net.borrow().has_peers() {
             return;
@@ -593,11 +668,17 @@ pub(super) fn load(dir: &Path, save_id: Option<&str>, server: &Rc<BHServer>) -> 
     super::set_tables(content.tables(super::variant_blocks_enabled()));
     net.borrow_mut().catalog = catalog;
     net.borrow_mut().content = content;
+    let watch = super::watch_enabled().then(|| Watcher::new(dir));
+    if watch.is_some() {
+        GameBridge::log(&*bridge, None, LogLevel::Info, "watching the mods directory: changed mods are reloaded");
+    }
     Some(Rc::new(ServerMods {
         host: RefCell::new(host),
         srv: Rc::downgrade(server),
         joined: RefCell::new(BTreeSet::new()),
         net,
+        dir: dir.to_path_buf(),
+        watch: RefCell::new(watch),
     }))
 }
 
@@ -860,13 +941,18 @@ mod tests {
             srv: Weak::new(),
             joined: RefCell::new(BTreeSet::new()),
             net: Rc::default(),
+            dir: tmp.path().to_path_buf(),
+            watch: RefCell::new(None),
         };
         let _busy = sm.host.borrow_mut();
         assert_eq!(sm.chat("p", "x"), ChatVerdict::Keep);
         assert!(!sm.owns_command("/x"));
         assert!(!sm.command(None, "/x"));
         sm.tick(0.2);
+        // /mods is the admin's even then, and says so; without a server there is nobody to tell.
+        assert!(sm.owns_command("/mods") && sm.command(None, "/mods reload"));
         drop(_busy);
+        assert!(sm.command(None, "/mods list"));
         sm.tick(0.2);
         // Without a server the protocol hooks do nothing.
         assert_eq!(sm.pre_login("e", "p", "a", None), None);
@@ -905,9 +991,96 @@ mod tests {
             srv: Rc::downgrade(&h.srv),
             joined: RefCell::new(BTreeSet::new()),
             net,
+            dir: tmp.path().to_path_buf(),
+            watch: RefCell::new(None),
         });
         crate::mods::install(Some(sm.clone()));
         Installed(sm, tmp)
+    }
+
+    #[test]
+    fn mods_command_is_for_admins_and_the_console() {
+        use crate::mods::admin::tests::write_lua_mod;
+        let h = Harness::new("m_admin_cmd");
+        let mods = installed(&h, false);
+        let sm = &mods.0;
+        sm.world_loaded("World", "w");
+        let main = "return { on_enable = function() bh.log.info('alpha up') end }";
+        write_lua_mod(mods.1.path(), "alpha", "1.0.0", main);
+        let pid = h.join("Sam");
+        assert!(sm.owns_command("/MODS reload") && sm.owns_command("/mods") && !sm.owns_command("/mod"));
+        // A player who is not an admin is refused and nothing happens.
+        h.m.clear();
+        assert!(sm.command(Some(&pid), "/mods reload"));
+        assert!(sm.host.borrow().is_empty());
+        assert!(!h.m.packets_to(&pid).is_empty(), "the refusal reached the player");
+        // An admin reloads: the new mod starts in the running world and is offered in the catalog.
+        *h.srv.admin_list.borrow_mut() = Some(vec!["Sam".to_string()]);
+        h.m.clear();
+        assert!(sm.command(Some(&pid), "/mods reload"));
+        assert_eq!(sm.host.borrow().mods().len(), 1);
+        assert!(!h.m.packets_to(&pid).is_empty());
+        assert_eq!(sm.net.borrow().catalog.entries.len(), 1);
+        // The console sees the same text; a command that changes nothing leaves the catalog alone.
+        let before = h.d.messages().len();
+        assert!(sm.command(None, "/mods reload"));
+        assert!(sm.command(None, "/mods timings"));
+        let said = h.d.messages()[before..].to_vec();
+        assert_eq!(said[0], "No mod changed on disk (1 checked).");
+        assert!(said[1].starts_with("Mod timings over the last 60 s"), "{said:?}");
+        // While a mod call runs the host cannot be entered.
+        let busy = sm.host.borrow_mut();
+        let before = h.d.messages().len();
+        assert!(sm.command(None, "/mods"));
+        drop(busy);
+        assert_eq!(h.d.messages()[before..], ["The mods are busy, try again."]);
+    }
+
+    #[test]
+    fn the_watcher_reloads_changed_mods() {
+        use crate::mods::admin::tests::write_lua_mod;
+        let h = Harness::new("m_watch");
+        let mods = installed(&h, false);
+        let sm = &mods.0;
+        sm.world_loaded("World", "w");
+        let dir = mods.1.path();
+        let main = |tag: &str| {
+            format!("return {{ on_enable = function() bh.commands.register({{ name = 'hi' }}, function() return '{tag}' end) end }}")
+        };
+        write_lua_mod(dir, "alpha", "1.0.0", &main("one"));
+        sm.watched_reload();
+        assert!(sm.command(None, "/hi"));
+        // Poll with the watcher on: the change is seen, and acted on once it is quiet.
+        *sm.watch.borrow_mut() = Some(Watcher::new(dir));
+        sm.poll();
+        write_lua_mod(dir, "alpha", "1.0.1", &main("two"));
+        write_lua_mod(dir, "bad", "1.0.0", "this is not luau");
+        // It has a client half too: the catalog says why it is not offered when its server half is down.
+        let toml = std::fs::read_to_string(dir.join("bad/mod.toml")).unwrap();
+        let toml = toml
+            .replace("client = false", "client = true")
+            .replace("[entry]\n", "[entry]\nclient = { runtime = \"lua\", path = \"client/main.luau\" }\n");
+        std::fs::write(dir.join("bad/mod.toml"), toml).unwrap();
+        std::fs::create_dir_all(dir.join("bad/client")).unwrap();
+        std::fs::write(dir.join("bad/client/main.luau"), "return {}").unwrap();
+        let settle = || std::thread::sleep(bhmod_core::watch::INTERVAL + std::time::Duration::from_millis(100));
+        settle();
+        sm.poll();
+        settle();
+        sm.poll();
+        let mods_now = sm.host.borrow().mods();
+        assert_eq!(mods_now.iter().find(|m| m.id == "alpha").unwrap().version, "1.0.1");
+        assert!(matches!(mods_now.iter().find(|m| m.id == "bad").unwrap().state, ModState::Disabled(_)));
+        let before = h.d.messages().len();
+        assert!(sm.command(None, "/hi"));
+        assert_eq!(h.d.messages()[before..], ["two"]);
+        // Nothing changed: the watcher stays quiet. A host that is busy ignores a change.
+        sm.watched_reload();
+        let busy = sm.host.borrow_mut();
+        sm.watched_reload();
+        drop(busy);
+        // Mods that are disabled are not offered.
+        assert!(sm.net.borrow().catalog.entries.iter().all(|e| e.info.id != "bad"));
     }
 
     fn limbo_join(h: &Harness, alias: &str) -> String {

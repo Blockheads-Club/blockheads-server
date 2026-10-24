@@ -10,6 +10,7 @@ cargo llvm-cov --no-report -p bh_testclient --test mods_server
 cargo llvm-cov --no-report -p bh_testclient --test mods_gameplay
 cargo llvm-cov --no-report -p bh_testclient --test mods_protocol
 cargo llvm-cov --no-report -p bh_testclient --test mods_services
+cargo llvm-cov --no-report -p bh_testclient --test mods_reload
 cargo llvm-cov report --summary-only | tee /dev/stderr | awk '
   /src\/mods\/|src\/modded\.rs/ { n++; if ($10 != "100.00%") { print "not fully covered: " $1 " " $10; bad = 1 } }
   END { if (n == 0) { print "no mods files in the report"; exit 1 } exit bad }'

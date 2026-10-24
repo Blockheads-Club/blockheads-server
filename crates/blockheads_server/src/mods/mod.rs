@@ -6,7 +6,8 @@
 //! directory exists and at least one mod loaded.
 //!
 //! Configuration has no CLI flag (the help text is frozen): the mods directory is `HostConfig.mods.dir`, else
-//! `BLOCKHEADS_MODS_DIR`, else `<data dir>/mods`; `mods.toml` in it grants permissions.
+//! `BLOCKHEADS_MODS_DIR`, else `<data dir>/mods`; `mods.toml` in it grants permissions. Admins manage the running
+//! mods with `/mods` (list, `reload [id]`, `timings`); `BLOCKHEADS_MODS_WATCH=1` reloads changed mods by itself.
 
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -16,6 +17,8 @@ use crate::plist::value::{PlistDict, PlistValue};
 use crate::server::bhserver::BHServer;
 use crate::types::structs::IntPair;
 
+#[cfg(feature = "mods")]
+pub mod admin;
 #[cfg(feature = "mods")]
 pub mod catalog;
 #[cfg(feature = "mods")]
@@ -78,6 +81,12 @@ pub struct ModsConfig {
 /// Whether variant blocks are on: [`ModsConfig::variant_blocks`] or `BLOCKHEADS_MODS_VARIANT_BLOCKS`.
 pub fn variant_blocks_enabled() -> bool {
     config().variant_blocks || flag_on(std::env::var("BLOCKHEADS_MODS_VARIANT_BLOCKS").ok().as_deref())
+}
+
+/// Whether the developer file watcher is on (`BLOCKHEADS_MODS_WATCH` = `1`, `true`, `yes` or `on`): the mods
+/// directory is looked at about twice a second and the changed mods are reloaded, as `/mods reload` does.
+pub fn watch_enabled() -> bool {
+    flag_on(std::env::var("BLOCKHEADS_MODS_WATCH").ok().as_deref())
 }
 
 fn flag_on(v: Option<&str>) -> bool {
@@ -481,7 +490,10 @@ mod tests {
         assert!(!flag_on(None) && !flag_on(Some("")) && !flag_on(Some("0")) && !flag_on(Some("maybe")));
         assert!(flag_on(Some("1")) && flag_on(Some(" Yes ")) && flag_on(Some("ON")) && flag_on(Some("true")));
         // Tests run single-threaded (.cargo/config.toml).
-        assert!(!variant_blocks_enabled());
+        assert!(!variant_blocks_enabled() && !watch_enabled());
+        std::env::set_var("BLOCKHEADS_MODS_WATCH", "yes");
+        assert!(watch_enabled());
+        std::env::remove_var("BLOCKHEADS_MODS_WATCH");
         std::env::set_var("BLOCKHEADS_MODS_VARIANT_BLOCKS", "1");
         assert!(variant_blocks_enabled());
         std::env::remove_var("BLOCKHEADS_MODS_VARIANT_BLOCKS");

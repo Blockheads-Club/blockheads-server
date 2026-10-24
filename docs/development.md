@@ -71,6 +71,16 @@ git checkout Cargo.lock   # before committing
 When a mod-sdk change lands, bump the five `rev`s to its commit and run
 `cargo update -p bhmod-core -p bhmod-wasm -p bhmod-manifest -p bhmod-proto -p bhmod-content`.
 
+### Hot reload, `/mods` and the watcher
+
+`mods/admin.rs` implements the admin command `/mods` (list, `reload [id]`, `timings [id]`, `timings reset [id]`); admins
+and the console only, handled before the built-in and the mods' own commands (`mods` is in `BUILTIN_COMMANDS`). The work
+is `bhmod_core::ModHost::reload` / `timings` (mod-sdk `docs/hot-reload.md`). After a reload that changed anything,
+`ServerMods::refresh_catalog` builds the offered client packages again (players who join later get the new ones; the
+content registry is not rebuilt). `BLOCKHEADS_MODS_WATCH=1` creates a `bhmod_core::watch::Watcher` that `poll()` looks at;
+there is no CLI flag because the help text is frozen. Live tests: `crates/bh_testclient/tests/mods_reload.rs`
+(port 15230/15231), part of `scripts/mods-coverage.sh`.
+
 ### The 0xBC mod protocol (server side)
 
 `crates/blockheads_server/src/mods/net.rs` implements the server side of mod-sdk `docs/protocol-0xbc.md`;
