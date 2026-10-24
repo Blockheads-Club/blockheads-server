@@ -255,7 +255,6 @@ mod tests {
             Some(Obj::new(14, id, self.log.clone()))
         }
     }
-    use crate::objects::base::DynamicObject;
 
     /// create: time crystal is skipped; others go straight into dynamic_objects[14] and the position set.
     #[test]

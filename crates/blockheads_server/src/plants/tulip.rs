@@ -231,17 +231,13 @@ impl TulipPlant {
         let mut bot = (mix & 0x0f00) >> 8;
         let r = glibc_rand::r01_tagged("plants::tulip::mixGenesVariation::top");
         if r < 0.25f32 {
-            if top != 0 {
-                top -= 1;
-            }
+            top = top.saturating_sub(1);
         } else if r > 0.85f32 && top < 8 {
             top += 1;
         }
         let r = glibc_rand::r01_tagged("plants::tulip::mixGenesVariation::bot");
         if r < 0.25f32 {
-            if bot != 0 {
-                bot -= 1;
-            }
+            bot = bot.saturating_sub(1);
         } else if r > 0.85f32 && bot < 8 {
             bot += 1;
         }
@@ -470,7 +466,7 @@ impl DynamicObject for TulipPlant {
             if t.available_food >= 1800.0f32 {
                 t.available_food -= 900.0f32;
             } else {
-                t.available_food = 0.5f32 * dt + t.available_food;
+                t.available_food += 0.5f32 * dt;
             }
         }
         let run_check = {
@@ -503,7 +499,7 @@ impl DynamicObject for TulipPlant {
             let season_x = season_for_world_x(pos.x, world.world_time(), Some(&world));
             let offset = self.plant.borrow().season_offset;
             let this_season = season_index(season_x, offset);
-            if matches!(this_season, 1 | 2 | 3) {
+            if matches!(this_season, 1..=3) {
                 let has = self.plant.borrow().has_flowered_this_season;
                 if !has {
                     {

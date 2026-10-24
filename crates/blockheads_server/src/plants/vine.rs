@@ -121,7 +121,7 @@ impl VinePlant {
         }
         let gene = self.plant.borrow().max_age_gene;
         let mut max_age = (((gene as f32) / 255.0f32) * 0.5f32 + 0.75f32) * 28000.0f32;
-        if tile.map_or(false, |t| matches!(t.type_index(), 0x30..=0x32)) {
+        if tile.is_some_and(|t| matches!(t.type_index(), 0x30..=0x32)) {
             max_age *= 1.5f32;
         }
         self.plant.borrow_mut().max_age = max_age;
@@ -663,7 +663,7 @@ mod tests {
     ///  initSubDerivedItems: maxAge range 21000..35000 for genes 0..255 (gene 255 -> 35000).
     #[test]
     fn max_age_range() {
-        let m = (((255u16 as f32) / 255.0f32) * 0.5f32 + 0.75f32) * 28000.0f32;
+        let m = (((255_f32) / 255.0f32) * 0.5f32 + 0.75f32) * 28000.0f32;
         assert_eq!(m, 35000.0);
     }
 }

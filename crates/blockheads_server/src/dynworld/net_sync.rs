@@ -78,7 +78,7 @@ impl DynamicWorld {
         if object_type == DYNAMIC_OBJECT_TYPE_OWNERSHIP_SIGN && self.has_server() {
             let server = self.server.borrow().clone().unwrap();
             // `playerIsAdminWithID:nil` is NO
-            if !client_id.map_or(false, |c| server.player_is_admin_with_id(c)) {
+            if !client_id.is_some_and(|c| server.player_is_admin_with_id(c)) {
                 return; // only admins
             }
             if let (Some(pu), Some(c)) = (server.player_update(), client_id) {
@@ -103,7 +103,7 @@ impl DynamicWorld {
         if self.has_server() {
             let server = self.server.borrow().clone().unwrap();
             if object_type == DYNAMIC_OBJECT_TYPE_OWNERSHIP_SIGN {
-                if !client_id.map_or(false, |c| server.player_is_admin_with_id(c)) {
+                if !client_id.is_some_and(|c| server.player_is_admin_with_id(c)) {
                     return;
                 }
             } else {
@@ -119,7 +119,7 @@ impl DynamicWorld {
                     }
                 }
             }
-            if !client_id.map_or(false, |c| server.player_is_admin_with_id(c)) {
+            if !client_id.is_some_and(|c| server.player_is_admin_with_id(c)) {
                 let mut m: Vec<NetBlob> = Vec::new();
                 for nd in remove_array.iter() {
                     let Some(id) = nd_unique_id(nd) else { continue };

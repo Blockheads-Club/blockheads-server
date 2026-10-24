@@ -544,7 +544,7 @@ impl ArtificialLight {
             st.contribution_grid_origin =
                 IntPair { x: geti("contributionGridOrigin.x"), y: geti("contributionGridOrigin.y") };
             st.light_direction = geti("lightDirection");
-            if save_dict.get(&"downlight".to_string()).map_or(false, |v| v.bool_value()) {
+            if save_dict.get(&"downlight".to_string()).is_some_and(|v| v.bool_value()) {
                 st.light_direction = LIGHT_DIRECTION_DOWN;
             }
             st.diameter = st.radius.wrapping_shl(1);
@@ -742,7 +742,7 @@ impl ArtificialLight {
                     if 0 < gx && gx < diameter && 0 < gy && gy < diameter {
                         let cell = (gy * diameter + gx) as usize;
                         if st.added_grid.get(cell).copied() == Some(1)
-                            && st.contribution_grid.get(cell * 5).map_or(false, |v| *v > 0)
+                            && st.contribution_grid.get(cell * 5).is_some_and(|v| *v > 0)
                         {
                             affects = true;
                             break;

@@ -697,7 +697,7 @@ mod tests {
         assert!(read_plist_tail(&[0u8; 0x20], 0x20).is_none());
         // short data raises
         let r = crate::foundation::exception::catch_ns(|| read_plist_tail(&[0u8; 0x10], 0x20));
-        let e = r.err().expect("raises");
+        let e = r.expect_err("raises");
         assert_eq!(e.name, "NSRangeException");
         assert_eq!(e.reason_or_null(), "Range location + length too great");
     }

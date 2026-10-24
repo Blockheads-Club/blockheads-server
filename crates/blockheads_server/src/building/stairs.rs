@@ -345,7 +345,7 @@ impl DynamicObject for Stairs {
                 let cfg = self.st.borrow().current_configuration;
                 if cfg == STAIRS_HIGH_RIGHT_FLOATING || cfg == STAIRS_HIGH_LEFT_FLOATING {
                     let no_back_wall = tile_at_world_position_loaded(pos.x, pos.y, &world)
-                        .map_or(false, |t| t.back_wall_type_index() == 2);
+                        .is_some_and(|t| t.back_wall_type_index() == 2);
                     if no_back_wall {
                         if self.base.borrow().needs_removed {
                             return;

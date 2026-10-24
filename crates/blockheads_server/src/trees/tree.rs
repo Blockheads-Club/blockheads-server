@@ -712,7 +712,7 @@ pub fn tree_grow_in_time_since_saved(me: &ObjRef, save_time: f64) {
                     td -= tn as f64;
                     {
                         let mut s = t.tree().borrow_mut();
-                        s.age = tn + s.age;
+                        s.age += tn;
                         s.growth_counter = 0.0;
                     }
                     t.increment_height();
@@ -747,7 +747,7 @@ pub fn tree_load_save_dict_values(me: &ObjRef, d: &PlistDict) {
     {
         let mut s = t.tree().borrow_mut();
         s.tree_season_offset = int("treeSeasonOffset");
-        s.dead = get("dead").map_or(false, |v| v.bool_value());
+        s.dead = get("dead").is_some_and(|v| v.bool_value());
         s.time_died = get("timeDied").map_or(0.0, |v| v.double_value());
         s.remove_check_count = flt("removeCheckCount");
         s.fruit_count = 0;
@@ -766,7 +766,7 @@ pub fn tree_load_save_dict_values(me: &ObjRef, d: &PlistDict) {
                         pos: IntPair { x: fx, y: fy },
                         has_created_free_block_this_season: fd
                             .object_for_key("hasCreatedFreeBlockThisSeason")
-                            .map_or(false, |v| v.bool_value()),
+                            .is_some_and(|v| v.bool_value()),
                     };
                     s.fruit_count = n + 1;
                 }
@@ -2022,7 +2022,7 @@ mod tests {
 
     // ------------------------------------------------------------------------------------------ integration tests
 
-    use crate::dynworld::state::{DwHooks, FreeBlockInit};
+    use crate::dynworld::state::FreeBlockInit;
     use crate::trees::apple::AppleTree;
     use crate::trees::cactus::CactusTree;
     use crate::trees::cherry::CherryTree;
@@ -2635,7 +2635,7 @@ mod tests {
         assert!(h >= 3, "the canopy tops the trunk");
         assert_eq!(tree_state(&g).borrow().max_height_reached, 0, "R5: maxHeightReached stays 0");
         let tops = tile(&w, 30, GROUND + 1).contents;
-        assert!(matches!(tops, 109 | 110 | 111), "{tops}");
+        assert!(matches!(tops, 109..=111), "{tops}");
         // R5: nothing dies, nothing is removed on unload
         for _ in 0..50 {
             tree_update(&g, 0.2, 0.2, false);

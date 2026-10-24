@@ -174,12 +174,13 @@ impl TreeLike for AppleTree {
         if food >= 1800.0f32 {
             self.available_food.set(food - 900.0f32);
             if let Some(tile) = tile_at(&w, pos.x, pos.y + 1) {
-                if tile.get().back_wall_type_index == 2 && (r01t("AppleTree.update.dodo") as f64) > 0.8f64 {
-                    if !dw.npc_exists_at_pos_ignore_npc(pos, None) {
-                        dw.load_npc_at_position_type_save_dict_is_adult_was_placed_placed_by_client(
-                            pos, NPC_DODO, None, true, false, None,
-                        );
-                    }
+                if tile.get().back_wall_type_index == 2
+                    && (r01t("AppleTree.update.dodo") as f64) > 0.8f64
+                    && !dw.npc_exists_at_pos_ignore_npc(pos, None)
+                {
+                    dw.load_npc_at_position_type_save_dict_is_adult_was_placed_placed_by_client(
+                        pos, NPC_DODO, None, true, false, None,
+                    );
                 }
             }
         } else {
