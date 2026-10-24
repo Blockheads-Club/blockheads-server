@@ -12,7 +12,7 @@ use bhmod_core::remote::{RemoteCall, RemoteError};
 use bhmod_core::types::ApiError;
 use bhmod_proto::{
     file_error, hex, Channel, ChannelInfo, ChannelRegister, Cosmetics, FileChunk, FileError, Hash, Message, ModList,
-    RejectText, ServerHello, ServiceCall, ServiceFailure, ServiceResult, CHUNK_SIZE, MAX_IN_FLIGHT, PROTO,
+    PlayerCount, RejectText, ServerHello, ServiceCall, ServiceFailure, ServiceResult, CHUNK_SIZE, MAX_IN_FLIGHT, PROTO,
     REJECT_CLIENT_TOO_OLD,
 };
 
@@ -50,6 +50,8 @@ pub trait Link {
     fn approved(&self, peer: &str) -> bool;
     /// True while the peer is connected (approved or waiting for approval).
     fn alive(&self, peer: &str) -> bool;
+    /// Players in the game and the server's capacity, if known (the optional player count of `SERVER_HELLO`).
+    fn players(&self) -> Option<(u32, u32)>;
 }
 
 /// What a 0xBC packet from a player asks the mods to do.
@@ -402,6 +404,7 @@ impl ModNet {
                 mods_hash: self.catalog.mods_hash,
                 client_required: self.catalog.client_required,
                 count: self.catalog.entries.len() as u64,
+                players: link.players().map(|(online, capacity)| PlayerCount { online, capacity }),
             };
             link.send(peer, Message::ServerHello(reply).encode());
             return None;

@@ -125,6 +125,31 @@ fn mods_dir(root: &Path) -> PathBuf {
     mods
 }
 
+/// The original server logs a leaving player (a clean ENet disconnect and a timeout alike: both arrive as the ENet
+/// DISCONNECT event) as `<world> - Client disconnected:<id>` and `<world> - Player Disconnected <alias>`, once each
+/// for a normal leave; the log parity suites compare these lines, so nothing else may be added.
+#[test]
+fn leaving_and_timed_out_players_are_logged_like_the_original() {
+    let tmp = tempfile::tempdir().unwrap();
+    let data = tmp.path().join("TheBlockheads");
+    let w = host::create_world(Some(&data), "Leave", 104, false).expect("create");
+    let mut srv = start(&data, &w.id, 15401, ModsConfig { dir: None, disabled: true, variant_blocks: false });
+    let count = |srv: &Running, needle: &str| srv.lines.lock().unwrap().iter().filter(|l| l.contains(needle)).count();
+    let mut ann = srv.join("Ann");
+    assert!(srv.log_has("LEAVE - Player Connected Ann | "), "{}", srv.log());
+    ann.disconnect();
+    assert!(srv.wait_log("LEAVE - Player Disconnected Ann", 20), "{}", srv.log());
+    assert_eq!(count(&srv, "Player Disconnected Ann"), 1);
+    assert_eq!(count(&srv, " - Client disconnected:"), 1, "{}", srv.log());
+    // A client that just vanishes (no DISCONNECT sent) is dropped by the ENet timeout and logged the same way.
+    let bob = srv.join("Bob");
+    drop(bob);
+    assert!(srv.wait_log("LEAVE - Player Disconnected Bob", 90), "{}", srv.log());
+    assert_eq!(count(&srv, "Player Disconnected Bob"), 1);
+    assert_eq!(count(&srv, " - Client disconnected:"), 2, "{}", srv.log());
+    assert_eq!(srv.handle.stop(), Status::Stopped(0));
+}
+
 #[test]
 fn lua_mods_on_a_live_server() {
     let tmp = tempfile::tempdir().unwrap();

@@ -81,12 +81,17 @@ impl Running {
 }
 
 fn start(data: &Path, world: &str, port: u16, mods: &Path) -> Running {
+    start_max(data, world, port, mods, 0)
+}
+
+fn start_max(data: &Path, world: &str, port: u16, mods: &Path, max_players: i32) -> Running {
     let lines = Arc::new(Mutex::new(Vec::<String>::new()));
     let l2 = lines.clone();
     let cfg = HostConfig {
         data_dir: Some(data.to_path_buf()),
         world: WorldSelect::Load(world.to_string()),
         port: Some(port),
+        max_players,
         mods: ModsConfig { dir: Some(mods.to_path_buf()), disabled: false, variant_blocks: false },
         ..HostConfig::default()
     };
@@ -150,8 +155,13 @@ fn server_only_mods_admit_vanilla_and_modded_clients() {
     let mut s = srv.session("MODDER");
     let mut mc = ModClient::new(LoaderOptions::new(&cache));
     assert_eq!(mc.join(&mut s, 10_000).unwrap(), JoinOutcome::Approved, "{}", srv.log());
-    // SERVER_HELLO: one server-only mod listed, empty modsHash, nothing required (byte-exact vector).
-    assert_eq!(mod_packets(&s, 0x01), vec![vector("01-server-hello-server-only")]);
+    // SERVER_HELLO: one server-only mod listed, empty modsHash, nothing required (byte-exact vector), plus the
+    // optional player count (the vanilla client is in the game, the default capacity is 32).
+    let [raw] = &mod_packets(&s, 0x01)[..] else { panic!("one SERVER_HELLO") };
+    let Message::ServerHello(mut hello) = Message::decode(raw).unwrap() else { unreachable!() };
+    assert_eq!(hello.players, Some(bhmod_proto::PlayerCount { online: 1, capacity: 32 }));
+    hello.players = None;
+    assert_eq!(Message::ServerHello(hello).encode(), vector("01-server-hello-server-only"));
     assert!(mc.list.is_none() && mc.downloads.is_empty());
     // The list is still available; hello-lua is information only and cannot be downloaded.
     let list = mc.request_list(&mut s, 5000).unwrap();
@@ -160,6 +170,29 @@ fn server_only_mods_admit_vanilla_and_modded_clients() {
     let m: ModInfo = list.mods[0].clone();
     assert!(!mc.download(&mut s, &m, 5000).unwrap());
     assert_eq!(mc.file_errors[0].code, bhmod_proto::file_error::NOT_FOUND);
+    assert_eq!(srv.handle.stop(), Status::Stopped(0));
+}
+
+#[test]
+fn server_hello_carries_the_player_count() {
+    let _w = watchdog("server_hello_players", 180);
+    let tmp = tempfile::tempdir().unwrap();
+    let (data, wid) = world(tmp.path());
+    let mods = tmp.path().join("mods");
+    copy_dir(&fixture("hello-lua"), &mods.join("hello-lua"));
+    std::fs::write(mods.join("mods.toml"), "[hello-lua]\ngrant = [\"players:chat\"]\n").unwrap();
+    // The configured maximum is capped at 32 like the server's own `full` check; nobody is in the game yet.
+    let mut srv = start_max(&data, &wid, 15461, &mods, 50);
+    let mut first = srv.session("FIRST");
+    let mut mc = ModClient::new(LoaderOptions::new(&tmp.path().join("c1")));
+    assert_eq!(mc.join(&mut first, 10_000).unwrap(), JoinOutcome::Approved, "{}", srv.log());
+    let hello = mc.server.clone().unwrap();
+    assert_eq!(hello.players, Some(bhmod_proto::PlayerCount { online: 0, capacity: 32 }));
+    // The second modded client finds the first one in the game.
+    let mut second = srv.session("SECOND");
+    let mut mc2 = ModClient::new(LoaderOptions::new(&tmp.path().join("c2")));
+    assert_eq!(mc2.join(&mut second, 10_000).unwrap(), JoinOutcome::Approved, "{}", srv.log());
+    assert_eq!(mc2.server.unwrap().players, Some(bhmod_proto::PlayerCount { online: 1, capacity: 32 }));
     assert_eq!(srv.handle.stop(), Status::Stopped(0));
 }
 
@@ -502,8 +535,14 @@ fn fake_modded(port: u16, sha: [u8; 32], size: u64, chunks: Vec<Vec<u8>>) {
         None if p.is_none() => vec![Act::Send(contact())],
         Some(Message::Hello(_)) => {
             vec![Act::Send(
-                Message::ServerHello(ServerHello { proto: 1, mods_hash: [0; 32], client_required: true, count: 1 })
-                    .encode(),
+                Message::ServerHello(ServerHello {
+                    proto: 1,
+                    mods_hash: [0; 32],
+                    client_required: true,
+                    count: 1,
+                    players: None,
+                })
+                .encode(),
             )]
         }
         Some(Message::ListRequest) => {
@@ -596,6 +635,7 @@ fn modded_client_edge_cases() {
                 mods_hash: [0; 32],
                 client_required: true,
                 count: 0,
+                players: None,
             })
             .encode(),
         )],

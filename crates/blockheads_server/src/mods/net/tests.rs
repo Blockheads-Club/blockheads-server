@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -15,6 +15,7 @@ struct Fake {
     rejected: RefCell<Vec<(String, u8)>>,
     approved: RefCell<Vec<String>>,
     waiting: RefCell<Vec<String>>,
+    players: Cell<Option<(u32, u32)>>,
 }
 
 impl Link for Fake {
@@ -29,6 +30,9 @@ impl Link for Fake {
     }
     fn alive(&self, peer: &str) -> bool {
         self.approved(peer) || self.waiting.borrow().contains(&peer.to_string())
+    }
+    fn players(&self) -> Option<(u32, u32)> {
+        self.players.get()
     }
 }
 
@@ -120,6 +124,13 @@ fn hello_and_list() {
     assert!(h.client_required);
     assert_eq!(h.count, 1);
     assert_eq!(h.mods_hash, n.catalog.mods_hash);
+    assert_eq!(h.players, None);
+    // A link that knows its player count puts it into the answer.
+    l.players.set(Some((3, 16)));
+    n.packet(&l, "f", &hello(1), &[]);
+    let sent = l.take();
+    let [Message::ServerHello(h)] = &sent[..] else { unreachable!() };
+    assert_eq!(h.players, Some(PlayerCount { online: 3, capacity: 16 }));
     n.packet(&l, "e", &Message::ListRequest.encode(), &["big:sync".to_string()]);
     let sent = l.take();
     let [Message::ModList(m)] = &sent[..] else { unreachable!() };
