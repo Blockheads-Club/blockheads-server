@@ -2089,7 +2089,7 @@ mod tests {
             path_user: Some(user.clone()),
         });
         run_to_end(&pc);
-        assert!(pc.path_user().map_or(false, |u| crate::objects::handle::ptr_eq(&u, &user)));
+        assert!(pc.path_user().is_some_and(|u| crate::objects::handle::ptr_eq(&u, &user)));
         assert_eq!((pc.goal_x(), pc.goal_y(), pc.goal_interaction(), pc.path_type()), (104, 21, 2, 3));
         assert!(pc.extra_data().is_some());
         pc.set_has_path(false);
@@ -2111,7 +2111,6 @@ mod tests {
     /// The stand-in user and loader answer their questions.
     #[test]
     fn test_doubles_answer() {
-        use crate::objects::protocols::PathUserDynamicObject;
         use crate::world::state::WorldOpsHooks;
         let (world, _l, _d) = new_world(32, 20);
         let user = new_user(ip(1, 2));

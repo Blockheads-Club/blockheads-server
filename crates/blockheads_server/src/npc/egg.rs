@@ -1099,7 +1099,7 @@ mod tests {
         let mut genes = new_mutable_dict();
         genes.map.insert("breed".to_string(), PlistValue::int(3));
         env.fill_tile_dodo_egg(pos, 3, &genes);
-        let b: ObjRef = crate::objects::handle::alloc_obj(|sw| Blockhead::alloc(sw));
+        let b: ObjRef = crate::objects::handle::alloc_obj(Blockhead::alloc);
         let plain: ObjRef = crate::objects::base::testutil::TestObj::new();
         env.add_simulation_event_damage(&b, "ouch");
         assert!(!env.dw_load_npc_at_position(pos, 1, None, true, false, None) || true);
@@ -1195,9 +1195,7 @@ mod tests {
         env.set_tile(below.x, below.y, 1);
         e.world_changed(&e, &mut vec![below]);
         env.set_tile(below.x, below.y, 2);
-        let mut t = Tile::default();
-        t.type_index = 2;
-        t.foreground_contents = 100;
+        let t = Tile { type_index: 2, foreground_contents: 100, ..Tile::default() };
         env.tiles.borrow_mut().insert((below.x, below.y), t);
         e.world_changed(&e, &mut vec![below]);
         env.set_tile(below.x, below.y, 2);

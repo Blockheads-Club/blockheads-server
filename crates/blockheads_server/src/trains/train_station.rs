@@ -443,7 +443,7 @@ fn _creation_helper(me: &ObjRef) -> Option<Vec<u8>> {
 mod tests {
     use super::*;
     use crate::interaction::sign::testkit::{tile, world_with_block};
-    use crate::objects::base::{new_mutable_dict, DynamicObject};
+    use crate::objects::base::new_mutable_dict;
     use crate::world::state::PhysicalBlockRef;
 
     /// : the 3x2 footprint order and the swapped-tile placement quirk are encoded in `new`/`remove`; here the

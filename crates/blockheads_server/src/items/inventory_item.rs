@@ -171,7 +171,7 @@ impl InventoryItem {
         if let Some(d) = &self.dynamic_object_save_dict {
             dd.insert("d".to_string(), d.clone());
         }
-        if dd.len() != 0 {
+        if !dd.is_empty() {
             if let Some(xml) = data_from_property_list(&PlistValue::Dict(dd)) {
                 ret.extend_from_slice(&gzip_deflate(&xml));
             }

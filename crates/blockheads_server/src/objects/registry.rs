@@ -1255,7 +1255,7 @@ mod tests {
         assert_eq!(tap.action_title(), "");
         assert!(!tap.is_double_height());
         o.update_accurate_dt_is_simulation(&o, 0.016, 0.016, false);
-        let sd = o.get_save_dict(&o);
+        let _sd = o.get_save_dict(&o);
         let nd = o.creation_net_data_for_client(&o, None).unwrap();
         assert_eq!(nd, o.update_net_data_for_client(&o, None).unwrap());
         o.remote_update(&o, &nd);

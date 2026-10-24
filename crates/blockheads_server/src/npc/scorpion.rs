@@ -2055,11 +2055,13 @@ mod tests {
     fn remote_updates_follow_the_controlling_side() {
         let f = fixture(10);
         let (s, me) = mk(&f, ip(20, 11));
-        let mut u = ScorpionUpdateNetData::default();
-        u.to_square_x = 25;
-        u.to_square_y = 11;
-        u.walk_speed = 102;
-        u.movement_direction = 1;
+        let mut u = ScorpionUpdateNetData {
+            to_square_x: 25,
+            to_square_y: 11,
+            walk_speed: 102,
+            movement_direction: 1,
+            ..ScorpionUpdateNetData::default()
+        };
         // server: no remote rider, nothing happens
         s.do_remote_update(&me, &u);
         assert_eq!(s.data().remote_goal_square, ip(0, 0));

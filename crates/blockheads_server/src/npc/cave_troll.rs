@@ -859,7 +859,7 @@ impl CaveTroll {
             }
             t.from_tile = tile;
             t.to_tile = tile;
-            if tile.map_or(false, |ft| ft.get().light > 0x7f) {
+            if tile.is_some_and(|ft| ft.get().light > 0x7f) {
                 t.was_lit = true;
             }
         });
@@ -3283,19 +3283,20 @@ mod sim_tests {
     }
 
     fn update_data(g: &mut Gen) -> CaveTrollUpdateData {
-        let mut u = CaveTrollUpdateData::default();
-        u.to_square_x = 6 + g.below(40);
-        u.to_square_y = 8 + g.below(18);
-        u.interacting_square_x = 6 + g.below(40);
-        u.interacting_square_y = 8 + g.below(18);
-        u.traverse_type = [0u8, 1, 2, 4, 5, 17, 19, 24][g.below(8) as usize];
-        u.traverse_to_key_frame = g.below(9) as u8;
-        u.terrain_difficulty = [10u16, 40, 60000][g.below(3) as usize];
-        u.interacting = g.below(2) as u8;
-        u.interaction_type = [0u8, 10, 12][g.below(3) as usize];
-        u.animation_type = g.below(28) as u8;
-        u.sub_animation_type = [0u8, 3, 4][g.below(3) as usize];
-        u
+        CaveTrollUpdateData {
+            to_square_x: 6 + g.below(40),
+            to_square_y: 8 + g.below(18),
+            interacting_square_x: 6 + g.below(40),
+            interacting_square_y: 8 + g.below(18),
+            traverse_type: [0u8, 1, 2, 4, 5, 17, 19, 24][g.below(8) as usize],
+            traverse_to_key_frame: g.below(9) as u8,
+            terrain_difficulty: [10u16, 40, 60000][g.below(3) as usize],
+            interacting: g.below(2) as u8,
+            interaction_type: [0u8, 10, 12][g.below(3) as usize],
+            animation_type: g.below(28) as u8,
+            sub_animation_type: [0u8, 3, 4][g.below(3) as usize],
+            ..CaveTrollUpdateData::default()
+        }
     }
 
     #[test]
@@ -3395,13 +3396,9 @@ mod sim_tests {
                 if g.below(120) == 0 {
                     troll.npc.borrow_mut().dead = true;
                 }
-                if !troll.control_is_local() {
-                } else if troll.path_needs_recalculated() && g.below(4) != 0 {
-                    let ty = [0, 1, 2, 3, 4, 5][g.below(6) as usize];
-                    let goal = [0, 10, 12][g.below(3) as usize];
-                    let p = random_path(&mut g, me.pos());
-                    troll.set_path(&me, p, ty, goal, None);
-                } else if g.below(35) == 0 {
+                if troll.control_is_local()
+                    && ((troll.path_needs_recalculated() && g.below(4) != 0) || g.below(35) == 0)
+                {
                     let ty = [0, 1, 2, 3, 4, 5][g.below(6) as usize];
                     let goal = [0, 10, 12][g.below(3) as usize];
                     let p = random_path(&mut g, me.pos());

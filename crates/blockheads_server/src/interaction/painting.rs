@@ -374,7 +374,7 @@ impl DynamicObject for Painting {
         if let Some(n) = &st.owner_name {
             dd.map.insert("ownerName".to_string(), PlistValue::string(n.clone()));
         }
-        let visible = !st.hidden_due_to_server_ban && st.image_data.as_ref().map_or(false, |i| !i.is_empty());
+        let visible = !st.hidden_due_to_server_ban && st.image_data.as_ref().is_some_and(|i| !i.is_empty());
         if !visible {
             dd.map.insert("hiddenDueToServerBan".to_string(), PlistValue::boolean(true));
         }

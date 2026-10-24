@@ -722,7 +722,7 @@ impl Blockhead {
                         tl.contents == 0
                     };
                     let head_ok = |n: Option<TileRef>| -> bool {
-                        tile_copy(&n).map_or(false, |nt| {
+                        tile_copy(&n).is_some_and(|nt| {
                             nt.contents == 0
                                 && nt.foreground_contents == 0
                                 && nt.background_contents == 0

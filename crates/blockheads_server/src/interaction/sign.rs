@@ -970,7 +970,7 @@ mod tests {
         me.blockheads_loaded(&me);
         let bh: ObjRef = TestBh::new(1, false);
         me.blockhead_unloaded(&me, &bh);
-        assert_eq!(s.io_state().borrow().current_blockhead.is_none(), true);
+        assert!(s.io_state().borrow().current_blockhead.is_none());
         assert!(s.sign_placement_info().is_some());
         me.dealloc(&me);
         assert_eq!(s.text(), None);

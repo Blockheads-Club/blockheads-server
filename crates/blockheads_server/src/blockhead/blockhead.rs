@@ -13,7 +13,6 @@ use std::any::Any;
 use std::cell::RefCell;
 use std::rc::{Rc, Weak};
 
-use crate::fmath::cconv::f32_to_i32;
 use crate::items::inventory_item::{InventoryItem, ItemRef, SubSlot};
 use crate::objects::base::{base_update_position, BlockheadApi, DynamicObject, DynamicObjectBase, DynamicWorldRef};
 use crate::objects::class_info::{ClassInfo, DYNAMIC_OBJECT_CLASS};
@@ -2057,10 +2056,8 @@ pub(crate) mod testutil {
         pub belongs: Cell<bool>,
         pub torch: RefCell<Option<ObjRef>>,
         pub can_pick: Cell<bool>,
-        pub plant: RefCell<Option<ObjRef>>,
         pub io_by_id: RefCell<Option<ObjRef>>,
         pub adding_fuel: Cell<bool>,
-        pub light_index: Cell<Option<i32>>,
     }
     impl TestHost {
         pub fn install() -> Rc<TestHost> {
@@ -2393,76 +2390,73 @@ mod tests {
         let pv = PlistValue::int(1);
         let mut flag = false;
         let h = Bare;
-        let _ = BlockheadHostStub::update_position(&h, b, IntPair { x: 1, y: 2 });
-        let _ = BlockheadHostStub::stop_riding(&h, b);
-        let _ = BlockheadHostStub::pickup_dynamic_object(&h, b, &ob);
+        BlockheadHostStub::update_position(&h, b, IntPair { x: 1, y: 2 });
+        BlockheadHostStub::stop_riding(&h, b);
+        BlockheadHostStub::pickup_dynamic_object(&h, b, &ob);
         let _ = BlockheadHostStub::interaction_type_for_tile_at_pos_item_pickup_rejected_due_to_inventory_full_include_actions_face_index_allow_protected_actions(&h, b, None, IntPair { x: 1, y: 2 }, None, &mut flag, true, 3, true);
         let _ = BlockheadHostStub::good_or_bad_interaction_for_action(&h, b, None);
-        let _ = BlockheadHostStub::update_gather_speed_and_animation_for_current_interation_and_item(&h, b);
+        BlockheadHostStub::update_gather_speed_and_animation_for_current_interation_and_item(&h, b);
         let _ = BlockheadHostStub::is_adding_fuel_to_any_workbench(&h, b);
         let _ = BlockheadHostStub::current_traverse_to_key_frame(&h, b);
         let _ = BlockheadHostStub::next_pos(&h, b);
         let _ = BlockheadHostStub::info_for_path_recalculation(&h, b);
-        let _ = BlockheadHostStub::set_path_type_goal_interaction_extra_data(&h, b, None, 3, 3, None);
-        let _ = BlockheadHostStub::set_waiting_for_path_to_pos(&h, b, IntPair { x: 1, y: 2 });
-        let _ = BlockheadHostStub::set_no_longer_waiting_for_path(&h, b);
+        BlockheadHostStub::set_path_type_goal_interaction_extra_data(&h, b, None, 3, 3, None);
+        BlockheadHostStub::set_waiting_for_path_to_pos(&h, b, IntPair { x: 1, y: 2 });
+        BlockheadHostStub::set_no_longer_waiting_for_path(&h, b);
         let _ = BlockheadHostStub::can_crawl(&h, b);
         let _ = BlockheadHostStub::can_fly(&h, b);
         let _ = BlockheadHostStub::tap_is_within_body_radius(&h, b, Vector2 { x: 0.5, y: 1.5 });
-        let _ = BlockheadHostStub::hit_with_force_blockhead(&h, b, 3, None);
+        BlockheadHostStub::hit_with_force_blockhead(&h, b, 3, None);
         let _ = BlockheadHostStub::will_die_if_hit_by_force(&h, b, 3);
         let _ = BlockheadHostStub::center(&h, b);
         let _ = BlockheadHostStub::is_interacting_with_any_interaction_object(&h, b);
-        let _ = BlockheadHostStub::set_interaction_object(&h, b, None);
-        let _ = BlockheadHostStub::set_interaction_workbench(&h, b, None);
+        BlockheadHostStub::set_interaction_object(&h, b, None);
+        BlockheadHostStub::set_interaction_workbench(&h, b, None);
         let _ = BlockheadHostStub::can_pick_up_item_of_type_sub_items(&h, b, ItemType(5), None);
         let _ = BlockheadHostStub::can_pick_up_item_of_type_sub_items_data_a_data_b(&h, b, ItemType(5), None, 3, 3);
-        let _ = BlockheadHostStub::add_item_to_inventory_flash_disable_warp_check_force_slot_index(
-            &h, b, &item, true, true, 3,
-        );
-        let _ = BlockheadHostStub::add_item_to_inventory_flash(&h, b, &item, true);
+        BlockheadHostStub::add_item_to_inventory_flash_disable_warp_check_force_slot_index(&h, b, &item, true, true, 3);
+        BlockheadHostStub::add_item_to_inventory_flash(&h, b, &item, true);
         let _ = BlockheadHostStub::pickup_freeblock_if_possible_in_tile_intentional(&h, b, &ob, None, true);
-        let _ = BlockheadHostStub::increment_usage_of_interaction_item(&h, b, true);
-        let _ = BlockheadHostStub::increment_usage_of_clothing(&h, b);
-        let _ = BlockheadHostStub::increment_usage_of_ice_clothing(&h, b);
-        let _ = BlockheadHostStub::increment_fuel_usage(&h, b);
-        let _ = BlockheadHostStub::increment_passive_item_usage(&h, b);
-        let _ = BlockheadHostStub::increment_damage_of_armor_clothing(&h, b, 0.5);
-        let _ = BlockheadHostStub::inventory_was_changed_sub_index_was_usage(&h, b, 3, 3, true);
-        let _ =
-            BlockheadHostStub::drop_inventory_items_at_index_sub_index_count_ignore_freeblocks(&h, b, 3, 3, 3, true);
-        let _ = BlockheadHostStub::remove_interaction_item(&h, b, true);
+        BlockheadHostStub::increment_usage_of_interaction_item(&h, b, true);
+        BlockheadHostStub::increment_usage_of_clothing(&h, b);
+        BlockheadHostStub::increment_usage_of_ice_clothing(&h, b);
+        BlockheadHostStub::increment_fuel_usage(&h, b);
+        BlockheadHostStub::increment_passive_item_usage(&h, b);
+        BlockheadHostStub::increment_damage_of_armor_clothing(&h, b, 0.5);
+        BlockheadHostStub::inventory_was_changed_sub_index_was_usage(&h, b, 3, 3, true);
+        BlockheadHostStub::drop_inventory_items_at_index_sub_index_count_ignore_freeblocks(&h, b, 3, 3, 3, true);
+        BlockheadHostStub::remove_interaction_item(&h, b, true);
         let _ = BlockheadHostStub::has_interaction_inventory_item_available(&h, b);
         let _ = BlockheadHostStub::can_use_dynamic_object(&h, b, &ob);
-        let _ = BlockheadHostStub::stop_all_actions(&h, b);
-        let _ = BlockheadHostStub::stop_fishing(&h, b);
-        let _ = BlockheadHostStub::die_for_good(&h, b);
+        BlockheadHostStub::stop_all_actions(&h, b);
+        BlockheadHostStub::stop_fishing(&h, b);
+        BlockheadHostStub::die_for_good(&h, b);
         let _ = BlockheadHostStub::unable_to_work_reason(&h, b);
         let _ = BlockheadHostStub::jetpack_fuel_count(&h, b);
-        let _ = BlockheadHostStub::update_jet_motion(&h, b, 0.5);
+        BlockheadHostStub::update_jet_motion(&h, b, 0.5);
         let _ = BlockheadHostStub::free_block_pickup_radius(&h, b);
         let _ = BlockheadHostStub::dpad_should_be_displayed(&h, b);
         let _ = BlockheadHostStub::current_item(&h, b);
         let _ = BlockheadHostStub::current_interaction_requires_human_input(&h, b);
         let _ = BlockheadHostStub::action_in_progress(&h, &act);
-        let _ = BlockheadHostStub::action_set_in_progress(&h, &act, true);
+        BlockheadHostStub::action_set_in_progress(&h, &act, true);
         let _ = BlockheadHostStub::action_goal_tile_pos(&h, &act);
         let _ = BlockheadHostStub::action_get_save_dict(&h, &act);
         let _ = BlockheadHostStub::action_init_with_save_dict_inventory_items(&h, &pv, &[]);
         let _ = BlockheadHostStub::action_interaction_test_result(&h, &act);
         let _ = BlockheadHostStub::action_interaction_object_id(&h, &act);
         let _ = BlockheadHostStub::action_inventory_change_int_for_key(&h, &act, "k");
-        let _ = BlockheadHostStub::action_set_inventory_change_int_for_key(&h, &act, "k", 3);
-        let _ = BlockheadHostStub::add_simulation_event_of_type_for_blockhead_extra_data(
+        BlockheadHostStub::action_set_inventory_change_int_for_key(&h, &act, "k", 3);
+        BlockheadHostStub::add_simulation_event_of_type_for_blockhead_extra_data(
             &h,
             3,
             &ob,
             SimulationEventExtra::None,
         );
-        let _ = BlockheadHostStub::report_achievement_with_identifier(&h, "k");
-        let _ = BlockheadHostStub::abort_in_progress_path_if_for_blockhead(&h, &ob);
-        let _ = BlockheadHostStub::send_damage_for_net_blockhead_recoil(&h, 0.5, &ob, true);
-        let _ = BlockheadHostStub::fire_projectile_from_to_at_fire_item_type_firer(
+        BlockheadHostStub::report_achievement_with_identifier(&h, "k");
+        BlockheadHostStub::abort_in_progress_path_if_for_blockhead(&h, &ob);
+        BlockheadHostStub::send_damage_for_net_blockhead_recoil(&h, 0.5, &ob, true);
+        BlockheadHostStub::fire_projectile_from_to_at_fire_item_type_firer(
             &h,
             Vector2 { x: 0.5, y: 1.5 },
             Vector2 { x: 0.5, y: 1.5 },
@@ -2471,20 +2465,20 @@ mod tests {
             None,
         );
         let _ = BlockheadHostStub::tile_is_lit_for_client_at_pos_tile(&h, None, IntPair { x: 1, y: 2 }, None, None);
-        let _ = BlockheadHostStub::fully_load_if_needed_around_pos_client_light_block_index_for_blockhead(
+        BlockheadHostStub::fully_load_if_needed_around_pos_client_light_block_index_for_blockhead(
             &h,
             IntPair { x: 1, y: 2 },
             3,
             None,
         );
-        let _ = BlockheadHostStub::place_workbench_of_type_at_pos_save_dict_placed_by_client_placed_by_blockhead_placed_by_client_name(&h, 3, IntPair { x: 1, y: 2 }, None, None, &ob, None);
+        BlockheadHostStub::place_workbench_of_type_at_pos_save_dict_placed_by_client_placed_by_blockhead_placed_by_client_name(&h, 3, IntPair { x: 1, y: 2 }, None, None, &ob, None);
         let _ = BlockheadHostStub::place_interaction_object_with_item_at_pos_save_dict_placed_by_client_placed_by_blockhead_placed_by_client_name(&h, &item, IntPair { x: 1, y: 2 }, None, None, &ob, None);
-        let _ = BlockheadHostStub::fill_tile_at_pos_with_type(&h, None, IntPair { x: 1, y: 2 }, 3);
-        let _ = BlockheadHostStub::fill_tile_at_pos_with_type_data_a_data_b_placed_by_client_save_dict_placed_by_blockhead_placed_by_client_name(&h, None, IntPair { x: 1, y: 2 }, 3, 3, 3, None, None, None, None);
-        let _ = BlockheadHostStub::remove_tile_at_world_x_world_y_create_contents_freeblock_count_create_foreground_contents_freeblock_count_remove_blockhead_only_remove_c_ontents_only_remove_foreground_contents(&h, 3, 3, 3, 3, &ob, true, true);
-        let _ = BlockheadHostStub::remove_back_wall_at_pos_remove_blockhead(&h, IntPair { x: 1, y: 2 }, &ob);
-        let _ = BlockheadHostStub::remove_water_tile_at_pos(&h, IntPair { x: 1, y: 2 });
-        let _ = BlockheadHostStub::paint_tile_at_pos_color_index_face_index_paint_blockhead(
+        BlockheadHostStub::fill_tile_at_pos_with_type(&h, None, IntPair { x: 1, y: 2 }, 3);
+        BlockheadHostStub::fill_tile_at_pos_with_type_data_a_data_b_placed_by_client_save_dict_placed_by_blockhead_placed_by_client_name(&h, None, IntPair { x: 1, y: 2 }, 3, 3, 3, None, None, None, None);
+        BlockheadHostStub::remove_tile_at_world_x_world_y_create_contents_freeblock_count_create_foreground_contents_freeblock_count_remove_blockhead_only_remove_c_ontents_only_remove_foreground_contents(&h, 3, 3, 3, 3, &ob, true, true);
+        BlockheadHostStub::remove_back_wall_at_pos_remove_blockhead(&h, IntPair { x: 1, y: 2 }, &ob);
+        BlockheadHostStub::remove_water_tile_at_pos(&h, IntPair { x: 1, y: 2 });
+        BlockheadHostStub::paint_tile_at_pos_color_index_face_index_paint_blockhead(
             &h,
             None,
             IntPair { x: 1, y: 2 },
@@ -2492,19 +2486,19 @@ mod tests {
             3,
             &ob,
         );
-        let _ = BlockheadHostStub::remove_paint_at_tile_at_pos_face_index_paint_blockhead(
+        BlockheadHostStub::remove_paint_at_tile_at_pos_face_index_paint_blockhead(
             &h,
             None,
             IntPair { x: 1, y: 2 },
             3,
             &ob,
         );
-        let _ = BlockheadHostStub::send_gather_notification_for_tile_at_pos(&h, None, IntPair { x: 1, y: 2 });
-        let _ = BlockheadHostStub::display_ownership_areas(&h);
-        let _ = BlockheadHostStub::blockhead_reached_interaction_object_destination_path_extra_data(&h, &ob, None);
+        BlockheadHostStub::send_gather_notification_for_tile_at_pos(&h, None, IntPair { x: 1, y: 2 });
+        BlockheadHostStub::display_ownership_areas(&h);
+        BlockheadHostStub::blockhead_reached_interaction_object_destination_path_extra_data(&h, &ob, None);
         let _ = BlockheadHostStub::remove_curse_words_from_blockhead_name(&h, None);
         let _ = BlockheadHostStub::player_is_admin_with_id(&h, None);
-        let _ = BlockheadHostStub::update_player(&h, None);
+        BlockheadHostStub::update_player(&h, None);
         let _ = BlockheadHostStub::player_name_for_player_with_id_including_old_players(&h, None);
         let _ = BlockheadHostStub::server_client_light_block_index_for_net_id(&h, None);
         let _ = BlockheadHostStub::dynamic_world_local_net_id(&h);
@@ -2527,15 +2521,15 @@ mod tests {
         let _ = BlockheadHostStub::elevator_shaft_at_pos(&h, IntPair { x: 1, y: 2 });
         let _ = BlockheadHostStub::elevator_motor_at_pos(&h, IntPair { x: 1, y: 2 });
         let _ = BlockheadHostStub::remove_object_at_pos(&h, Remover::Torch, IntPair { x: 1, y: 2 });
-        let _ = BlockheadHostStub::remove_interaction_object_at_pos_remove_blockhead(&h, IntPair { x: 1, y: 2 }, &ob);
-        let _ = BlockheadHostStub::remove_workbench_at_pos_remove_blockhead(&h, IntPair { x: 1, y: 2 }, &ob);
-        let _ = BlockheadHostStub::load_gather_block_at_pos(&h, IntPair { x: 1, y: 2 });
+        BlockheadHostStub::remove_interaction_object_at_pos_remove_blockhead(&h, IntPair { x: 1, y: 2 }, &ob);
+        BlockheadHostStub::remove_workbench_at_pos_remove_blockhead(&h, IntPair { x: 1, y: 2 }, &ob);
+        BlockheadHostStub::load_gather_block_at_pos(&h, IntPair { x: 1, y: 2 });
         let _ = BlockheadHostStub::pos_of_doors_other_block_at_pos(&h, IntPair { x: 1, y: 2 });
-        let _ = BlockheadHostStub::set_door_at_pos_to_open_direction(&h, IntPair { x: 1, y: 2 }, true, 3);
-        let _ = BlockheadHostStub::open_elevator_at_pos(&h, IntPair { x: 1, y: 2 });
-        let _ = BlockheadHostStub::elevator_motor_for_shaft_at_pos_use_power(&h, IntPair { x: 1, y: 2 });
+        BlockheadHostStub::set_door_at_pos_to_open_direction(&h, IntPair { x: 1, y: 2 }, true, 3);
+        BlockheadHostStub::open_elevator_at_pos(&h, IntPair { x: 1, y: 2 });
+        BlockheadHostStub::elevator_motor_for_shaft_at_pos_use_power(&h, IntPair { x: 1, y: 2 });
         let _ = BlockheadHostStub::check_for_harmable_dynamic_object_under_tap_ignore_local_blockheads_ignore_all_blockheads(&h, Vector2 { x: 0.5, y: 1.5 }, true, true);
-        let _ = BlockheadHostStub::create_free_block_at_position_of_type_data_a_data_b_sub_items_dynamic_object_save_dict_hovers_play_sound_priority_blockhead(&h, IntPair { x: 1, y: 2 }, ItemType(5), 3, 3, None, None, true, 3, None);
+        BlockheadHostStub::create_free_block_at_position_of_type_data_a_data_b_sub_items_dynamic_object_save_dict_hovers_play_sound_priority_blockhead(&h, IntPair { x: 1, y: 2 }, ItemType(5), 3, 3, None, None, true, 3, None);
         let _ = BlockheadHostStub::is_npc(&h, &ob);
         let _ = BlockheadHostStub::is_donkey(&h, &ob);
         let _ = BlockheadHostStub::is_bed(&h, &ob);
@@ -2545,14 +2539,14 @@ mod tests {
         let _ = BlockheadHostStub::npc_can_be_shaved_by_blockhead(&h, &ob, b);
         let _ = BlockheadHostStub::npc_belongs_to_player_with_blockhead(&h, &ob, b);
         let _ = BlockheadHostStub::npc_can_be_fed_by_blockhead(&h, &ob, b);
-        let _ = BlockheadHostStub::npc_feed_by_blockhead(&h, &ob, b);
-        let _ = BlockheadHostStub::npc_set_free_by_blockhead(&h, &ob, b);
+        BlockheadHostStub::npc_feed_by_blockhead(&h, &ob, b);
+        BlockheadHostStub::npc_set_free_by_blockhead(&h, &ob, b);
         let _ = BlockheadHostStub::npc_capture_by_blockhead_with_item_type(&h, &ob, b, 3);
         let _ = BlockheadHostStub::npc_shave_by_blockhead(&h, &ob, b);
         let _ = BlockheadHostStub::npc_milk_by_blockhead(&h, &ob, b);
-        let _ = BlockheadHostStub::npc_begin_blockhead_inspection(&h, &ob, b);
-        let _ = BlockheadHostStub::npc_inspection_stopped(&h, &ob);
-        let _ = BlockheadHostStub::npc_remote_blockhead_hooked_you(&h, &ob, b);
+        BlockheadHostStub::npc_begin_blockhead_inspection(&h, &ob, b);
+        BlockheadHostStub::npc_inspection_stopped(&h, &ob);
+        BlockheadHostStub::npc_remote_blockhead_hooked_you(&h, &ob, b);
         let _ = BlockheadHostStub::donkey_breed(&h, &ob);
         let _ = BlockheadHostStub::egg_breed(&h, &ob);
         let _ = BlockheadHostStub::torch_data_a_b(&h, &ob);
@@ -2565,18 +2559,18 @@ mod tests {
         let _ = BlockheadHostStub::workbench_level(&h, &ob);
         let _ = BlockheadHostStub::workbench_has_required_fuel(&h, &ob);
         let _ = BlockheadHostStub::workbench_uses_stores_conducts_or_produces_electricity(&h, &ob);
-        let _ = BlockheadHostStub::workbench_abort_immediately_and_restore_blockhead_items(&h, &ob);
+        BlockheadHostStub::workbench_abort_immediately_and_restore_blockhead_items(&h, &ob);
         let _ = BlockheadHostStub::workbench_is_in_use(&h, &ob);
         let _ = BlockheadHostStub::workbench_current_blockhead(&h, &ob);
         let _ = BlockheadHostStub::workbench_craft_item_with_blockhead_count(&h, &ob, &any, b, 3);
-        let _ = BlockheadHostStub::workbench_start_managing_fuel_with_blockhead(&h, &ob, b);
-        let _ = BlockheadHostStub::set_workbench_choice_ui_option(&h, &ob, 3);
+        BlockheadHostStub::workbench_start_managing_fuel_with_blockhead(&h, &ob, b);
+        BlockheadHostStub::set_workbench_choice_ui_option(&h, &ob, 3);
         let _ = BlockheadHostStub::interaction_object_type(&h, &ob);
         let _ = BlockheadHostStub::interaction_object_is_in_use(&h, &ob);
-        let _ = BlockheadHostStub::interaction_object_remove(&h, &ob, b);
-        let _ = BlockheadHostStub::blockhead_would_like_to_take_ownership_with_save_dict(&h, &ob, b, &pv);
+        BlockheadHostStub::interaction_object_remove(&h, &ob, b);
+        BlockheadHostStub::blockhead_would_like_to_take_ownership_with_save_dict(&h, &ob, b, &pv);
         let _ = BlockheadHostStub::plant_gather_progress_for_tile(&h, &ob, IntPair { x: 1, y: 2 });
-        let _ = BlockheadHostStub::plant_set_gather_progress_for_tile(&h, &ob, 3, IntPair { x: 1, y: 2 });
+        BlockheadHostStub::plant_set_gather_progress_for_tile(&h, &ob, 3, IntPair { x: 1, y: 2 });
         let _ = BlockheadHostStub::plant_tile_harvested_remove_blockhead_correct_tool_multiplier(
             &h,
             &ob,
@@ -2587,7 +2581,7 @@ mod tests {
         let _ = BlockheadHostStub::fishing_rod_valid(&h, &any);
         let _ = BlockheadHostStub::fishing_rod_hooked_fish_unique_id(&h, &any);
         let _ = BlockheadHostStub::fishing_rod_new_with_swipe(&h, b, Vector2 { x: 0.5, y: 1.5 });
-        let _ = BlockheadHostStub::fishing_rod_update(&h, &any, 0.5, 0.5, true);
+        BlockheadHostStub::fishing_rod_update(&h, &any, 0.5, 0.5, true);
         // defaults with behaviour
         assert_eq!(BlockheadHostStub::next_pos(&h, b), b.bh.borrow().to_square);
         assert_eq!(BlockheadHostStub::center(&h, b), Vector2 { x: b.float_pos().x, y: b.float_pos().y + 1.0 });

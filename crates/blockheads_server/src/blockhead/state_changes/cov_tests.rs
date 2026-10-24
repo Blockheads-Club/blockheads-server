@@ -201,13 +201,12 @@ fn start_using_objects_inspecting_crafting_and_fuel() {
     let start = |t: u32| b.start_interacting_with_tile_at_index_tile_interaction_type(idx(6, 8), t_(&world, 6, 8), t);
     // an interactive object named by the path data: refused, accepted, a workbench-choice object
     let obj = stub(1, true);
-    let extra = |count: i64| {
+    b.bh.borrow_mut().path_extra_data = {
         let mut e = PathExtraData::new();
         e.set("interactionObject", ExtraValue::Obj(obj.clone()));
-        e.set("craftCountOrExtraData", ExtraValue::Int(count));
+        e.set("craftCountOrExtraData", ExtraValue::Int(2));
         Some(e)
     };
-    b.bh.borrow_mut().path_extra_data = extra(2);
     h.set("cantuse", 1);
     start(it::USE_INTERACTIVE_OBJECT);
     assert_eq!(b.st().interacting, 0);
@@ -420,8 +419,7 @@ fn remote_update_server_side_effects() {
     let (rep, data) = replica(&world, &dwref);
     let r = bh_of(&rep);
     let (mods, _g) = install_mods(Some(1.0));
-    let mut u = BlockheadUpdateData::default();
-    u.z_index = 1;
+    let mut u = BlockheadUpdateData { z_index: 1, ..BlockheadUpdateData::default() };
     // a non-admin player moving with z-index 1 is refreshed
     rep.remote_update(&rep, &u.to_vec());
     assert!(h.take().contains(&"updateplayer".to_string()));
@@ -534,9 +532,11 @@ fn die_tells_the_mods_and_damage_obeys_them() {
     assert_eq!(b.st().sub_animation_type, 0);
     assert!(b.bh.borrow().path_needs_recalculated);
     // the health dial in the middle leaves the damage alone
-    let mut r = crate::types::structs::CustomRules::default();
-    r.custom_rules_enabled = 1;
-    r.health = 2;
+    let r = crate::types::structs::CustomRules {
+        custom_rules_enabled: 1,
+        health: 2,
+        ..crate::types::structs::CustomRules::default()
+    };
     _world.set_custom_rules(r);
     let before = b.st().health;
     b.suffer_damage_is_simulation_recoil(0.05, false, false);

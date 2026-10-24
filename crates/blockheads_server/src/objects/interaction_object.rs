@@ -1146,8 +1146,7 @@ mod tests {
         assert_eq!(me.owner_id().as_deref(), Some("saved-owner"));
         // an update that ends the use removes an object flagged for it
         o.io.borrow_mut().needs_to_be_removed_when_interaction_ends = true;
-        let mut img = InteractionObjectCreationNetData::default();
-        img.is_in_use = 0;
+        let img = InteractionObjectCreationNetData { is_in_use: 0, ..InteractionObjectCreationNetData::default() };
         interaction_object_remote_update(&me, &img.to_vec());
         assert_eq!(*o.removes.borrow(), vec!["remove(false)".to_string()]);
     }

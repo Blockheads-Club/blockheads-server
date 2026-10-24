@@ -13,8 +13,8 @@ use crate::items::misc::{default_data_a_and_b_for_item_type, get_new_options_fro
 use crate::items::predicates::item_type_is_sowable;
 use crate::objects::base::{
     base_init_with_world_dynamic_world_at_position_cache, base_init_with_world_dynamic_world_cache_net_data,
-    base_init_with_world_dynamic_world_save_dict_cache, new_mutable_dict, padded_bytes, BlockheadApi, DynamicObject,
-    DynamicWorldRef, WorldRef,
+    base_init_with_world_dynamic_world_save_dict_cache, new_mutable_dict, padded_bytes, DynamicObject, DynamicWorldRef,
+    WorldRef,
 };
 use crate::objects::handle::{alloc_obj, CacheRef, ObjRef};
 use crate::plist::helpers::{data_from_property_list, property_list_with_data_raw};
@@ -22,7 +22,6 @@ use crate::plist::value::{PlistDict, PlistValue};
 use crate::rng::glibc_rand::{r01_from, rand_tagged};
 use crate::types::enums::FoodType;
 use crate::types::item_type::ItemType;
-use crate::types::netdata::DynamicObjectNetData;
 use crate::types::netdata::{BlockheadCreationData, BlockheadPreviewDataNew, BlockheadUpdateData};
 use crate::types::structs::{BlockheadSkinOptions, IntPair, TradeMission, WindowInfo, WireStruct};
 use crate::world::helpers::{tile_contains_door, tile_contains_trap_door, tile_is_air_or_snow, tile_is_solid};
@@ -1634,9 +1633,11 @@ mod tests {
         let egg = b.bh.borrow().inventory_items[2].borrow()[0].clone();
         assert_eq!((egg.borrow().item_type, egg.borrow().data_a, egg.borrow().data_b), (ItemType(91), 0, 0));
         // custom rules decide per category whether the default starter items are given
-        let mut rules = CustomRules::default();
-        rules.custom_rules_enabled = 1;
-        rules.spawn_item_types = [0, 2, 0, 2, 0, 0, 0, 0];
+        let rules = CustomRules {
+            custom_rules_enabled: 1,
+            spawn_item_types: [0, 2, 0, 2, 0, 0, 0, 0],
+            ..CustomRules::default()
+        };
         world.set_custom_rules(rules);
         let o = new_bh(&world, &dwref, 1);
         let b = bh_of(&o);

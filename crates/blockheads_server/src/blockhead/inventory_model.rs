@@ -3531,7 +3531,7 @@ mod tests {
         use crate::types::structs::BlockheadState;
         let f = fx();
         let b = f.b();
-        let st = |b: &Blockhead| b.bh.borrow().state.clone();
+        let st = |b: &Blockhead| b.bh.borrow().state;
         let base = |s: &mut BlockheadState| {
             s.energy = 0.5;
             s.fullness = 0.1;
@@ -3600,7 +3600,7 @@ mod tests {
     fn coffee_in_expert_mode_and_normal_mode() {
         let f = fx();
         let b = f.b();
-        let st = |b: &Blockhead| b.bh.borrow().state.clone();
+        let st = |b: &Blockhead| b.bh.borrow().state;
         eat(&f, ItemType::ITEM_COFFEE_CUP, |s| {
             s.energy = 0.5;
             s.heat = 1.0;
@@ -3985,11 +3985,7 @@ mod tests {
         let f = fx();
         let b = f.b();
         put(b, 2, vec![mk(APPLE, 0, 0), mk(APPLE, 0, 0)]);
-        put(
-            b,
-            3,
-            vec![basket_with(vec![(1, vec![mk(APPLE, 0, 0); 0]), (2, (0..3).map(|_| mk(APPLE, 0, 0)).collect())])],
-        );
+        put(b, 3, vec![basket_with(vec![(1, Vec::new()), (2, (0..3).map(|_| mk(APPLE, 0, 0)).collect())])]);
         put(b, 4, vec![basket_with(vec![(0, vec![mk(FLINT, 0, 0)])])]);
         let count = |inc| b.count_of_inventory_items_of_type_include_actions(ItemType(APPLE), inc);
         assert_eq!(count(false), 5);
@@ -4053,7 +4049,7 @@ mod tests {
             b,
             4,
             vec![basket_with(vec![
-                (0, vec![mk(ItemType::ITEM_GOLD_COIN.0, 0, 0); 0]),
+                (0, Vec::new()),
                 (3, vec![mk(ItemType::ITEM_COPPER_COIN.0, 0, 0), mk(ItemType::ITEM_COPPER_COIN.0, 0, 0)]),
             ])],
         );
@@ -4384,7 +4380,7 @@ mod tests {
         assert_eq!(offer(None), 1);
         assert_eq!(offer(Some(&[])), 1);
         let empty: SubSlot = Rc::new(RefCell::new(Vec::new()));
-        assert_eq!(offer(Some(&[empty.clone()])), 1);
+        assert_eq!(offer(Some(std::slice::from_ref(&empty))), 1);
         // a sub-slot of the same item that has room for the loose stack
         let flints = |n: usize| -> SubSlot { Rc::new(RefCell::new((0..n).map(|_| mk(FLINT, 0, 0)).collect())) };
         assert_eq!(offer(Some(&[flints(3)])), 1);

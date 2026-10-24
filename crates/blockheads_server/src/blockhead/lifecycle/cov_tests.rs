@@ -19,9 +19,8 @@ fn slots_of(b: &Blockhead) -> PlistValue {
 fn custom_rules_can_switch_off_the_food_and_the_basket() {
     let _h = TestHost::install();
     let (world, _dw, dwref) = setup();
-    let mut rules = CustomRules::default();
-    rules.custom_rules_enabled = 1;
-    rules.spawn_item_types = [2, 0, 2, 0, 0, 0, 0, 0];
+    let rules =
+        CustomRules { custom_rules_enabled: 1, spawn_item_types: [2, 0, 2, 0, 0, 0, 0, 0], ..CustomRules::default() };
     world.set_custom_rules(rules);
     let o = new_bh(&world, &dwref, 1);
     let b = bh_of(&o);

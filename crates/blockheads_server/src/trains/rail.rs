@@ -556,8 +556,8 @@ mod world_tests {
         let (world, dw) = setup("rail_remote");
         lay_rails(&world, &dw, 5, 14);
         let r = dw.get_rail_at_pos(IntPair { x: 8, y: 10 }).unwrap();
-        let mut img = RailCreationNetData::default();
-        img.configuration = RAIL_DIAGONAL_UP_RIGHT as u8;
+        let mut img =
+            RailCreationNetData { configuration: RAIL_DIAGONAL_UP_RIGHT as u8, ..RailCreationNetData::default() };
         r.set_update_needs_to_be_sent(false);
         r.remote_update(&r, &img.to_vec());
         assert_eq!(rail_current_configuration(&r), RAIL_DIAGONAL_UP_RIGHT);

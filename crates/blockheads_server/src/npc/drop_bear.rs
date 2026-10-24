@@ -1902,10 +1902,12 @@ mod tests {
         assert!(DropBear::init_with_world_dynamic_world_cache_net_data(&f.wref, &f.dwr, None, &bad).is_none());
         // client: updates are queued, a drop starts the fall at once
         f.env.client.set(true);
-        let mut u = DropBearUpdateNetData::default();
-        u.to_square_x = 21;
-        u.to_square_y = 13;
-        u.walk_speed = 51;
+        let mut u = DropBearUpdateNetData {
+            to_square_x: 21,
+            to_square_y: 13,
+            walk_speed: 51,
+            ..DropBearUpdateNetData::default()
+        };
         for _ in 0..6 {
             b.do_remote_update(&me, &u);
         }

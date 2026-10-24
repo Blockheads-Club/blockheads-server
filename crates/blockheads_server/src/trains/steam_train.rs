@@ -1329,7 +1329,7 @@ mod world_tests {
         let right = place(&dw2, 20, 208, 44);
         let eng2 = place(&dw2, 19, 205, 42);
         let ct = train_car_of(&right).unwrap();
-        assert!(ct.engine_car(&right).map_or(false, |e| ptr_eq(&e, &eng2)));
+        assert!(ct.engine_car(&right).is_some_and(|e| ptr_eq(&e, &eng2)));
         // an engine between two free cars couples both
         let (world3, dw3) = setup("steam_couple3");
         lay_rails(&world3, &dw3, 3, 40);
@@ -1400,8 +1400,10 @@ mod world_tests {
         lay_rails(&world, &dw, 3, 60);
         let car = place_steam(&dw, 30);
         let s = steam_of(&car);
-        let mut img = SteamTrainCreationNetData::default();
-        img.train_car_creation_net_data = train_car_train_car_creation_net_data(&car);
+        let mut img = SteamTrainCreationNetData {
+            train_car_creation_net_data: train_car_train_car_creation_net_data(&car),
+            ..SteamTrainCreationNetData::default()
+        };
         img.fuel_fraction = 51; // 0.2
         img.has_fuel = 1;
         img.whistle = 1;

@@ -3110,8 +3110,10 @@ mod tests {
         let me = TestNpc::alloc(NPC_DODO);
         let wr: WorldRef = fx.w.clone();
         let dr: DynamicWorldRef = fx.dw.clone();
-        let mut d = NPCCreationNetData::default();
-        d.dynamic_object_net_data = crate::types::netdata::DynamicObjectNetData::new(42, 40, 3, false);
+        let d = NPCCreationNetData {
+            dynamic_object_net_data: crate::types::netdata::DynamicObjectNetData::new(42, 40, 3, false),
+            ..NPCCreationNetData::default()
+        };
         assert!(npc_init_with_world_dynamic_world_cache_net_data(&me, &wr, &dr, None, &d.to_vec()));
         me
     }
@@ -3385,10 +3387,12 @@ mod tests {
         let b = TestBh::alloc(21, Some("p"));
         fx.env.bhs.borrow_mut().push(b.clone());
         let send = |kind: u8| {
-            let mut d = NPCCreationNetData::default();
-            d.interact_blockhead_id = 21;
-            d.interaction_type = kind;
-            d.interaction_item_type = 5;
+            let d = NPCCreationNetData {
+                interact_blockhead_id: 21,
+                interaction_type: kind,
+                interaction_item_type: 5,
+                ..NPCCreationNetData::default()
+            };
             npc_remote_creation_data_update(&me, &d.to_vec());
         };
         send(NET_NPC_INTERACTION_FEED);
@@ -3401,9 +3405,11 @@ mod tests {
         assert!(me.needs_removed());
         assert_eq!(fx.env.made.borrow().len(), 1);
         // an unknown blockhead id is ignored
-        let mut d = NPCCreationNetData::default();
-        d.interact_blockhead_id = 99;
-        d.interaction_type = NET_NPC_INTERACTION_FEED;
+        let d = NPCCreationNetData {
+            interact_blockhead_id: 99,
+            interaction_type: NET_NPC_INTERACTION_FEED,
+            ..NPCCreationNetData::default()
+        };
         npc_remote_creation_data_update(&me, &d.to_vec());
     }
 
@@ -3413,8 +3419,7 @@ mod tests {
         let me = make(&fx, NPC_DODO, true, None);
         let local = TestBh::alloc(30, Some("p"));
         let send = |rider_id: u64| {
-            let mut d = NPCCreationNetData::default();
-            d.rider_id = rider_id;
+            let d = NPCCreationNetData { rider_id, ..NPCCreationNetData::default() };
             npc_remote_creation_data_update(&me, &d.to_vec());
         };
         // the local rider stays on a matching or empty id, leaves on a different one
@@ -3451,13 +3456,15 @@ mod tests {
         fx.env.bhs.borrow_mut().push(b.clone());
         fx.env.bhs.borrow_mut().push(n.clone());
         let send = |d: &NPCCreationNetData| npc_remote_creation_data_update(&me, &d.to_vec());
-        let mut d = NPCCreationNetData::default();
-        d.hit_force = 2;
-        d.damage = 5;
-        d.fullness = 100;
-        d.age = 200;
-        d.tame_cooldown_timer = 7;
-        d.tame_type = 1;
+        let mut d = NPCCreationNetData {
+            hit_force: 2,
+            damage: 5,
+            fullness: 100,
+            age: 200,
+            tame_cooldown_timer: 7,
+            tame_type: 1,
+            ..NPCCreationNetData::default()
+        };
         send(&d);
         {
             let s = st(&me);
@@ -3684,7 +3691,7 @@ mod tests {
         fx.dw.blockheads.borrow_mut().push(TestBh::alloc(33, None));
         st(&me).saved_blockhead_index = 0;
         npc_blockheads_loaded(&me);
-        assert!(rd(&me).rider.is_none() && rd(&me).being_controlled == false);
+        assert!(rd(&me).rider.is_none() && !rd(&me).being_controlled);
         assert!(fx.env.stops.borrow().contains(&32));
         st(&me).saved_blockhead_index = 1;
         npc_blockheads_loaded(&me);

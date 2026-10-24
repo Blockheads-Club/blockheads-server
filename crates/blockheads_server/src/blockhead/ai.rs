@@ -1048,7 +1048,7 @@ mod tests {
         ai.with_state(|s| assert!(s.found_tile[9] && s.previous_action_count == 1));
     }
 
-    use crate::plants::plant::{new_plant_for_type, PlantLike};
+    use crate::plants::plant::new_plant_for_type;
 
     fn set(w: &World, x: i32, y: i32, f: impl FnOnce(&mut Tile)) {
         tile(w, x, y).update(f);

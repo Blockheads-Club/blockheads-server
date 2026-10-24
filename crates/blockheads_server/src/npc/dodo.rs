@@ -1415,7 +1415,6 @@ impl_npc_protocols!(Dodo);
 mod tests {
     use super::*;
     use crate::npc::egg::test_support::TestPassiveEnv;
-    use crate::npc::egg::{set_passive_env, PassiveEnv};
     use crate::npc::npc::{register_npc_ctor, set_npc_env};
     use crate::objects::base::testutil::{setup, MockDw, MockWorld};
     use crate::types::tile::Tile;
@@ -1927,9 +1926,7 @@ mod tests {
     fn arriving_at_a_gate_turns_the_dodo_back() {
         let fx = fixture();
         let me = about_to_arrive(&fx);
-        let mut gate = Tile::default();
-        gate.type_index = 2;
-        gate.contents = 0x92;
+        let gate = Tile { type_index: 2, contents: 0x92, ..Tile::default() };
         fx.env.tiles.borrow_mut().insert((41, 3), gate);
         me.update_accurate_dt_is_simulation(&me, 0.01, 0.01, false);
         let s = dodo_of(&me).dodo.borrow().clone();
@@ -1942,9 +1939,7 @@ mod tests {
         for case in 0..2 {
             let fx = fixture();
             let me = about_to_arrive(&fx);
-            let mut t = Tile::default();
-            t.type_index = 2;
-            t.contents = 5;
+            let t = Tile { type_index: 2, contents: 5, ..Tile::default() };
             fx.env.tiles.borrow_mut().insert((41, 3), t);
             if case == 1 {
                 let tree: ObjRef = crate::objects::base::testutil::TestObj::new();
@@ -1972,8 +1967,7 @@ mod tests {
         let rider = bh_at(40, 3);
         npc_state(&me).borrow_mut().rider = Some(rider);
         for (x, y) in [(41, 3), (40, 4)] {
-            let mut t = Tile::default();
-            t.type_index = 1;
+            let t = Tile { type_index: 1, ..Tile::default() };
             fx.env.tiles.borrow_mut().insert((x, y), t);
         }
         {
@@ -2194,9 +2188,7 @@ mod ai_tests {
     }
 
     fn tile(ty: u8) -> Tile {
-        let mut t = Tile::default();
-        t.type_index = ty;
-        t
+        Tile { type_index: ty, ..Tile::default() }
     }
     fn put(env: &TestPassiveEnv, x: i32, y: i32, t: Tile) {
         env.tiles.borrow_mut().insert((x, y), t);

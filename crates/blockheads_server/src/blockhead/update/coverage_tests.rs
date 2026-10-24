@@ -50,13 +50,9 @@ fn sim_ready(b: &Blockhead) {
 }
 
 fn rules(world: &World, f: impl FnOnce(&mut CustomRules)) {
-    let mut r = CustomRules::default();
-    r.custom_rules_enabled = 1;
     // neutral: 1 is the "normal" setting of the hunger / health / happiness dials, death on
-    r.hunger = 1;
-    r.health = 2;
-    r.happiness = 1;
-    r.death = 1;
+    let mut r =
+        CustomRules { custom_rules_enabled: 1, hunger: 1, health: 2, happiness: 1, death: 1, ..CustomRules::default() };
     f(&mut r);
     world.set_custom_rules(r);
 }
@@ -186,9 +182,7 @@ fn damage_apply_branches() {
     assert_eq!(b.st().health, 0.0);
     assert_eq!(b.st().death, 0.5);
     // rules.death == 0: no death accumulation
-    let mut r = CustomRules::default();
-    r.custom_rules_enabled = 1;
-    r.death = 0;
+    let r = CustomRules { custom_rules_enabled: 1, death: 0, ..CustomRules::default() };
     let c0 = mkc(r);
     b.bh.borrow_mut().state.health = 0.1;
     b.bh.borrow_mut().state.death = 0.0;
