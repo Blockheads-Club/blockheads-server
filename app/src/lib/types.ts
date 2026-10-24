@@ -20,6 +20,14 @@ export interface Settings {
   run: RunOptions;
   /** App update preferences (missing in settings saved before updates existed). */
   updates?: UpdatePrefs;
+  /** Mod runtime options (missing in settings saved before they existed). */
+  mods?: ModsPrefs;
+}
+export interface ModsPrefs {
+  /** Run JVM (Java/Kotlin) mods: unsandboxed code, off by default. */
+  jvm: boolean;
+  /** The Java installation to use; empty = JAVA_HOME, then `java` on the PATH. */
+  javaHome: string;
 }
 export type UpdateChannel = 'stable' | 'beta';
 export interface UpdatePrefs {
@@ -103,6 +111,8 @@ export interface AppInfo {
   platform: string;
   /** macOS draws the window buttons itself (overlay title bar). */
   nativeControls: boolean;
+  /** This build can run JVM mods (cargo feature `jvm`). */
+  jvmBuilt?: boolean;
 }
 /** What the hidden main window tells the splash window while it boots. */
 export interface SplashState {

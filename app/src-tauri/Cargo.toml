@@ -42,6 +42,11 @@ tauri-plugin-dialog = "2"
 # In-place desktop updates from the signed latest.json of a release (see src/update.rs).
 tauri-plugin-updater = "2"
 
+[features]
+# JVM mods (Java/Kotlin, unsandboxed). Off by default: building needs a JDK (javac, jar); running needs a JRE and the
+# switch in Settings. See docs/mods.md.
+jvm = ["blockheads_server/jvm"]
+
 [dev-dependencies]
 tempfile = "3"
 
