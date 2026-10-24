@@ -2806,6 +2806,13 @@ mod lifecycle_scenarios {
             .as_ref()
             .unwrap()
             .set_data(Some(&encode(vec![("randomSeed", PlistValue::int(9))])), Some("worldv2"));
+        // Close the environment again: the first load stage opens it afresh, and one process must not
+        // hold two environments over the same directory (LMDB's lock table is per environment, and
+        // on macOS the second open does not see the first one's data).
+        *w.main_database.borrow_mut() = None;
+        *w.block_database.borrow_mut() = None;
+        *w.dynamic_object_database.borrow_mut() = None;
+        *w.database_environment.borrow_mut() = None;
         *w.net_events_message_to_display_once_loaded.borrow_mut() = Some("welcome back".to_string());
         let _ = capture_log(|| {
             let mut n = 0;

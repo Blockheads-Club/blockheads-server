@@ -411,7 +411,13 @@ mod tests {
             }
         }
         for f in ["%ld", "%lld", "%lu", "%llu", "%zu", "%zx", "%lx"] {
-            for &v in &[0i64, 1, -1, 4294967296, i64::MAX, i64::MIN] {
+            // `long` and `size_t` are 32 bits wide on 32-bit targets, where libc cannot
+            // print the wide values; the two-`l` forms stay 64-bit everywhere.
+            let narrow = size_of::<std::ffi::c_long>() == 4 && !f.starts_with("%ll");
+            let signed = f.ends_with('d');
+            let fits =
+                |v: &i64| !narrow || if signed { i32::try_from(*v).is_ok() } else { u32::try_from(*v as u64).is_ok() };
+            for v in [0i64, 1, -1, 4294967296, i64::MAX, i64::MIN].into_iter().filter(fits) {
                 let a = if f.ends_with('d') { CArg::I64(v) } else { CArg::U64(v as u64) };
                 assert_eq!(sprintf(f, &[a]), c_i(f, v), "fmt {f} v {v}");
             }
