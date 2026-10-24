@@ -2291,7 +2291,7 @@ mod car_tests {
         let loaded = PassengerCar::from_save_dict(&world, &dw, &sd, None).unwrap();
         assert_eq!(tc_of(&loaded).borrow().saved_blockhead_index, [1, 2]);
         loaded.blockheads_loaded(&loaded);
-        assert!(tc_of(&loaded).borrow().riders[0].as_ref().map_or(false, |r| ptr_eq(r, &a)));
+        assert!(tc_of(&loaded).borrow().riders[0].as_ref().is_some_and(|r| ptr_eq(r, &a)));
         assert!(bh_of(&a).bh.borrow().ride_object.is_some());
         assert_eq!(tc_of(&loaded).borrow().saved_blockhead_index, [-1, -1]);
         // an index past the list is ignored
@@ -2321,7 +2321,7 @@ mod car_tests {
         assert!(tc_of(&car).borrow().riders[0].is_some());
         // full: the hand car has one seat
         train_car_add_rider(&car, &b);
-        assert!(tc_of(&car).borrow().riders[0].as_ref().map_or(false, |r| ptr_eq(r, &a)));
+        assert!(tc_of(&car).borrow().riders[0].as_ref().is_some_and(|r| ptr_eq(r, &a)));
         // the seated one becomes server-controlled: adding it again vacates the seat
         bh_of(&a).bh.borrow_mut().is_client_blockhead_being_controlled_by_server = true;
         car.set_update_needs_to_be_sent(false);
@@ -2372,7 +2372,7 @@ mod car_tests {
         net.base().borrow_mut().is_net = true;
         dw.net_blockheads.borrow_mut().push(net.clone());
         car.remote_update(&car, &img(&car, net.unique_id(), 0));
-        assert!(tc_of(&car).borrow().riders[0].as_ref().map_or(false, |r| ptr_eq(r, &net)));
+        assert!(tc_of(&car).borrow().riders[0].as_ref().is_some_and(|r| ptr_eq(r, &net)));
         car.remote_update(&car, &img(&car, net.unique_id(), 0));
         car.remote_update(&car, &img(&car, 0, 0));
         assert!(tc_of(&car).borrow().riders[0].is_none());
@@ -2404,7 +2404,7 @@ mod car_tests {
         };
         // known cars are linked at once
         rep.remote_update(&rep, &img(b.unique_id(), eng.unique_id(), eng.unique_id()));
-        assert!(tc_of(&rep).borrow().right_car.as_ref().map_or(false, |c| ptr_eq(c, &b)));
+        assert!(tc_of(&rep).borrow().right_car.as_ref().is_some_and(|c| ptr_eq(c, &b)));
         assert!(tc_of(&rep).borrow().engine_is_right);
         // the same ids again keep the links
         rep.remote_update(&rep, &img(b.unique_id(), eng.unique_id(), eng.unique_id()));

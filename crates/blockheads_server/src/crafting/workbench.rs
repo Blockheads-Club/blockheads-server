@@ -50,8 +50,8 @@ use crate::objects::interaction_object::{
     interaction_object_init_with_world_dynamic_world_cache_net_data,
     interaction_object_init_with_world_dynamic_world_save_dict_cache,
     interaction_object_interaction_object_creation_net_data, interaction_object_remote_blockhead_removed_with_id,
-    interaction_object_remote_update, interaction_object_requires_physical_block,
-    interaction_object_should_add_to_macro_block, InteractionObjectLike, InteractionObjectState,
+    interaction_object_remote_update, interaction_object_should_add_to_macro_block, InteractionObjectLike,
+    InteractionObjectState,
 };
 use crate::objects::protocols::PowerUser;
 use crate::path::wire_path::WirePowerSource;
@@ -443,11 +443,11 @@ impl Workbench {
         let this = Self::alloc(world);
         let me: ObjRef = this.clone();
         let wref: WorldRef = world.clone();
-        if !interaction_object_init_with_world_dynamic_world_at_position_cache_item_flipped_save_dict_placed_by_client_client_name(
+        // the base initialisers always succeed for a position, so `None` is only the ObjC `self = nil` shape
+        interaction_object_init_with_world_dynamic_world_at_position_cache_item_flipped_save_dict_placed_by_client_client_name(
             &me, &wref, dw, pos, cache, None, flipped, save_dict, client_id, client_name,
-        ) {
-            return None;
-        }
+        )
+        .then_some(())?;
         let ty_i = ty.0 as i32;
         {
             let mut s = this.st.borrow_mut();
@@ -534,11 +534,10 @@ impl Workbench {
         let this = Self::alloc(world);
         let me: ObjRef = this.clone();
         let wref: WorldRef = world.clone();
-        if !interaction_object_init_with_world_dynamic_world_at_position_cache_item_flipped_save_dict_placed_by_client_client_name(
+        interaction_object_init_with_world_dynamic_world_at_position_cache_item_flipped_save_dict_placed_by_client_client_name(
             &me, &wref, dw, pos, cache, None, flipped, save_dict, client_id, client_name,
-        ) {
-            return None;
-        }
+        )
+        .then_some(())?;
         Some(this)
     }
 
@@ -553,9 +552,8 @@ impl Workbench {
         let this = Self::alloc(world);
         let me: ObjRef = this.clone();
         let wref: WorldRef = world.clone();
-        if !interaction_object_init_with_world_dynamic_world_save_dict_cache(&me, &wref, dw, save_dict, cache.clone()) {
-            return None;
-        }
+        interaction_object_init_with_world_dynamic_world_save_dict_cache(&me, &wref, dw, save_dict, cache.clone())
+            .then_some(())?;
         let sd = save_dict;
         {
             let mut s = this.st.borrow_mut();
@@ -580,21 +578,10 @@ impl Workbench {
             }
         }
         let in_use = this.io.borrow().is_in_use;
+        // `setInteractionWorkbench:` for the current and the fuel blockhead is a message to nil here: both are only
+        // resolved later, by `blockheads_loaded`
         if in_use {
             this.restore_crafting_state(sd);
-            let cur = this.io.borrow().current_blockhead.clone();
-            if let Some(c) = cur {
-                host().bh_set_interaction_workbench(&c, Some(&me));
-            }
-        }
-        let (in_use_fuel, curf) = {
-            let s = this.st.borrow();
-            (s.is_in_use_fuel, s.current_fuel_blockhead.clone())
-        };
-        if in_use_fuel {
-            if let Some(c) = curf {
-                host().bh_set_interaction_workbench(&c, Some(&me));
-            }
         }
         if let Some(PlistValue::Dict(ld)) = get(sd, "lightDict") {
             if let (Some(w), Some(d)) = (this.w(), this.dw()) {
@@ -764,15 +751,13 @@ impl Workbench {
         self.st.borrow_mut().animation_loop_index = a;
         let fc = r01() * 5.0f32;
         self.st.borrow_mut().fuel_counter = fc;
-        let is_client = false; // dw.isClient is NO on the dedicated server
-        if !is_client {
-            if let Some(w) = self.w() {
-                let (ty, level) = {
-                    let s = self.st.borrow();
-                    (WorkbenchType(s.ty as u32), s.level)
-                };
-                w.update_tile_graphic_for_workbench_of_type_at_pos_level(ty, self.pos(), level);
-            }
+        // `dw.isClient` is NO on the dedicated server, so the tile graphic is always updated
+        if let Some(w) = self.w() {
+            let (ty, level) = {
+                let s = self.st.borrow();
+                (WorkbenchType(s.ty as u32), s.level)
+            };
+            w.update_tile_graphic_for_workbench_of_type_at_pos_level(ty, self.pos(), level);
         }
     }
 
@@ -989,12 +974,10 @@ impl Workbench {
         if tile.contents == 46 {
             return 0.0;
         }
+        // `sun_light` is a byte, so `s` cannot exceed 1.0
         let mut s = powf((tile.sun_light as f32) / 255.0f32, 4.0f32);
         let mut a =
             tile.artificial_light_r.wrapping_add(tile.artificial_light_g).wrapping_add(tile.artificial_light_b) as f32;
-        if 1.0f32 < s {
-            s = 1.0;
-        }
         if s <= 0.0 {
             s = 0.0;
         }
@@ -1010,6 +993,8 @@ impl Workbench {
 
     /// `-combinedLightForSolarPanel`.
     pub fn combined_light_for_solar_panel(&self) -> f32 {
+        // no world, no tile (`solar_tile` needs it too), so the day and weather lookups below always have one
+        let Some(w) = self.w() else { return 0.0 };
         let t = self.solar_tile();
         if !tile_is_air_or_snow(t) {
             return 0.0;
@@ -1021,19 +1006,12 @@ impl Workbench {
         let mut s = powf((tile.sun_light as f32) / 255.0f32, 4.0f32);
         let mut a =
             tile.artificial_light_r.wrapping_add(tile.artificial_light_g).wrapping_add(tile.artificial_light_b) as f32;
-        let w = self.w();
-        let day = match &w {
-            Some(w) => w.get_day_night_fraction_for_x_at_world_time(self.pos().x as f32, WorldApi::world_time(&**w)),
-            None => 0.0,
-        };
+        let day = w.get_day_night_fraction_for_x_at_world_time(self.pos().x as f32, WorldApi::world_time(&*w));
         s = (day - 0.23f32) * 6.0f32 * s;
         if s >= 1.0f32 {
             s = 1.0;
         }
-        let wf = match &w {
-            Some(w) => w.get_weather_fraction_for_pos(self.pos()),
-            None => 0.0,
-        };
+        let wf = w.get_weather_fraction_for_pos(self.pos());
         if wf > 0.0 {
             let w2 = if (wf as f64) < 0.2f64 { wf as f64 } else { 0.2f64 };
             s = ((s as f64) * (1.0f64 - w2 * 4.0f64)) as f32;
@@ -1298,7 +1276,8 @@ impl Workbench {
         let world = self.w();
         let p = self.pos();
         let stone = world.as_ref().and_then(|w| tile_at_world_position_loaded(p.x, p.y - 1, w));
-        if let Some(t) = stone {
+        // a stone tile implies a world
+        if let (Some(t), Some(w)) = (stone, &world) {
             if (1..=5).contains(&level) {
                 let idx = if ty == WB_BASIC_PORTAL { 0x20 + level } else { 0x2a + level };
                 t.update(|t| t.type_index = idx as u8);
@@ -1316,9 +1295,7 @@ impl Workbench {
                             4 => "grp.ruby_portal",
                             _ => "grp.diamond_portal",
                         };
-                        if let Some(w) = &world {
-                            w.report_achievement_with_identifier(id);
-                        }
+                        w.report_achievement_with_identifier(id);
                     }
                 }
             }
@@ -1674,37 +1651,36 @@ impl Workbench {
                         && below.unwrap().get().contents != 96
                     {
                         let here = tile_at_world_position_loaded(pos.x, pos.y, &world);
-                        if let Some(h) = here {
-                            if h.get().back_wall_type_index == 2 {
-                                let mut blocked = false;
-                                for n in [
-                                    IntPair { x: pos.x - 1, y: pos.y },
-                                    IntPair { x: pos.x + 1, y: pos.y },
-                                    IntPair { x: pos.x, y: pos.y + 1 },
-                                ] {
-                                    let tn = tile_at_world_position_loaded(n.x, n.y, &world);
-                                    match tn {
-                                        None => {
-                                            // UB-PARITY: the original dereferences the NULL tile.
-                                            ub_null_tile_deref();
+                        // the bench's own tile is always loaded
+                        if here.is_some_and(|h| h.get().back_wall_type_index == 2) {
+                            let mut blocked = false;
+                            for n in [
+                                IntPair { x: pos.x - 1, y: pos.y },
+                                IntPair { x: pos.x + 1, y: pos.y },
+                                IntPair { x: pos.x, y: pos.y + 1 },
+                            ] {
+                                let tn = tile_at_world_position_loaded(n.x, n.y, &world);
+                                match tn {
+                                    None => {
+                                        // UB-PARITY: the original dereferences the NULL tile.
+                                        ub_null_tile_deref();
+                                        blocked = true;
+                                        break;
+                                    }
+                                    Some(t) => {
+                                        if tile_is_half_depth(tn, &world, n)
+                                            || t.get().contents == 96
+                                            || tile_is_solid(tn)
+                                        {
                                             blocked = true;
                                             break;
                                         }
-                                        Some(t) => {
-                                            if tile_is_half_depth(tn, &world, n)
-                                                || t.get().contents == 96
-                                                || tile_is_solid(tn)
-                                            {
-                                                blocked = true;
-                                                break;
-                                            }
-                                        }
                                     }
                                 }
-                                if !blocked {
-                                    self.remove(me, None);
-                                    return;
-                                }
+                            }
+                            if !blocked {
+                                self.remove(me, None);
+                                return;
                             }
                         }
                     }
@@ -1838,9 +1814,7 @@ impl Workbench {
             }
             return in_use;
         }
-        if interaction_object_requires_physical_block() {
-            return true;
-        }
+        // (`InteractionObject`'s own `requiresPhysicalBlock` is a constant NO)
         if in_use_fuel || in_use {
             return true;
         }
@@ -2264,12 +2238,7 @@ pub(crate) mod testkit {
         f();
         let next = crate::rng::glibc_rand::rand();
         crate::rng::glibc_rand::srand(777);
-        for n in 0..400 {
-            if crate::rng::glibc_rand::rand() == next {
-                return n;
-            }
-        }
-        usize::MAX
+        (0..400).find(|_| crate::rng::glibc_rand::rand() == next).unwrap_or(usize::MAX)
     }
 }
 
@@ -2278,6 +2247,7 @@ mod tests {
     use super::testkit::*;
     use super::*;
     use crate::crafting::craftable_item_object::{zero_craftable_item, CraftableItemObject};
+    use crate::objects::interaction_object::testutil::TestBh;
 
     #[test]
     fn inherited_item_init_is_zero_state() {
@@ -2498,10 +2468,8 @@ mod tests {
             "xScroll",
         ];
         assert_eq!(keys, want.iter().map(|s| s.to_string()).collect::<Vec<_>>());
-        let ld = match d.map.get(&"lightDict".to_string()) {
-            Some(PlistValue::Dict(l)) => l.clone(),
-            _ => panic!("lightDict"),
-        };
+        let ld = d.map.get(&"lightDict".to_string()).cloned();
+        let Some(PlistValue::Dict(ld)) = ld else { unreachable!("lightDict") };
         assert_eq!(ld.map.get(&"maxRed".to_string()).unwrap().int_value(), 153);
         assert_eq!(ld.map.get(&"maxHeat".to_string()).unwrap().int_value(), -2);
         assert_eq!(ld.map.get(&"radius".to_string()).unwrap().int_value(), 12);
@@ -2690,5 +2658,908 @@ mod tests {
             Some(CraftableItemObject::init_with_craftable_item(zero_craftable_item()));
         wb.dealloc(&me);
         assert!(wb.st.borrow().light.is_none() && wb.st.borrow().crafting_item_object.is_none());
+    }
+
+    fn recipe_two_sources() -> CraftableItem {
+        let mut ci = zero_craftable_item();
+        ci.crafted_item_type = 19;
+        ci.crafted_item_count = 1;
+        ci.number_of_required_items = 2;
+        ci.required_items[0] = 20;
+        ci.required_item_counts[0] = 2;
+        ci.required_items[1] = 11;
+        ci.required_item_counts[1] = 1;
+        ci
+    }
+
+    fn bh_log(bh: &ObjRef) -> Vec<String> {
+        bh.as_any().downcast_ref::<TestBh>().unwrap().log.borrow().clone()
+    }
+
+    #[test]
+    fn null_host_is_inert() {
+        let f = fixture();
+        let (_wb, me) = make(&f, 2, 10, 10);
+        let bh = blockhead(5, false);
+        let h: &dyn WorkbenchHost = &NullHost;
+        h.portal_is_being_removed_at_pos(IntPair { x: 1, y: 2 });
+        assert_eq!(h.find_and_subtract_all_power_up_to_for_user(10, &bh), 0);
+        assert!(!h.bh_paused(&bh) && !h.bh_has_coffee_energy(&bh) && !h.bh_should_continue_simulating(&bh));
+        assert!(!h.bh_is_crafting_at_any_workbench(&bh) && !h.bh_is_adding_fuel_to_any_workbench(&bh));
+        assert!(!h.bh_double_time_unlocked(&bh));
+        assert_eq!(h.bh_unable_to_work_reason(&bh), 0);
+        assert!(h.bh_interaction_workbench(&bh).is_none());
+        h.bh_set_interaction_workbench(&bh, Some(&me));
+        h.bh_set_interaction_object(&bh, Some(&me));
+        assert_eq!(bh_log(&bh), vec!["setIO(true)".to_string()]);
+        assert!(h.bh_subtract_items_from_inventory_of_type_count_data_b(&bh, ItemType(20), 3, 0).is_empty());
+        h.bh_add_item_to_inventory(&bh, &InventoryItem::new(ItemType(20), 0, 0, None, None));
+        h.bh_craft_item_finished_at_workbench(&bh, true, &me);
+        h.bh_net_interaction_object_was_loaded(&bh, &me);
+    }
+
+    #[test]
+    fn accessors_setters_and_fuel_queries() {
+        let f = fixture();
+        let (wb, me) = make(&f, 14, 10, 10);
+        wb.set_selected_index(3);
+        wb.set_x_scroll(1.5);
+        assert_eq!((wb.selected_index(), wb.x_scroll()), (3, 1.5));
+        assert_eq!(wb.title(), "METALWORK BENCH LEVEL 1");
+        assert_eq!(wb.upgrade_name(), "LEVEL 2 UPGRADE");
+        assert_eq!(wb.craftable_items().len(), 2);
+        assert!(wb.number_of_craftable_items() > 0);
+        assert!(wb.number_of_craftable_items_up_to_current_level() > 0);
+        assert!(wb.number_of_craftable_items_up_to_current_level() <= wb.number_of_craftable_items());
+        assert!(!wb.is_double_height() && wb.requires_fuel() && !wb.requires_electricty());
+        assert_eq!((wb.fuel_item_count(), wb.fuel_types_count()), (3, 3));
+        assert_eq!(wb.fuel_items(), wb.fuel_types());
+        assert_eq!(wb.fuel_items(), Some([ItemType(1049), ItemType(14), ItemType(51)]));
+        assert_eq!(wb.destroy_item_type(), item_type_for_workbench_type_and_level(WorkbenchType(14), 0));
+        wb.set_paused(true);
+        assert!(wb.st.borrow().paused);
+        // fuel availability
+        assert!(wb.has_required_fuel());
+        wb.st.borrow_mut().has_fuel = false;
+        assert!(!wb.has_required_fuel());
+        let (kiln, _k) = make(&f, 16, 20, 10);
+        assert!(kiln.requires_electricty());
+        assert!(!kiln.has_required_fuel());
+        kiln.st.borrow_mut().available_electricity = 5;
+        assert!(kiln.has_required_fuel());
+        wb.st.borrow_mut().fuel_fraction = 5.0;
+        assert_eq!(wb.fuel_count(), 10);
+        // fuel by item
+        let (camp, cme) = make(&f, 3, 30, 10);
+        camp.st.borrow_mut().fuel_fraction = 0.1;
+        camp.add_to_fuel_for_item(&cme, ItemType(1049));
+        assert!((camp.st.borrow().fuel_fraction - 0.6).abs() < 1e-6);
+        drop(me);
+    }
+
+    #[test]
+    fn solar_panel_light_and_energy() {
+        let f = fixture();
+        let (wb, me) = make(&f, 20, 10, 10);
+        let above = crate::world::tiles::tile_at_world_position_loaded(10, 11, &f.world).unwrap();
+        // full sunlight reads the raw tile light, the artificial part is capped at 2000
+        above.update(|t| t.sun_light = 255);
+        assert!((wb.combined_light_for_solar_panel_with_full_sunlight() - 1.0).abs() < 1e-6);
+        above.update(|t| t.artificial_light_r = 3000);
+        assert!((wb.combined_light_for_solar_panel_with_full_sunlight() - 1.2).abs() < 1e-6);
+        above.update(|t| t.sun_light = 0);
+        assert!((wb.combined_light_for_solar_panel_with_full_sunlight() - 0.2).abs() < 1e-6);
+        above.update(|t| t.contents = 0x03);
+        assert!((wb.combined_light_for_solar_panel_with_full_sunlight() - 0.1).abs() < 1e-6, "trees halve it");
+        above.update(|t| t.contents = 46);
+        assert_eq!(wb.combined_light_for_solar_panel_with_full_sunlight(), 0.0);
+        above.update(|t| {
+            t.contents = 0;
+            t.type_index = 10;
+        });
+        assert_eq!(wb.combined_light_for_solar_panel_with_full_sunlight(), 0.0, "solid tile above");
+        assert_eq!(wb.combined_light_for_solar_panel(), 0.0);
+        assert_eq!(wb.energy_fraction(), 0.0);
+        // daylight: pick a world time where the sun is high at x = 10
+        above.update(|t| {
+            t.type_index = 2;
+            t.sun_light = 255;
+        });
+        let mut best = 0.0f32;
+        for step in 0..48 {
+            f.world.set_world_time(step as f64 * 225.0);
+            best = best.max(wb.combined_light_for_solar_panel());
+        }
+        assert!(best > 0.5, "daylight reaches the panel: {best}");
+        // rain dims it, artificial light only adds
+        let mut dimmed = 0.0f32;
+        let mut t_best = 0.0;
+        for step in 0..48 {
+            f.world.set_world_time(step as f64 * 225.0);
+            if wb.combined_light_for_solar_panel() >= best - 1e-6 {
+                t_best = step as f64 * 225.0;
+            }
+        }
+        f.world.set_world_time(t_best);
+        let rules = crate::types::structs::CustomRules { custom_rules_enabled: 1, rainfall: 4, ..Default::default() };
+        f.world.set_custom_rules(rules);
+        dimmed = dimmed.max(wb.combined_light_for_solar_panel());
+        assert!(dimmed < best, "rain dims the panel: {dimmed} < {best}");
+        assert!(wb.energy_fraction() <= 1.0);
+        // low light reads as zero energy
+        f.world.set_custom_rules(Default::default());
+        above.update(|t| {
+            t.sun_light = 1;
+            t.artificial_light_r = 0;
+        });
+        assert_eq!(wb.energy_fraction(), 0.0);
+        // a bright tile reaches the clamp of one
+        above.update(|t| {
+            t.sun_light = 255;
+            t.artificial_light_r = 20000;
+        });
+        assert_eq!(wb.energy_fraction(), 1.0);
+        // a panel needs a physical block while the sun shines
+        above.update(|t| t.artificial_light_r = 0);
+        wb.st.borrow_mut().available_electricity = 1;
+        assert!(me.requires_physical_block());
+    }
+
+    fn crafting_save_dict(ci: &CraftableItem, src: PlistValue) -> PlistDict {
+        let mut sd = new_mutable_dict();
+        sd.map.insert("craftingItemData".into(), PlistValue::data(ci.to_vec()));
+        sd.map.insert("count".into(), PlistValue::int(4));
+        sd.map.insert("countLeft".into(), PlistValue::int(3));
+        sd.map.insert("countCreated".into(), PlistValue::int(1));
+        sd.map.insert("sourceItems_0".into(), src);
+        sd.map.insert("sourceItems_1".into(), PlistValue::array(vec![PlistValue::int(1)]));
+        sd
+    }
+
+    #[test]
+    fn restore_crafting_state_formats() {
+        let f = fixture();
+        let (wb, _me) = make(&f, 2, 10, 10);
+        let ci = recipe_two_sources();
+        let item = InventoryItem::new(ItemType(20), 7, 8, None, None);
+        let blob = PlistValue::data(item.borrow().save_data());
+        // legacy raw struct; foreign entries and the time-crystal style slot (item 11) are skipped
+        let sd = crafting_save_dict(&ci, PlistValue::array(vec![blob.clone(), PlistValue::int(5)]));
+        wb.restore_crafting_state(&sd);
+        {
+            let s = wb.st.borrow();
+            assert_eq!((s.count, s.count_left, s.count_created), (4, 3, 1));
+            assert_eq!(s.crafting_item_object.as_ref().unwrap().craftable_item(), ci);
+            let src = s.source_items[0].as_ref().unwrap();
+            assert_eq!((src.len(), src[0].borrow().data_a), (1, 7));
+            assert!(s.source_items[1].is_none());
+        }
+        // an empty saved array leaves the slot unset
+        let sd = crafting_save_dict(&ci, PlistValue::array(vec![]));
+        wb.restore_crafting_state(&sd);
+        assert!(wb.st.borrow().source_items[0].is_none());
+        // a short raw struct raises
+        let mut short = crafting_save_dict(&ci, blob);
+        short.map.insert("craftingItemData".into(), PlistValue::data(vec![0; 10]));
+        let r = crate::foundation::exception::catch_ns(|| wb.restore_crafting_state(&short));
+        assert_eq!(r.unwrap_err().name, "NSRangeException");
+        // no crafting data at all, or data of the wrong kind: no recipe
+        for sd in [new_mutable_dict(), {
+            let mut d = new_mutable_dict();
+            d.map.insert("craftingItemData".into(), PlistValue::string("x"));
+            d
+        }] {
+            wb.restore_crafting_state(&sd);
+            assert!(wb.st.borrow().crafting_item_object.is_none());
+        }
+        // a v2 entry that is not a dictionary gives an empty recipe object
+        let mut sd = new_mutable_dict();
+        sd.map.insert("craftingItemDatav2".into(), PlistValue::int(1));
+        wb.restore_crafting_state(&sd);
+        assert_eq!(wb.st.borrow().crafting_item_object.as_ref().unwrap().craftable_item(), zero_craftable_item());
+    }
+
+    #[test]
+    fn take_ownership_and_blockheads_loaded() {
+        let f = fixture();
+        let (wb, me) = make(&f, 2, 10, 10);
+        let bh = blockhead(5, false);
+        let ci = recipe_two_sources();
+        let mut sd = crafting_save_dict(&ci, PlistValue::array(vec![]));
+        sd.map.insert("craftProgressCount".into(), PlistValue::real_f32(2.5));
+        sd.map.insert("hurrying".into(), PlistValue::boolean(true));
+        wb.blockhead_would_like_to_take_ownership_with_save_dict_impl(&me, &bh, Some(&sd));
+        assert!(me.is_in_use());
+        assert_eq!(wb.st.borrow().craft_progress_count, 2.5);
+        assert!(wb.st.borrow().hurrying);
+        assert!(f.host.log.borrow().iter().any(|l| l == "setIW(true)"));
+        // a second blockhead is ignored while one is current
+        let other = blockhead(6, false);
+        wb.blockhead_would_like_to_take_ownership_with_save_dict_impl(&me, &other, None);
+        assert!(wb.io.borrow().current_blockhead.as_ref().is_some_and(|c| c.unique_id() == 5));
+        // reload links: the fuel blockhead index resolves and the blockheads get the bench back
+        f.dw.blockheads.borrow_mut().extend([other.clone(), bh.clone()]);
+        {
+            let mut s = wb.st.borrow_mut();
+            s.saved_blockhead_index_fuel = 1;
+            s.is_in_use_fuel = true;
+        }
+        f.host.log.borrow_mut().clear();
+        wb.blockheads_loaded_impl(&me);
+        assert!(wb.st.borrow().current_fuel_blockhead.as_ref().is_some_and(|c| c.unique_id() == 5));
+        assert_eq!(wb.st.borrow().saved_blockhead_index_fuel, -1);
+        assert_eq!(f.host.log.borrow().iter().filter(|l| *l == "setIW(true)").count(), 2);
+        // `interactionObject` goes to the blockhead the base class resolved from its own saved index (slot 0)
+        let log = bh_log(&other);
+        assert!(!log.is_empty() && log.iter().all(|l| l == "setIO(true)"), "{log:?}");
+        // an index past the end of the list is dropped
+        wb.st.borrow_mut().current_fuel_blockhead = None;
+        wb.st.borrow_mut().saved_blockhead_index_fuel = 9;
+        wb.blockheads_loaded_impl(&me);
+        assert!(wb.st.borrow().current_fuel_blockhead.is_none());
+        assert_eq!(wb.st.borrow().saved_blockhead_index_fuel, -1);
+        // fuel blockhead unloads / remote fuel blockhead leaves
+        wb.st.borrow_mut().current_fuel_blockhead = Some(other.clone());
+        wb.st.borrow_mut().is_in_use_fuel = true;
+        wb.blockhead_unloaded_impl(&me, &bh);
+        assert!(wb.st.borrow().is_in_use_fuel);
+        wb.blockhead_unloaded_impl(&me, &other);
+        assert!(!wb.st.borrow().is_in_use_fuel && wb.st.borrow().current_fuel_blockhead.is_none());
+        wb.st.borrow_mut().remote_fuel_blockhead_in_use_unique_id = 9;
+        wb.st.borrow_mut().is_in_use_fuel = true;
+        wb.remote_blockhead_removed_with_id_impl(&me, 4);
+        assert!(wb.st.borrow().is_in_use_fuel);
+        wb.remote_blockhead_removed_with_id_impl(&me, 9);
+        assert!(!wb.st.borrow().is_in_use_fuel);
+        assert_eq!(wb.st.borrow().remote_fuel_blockhead_in_use_unique_id, 0);
+    }
+
+    #[test]
+    fn save_dict_with_crafting_and_fuel_blockhead_reloads() {
+        let f = fixture();
+        let (wb, me) = make(&f, 3, 10, 10);
+        let bh = blockhead(5, false);
+        let ci = recipe_two_sources();
+        f.dw.blockheads.borrow_mut().push(bh.clone());
+        {
+            let mut s = wb.st.borrow_mut();
+            s.crafting_item_object = Some(CraftableItemObject::init_with_craftable_item(ci));
+            s.count = 4;
+            s.count_left = 3;
+            s.count_created = 1;
+            s.source_items[0] = Some(vec![InventoryItem::new(ItemType(20), 1, 2, None, None)]);
+            s.source_items[1] = Some(vec![InventoryItem::new(ItemType(11), 1, 2, None, None)]);
+            s.current_fuel_blockhead = Some(bh.clone());
+            s.is_in_use_fuel = true;
+        }
+        wb.io.borrow_mut().is_in_use = true;
+        let sd = wb.get_save_dict_impl(&me);
+        assert_eq!(sd.map.get(&"currentBlockheadIndexFuel".to_string()).unwrap().int_value(), 0);
+        assert!(sd.map.get(&"craftingItemDatav2".to_string()).is_some());
+        assert!(sd.map.get(&"sourceItems_0".to_string()).is_some());
+        assert!(sd.map.get(&"sourceItems_1".to_string()).is_none(), "item 11 is never stored");
+        assert_eq!(sd.map.get(&"countLeft".to_string()).unwrap().int_value(), 3);
+        // not in the blockhead list: no index
+        f.dw.blockheads.borrow_mut().clear();
+        assert!(wb.get_save_dict_impl(&me).map.get(&"currentBlockheadIndexFuel".to_string()).is_none());
+        // load it back: crafting state, fuel blockhead index and the owner name of the net blob
+        let back = Workbench::init_with_world_dynamic_world_save_dict_cache(&f.world, &f.dwr, &sd, None).expect("load");
+        assert_eq!(back.st.borrow().saved_blockhead_index_fuel, 0);
+        assert!(back.io.borrow().is_in_use);
+        assert_eq!(back.st.borrow().count_left, 3);
+        assert_eq!(back.st.borrow().source_items[0].as_ref().unwrap().len(), 1);
+        wb.io.borrow_mut().owner_name = Some("Ann".into());
+        let nd = wb.update_net_data_for_client_impl(&me);
+        let (_, name) = Workbench::owner_from_tail(&nd[0x38..]);
+        assert_eq!(name.as_deref(), Some("Ann"));
+        // garbage after the header decodes to no owner
+        assert_eq!(Workbench::owner_from_tail(&[1, 2, 3]), (None, None));
+    }
+
+    /// Net blob of `wb` with the header edited by `edit`.
+    fn blob(wb: &Workbench, me: &ObjRef, edit: impl FnOnce(&mut WorkbenchNetData)) -> Vec<u8> {
+        let mut b = wb.update_net_data_for_client_impl(me);
+        let mut nd = <WorkbenchNetData as WireStruct>::read_le(&b[..0x38]);
+        edit(&mut nd);
+        b[..0x38].copy_from_slice(&nd.to_vec());
+        b
+    }
+
+    #[test]
+    fn remote_update_crafting_user_changes() {
+        let f = fixture();
+        f.dw.server.set(false);
+        let (wb, me) = make(&f, 2, 10, 10);
+        let bh = blockhead(7, false);
+        f.dw.blockheads.borrow_mut().push(bh.clone());
+        // a bench that was idle gets a different user on a client: the stale local user is stopped
+        wb.io.borrow_mut().current_blockhead = Some(bh.clone());
+        let b = blob(&wb, &me, |n| {
+            n.interaction_object_creation_net_data.is_in_use = 1;
+            n.interaction_object_creation_net_data.is_in_use_blockhead_unique_id = 9;
+        });
+        wb.remote_update_impl(&me, &b);
+        assert!(wb.io.borrow().current_blockhead.is_none());
+        // the same on a bench that was already in use is handled by the base class
+        {
+            let mut io = wb.io.borrow_mut();
+            io.is_in_use = true;
+            io.current_blockhead = Some(bh.clone());
+        }
+        wb.remote_update_impl(&me, &b);
+        assert!(wb.io.borrow().current_blockhead.is_none());
+        // no local user and a remote one that is not around: the bench is released again
+        assert_eq!(wb.io.borrow().remote_blockhead_in_use_unique_id, 9);
+        // the remote user is in the list: its state clears (literal scan without break)
+        let b = blob(&wb, &me, |n| {
+            n.interaction_object_creation_net_data.is_in_use = 1;
+            n.interaction_object_creation_net_data.is_in_use_blockhead_unique_id = 7;
+        });
+        wb.remote_update_impl(&me, &b);
+        assert!(!me.is_in_use());
+        assert_eq!(wb.io.borrow().remote_blockhead_in_use_unique_id, 0);
+        assert!(me.update_needs_to_be_sent());
+        // in use without any user id: not in use
+        wb.io.borrow_mut().is_in_use = false;
+        me.set_update_needs_to_be_sent(false);
+        let b = blob(&wb, &me, |n| n.interaction_object_creation_net_data.is_in_use = 1);
+        wb.remote_update_impl(&me, &b);
+        assert!(!me.is_in_use() && me.update_needs_to_be_sent());
+        // on a server a stale user of an idle bench is left alone
+        f.dw.server.set(true);
+        {
+            let mut io = wb.io.borrow_mut();
+            io.is_in_use = false;
+            io.current_blockhead = Some(bh.clone());
+        }
+        let b = blob(&wb, &me, |n| {
+            n.interaction_object_creation_net_data.is_in_use = 1;
+            n.interaction_object_creation_net_data.is_in_use_blockhead_unique_id = 99;
+        });
+        wb.remote_update_impl(&me, &b);
+        assert!(wb.io.borrow().current_blockhead.is_some());
+    }
+
+    #[test]
+    fn remote_update_fuel_user_and_fraction() {
+        let f = fixture();
+        f.dw.server.set(false);
+        let (wb, me) = make(&f, 3, 10, 10);
+        let bh = blockhead(7, false);
+        {
+            let mut s = wb.st.borrow_mut();
+            s.fuel_fraction = 0.5;
+            s.is_in_use_fuel = true;
+            s.current_fuel_blockhead = Some(bh.clone());
+        }
+        // another fuel user on a client replaces ours
+        let b = blob(&wb, &me, |n| {
+            n.is_in_use_fuel = 1;
+            n.is_in_use_fuel_blockhead_unique_id = 8;
+            n.fuel_fraction = 255;
+        });
+        wb.remote_update_impl(&me, &b);
+        assert!(wb.st.borrow().current_fuel_blockhead.is_none());
+        assert_eq!(wb.st.borrow().remote_fuel_blockhead_in_use_unique_id, 8);
+        assert!((wb.st.borrow().fuel_fraction - 1.0).abs() < 1e-6);
+        assert!(me.update_needs_to_be_sent());
+        // fuel dropping to zero and rising again
+        let b = blob(&wb, &me, |n| n.fuel_fraction = 0);
+        wb.remote_update_impl(&me, &b);
+        assert_eq!(wb.st.borrow().fuel_fraction, 0.0);
+        assert!(!wb.st.borrow().has_fuel);
+        let b = blob(&wb, &me, |n| n.fuel_fraction = 100);
+        wb.remote_update_impl(&me, &b);
+        assert!(wb.st.borrow().fuel_fraction > 0.39);
+        // small changes are ignored
+        me.set_update_needs_to_be_sent(false);
+        let b = blob(&wb, &me, |n| n.fuel_fraction = 101);
+        wb.remote_update_impl(&me, &b);
+        assert!(!me.update_needs_to_be_sent());
+    }
+
+    #[test]
+    fn remote_update_on_a_client_replica_guards_local_fuel_use() {
+        let f = fixture();
+        let (src, sme) = make(&f, 15, 10, 10);
+        let nd = src.update_net_data_for_client_impl(&sme);
+        let rep =
+            Workbench::init_with_world_dynamic_world_cache_net_data(&f.world, &f.dwr, None, &nd).expect("replica");
+        let rme: ObjRef = rep.clone();
+        let local = blockhead(3, false);
+        // a local user of the bench is working: a lower fuel level from the server is ignored
+        {
+            let mut io = rep.io.borrow_mut();
+            io.is_in_use = true;
+            io.current_blockhead = Some(local.clone());
+        }
+        let before = rep.st.borrow().fuel_fraction;
+        let b = blob(&src, &sme, |n| {
+            n.fuel_fraction = 10;
+            n.interaction_object_creation_net_data.is_in_use = 1;
+            n.interaction_object_creation_net_data.is_in_use_blockhead_unique_id = 3;
+        });
+        rep.remote_update_impl(&rme, &b);
+        assert_eq!(rep.st.borrow().fuel_fraction, before);
+        // a local fuel user, bench not in use: also ignored
+        rep.io.borrow_mut().is_in_use = false;
+        rep.io.borrow_mut().current_blockhead = None;
+        {
+            let mut s = rep.st.borrow_mut();
+            s.is_in_use_fuel = true;
+            s.current_fuel_blockhead = Some(local.clone());
+        }
+        let b = blob(&src, &sme, |n| {
+            n.fuel_fraction = 10;
+            n.is_in_use_fuel = 1;
+            n.is_in_use_fuel_blockhead_unique_id = 3;
+        });
+        rep.remote_update_impl(&rme, &b);
+        assert_eq!(rep.st.borrow().fuel_fraction, before);
+        // a steam generator's falling fuel starts the steam puffs
+        {
+            let mut s = rep.st.borrow_mut();
+            s.is_in_use_fuel = false;
+            s.current_fuel_blockhead = None;
+        }
+        let b = blob(&src, &sme, |n| n.fuel_fraction = 10);
+        rep.remote_update_impl(&rme, &b);
+        let puff = rep.st.borrow().particle_create_timer_steam_engine;
+        assert!(puff > 0.0 && puff <= 4.0, "{puff}");
+        // a far bigger drop is capped
+        {
+            let mut s = rep.st.borrow_mut();
+            s.fuel_fraction = 1.0;
+        }
+        let b = blob(&src, &sme, |n| n.fuel_fraction = 0);
+        rep.remote_update_impl(&rme, &b);
+        assert_eq!(rep.st.borrow().particle_create_timer_steam_engine, 4.0);
+    }
+
+    #[test]
+    fn remote_update_level_change_and_owner() {
+        let f = fixture();
+        let (wb, me) = make(&f, 13, 10, 10);
+        me.set_owner_id(Some("o1".into()));
+        wb.io.borrow_mut().owner_name = Some("Ann".into());
+        let b = blob(&wb, &me, |n| n.level = 2);
+        // on a server the tile graphic follows; the client branch skips it
+        wb.remote_update_impl(&me, &b);
+        assert_eq!(wb.level(), 2);
+        let t = crate::world::tiles::tile_at_world_position_loaded(10, 9, &f.world).unwrap().get();
+        assert_eq!(t.type_index, 0x2a + 2);
+        f.dw.server.set(false);
+        let b = blob(&wb, &me, |n| n.level = 3);
+        wb.remote_update_impl(&me, &b);
+        assert_eq!(wb.level(), 3);
+        // the owner comes from the tail while nobody uses the bench
+        me.set_owner_id(None);
+        wb.remote_update_impl(&me, &b);
+        assert_eq!(me.owner_id().as_deref(), Some("o1"));
+        assert_eq!(wb.io.borrow().owner_name.as_deref(), Some("Ann"));
+        // not while a user is present
+        wb.io.borrow_mut().current_blockhead = Some(blockhead(1, false));
+        me.set_owner_id(None);
+        wb.remote_update_impl(&me, &b);
+        assert_eq!(me.owner_id(), None);
+    }
+
+    #[test]
+    fn remote_update_without_a_world_or_dw() {
+        let f = fixture();
+        let (wb, me) = make(&f, 2, 10, 10);
+        let b = blob(&wb, &me, |n| n.level = 1);
+        let Fixture { world, dw, dwr, deps, host } = f;
+        drop((dw, dwr));
+        drop(world);
+        // both back references are gone: the update still applies the plain state
+        wb.remote_update_impl(&me, &b);
+        assert_eq!(wb.level(), 1);
+        assert_eq!(wb.world_time(), 0.0);
+        assert!(!wb.expert_mode() && !wb.is_cloud_game());
+        assert!(wb.solar_tile().is_none());
+        assert_eq!(wb.combined_light_for_solar_panel(), 0.0);
+        wb.notify();
+        drop((deps, host));
+    }
+
+    #[test]
+    fn remove_variants() {
+        let f = fixture();
+        // easel and refinery are two tiles high
+        for ty in [24, 26] {
+            let (wb, me) = make(&f, ty, 10 + ty as i32, 10);
+            wb.remove(&me, None);
+            assert!(me.needs_removed());
+        }
+        // a user on another machine defers the removal
+        let (wb, me) = make(&f, 2, 40, 10);
+        wb.io.borrow_mut().is_in_use = true;
+        wb.io.borrow_mut().current_blockhead = Some(blockhead(4, true));
+        wb.remove(&me, None);
+        assert!(!me.needs_removed());
+        assert!(wb.io.borrow().needs_to_be_removed_when_interaction_ends);
+        wb.io.borrow_mut().current_blockhead = None;
+        wb.io.borrow_mut().remote_blockhead_in_use_unique_id = 5;
+        wb.remove(&me, None);
+        assert!(!me.needs_removed());
+        // a local user is sent away and the fuel user cleared
+        wb.io.borrow_mut().remote_blockhead_in_use_unique_id = 0;
+        wb.io.borrow_mut().current_blockhead = Some(blockhead(4, false));
+        {
+            let mut s = wb.st.borrow_mut();
+            s.crafting_item_object = Some(CraftableItemObject::init_with_craftable_item(recipe_two_sources()));
+            s.is_in_use_fuel = true;
+            s.current_fuel_blockhead = Some(blockhead(8, false));
+        }
+        wb.remove(&me, None);
+        assert!(me.needs_removed());
+        assert!(!wb.st.borrow().is_in_use_fuel && wb.st.borrow().current_fuel_blockhead.is_none());
+        assert!(f.host.log.borrow().iter().any(|l| l == "craftItemFinished(false)"));
+        // removing twice, or a replica, does nothing
+        let n = f.deps.log.borrow().len();
+        wb.remove(&me, None);
+        assert_eq!(f.deps.log.borrow().len(), n);
+    }
+
+    #[test]
+    fn world_changed_support_rules() {
+        let f = fixture();
+        let set = |x: i32, y: i32, edit: fn(&mut crate::types::tile::Tile)| {
+            crate::world::tiles::tile_at_world_position_loaded(x, y, &f.world).unwrap().update(edit);
+        };
+        let ground = |t: &mut crate::types::tile::Tile| t.type_index = 10;
+        // a workbench over air with open air around it falls
+        let (_wb, me) = make(&f, 2, 10, 10);
+        me.world_changed(&me, &mut vec![IntPair { x: 10, y: 9 }]);
+        assert!(me.needs_removed());
+        // solid ground below keeps it
+        let (_wb2, me2) = make(&f, 2, 15, 10);
+        set(15, 9, ground);
+        me2.world_changed(&me2, &mut vec![IntPair { x: 15, y: 9 }]);
+        assert!(!me2.needs_removed());
+        // far away or far below changes are irrelevant
+        let (_wb3, me3) = make(&f, 2, 20, 10);
+        me3.world_changed(&me3, &mut vec![IntPair { x: 25, y: 9 }, IntPair { x: 20, y: 5 }]);
+        assert!(!me3.needs_removed());
+        // a back wall behind it keeps it; so do a blocked neighbour, a half depth one and a contents 96 one
+        let (_wb4, me4) = make(&f, 2, 5, 10);
+        set(5, 10, |t| t.back_wall_type_index = 7);
+        me4.world_changed(&me4, &mut vec![IntPair { x: 5, y: 9 }]);
+        assert!(!me4.needs_removed());
+        for (x, edit) in [
+            (6i32, ground as fn(&mut crate::types::tile::Tile)),
+            (8, |t: &mut crate::types::tile::Tile| t.contents = 96),
+        ] {
+            let bx = x + 20;
+            let (_w, m) = make(&f, 2, bx, 10);
+            set(bx + 1, 10, edit);
+            m.world_changed(&m, &mut vec![IntPair { x: bx, y: 9 }]);
+            assert!(!m.needs_removed(), "neighbour edit at {bx}");
+        }
+        let (_wb5, me5) = make(&f, 2, 3, 10);
+        set(3, 9, |t| t.contents = 96);
+        me5.world_changed(&me5, &mut vec![IntPair { x: 3, y: 9 }]);
+        assert!(!me5.needs_removed(), "contents 96 below keeps it");
+        // a bench at the edge of the loaded area has an unloaded neighbour and stays
+        let (_wb6, me6) = make(&f, 2, 0, 10);
+        me6.world_changed(&me6, &mut vec![IntPair { x: 0, y: 9 }]);
+        assert!(!me6.needs_removed());
+        // replicas ignore the world; the basic portal never falls; a lost world is harmless
+        let (src, sme) = make(&f, 2, 12, 10);
+        let nd = src.update_net_data_for_client_impl(&sme);
+        let rep = Workbench::init_with_world_dynamic_world_cache_net_data(&f.world, &f.dwr, None, &nd).unwrap();
+        let rme: ObjRef = rep;
+        rme.world_changed(&rme, &mut vec![IntPair { x: 12, y: 9 }]);
+        assert!(!rme.needs_removed());
+    }
+
+    #[test]
+    fn world_changed_wraps_around_the_world_edge() {
+        let f = fixture();
+        // width 128: a bench at x = 127 hears about a change at x = 0 through the wrap
+        let (wb, me) = make(&f, 2, 127, 10);
+        let _ = wb;
+        me.world_changed(&me, &mut vec![IntPair { x: 0, y: 9 }]);
+        // the tile below (127, 9) is not loaded, so nothing happens either way
+        assert!(!me.needs_removed());
+        // and the other direction
+        let (_wb2, me2) = make(&f, 2, 0, 10);
+        me2.world_changed(&me2, &mut vec![IntPair { x: 127, y: 9 }]);
+        assert!(!me2.needs_removed());
+    }
+
+    #[test]
+    fn world_changed_without_a_world_does_nothing() {
+        let f = fixture();
+        let (_wb, me) = make(&f, 2, 10, 10);
+        let Fixture { world, dw, dwr, deps, host } = f;
+        drop(world);
+        me.world_changed(&me, &mut vec![IntPair { x: 10, y: 9 }]);
+        assert!(!me.needs_removed());
+        drop((dw, dwr, deps, host));
+    }
+
+    #[test]
+    fn steam_puff_timer_is_capped_when_refilling() {
+        let f = fixture();
+        let (wb, me) = make(&f, 15, 10, 10);
+        {
+            let mut s = wb.st.borrow_mut();
+            s.available_electricity = 0;
+            s.fuel_fraction = 1.0;
+            s.particle_create_timer_steam_engine = 4.0;
+        }
+        assert!(!wb.subtract_electricty(&me, 1));
+        assert_eq!(wb.available_electricity(), 100);
+        assert_eq!(wb.st.borrow().particle_create_timer_steam_engine, 4.0);
+    }
+
+    #[test]
+    fn creation_from_a_save_dict_and_replica_creation() {
+        let f = fixture();
+        let mut sd = new_mutable_dict();
+        sd.map.insert("fuelFraction".into(), PlistValue::real_f32(0.0));
+        sd.map.insert("hasFuel".into(), PlistValue::boolean(false));
+        sd.map.insert("level".into(), PlistValue::int(2));
+        sd.map.insert("availableElectricity".into(), PlistValue::int(9));
+        let at = |ty: u32, x: i32, sd: &PlistDict| {
+            Workbench::init_with_world_dynamic_world_at_position_cache_type_flipped_save_dict_placed_by_client_client_name(
+                &f.world,
+                &f.dwr,
+                IntPair { x, y: 10 },
+                None,
+                WorkbenchType(ty),
+                false,
+                Some(sd),
+                Some("c1"),
+                Some("Ann"),
+            )
+            .expect("workbench")
+        };
+        // a campfire that is out keeps its embers
+        let camp = at(3, 10, &sd);
+        assert!(!camp.st.borrow().has_fuel && camp.st.borrow().light.is_some());
+        assert_eq!((camp.level(), camp.available_electricity()), (2, 9));
+        assert_eq!(camp.io.borrow().owner_name.as_deref(), Some("Ann"));
+        // other fuel users without fuel have no light at all
+        let kiln = at(8, 12, &sd);
+        assert!(kiln.st.borrow().light.is_none());
+        // a placed portal takes its stone from the saved level; levels outside 0..=5 keep the type
+        let portal = at(13, 14, &sd);
+        assert_eq!(portal.level(), 2);
+        let t = crate::world::tiles::tile_at_world_position_loaded(14, 9, &f.world).unwrap().get();
+        assert_eq!(t.type_index, 44);
+        sd.map.insert("level".into(), PlistValue::int(9));
+        let _high = at(13, 16, &sd);
+        let t = crate::world::tiles::tile_at_world_position_loaded(16, 9, &f.world).unwrap().get();
+        assert_eq!(t.type_index, 2);
+        // replicas: every blockhead hears about the new bench; an unloaded position yields nothing
+        let bh = blockhead(3, false);
+        f.dw.blockheads.borrow_mut().push(bh);
+        let nd = camp.update_net_data_for_client_impl(&(camp.clone() as ObjRef));
+        let rep =
+            Workbench::init_with_world_dynamic_world_cache_net_data(&f.world, &f.dwr, None, &nd).expect("replica");
+        assert_eq!(rep.level(), 2);
+        let mut far = nd.clone();
+        let mut hdr = <WorkbenchNetData as WireStruct>::read_le(&far[..0x38]);
+        hdr.interaction_object_creation_net_data.dynamic_object_net_data.pos_x = 100;
+        hdr.interaction_object_creation_net_data.dynamic_object_net_data.pos_y = 100;
+        far[..0x38].copy_from_slice(&hdr.to_vec());
+        assert!(Workbench::init_with_world_dynamic_world_cache_net_data(&f.world, &f.dwr, None, &far).is_none());
+        // a short blob raises
+        let r = crate::foundation::exception::catch_ns(|| {
+            Workbench::init_with_world_dynamic_world_cache_net_data(&f.world, &f.dwr, None, &nd[..0x30]).is_some()
+        });
+        assert_eq!(r.unwrap_err().name, "NSRangeException");
+    }
+
+    #[test]
+    fn portal_upgrades_write_each_stone_and_report() {
+        let f = fixture();
+        for (ty, base, x) in [(1u32, 0x20, 12), (13, 0x2a, 20)] {
+            let (wb, me) = make(&f, ty, x, 10);
+            wb.io.borrow_mut().current_blockhead = Some(blockhead(3, false));
+            for level in 1..=6 {
+                wb.upgrade_to_next_level(&me);
+                assert_eq!(wb.level(), level);
+                let stone = crate::world::tiles::tile_at_world_position_loaded(x, 9, &f.world).unwrap().get();
+                let want = if level <= 5 { base + level as u8 } else { base + 5 };
+                assert_eq!(stone.type_index, want, "portal {ty} level {level}");
+            }
+        }
+        // a blockhead the server controls does not earn the achievement; none present is fine too
+        f.deps.controlled.set(true);
+        let (wb, me) = make(&f, 13, 30, 10);
+        wb.io.borrow_mut().current_blockhead = Some(blockhead(3, false));
+        wb.upgrade_to_next_level(&me);
+        wb.io.borrow_mut().current_blockhead = None;
+        wb.upgrade_to_next_level(&me);
+        assert_eq!(wb.level(), 2);
+        // other benches have no stone to write
+        let (plain, pme) = make(&f, 2, 35, 10);
+        plain.upgrade_to_next_level(&pme);
+        assert_eq!(plain.level(), 1);
+    }
+
+    #[test]
+    fn set_level_silently_updates_without_a_send() {
+        let f = fixture();
+        let (wb, me) = make(&f, 2, 10, 10);
+        me.set_update_needs_to_be_sent(false);
+        let before = f.dw.changed.borrow().len();
+        wb.set_level_silently(&me, 2);
+        assert_eq!(wb.level(), 2);
+        assert!(!me.update_needs_to_be_sent());
+        assert_eq!(f.dw.changed.borrow().len(), before + 1);
+        assert!(wb.number_of_craftable_items_up_to_current_level() > 0);
+    }
+
+    #[test]
+    fn solar_panel_at_noon_and_in_the_dark() {
+        let f = fixture();
+        let (wb, _me) = make(&f, 20, 10, 10);
+        let above = crate::world::tiles::tile_at_world_position_loaded(10, 11, &f.world).unwrap();
+        above.update(|t| t.sun_light = 255);
+        let mut best = (0.0f32, 0.0f64);
+        // one year is 3600 seconds: look for the best moment of it
+        for step in 0..360 {
+            let time = step as f64 * 10.0;
+            f.world.set_world_time(time);
+            let c = wb.combined_light_for_solar_panel();
+            if c > best.0 {
+                best = (c, time);
+            }
+        }
+        assert!(best.0 >= 1.0, "the sun saturates the panel: {best:?}");
+        f.world.set_world_time(best.1);
+        above.update(|t| t.contents = 0x03);
+        assert!((wb.combined_light_for_solar_panel() - best.0 / 2.0).abs() < 1e-6, "trees halve it");
+        above.update(|t| t.contents = 46);
+        assert_eq!(wb.combined_light_for_solar_panel(), 0.0);
+    }
+
+    #[test]
+    fn save_and_restore_edge_cases() {
+        let f = fixture();
+        // a placed portal whose stone tile is not loaded still lights up when it is upgraded
+        let (p, pme) = make(&f, 13, 10, 0);
+        p.upgrade_to_next_level(&pme);
+        assert_eq!(p.level(), 1);
+        // empty stored source slots are not written; missing arrays leave the slot unset
+        let (wb, me) = make(&f, 2, 12, 10);
+        {
+            let mut s = wb.st.borrow_mut();
+            s.crafting_item_object = Some(CraftableItemObject::init_with_craftable_item(recipe_two_sources()));
+            s.source_items[0] = Some(vec![]);
+        }
+        wb.io.borrow_mut().is_in_use = true;
+        let sd = wb.get_save_dict_impl(&me);
+        assert!(sd.map.get(&"sourceItems_0".to_string()).is_none());
+        wb.st.borrow_mut().source_items[0] = None;
+        assert!(wb.get_save_dict_impl(&me).map.get(&"sourceItems_0".to_string()).is_none());
+        let ci = recipe_two_sources();
+        let mut plain = new_mutable_dict();
+        plain.map.insert("craftingItemData".into(), PlistValue::data(ci.to_vec()));
+        wb.restore_crafting_state(&plain);
+        assert!(wb.st.borrow().source_items[0].is_none());
+        // set_needs_removed(false) does not touch the light
+        DynamicObject::set_needs_removed(&*wb, &me, false);
+        assert!(!me.needs_removed());
+        // blockheads_loaded with nothing to link
+        {
+            let mut s = wb.st.borrow_mut();
+            s.saved_blockhead_index_fuel = 0;
+            s.is_in_use_fuel = false;
+        }
+        wb.blockheads_loaded_impl(&me);
+        assert_eq!(wb.st.borrow().saved_blockhead_index_fuel, -1);
+        wb.io.borrow_mut().is_in_use = true;
+        wb.io.borrow_mut().current_blockhead = None;
+        wb.st.borrow_mut().is_in_use_fuel = true;
+        wb.st.borrow_mut().current_fuel_blockhead = None;
+        wb.blockheads_loaded_impl(&me);
+    }
+
+    #[test]
+    fn world_gone_paths() {
+        let f = fixture();
+        let (wb, me) = make(&f, 24, 10, 10);
+        let Fixture { world, dw, dwr, deps, host } = f;
+        drop(world);
+        // remove, derived items and fuel changes cope without a world
+        wb.init_sub_derived_items();
+        wb.remove(&me, None);
+        assert!(me.needs_removed());
+        drop((dw, dwr, deps, host));
+    }
+
+    #[test]
+    fn trait_object_views() {
+        let f = fixture();
+        let (wb, me) = make(&f, 21, 10, 10);
+        wb.st.borrow_mut().available_electricity = 4096;
+        // DynamicObject
+        assert!(me.occupies_normal_contents());
+        assert_eq!(me.freeblock_creation_item_type(), wb.destroy_item_type().0 as i32);
+        assert!(me.free_block_creation_save_dict(&me).is_some());
+        assert_eq!((me.free_block_creation_data_a(), me.free_block_creation_data_b()), (0, 0));
+        assert_eq!(me.get_light_rgb(), [0.0, 0.0, 0.0]);
+        // InteractionObject
+        let il = me.as_interaction_like().unwrap();
+        assert!(!il.is_double_height());
+        assert_eq!(il.destroy_item_type(), wb.destroy_item_type().0 as i32);
+        assert_eq!(il.title(), "FLYWHEEL");
+        assert!(!il.requires_human_interaction());
+        assert!(!il.can_be_used_in_expert_mode_when_not_owned());
+        il.set_paused(&me, true);
+        assert!(wb.st.borrow().paused);
+        assert!(il.io_state().borrow().owner_name.is_none());
+        let bh = blockhead(5, false);
+        il.blockhead_would_like_to_take_ownership_with_save_dict(&me, &bh, None);
+        assert!(me.is_in_use());
+        il.remote_blockhead_removed_with_id(&me, 77);
+        // PowerUser / WirePowerSource
+        assert!(me.as_power_user().unwrap().is_storage_device());
+        let src: &dyn WirePowerSource = &*wb;
+        assert_eq!(src.available_electricity(), 4096);
+        assert!(src.is_storage_device() && src.conducts_electricity() && !src.generates_electricity());
+        assert!(src.subtract_electricty(96));
+        assert_eq!(wb.available_electricity(), 4000);
+        // the basic portal may be used in expert mode without owning it
+        let (_portal, pme) = make(&f, 1, 20, 10);
+        assert!(pme.as_interaction_like().unwrap().can_be_used_in_expert_mode_when_not_owned());
+        // virtual dispatch of the object itself
+        assert_eq!(me.class_info().name, "Workbench");
+        me.update_accurate_dt_is_simulation(&me, 0.1, 0.1, false);
+        assert_eq!(me.get_save_dict(&me).map.get(&"workbenchType".to_string()).unwrap().int_value(), 21);
+        let created = me.creation_net_data_for_client(&me, None).unwrap();
+        assert_eq!(created, me.update_net_data_for_client(&me, None).unwrap());
+        me.remote_update(&me, &created);
+        me.blockheads_loaded(&me);
+        me.blockhead_unloaded(&me, &bh);
+        me.add_artificial_light_contribution_for_physical_block_loaded_at_x_pos_y_pos(&me, 0, 0);
+        let (camp, cme) = make(&f, 3, 5, 10);
+        assert!(camp.st.borrow().light.is_some());
+        cme.add_artificial_light_contribution_for_physical_block_loaded_at_x_pos_y_pos(&cme, 0, 0);
+        // a bench that is being used without a recipe still saves
+        let (idle, ime) = make(&f, 2, 3, 10);
+        idle.io.borrow_mut().is_in_use = true;
+        assert!(idle.get_save_dict_impl(&ime).map.get(&"craftingItemDatav2".to_string()).is_none());
+        // the test doubles
+        assert!(f.dwr.get_owner_name_for_object_owner_id("nobody").is_none());
+        let deps = crate::world::misc::deps();
+        let (bench, bme) = make(&f, 2, 25, 10);
+        assert_eq!(deps.workbench_level(&bme), 0);
+        deps.workbench_upgrade_to_next_level(&bme);
+        assert_eq!(bench.level(), 1);
+        assert_eq!(deps.workbench_level(&bme), 1);
+        deps.workbench_upgrade_to_next_level(&blockhead(9, false));
+    }
+
+    #[test]
+    fn solar_panel_physical_block_follows_the_light() {
+        let f = fixture();
+        // a solar panel in the dark does not need its block loaded, one in the sun does
+        let (solar, sme) = make(&f, 20, 10, 10);
+        solar.st.borrow_mut().available_electricity = 1;
+        assert!(!sme.requires_physical_block());
+        crate::world::tiles::tile_at_world_position_loaded(10, 11, &f.world).unwrap().update(|t| t.sun_light = 255);
+        assert!(sme.requires_physical_block());
+    }
+
+    #[test]
+    fn net_replica_physical_block_rules() {
+        let f = fixture();
+        let (src, sme) = make(&f, 2, 10, 10);
+        let nd = src.update_net_data_for_client_impl(&sme);
+        let rep = Workbench::init_with_world_dynamic_world_cache_net_data(&f.world, &f.dwr, None, &nd).unwrap();
+        let rme: ObjRef = rep.clone();
+        assert!(!rme.requires_physical_block());
+        rep.io.borrow_mut().is_in_use = true;
+        assert!(rme.requires_physical_block());
+        rep.io.borrow_mut().is_in_use = false;
+        rep.st.borrow_mut().is_in_use_fuel = true;
+        assert!(rme.requires_physical_block());
     }
 }

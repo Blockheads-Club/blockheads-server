@@ -215,18 +215,16 @@ pub fn sign_connection_type_and_offset_for_pos(
         }
 
         let tile_o = Some(tile);
+        // every present tile is air/water/snow or solid
         if !tile_is_air_water_or_snow(tile_o) {
-            if tile_is_solid(tile_o) {
-                if pref == 0 {
-                    if tile_is_solid(left_o) && open(right_o) {
-                        set_off!(2);
-                    } else if tile_is_solid(right_o) && open(left_o) {
-                        set_off!(1);
-                    }
+            if pref == 0 {
+                if tile_is_solid(left_o) && open(right_o) {
+                    set_off!(2);
+                } else if tile_is_solid(right_o) && open(left_o) {
+                    set_off!(1);
                 }
-                return SignConnectionType(3);
             }
-            break 'end;
+            return SignConnectionType(3);
         }
 
         // (1)
@@ -458,5 +456,185 @@ mod tests {
             },
         );
         assert_eq!(sign_connection_type_and_offset_for_pos(P, None, &w, none).0, 0);
+    }
+
+    fn sign_obj(t: u16, ct: i64, off: i64, x: i32, y: i32) -> SignObjectInfo {
+        SignObjectInfo {
+            interaction_object_type: t,
+            connection_type: SignConnectionType(ct),
+            offset_type: SignOffsetType(off),
+            pos: IntPair { x, y },
+        }
+    }
+    /// Sign placement with an offset filter nothing matches, so every candidate is walked and the first is returned.
+    fn walk(w: &W, pref: i64) -> (i64, i64) {
+        let mut off = SignOffsetType(9);
+        let t = sign_connection_type_and_offset_for_pos(P, Some(&mut off), w, SignConnectionType(pref));
+        (t.0, off.0)
+    }
+
+    #[test]
+    fn torch_gem_and_hanging_variants() {
+        let mut col = AIR;
+        col.foreground_contents = 100;
+        // shark jaw hanging from a column
+        assert_eq!(torch_connection_type_for_pos(P, &world(&[((5, 4), col)]), ItemType(157)), 3);
+        // gem torch on a free tile: half depth, column below, wall right, wall left
+        let mut w = world(&[]);
+        w.half.push((5, 5));
+        assert_eq!(torch_connection_type_for_pos(P, &w, ItemType(75)), 2);
+        assert_eq!(torch_connection_type_for_pos(P, &world(&[((5, 4), col)]), ItemType(75)), 3);
+        assert_eq!(torch_connection_type_for_pos(P, &world(&[((6, 5), SOLID)]), ItemType(75)), 1);
+        assert_eq!(torch_connection_type_for_pos(P, &world(&[((4, 5), SOLID)]), ItemType(75)), -1);
+    }
+
+    #[test]
+    fn sign_missing_centre_and_neighbour_signs() {
+        let mut w = world(&[]);
+        w.tiles.remove(&(5, 5));
+        assert_eq!(walk(&w, 0), (0, 0));
+        let mut fg = AIR;
+        fg.foreground_contents = 48;
+        for t in [4, 8] {
+            let mut w = world(&[((6, 5), fg), ((5, 4), SOLID)]);
+            w.objs.insert((6, 5), sign_obj(t, 2, 0, 6, 5));
+            assert_eq!(walk(&w, 0), (0, 0));
+        }
+        // a sign beside the tile that is shifted away from it does not block
+        let mut w = world(&[((6, 5), fg), ((5, 4), SOLID)]);
+        w.objs.insert((6, 5), sign_obj(4, 2, 0, 6, 5));
+        let mut off = SignOffsetType(1);
+        assert_eq!(sign_connection_type_and_offset_for_pos(P, Some(&mut off), &w, SignConnectionType(0)).0, 2);
+    }
+
+    #[test]
+    fn sign_beside_foreground_object_that_is_not_a_sign() {
+        let mut fg = AIR;
+        fg.foreground_contents = 48;
+        for x in [4, 6] {
+            let mut w = world(&[((x, 5), fg), ((5, 4), SOLID)]);
+            w.objs.insert((x, 5), sign_obj(3, 0, 0, x, 5));
+            assert_eq!(walk(&w, 0), (2, 0));
+        }
+    }
+
+    #[test]
+    fn sign_on_solid_tile_without_a_free_side() {
+        // both neighbours open or both solid: the offset is left alone
+        for w in [world(&[((5, 5), SOLID)]), world(&[((5, 5), SOLID), ((4, 5), SOLID), ((6, 5), SOLID)])] {
+            let mut off = SignOffsetType(7);
+            assert_eq!(sign_connection_type_and_offset_for_pos(P, Some(&mut off), &w, SignConnectionType(0)).0, 3);
+            assert_eq!(off.0, 7);
+        }
+    }
+
+    #[test]
+    fn sign_on_solid_tile_offsets() {
+        let w = world(&[((5, 5), SOLID), ((6, 5), SOLID)]);
+        let mut off = SignOffsetType(0);
+        assert_eq!(sign_connection_type_and_offset_for_pos(P, Some(&mut off), &w, SignConnectionType(0)).0, 3);
+        assert_eq!(off.0, 1);
+        // a preferred type keeps the offset untouched
+        let mut off = SignOffsetType(0);
+        sign_connection_type_and_offset_for_pos(P, Some(&mut off), &w, SignConnectionType(2));
+        assert_eq!(off.0, 0);
+    }
+
+    #[test]
+    fn sign_below_object_candidates() {
+        let mut fg = AIR;
+        fg.foreground_contents = 48;
+        // sign below with open sides: its type and offset carry over
+        let mut w = world(&[((5, 4), fg)]);
+        w.objs.insert((5, 4), sign_obj(4, 1, 0, 5, 4));
+        assert_eq!(walk(&w, 0), (1, 0));
+        let mut off = SignOffsetType(0);
+        assert_eq!(sign_connection_type_and_offset_for_pos(P, Some(&mut off), &w, SignConnectionType(1)).0, 1);
+        // wall-side offsets are mirrored when the object sits on the other side
+        let mut w = world(&[((5, 4), fg)]);
+        w.objs.insert((5, 4), sign_obj(8, 1, 1, 4, 4));
+        assert_eq!(walk(&w, 0), (1, 2));
+        let mut w = world(&[((5, 4), fg)]);
+        w.objs.insert((5, 4), sign_obj(8, 1, 2, 6, 4));
+        assert_eq!(walk(&w, 0), (1, 1));
+        // blocked on the right, blocked on the left
+        let mut w = world(&[((5, 4), fg), ((6, 5), SOLID)]);
+        w.objs.insert((5, 4), sign_obj(4, 1, 1, 5, 4));
+        assert_ne!(walk(&w, 0).0, 1);
+        let mut w = world(&[((5, 4), fg), ((4, 5), SOLID)]);
+        w.objs.insert((5, 4), sign_obj(4, 1, 2, 5, 4));
+        assert_ne!(walk(&w, 0).0, 1);
+        // hang and side-wall objects below are skipped; foreign object types too
+        for (t, ct) in [(4, 5), (4, 4), (3, 1)] {
+            let mut w = world(&[((5, 4), fg)]);
+            w.objs.insert((5, 4), sign_obj(t, ct, 0, 5, 4));
+            assert_ne!(walk(&w, 0).0, ct);
+        }
+        // object recorded but absent from the registry
+        let w = world(&[((5, 4), fg)]);
+        assert_eq!(walk(&w, 0).0, 0);
+    }
+
+    #[test]
+    fn sign_above_object_candidates() {
+        let mut fg = AIR;
+        fg.foreground_contents = 48;
+        let mut w = world(&[((5, 6), fg)]);
+        w.objs.insert((5, 6), sign_obj(4, 4, 0, 5, 6));
+        assert_eq!(walk(&w, 0), (5, 0));
+        let mut off = SignOffsetType(0);
+        assert_eq!(sign_connection_type_and_offset_for_pos(P, Some(&mut off), &w, SignConnectionType(4)).0, 5);
+        let mut w = world(&[((5, 6), fg)]);
+        w.objs.insert((5, 6), sign_obj(8, 2, 0, 5, 6));
+        assert_eq!(walk(&w, 0), (2, 0));
+        let mut w = world(&[((5, 6), fg), ((6, 5), SOLID)]);
+        w.objs.insert((5, 6), sign_obj(4, 2, 1, 5, 6));
+        assert_ne!(walk(&w, 0).0, 2);
+        let mut w = world(&[((5, 6), fg), ((4, 5), SOLID)]);
+        w.objs.insert((5, 6), sign_obj(4, 2, 2, 5, 6));
+        assert_ne!(walk(&w, 0).0, 2);
+        let mut w = world(&[((5, 6), fg)]);
+        w.objs.insert((5, 6), sign_obj(3, 2, 0, 5, 6));
+        assert_eq!(walk(&w, 0).0, 0);
+        let w = world(&[((5, 6), fg)]);
+        assert_eq!(walk(&w, 0).0, 0);
+    }
+
+    #[test]
+    fn sign_open_side_candidates() {
+        // both sides open: ground between solid corners, ground below, ceiling between solid corners
+        let w = world(&[((4, 4), SOLID), ((6, 4), SOLID)]);
+        assert_eq!(walk(&w, 0), (1, 0));
+        assert_eq!(walk(&w, 2), (1, 0));
+        let w = world(&[((4, 6), SOLID), ((6, 6), SOLID), ((5, 4), SOLID)]);
+        assert_eq!(walk(&w, 0), (2, 0));
+        // right open only: ground / ceiling to the right
+        let w = world(&[((4, 5), SOLID), ((5, 4), SOLID), ((6, 4), SOLID)]);
+        assert_eq!(walk(&w, 0), (1, 1));
+        let w = world(&[((4, 5), SOLID), ((5, 6), SOLID), ((6, 6), SOLID)]);
+        assert_eq!(walk(&w, 0), (5, 1));
+        // left open only
+        let w = world(&[((6, 5), SOLID), ((5, 4), SOLID), ((4, 4), SOLID)]);
+        assert_eq!(walk(&w, 0), (1, 2));
+        let w = world(&[((6, 5), SOLID), ((5, 6), SOLID), ((4, 6), SOLID)]);
+        assert_eq!(walk(&w, 0), (5, 2));
+        // side wall with air above
+        let w = world(&[((6, 5), SOLID)]);
+        assert_eq!(walk(&w, 0), (4, 2));
+        let w = world(&[((4, 5), SOLID)]);
+        assert_eq!(walk(&w, 0), (4, 1));
+        // a column below counts as ground
+        let mut col = AIR;
+        col.foreground_contents = 100;
+        let w = world(&[((5, 4), col), ((6, 4), SOLID)]);
+        assert_eq!(walk(&w, 0), (2, 0));
+        let pick = |w: &W, off: i64| {
+            let mut o = SignOffsetType(off);
+            let t = sign_connection_type_and_offset_for_pos(P, Some(&mut o), w, SignConnectionType(1));
+            (t.0, o.0)
+        };
+        assert_eq!(pick(&w, 1), (1, 1));
+        let w = world(&[((5, 4), col), ((4, 4), SOLID)]);
+        assert_eq!(pick(&w, 2), (1, 2));
     }
 }

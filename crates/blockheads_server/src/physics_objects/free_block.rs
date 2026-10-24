@@ -987,8 +987,7 @@ impl FreeBlock {
                     self.notify_changed();
                 }
             }
-        } else {
-            let pb = priority.expect("the other branch took the missing priority blockhead");
+        } else if let Some(pb) = priority {
             if !pb.needs_removed() {
                 let bfp = pb.float_pos();
                 let goal = Vector2 { x: bfp.x + 0.0f32, y: bfp.y + 0.5f32 };
@@ -1485,7 +1484,7 @@ mod tests {
     use crate::world::state::Weather;
 
     fn bh_at(id: u64, x: f32, y: f32) -> ObjRef {
-        let b = alloc_obj(|w| Blockhead::alloc(w));
+        let b = alloc_obj(Blockhead::alloc);
         b.base.borrow_mut().unique_id = id;
         b.base.borrow_mut().float_pos = Vector2 { x, y };
         b
@@ -1929,9 +1928,7 @@ mod tests {
         let c = o.creation_net_data_for_client(&o, None).unwrap();
         let rep = FreeBlock::from_net_data(&w, &dw, None, &c).unwrap();
         rep.base().borrow_mut().is_net = true;
-        let mut upd2 = FreeblockUpdateNetData::default();
-        upd2.fall_speed = 255;
-        upd2.hovers = 0;
+        let upd2 = FreeblockUpdateNetData { fall_speed: 255, hovers: 0, ..FreeblockUpdateNetData::default() };
         rep.remote_update(&rep, &upd2.to_vec());
         assert_eq!(fb(&rep).st.borrow().fall_speed, 1.0);
         // taking a hovering pole item tells the dynamic world

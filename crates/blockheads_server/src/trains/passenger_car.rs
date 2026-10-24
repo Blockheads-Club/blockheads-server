@@ -272,7 +272,7 @@ mod world_tests {
         TrainCarLike::add_rider(p, &car, &b);
         let (pa, pb) = (p.rider_pos_for_blockhead(&a), p.rider_pos_for_blockhead(&b));
         assert!(pa[0] < pb[0]);
-        assert!(TrainCarLike::blockhead_can_ride_using_item(p, &car, &a, 0) == false);
+        assert!(!TrainCarLike::blockhead_can_ride_using_item(p, &car, &a, 0));
         let _ = car.render_pos();
         // both seats ride along a few ticks (one of them a long frame, clamped to 50 ms), then leave
         car.update_accurate_dt_is_simulation(&car, 0.2, 0.2, false);

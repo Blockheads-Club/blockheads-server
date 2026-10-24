@@ -459,4 +459,50 @@ mod tests {
         assert_eq!(item_type_for_dodo_egg_breed(DodoBreed(32)), I::ITEM_RAINBOW_ESSENCE);
         assert_eq!(item_type_for_dodo_egg_breed(DodoBreed(33)), I::ITEM_NONE);
     }
+
+    #[test]
+    fn skin_options_every_head() {
+        // female heads: (texture, hair)
+        for (h, tex, hair) in [
+            (0, 0, c8(0, 0, 0)),
+            (1, 0, c8(144, 41, 22)),
+            (2, 0, c8(238, 197, 146)),
+            (3, 1, c8(70, 37, 24)),
+            (4, 1, c8(0, 0, 0)),
+            (5, 1, c8(238, 197, 146)),
+            (6, 2, c8(238, 197, 146)),
+            (7, 2, c8(144, 41, 22)),
+            (8, 3, c8(55, 6, 6)),
+        ] {
+            let o = get_new_options_from_old(false, h, 0, 0);
+            assert_eq!((o.hair_texture_index, o.hair_color), (tex, hair), "female {h}");
+        }
+        // male heads
+        for (h, tex, hair) in [
+            (0, 0, c8(0, 0, 0)),
+            (1, 1, c8(0, 0, 0)),
+            (2, 2, c8(53, 27, 15)),
+            (3, 3, c8(67, 36, 32)),
+            (4, 4, c8(0, 0, 0)),
+            (5, 0, c8(212, 149, 105)),
+            (6, 5, c8(42, 22, 19)),
+            (7, 5, c8(42, 22, 19)),
+        ] {
+            let o = get_new_options_from_old(true, h, 0, 0);
+            assert_eq!((o.hair_texture_index, o.hair_color), (tex, hair), "male {h}");
+        }
+    }
+
+    #[test]
+    fn portal_item_per_level() {
+        for (level, item) in [
+            (1, I::ITEM_PORTAL_AMETHYST),
+            (2, I::ITEM_PORTAL_SAPPHIRE),
+            (3, I::ITEM_PORTAL_EMERALD),
+            (4, I::ITEM_PORTAL_RUBY),
+            (5, I::ITEM_PORTAL_DIAMOND),
+        ] {
+            assert_eq!(item_type_for_workbench_type_and_level(WorkbenchType(13), level), item);
+        }
+    }
 }

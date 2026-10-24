@@ -6,7 +6,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::dynworld::state::DynamicWorld;
-use crate::interaction::chest::{dict_str, gunzip_plist, gz_plist_bytes, subdata_from, ub_null_tile, Links};
+use crate::interaction::chest::{dict_str, gunzip_plist, gz_plist_bytes, subdata_from, Links};
 use crate::items::predicates::*;
 use crate::objects::base::{padded_bytes, DynamicObject, DynamicObjectBase};
 use crate::objects::class_info::{ClassInfo, INTERACTION_OBJECT_CLASS};
@@ -103,11 +103,11 @@ impl Mirror {
         let me = Self::alloc(world, dw);
         let me_obj: ObjRef = me.clone();
         let (w, d) = me.links.refs();
-        if !interaction_object_init_with_world_dynamic_world_at_position_cache_item_flipped_save_dict_placed_by_client_client_name(
+        // the base initialiser always succeeds here, `None` is only the ObjC `self = nil` shape
+        interaction_object_init_with_world_dynamic_world_at_position_cache_item_flipped_save_dict_placed_by_client_client_name(
             &me_obj, &w, &d, pos, cache, item, flipped, save_dict, client_id, client_name,
-        ) {
-            return None;
-        }
+        )
+            .then_some(())?;
         me.init_sub_derived_items();
         Some(me)
     }
@@ -122,9 +122,9 @@ impl Mirror {
         let me = Self::alloc(world, dw);
         let me_obj: ObjRef = me.clone();
         let (w, d) = me.links.refs();
-        if !interaction_object_init_with_world_dynamic_world_save_dict_cache(&me_obj, &w, &d, save_dict, cache) {
-            return None;
-        }
+        // the base initialiser always succeeds here, `None` is only the ObjC `self = nil` shape
+        interaction_object_init_with_world_dynamic_world_save_dict_cache(&me_obj, &w, &d, save_dict, cache)
+            .then_some(())?;
         me.init_sub_derived_items();
         Some(me)
     }
@@ -206,16 +206,14 @@ impl DynamicObject for Mirror {
     fn update_net_data_for_client(&self, me: &ObjRef, _client: Option<&str>) -> Option<Vec<u8>> {
         let mut out =
             crate::types::structs::WireStruct::to_vec(&interaction_object_interaction_object_creation_net_data(me));
-        let mut dict = PlistValue::mutable_dict();
-        if let PlistValue::Dict(dd) = &mut dict {
-            if let Some(o) = me.owner_id() {
-                dd.map.insert("ownerID".to_string(), PlistValue::string(o));
-            }
-            if let Some(n) = self.io.borrow().owner_name.clone() {
-                dd.map.insert("ownerName".to_string(), PlistValue::string(n));
-            }
+        let mut dd = crate::objects::base::new_mutable_dict();
+        if let Some(o) = me.owner_id() {
+            dd.map.insert("ownerID".to_string(), PlistValue::string(o));
         }
-        out.extend_from_slice(&gz_plist_bytes(&dict));
+        if let Some(n) = self.io.borrow().owner_name.clone() {
+            dd.map.insert("ownerName".to_string(), PlistValue::string(n));
+        }
+        out.extend_from_slice(&gz_plist_bytes(&PlistValue::Dict(dd)));
         Some(out)
     }
     /// `-remoteUpdate:`.
@@ -339,11 +337,6 @@ impl InteractionObjectLike for Mirror {
     }
 }
 
-#[allow(dead_code)]
-fn _unused() -> bool {
-    ub_null_tile()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -411,5 +404,102 @@ mod tests {
         let d = m.get_save_dict(&me);
         assert_eq!(d.map.get(&"interactionObjectType".to_string()).unwrap().int_value(), 9);
         assert!(m.free_block_creation_save_dict(&me).is_some());
+    }
+
+    use crate::interaction::sign::testkit::*;
+    use crate::objects::interaction_object::testutil::TestBh;
+
+    fn place(w: &Rc<World>, d: &Rc<DynamicWorld>, x: i32) -> (Rc<Mirror>, ObjRef) {
+        let it = InventoryItem::new(ItemType(331), 0, 0, None, None);
+        let it = it.borrow();
+        let m =
+            Mirror::new(w, d, IntPair { x, y: 10 }, None, Some(&it), false, None, Some("cid"), Some("Bob")).unwrap();
+        let me: ObjRef = m.clone();
+        (m, me)
+    }
+
+    #[test]
+    fn placing_reserves_both_tiles_and_reloads() {
+        let (w, d, pb) = world_with_block("mirror_d");
+        let (m, me) = place(&w, &d, 10);
+        assert_eq!((tile(pb, 10, 10).contents(), tile(pb, 10, 11).contents()), (48, 48));
+        assert_eq!(me.class_info().name, "Mirror");
+        assert!(me.as_any().downcast_ref::<Mirror>().is_some());
+        // saved and loaded again
+        let sd = m.get_save_dict(&me);
+        let back = Mirror::from_save_dict(&w, &d, &sd, None).unwrap();
+        assert_eq!(back.object_type(), 64);
+        // a client replica, with and without the owner tail, with a blockhead in the world
+        let nd = m.update_net_data_for_client(&me, None).unwrap();
+        let (bw, _bd, bdw) = crate::blockhead::blockhead::testutil::setup();
+        d.blockheads.borrow_mut().push(crate::blockhead::blockhead::testutil::new_bh(&bw, &bdw, 0));
+        let rep = Mirror::from_net_data(&w, &d, None, &nd).unwrap();
+        d.blockheads.borrow_mut().clear();
+        assert_eq!((rep.clone() as ObjRef).owner_id().as_deref(), Some("cid"));
+        assert_eq!(rep.io.borrow().owner_name.as_deref(), Some("Bob"));
+        let bare = Mirror::from_net_data(&w, &d, None, &nd[..0x28]).unwrap();
+        assert_eq!((bare.clone() as ObjRef).owner_id(), None);
+        // the mirror's pieces on an unloaded tile are simply not marked
+        let mut far = nd.clone();
+        far[8..12].copy_from_slice(&900u32.to_le_bytes());
+        far[12..16].copy_from_slice(&900u32.to_le_bytes());
+        assert!(Mirror::from_net_data(&w, &d, None, &far).is_none());
+        // object hooks
+        me.world_contents_changed(&me, &mut vec![]);
+        me.blockheads_loaded(&me);
+        let bh: ObjRef = TestBh::new(1, false);
+        me.blockhead_unloaded(&me, &bh);
+        assert!(m.io_state().borrow().current_blockhead.is_none());
+        me.update_accurate_dt_is_simulation(&me, 0.1, 0.1, false);
+        me.set_needs_removed(&me, true);
+        me.update_accurate_dt_is_simulation(&me, 0.1, 0.1, false);
+        me.dealloc(&me);
+    }
+
+    #[test]
+    fn support_loss_and_removal() {
+        let (w, d, pb) = world_with_block("mirror_e");
+        let (_m, me) = place(&w, &d, 10);
+        // solid ground keeps it; other columns and replicas do not matter
+        tile(pb, 10, 9).set_type_index(6);
+        me.world_changed(&me, &mut vec![IntPair { x: 10, y: 9 }]);
+        assert!(!me.needs_removed());
+        tile(pb, 10, 9).set_type_index(2);
+        me.world_changed(&me, &mut vec![IntPair { x: 11, y: 9 }, IntPair { x: 10, y: 20 }]);
+        assert!(!me.needs_removed());
+        me.world_changed(&me, &mut vec![IntPair { x: 10, y: 9 }]);
+        assert!(me.needs_removed());
+        let (r, rme) = place(&w, &d, 14);
+        r.base.borrow_mut().is_net = true;
+        rme.world_changed(&rme, &mut vec![IntPair { x: 14, y: 9 }]);
+        assert!(!rme.needs_removed());
+        r.remove(&rme, None);
+        assert!(!rme.needs_removed());
+    }
+
+    #[test]
+    fn removing_a_mirror_that_is_in_use() {
+        let (w, d, _pb) = world_with_block("mirror_f");
+        let (m, me) = place(&w, &d, 10);
+        let user = TestBh::new(7, false);
+        let ub: ObjRef = user.clone();
+        m.start_interaction_with_blockhead(&me, &ub);
+        // another machine's user, or a remote one, postpones the removal
+        m.io.borrow_mut().remote_blockhead_in_use_unique_id = 9;
+        m.remove(&me, None);
+        assert!(!me.needs_removed() && m.io.borrow().needs_to_be_removed_when_interaction_ends);
+        m.io.borrow_mut().remote_blockhead_in_use_unique_id = 0;
+        let net: ObjRef = TestBh::new(8, true);
+        m.io.borrow_mut().current_blockhead = Some(net);
+        m.remove(&me, None);
+        assert!(!me.needs_removed());
+        // a local user is stopped and the mirror drops as an item
+        m.io.borrow_mut().current_blockhead = Some(ub.clone());
+        m.remove(&me, None);
+        assert!(me.needs_removed());
+        assert!(user.log.borrow().iter().any(|l| l == "stop"));
+        // and once removed nothing more happens
+        m.remove(&me, None);
+        assert_eq!(user.log.borrow().iter().filter(|l| *l == "stop").count(), 1);
     }
 }

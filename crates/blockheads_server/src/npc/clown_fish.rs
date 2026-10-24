@@ -1534,10 +1534,7 @@ mod sim_tests {
         Fx { w, dw, env }
     }
     fn put(f: &Fx, x: i32, y: i32, ty: u8, level: u8, contents: u8) {
-        let mut t = Tile::default();
-        t.type_index = ty;
-        t.partial_content_left = level;
-        t.contents = contents;
+        let t = Tile { type_index: ty, partial_content_left: level, contents, ..Tile::default() };
         f.env.inner.tiles.borrow_mut().insert((x, y), t);
     }
     fn make(f: &Fx, adult: bool, placed: bool) -> Option<ObjRef> {

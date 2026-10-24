@@ -1305,9 +1305,7 @@ mod ai_tests {
     }
 
     fn tile(ty: u8) -> Tile {
-        let mut t = Tile::default();
-        t.type_index = ty;
-        t
+        Tile { type_index: ty, ..Tile::default() }
     }
 
     fn put(env: &TestPassiveEnv, x: i32, y: i32, t: Tile) {

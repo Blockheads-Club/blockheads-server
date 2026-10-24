@@ -17,8 +17,8 @@ use crate::items::inventory_item::{InventoryItem, ItemRef, SubSlot};
 use crate::items::predicates::{item_type_is_stackable, item_type_is_workbench};
 use crate::nslog;
 use crate::objects::base::{
-    base_remove_from_macro_block, base_update_position, padded_bytes, DynamicObject, DynamicObjectBase,
-    DynamicWorldRef, WorldRef,
+    base_remove_from_macro_block, base_update_position, new_mutable_dict, padded_bytes, DynamicObject,
+    DynamicObjectBase, DynamicWorldRef, WorldRef,
 };
 use crate::objects::class_info::{ClassInfo, INTERACTION_OBJECT_CLASS};
 use crate::objects::handle::{self, CacheRef, ObjRef};
@@ -296,11 +296,11 @@ impl Chest {
         let me = Self::alloc(world, dw);
         let me_obj: ObjRef = me.clone();
         let (w, d) = me.links.refs();
-        if !interaction_object_init_with_world_dynamic_world_at_position_cache_item_flipped_save_dict_placed_by_client_client_name(
+        // the base initialiser always succeeds here, `None` is only the ObjC `self = nil` shape
+        interaction_object_init_with_world_dynamic_world_at_position_cache_item_flipped_save_dict_placed_by_client_client_name(
             &me_obj, &w, &d, pos, cache, item, flipped, save_dict, client_id, client_name,
-        ) {
-            return None;
-        }
+        )
+            .then_some(())?;
         let item_type = item.map_or(0, |i| i.item_type.0);
         let mut chest_type = CHEST_STANDARD;
         match item_type {
@@ -379,9 +379,9 @@ impl Chest {
         let me = Self::alloc(world, dw);
         let me_obj: ObjRef = me.clone();
         let (w, d) = me.links.refs();
-        if !interaction_object_init_with_world_dynamic_world_save_dict_cache(&me_obj, &w, &d, save_dict, cache) {
-            return None;
-        }
+        // the base initialiser always succeeds here, `None` is only the ObjC `self = nil` shape
+        interaction_object_init_with_world_dynamic_world_save_dict_cache(&me_obj, &w, &d, save_dict, cache)
+            .then_some(())?;
         let mut chest_type = dict_int(save_dict, "chestType");
         if chest_type == CHEST_PORTAL && world.custom_rules().custom_rules_enabled != 0 {
             chest_type = CHEST_STANDARD;
@@ -870,7 +870,7 @@ impl DynamicObject for Chest {
         let owner_id = me.owner_id();
         let owner_name = self.io.borrow().owner_name.clone();
         let proxy = self.io.borrow().proxy_object_owner.is_some();
-        let mut dict = PlistValue::mutable_dict();
+        let mut dd = new_mutable_dict();
         {
             let mut st = self.st.borrow_mut();
             if ct == CHEST_SHELF || ct == CHEST_DISPLAY_CABINET {
@@ -910,13 +910,11 @@ impl DynamicObject for Chest {
                     }
                 }
             }
-            if let PlistValue::Dict(dd) = &mut dict {
-                if let Some(o) = owner_id {
-                    dd.map.insert("ownerID".to_string(), PlistValue::string(o));
-                }
-                if let Some(n) = owner_name {
-                    dd.map.insert("ownerName".to_string(), PlistValue::string(n));
-                }
+            if let Some(o) = owner_id {
+                dd.map.insert("ownerID".to_string(), PlistValue::string(o));
+            }
+            if let Some(n) = owner_name {
+                dd.map.insert("ownerName".to_string(), PlistValue::string(n));
             }
             let embed = ct != CHEST_PORTAL
                 && st.inventory_items.is_some()
@@ -933,14 +931,12 @@ impl DynamicObject for Chest {
                     }
                     arr.push(mutable_array_of(sl));
                 }
-                if let PlistValue::Dict(dd) = &mut dict {
-                    dd.map.insert("saveItemSlots".to_string(), mutable_array_of(arr));
-                }
+                dd.map.insert("saveItemSlots".to_string(), mutable_array_of(arr));
                 st.inventory_needs_to_be_sent_with_update = false;
             }
         }
         let mut out = cnd.to_vec();
-        out.extend_from_slice(&gz_plist_bytes(&dict));
+        out.extend_from_slice(&gz_plist_bytes(&PlistValue::Dict(dd)));
         Some(out)
     }
     /// `-remoteUpdate:`.
@@ -1259,21 +1255,14 @@ mod tests {
         let me: ObjRef = c.clone();
         c.st.borrow().inventory_items.as_ref().unwrap()[1].borrow_mut().push(mk_item(11));
         let dict = c.get_save_dict(&me);
-        match dict.map.get(&"saveItemSlots".to_string()).unwrap() {
-            PlistValue::Array(a) => match &a.items[1] {
-                PlistValue::Array(s) => assert!(s.items.is_empty()),
-                _ => panic!(),
-            },
-            _ => panic!(),
-        }
+        let slot_len = |v: &PlistValue| {
+            let PlistValue::Array(a) = v else { unreachable!("slots") };
+            let PlistValue::Array(s) = &a.items[1] else { unreachable!("slot") };
+            s.items.len()
+        };
+        assert_eq!(slot_len(dict.map.get(&"saveItemSlots".to_string()).unwrap()), 0);
         let blob = c.inventory_data_allowing_empty(false).unwrap();
-        match &gunzip_plist(&blob).unwrap() {
-            PlistValue::Array(a) => match &a.items[1] {
-                PlistValue::Array(s) => assert_eq!(s.items.len(), 1),
-                _ => panic!(),
-            },
-            _ => panic!(),
-        }
+        assert_eq!(slot_len(&gunzip_plist(&blob).unwrap()), 1);
     }
 
     #[test]
@@ -1435,4 +1424,512 @@ mod tests {
     }
 
     fn tile_noop() {}
+
+    use crate::interaction::sign::testkit::*;
+    use crate::objects::base::new_mutable_dict;
+    use crate::objects::interaction_object::testutil::TestBh;
+
+    fn blob(t: u32, a: u16, b: u16) -> Vec<u8> {
+        InventoryItem::new(ItemType(t), a, b, None, None).borrow().save_data()
+    }
+
+    /// `n` saved slots, the given ones filled.
+    fn saved(n: usize, fill: &[(usize, Vec<Vec<u8>>)]) -> PlistValue {
+        let mut slots = vec![Vec::new(); n];
+        for (i, items) in fill {
+            slots[*i] = items.clone();
+        }
+        slots_plist_from_blobs(slots)
+    }
+
+    fn obj(c: &Rc<Chest>) -> ObjRef {
+        c.clone()
+    }
+
+    fn chest_at(
+        w: &Rc<World>,
+        d: &Rc<DynamicWorld>,
+        x: i32,
+        item: &Rc<RefCell<InventoryItem>>,
+        sd: Option<&PlistDict>,
+        client: Option<&str>,
+    ) -> Rc<Chest> {
+        let it = item.borrow();
+        Chest::new(w, d, IntPair { x, y: 10 }, None, Some(&it), false, sd, client, None).unwrap()
+    }
+
+    #[test]
+    fn helper_edge_cases() {
+        assert!(!ub_null_tile());
+        assert!(saved_slot_at(&PlistValue::int(1), 0).is_none());
+        let arr = saved(2, &[]);
+        assert!(saved_slot_at(&arr, 1).is_some());
+        let e = crate::foundation::exception::catch_ns(|| saved_slot_at(&arr, 2).is_some()).unwrap_err();
+        assert_eq!(e.name, "NSRangeException");
+        assert!(gunzip_plist(&[1, 2, 3]).is_none());
+        assert_eq!(array_count(None), 0);
+        // saved slots keep data entries only
+        let mixed = mutable_array_of(vec![PlistValue::int(3), PlistValue::data(blob(5, 0, 0))]);
+        assert_eq!(load_slot_items(Some(&mixed)).len(), 1);
+        assert!(load_slot_items(Some(&PlistValue::int(1))).is_empty());
+        assert!(load_slot_items(None).is_empty());
+        assert_eq!(array_count(Some(&arr)), 2);
+        assert_eq!(dict_int(&new_mutable_dict(), "x"), 0);
+        assert_eq!(dict_str(None, "x"), None);
+    }
+
+    #[test]
+    fn creation_from_saved_slots_and_carried_inventories() {
+        let (w, d, _pb) = world_with_block("chest_cr");
+        // saved slots: the time crystal is dropped, the safe client id becomes the owner
+        let mut sd = new_mutable_dict();
+        sd.map.insert("saveItemSlots".into(), saved(16, &[(2, vec![blob(5, 1, 2), blob(11, 0, 0)])]));
+        sd.map.insert("safeClientID".into(), PlistValue::string("sc"));
+        let safe = chest_at(&w, &d, 4, &mk_item(0x429), Some(&sd), None);
+        let me: ObjRef = safe.clone();
+        assert_eq!(me.owner_id().as_deref(), Some("sc"));
+        assert_eq!(safe.st.borrow().inventory_items.as_ref().unwrap()[2].borrow().len(), 1);
+        // an explicit owner wins, and a plain chest ignores the safe client id
+        let owned = chest_at(&w, &d, 5, &mk_item(0x429), Some(&sd), Some("me"));
+        assert_eq!(obj(&owned).owner_id().as_deref(), Some("me"));
+        let plain = chest_at(&w, &d, 6, &mk_item(0x413), Some(&sd), None);
+        assert_eq!(obj(&plain).owner_id(), None);
+        // a display cabinet takes four saved slots
+        let mut sd4 = new_mutable_dict();
+        sd4.map.insert("saveItemSlots".into(), saved(4, &[(1, vec![blob(7, 0, 3)])]));
+        sd4.map.insert("safeClientID".into(), PlistValue::string("sc4"));
+        let cab = chest_at(&w, &d, 7, &mk_item(0xcf), Some(&sd4), None);
+        assert_eq!(obj(&cab).owner_id().as_deref(), Some("sc4"));
+        // a safe carried as an item: its sub slots become the contents
+        let mut input: Vec<Vec<ItemRef>> = vec![Vec::new(); 16];
+        input[1].push(mk_item(8));
+        let carried = InventoryItem::new(ItemType(0x429), 0, 0, Some(&input), None);
+        let mut sdc = new_mutable_dict();
+        sdc.map.insert("safeClientID".into(), PlistValue::string("sc2"));
+        let c = chest_at(&w, &d, 8, &carried, Some(&sdc), None);
+        assert_eq!(c.chest_type(), CHEST_SAFE);
+        assert_eq!(obj(&c).owner_id().as_deref(), Some("sc2"));
+        assert_eq!(c.st.borrow().inventory_items.as_ref().unwrap()[1].borrow().len(), 1);
+        // the same without a safe client id, and for a plain chest item
+        let c = chest_at(&w, &d, 9, &carried, None, None);
+        assert_eq!(obj(&c).owner_id(), None);
+        let carried_chest = InventoryItem::new(ItemType(0x413), 0, 0, Some(&input), None);
+        let c = chest_at(&w, &d, 10, &carried_chest, Some(&sdc), None);
+        assert_eq!(c.chest_type(), CHEST_STANDARD);
+        assert_eq!(obj(&c).owner_id(), None);
+        // an item without a matching slot list falls back to empty slots
+        let c = chest_at(&w, &d, 11, &mk_item(5), None, None);
+        assert_eq!(c.st.borrow().inventory_items.as_ref().unwrap().len(), 16);
+        let shelf_item = mk_item(0xa1);
+        let c = chest_at(&w, &d, 12, &shelf_item, None, None);
+        assert!(c.st.borrow().inventory_items.as_ref().unwrap().iter().all(|s| s.borrow().is_empty()));
+    }
+
+    #[test]
+    fn loading_from_a_save_dict() {
+        let (w, d, _pb) = world_with_block("chest_load");
+        // portal chests become standard ones when custom rules are on
+        let mut sd = new_mutable_dict();
+        sd.map.insert("chestType".into(), PlistValue::int(4));
+        let portal = Chest::from_save_dict(&w, &d, &sd, None).unwrap();
+        assert_eq!(portal.chest_type(), CHEST_PORTAL);
+        assert!(portal.st.borrow().inventory_items.is_none());
+        let mut rules = w.custom_rules();
+        rules.custom_rules_enabled = 1;
+        w.set_custom_rules(rules);
+        assert_eq!(Chest::from_save_dict(&w, &d, &sd, None).unwrap().chest_type(), CHEST_STANDARD);
+        rules.custom_rules_enabled = 0;
+        w.set_custom_rules(rules);
+        // shelf render caches, safe owner and a legacy inventory inside the dictionary
+        let mut sd = new_mutable_dict();
+        sd.map.insert("chestType".into(), PlistValue::int(2));
+        sd.map.insert("safeClientID".into(), PlistValue::string("sc"));
+        sd.map.insert("shelfRenderItems_1".into(), PlistValue::int(7));
+        sd.map.insert("shelfItemDataBs_1".into(), PlistValue::int(9));
+        let shelf = Chest::from_save_dict(&w, &d, &sd, None).unwrap();
+        assert_eq!(shelf.st.borrow().shelf_render_items, [0, 7, 0, 0]);
+        assert_eq!(shelf.st.borrow().shelf_item_data_bs, [0, 9, 0, 0]);
+        assert_eq!(obj(&shelf).owner_id().as_deref(), Some("sc"));
+        sd.map.insert("saveItemSlots".into(), saved(4, &[(3, vec![blob(5, 0, 0)])]));
+        let legacy = Chest::from_save_dict(&w, &d, &sd, None).unwrap();
+        assert_eq!(legacy.st.borrow().inventory_items.as_ref().unwrap()[3].borrow().len(), 1);
+        sd.map.insert("saveItemSlots".into(), saved(1, &[]));
+        let short = Chest::from_save_dict(&w, &d, &sd, None).unwrap();
+        assert_eq!(short.st.borrow().inventory_items.as_ref().unwrap().len(), 4);
+    }
+
+    #[test]
+    fn net_created_chests_and_remote_updates() {
+        let (w, d, _pb) = world_with_block("chest_netc");
+        let mut sd = new_mutable_dict();
+        sd.map.insert("saveItemSlots".into(), saved(4, &[(0, vec![blob(7, 0, 3)])]));
+        let shelf = chest_at(&w, &d, 4, &mk_item(0xa1), Some(&sd), Some("own"));
+        let me: ObjRef = shelf.clone();
+        shelf.contents_did_change(&me);
+        let bytes = shelf.update_net_data_for_client(&me, None).unwrap();
+        let rep = Chest::from_net_data(&w, &d, None, &bytes).unwrap();
+        let rme: ObjRef = rep.clone();
+        assert_eq!(rep.chest_type(), CHEST_SHELF);
+        assert_eq!(rep.st.borrow().shelf_render_items[0], 7);
+        assert_eq!(rme.owner_id().as_deref(), Some("own"));
+        assert_eq!(rep.st.borrow().inventory_items.as_ref().unwrap()[0].borrow().len(), 1);
+        // without the inventory the replica has none; a safe client id stands in for the owner
+        let plain = chest_at(&w, &d, 5, &mk_item(0x429), None, None);
+        let pme: ObjRef = plain.clone();
+        let mut b = plain.update_net_data_for_client(&pme, None).unwrap();
+        let mut dict = PlistValue::mutable_dict();
+        if let PlistValue::Dict(dd) = &mut dict {
+            dd.map.insert("safeClientID".into(), PlistValue::string("sf"));
+        }
+        b.truncate(0x40);
+        b.extend_from_slice(&gz_plist_bytes(&dict));
+        let rep2 = Chest::from_net_data(&w, &d, None, &b).unwrap();
+        assert_eq!(obj(&rep2).owner_id().as_deref(), Some("sf"));
+        assert!(rep2.st.borrow().inventory_items.is_none());
+        // portal chests carry no inventory, and with custom rules they are standard ones
+        let portal = chest_at(&w, &d, 6, &mk_item(0x432), None, None);
+        let pob: ObjRef = portal.clone();
+        let pbytes = portal.update_net_data_for_client(&pob, None).unwrap();
+        assert_eq!(pbytes[0x38], CHEST_PORTAL as u8);
+        let prep = Chest::from_net_data(&w, &d, None, &pbytes).unwrap();
+        assert_eq!(prep.chest_type(), CHEST_PORTAL);
+        assert!(prep.st.borrow().inventory_items.is_none());
+        let mut rules = w.custom_rules();
+        rules.custom_rules_enabled = 1;
+        w.set_custom_rules(rules);
+        assert_eq!(Chest::from_net_data(&w, &d, None, &pbytes).unwrap().chest_type(), CHEST_STANDARD);
+        rules.custom_rules_enabled = 0;
+        w.set_custom_rules(rules);
+        // every blockhead of the world hears about a new replica
+        let (bw, _bd, bdw) = crate::blockhead::blockhead::testutil::setup();
+        d.blockheads.borrow_mut().push(crate::blockhead::blockhead::testutil::new_bh(&bw, &bdw, 0));
+        assert!(Chest::from_net_data(&w, &d, None, &bytes).is_some());
+        d.blockheads.borrow_mut().clear();
+        // a replica of an unloaded position is refused
+        let mut far = bytes.clone();
+        far[8..12].copy_from_slice(&900u32.to_le_bytes());
+        far[12..16].copy_from_slice(&900u32.to_le_bytes());
+        assert!(Chest::from_net_data(&w, &d, None, &far).is_none());
+        // remote updates: shelf caches, owner + inventory when nobody is using the chest
+        let up = shelf.update_net_data_for_client(&me, None).unwrap();
+        rep.remote_update(&rme, &up);
+        assert_eq!(rep.st.borrow().shelf_render_items[0], 7);
+        shelf.contents_did_change(&me);
+        let up = shelf.creation_net_data_for_client(&me, None).unwrap();
+        rep.remote_update(&rme, &up);
+        assert_eq!(rep.st.borrow().inventory_items.as_ref().unwrap().len(), 4);
+        // a remote user appearing makes the server push the inventory
+        let mut nd = bytes.clone();
+        nd[0x18..0x20].copy_from_slice(&5u64.to_le_bytes());
+        nd[0x22] = 1;
+        shelf.remote_update(&me, &nd);
+        assert_eq!(shelf.io.borrow().remote_blockhead_in_use_unique_id, 5);
+        // portal chests never send inventories, whoever uses them
+        let mut pnd = pbytes.clone();
+        pnd[0x18..0x20].copy_from_slice(&6u64.to_le_bytes());
+        pnd[0x22] = 1;
+        portal.remote_update(&pob, &pnd);
+    }
+
+    #[test]
+    fn lazy_inventory_loading_and_blobs() {
+        let (w, d, _pb) = world_with_block("chest_lazy");
+        let c = chest_at(&w, &d, 4, &mk_item(0x413), None, Some("o"));
+        let me = obj(&c);
+        c.st.borrow().inventory_items.as_ref().unwrap()[0].borrow_mut().push(mk_item(5));
+        let blob_data = c.inventory_data_allowing_empty(false).unwrap();
+        // forgetting the slots and asking again loads them (here: nothing stored, so empty slots)
+        c.st.borrow_mut().inventory_items = None;
+        assert!(c.inventory_data_allowing_empty(true).is_none());
+        let inv = c.inventory_items().unwrap();
+        assert_eq!(inv.len(), 16);
+        assert!(inv[0].borrow().is_empty());
+        // update with data and with garbage
+        c.remote_inventory_data_recieved(Some(&blob_data));
+        assert_eq!(c.inventory_items().unwrap()[0].borrow().len(), 1);
+        c.update_inventory_with_data(Some(&[1, 2, 3]));
+        assert!(c.inventory_items().unwrap()[0].borrow().is_empty());
+        c.update_inventory_with_data(None);
+        assert_eq!(c.inventory_items().unwrap().len(), 16);
+        // replicas and portal chests never load
+        c.base.borrow_mut().is_net = true;
+        c.st.borrow_mut().inventory_items = None;
+        c.load_inventory_items_from_disk_if_needed();
+        assert!(c.st.borrow().inventory_items.is_none());
+        c.base.borrow_mut().is_net = false;
+        c.st.borrow_mut().chest_type = CHEST_PORTAL;
+        c.update_inventory_with_data(Some(&blob_data));
+        assert!(c.st.borrow().inventory_items.is_none());
+        assert!(!c.inventory_changed());
+        assert!(!c.is_in_use());
+        drop(me);
+    }
+
+    #[test]
+    fn save_dict_for_shelves_with_items() {
+        let (w, d, _pb) = world_with_block("chest_shelfsave");
+        let shelf = chest_at(&w, &d, 4, &mk_item(0xa1), None, Some("o"));
+        let me = obj(&shelf);
+        let camp = {
+            let mut dict = new_mutable_dict();
+            dict.map.insert("level".into(), PlistValue::int(2));
+            InventoryItem::new(ItemType::ITEM_CAMPFIRE, 0, 5, None, Some(PlistValue::Dict(dict)))
+        };
+        {
+            let st = shelf.st.borrow();
+            let inv = st.inventory_items.as_ref().unwrap();
+            inv[0].borrow_mut().push(camp.clone());
+            inv[1].borrow_mut().push(InventoryItem::new(ItemType(8), 0, 4, None, None));
+        }
+        let dict = shelf.get_save_dict_including_inventory(&me, false);
+        assert_eq!(dict_int(&dict, "shelfRenderItems_0"), ItemType::ITEM_CAMPFIRE.0 as i32);
+        assert_eq!(dict_int(&dict, "shelfItemDataBs_0"), 2);
+        assert_eq!(dict_int(&dict, "shelfItemDataBs_1"), 4);
+        // the wire form reads the same numbers
+        let b = shelf.update_net_data_for_client(&me, None).unwrap();
+        assert_eq!(u16::from_le_bytes([b[0x28], b[0x29]]) as u32, ItemType::ITEM_CAMPFIRE.0);
+        assert_eq!(u16::from_le_bytes([b[0x30], b[0x31]]), 2);
+        // a short slot array raises from both
+        shelf.st.borrow_mut().inventory_items.as_mut().unwrap().truncate(2);
+        let e =
+            crate::foundation::exception::catch_ns(|| shelf.get_save_dict_including_inventory(&me, false).map.len())
+                .unwrap_err();
+        assert_eq!(e.name, "NSRangeException");
+        let e = crate::foundation::exception::catch_ns(|| shelf.update_net_data_for_client(&me, None).unwrap().len())
+            .unwrap_err();
+        assert_eq!(e.name, "NSRangeException");
+    }
+
+    #[test]
+    fn moving_items_into_chests() {
+        let (w, d, _pb) = world_with_block("chest_mv");
+        let c = chest_at(&w, &d, 4, &mk_item(0x413), None, Some("o"));
+        let me = obj(&c);
+        let from = |n: usize, t: u32| -> SubSlot { Rc::new(RefCell::new((0..n).map(|_| mk_item(t)).collect())) };
+        // nothing to move
+        assert_eq!(c.move_inventory_items_from_array_to_index_count(&me, &from(0, 5), 0, 3), 0);
+        assert_eq!(c.move_inventory_items_from_array_to_index_count(&me, &from(2, 5), 0, 0), 0);
+        // auto index prefers a stack with room, then an empty slot
+        assert_eq!(c.move_inventory_items_from_array_to_index_count(&me, &from(3, 5), -1, 3), 3);
+        assert_eq!(c.move_inventory_items_from_array_to_index_count(&me, &from(2, 5), -1, 2), 2);
+        assert_eq!(c.st.borrow().inventory_items.as_ref().unwrap()[0].borrow().len(), 5);
+        // a full stack is skipped
+        c.st.borrow().inventory_items.as_ref().unwrap()[0].borrow_mut().extend((0..94).map(|_| mk_item(5)));
+        assert_eq!(c.move_inventory_items_from_array_to_index_count(&me, &from(1, 5), -1, 1), 1);
+        assert_eq!(c.st.borrow().inventory_items.as_ref().unwrap()[1].borrow().len(), 1);
+        // removing takes the last item of the first matching slot
+        assert!(c.remove_item_if_available(&me, 5));
+        assert_eq!(c.st.borrow().inventory_items.as_ref().unwrap()[0].borrow().len(), 98);
+        assert!(!c.remove_item_if_available(&me, 99));
+        // non-stackable items fill empty slots one by one
+        assert_eq!(c.move_inventory_items_from_array_to_index_count(&me, &from(1, 20), -1, 1), 1);
+        // a chest with no free slot refuses
+        for s in c.st.borrow().inventory_items.as_ref().unwrap().iter() {
+            if s.borrow().is_empty() {
+                s.borrow_mut().push(mk_item(30));
+            }
+        }
+        assert_eq!(c.move_inventory_items_from_array_to_index_count(&me, &from(1, 31), -1, 1), 0);
+        // a fixed slot only takes the same stackable kind
+        assert_eq!(c.move_inventory_items_from_array_to_index_count(&me, &from(1, 31), 0, 1), 0);
+        // portal chests log and refuse
+        c.st.borrow_mut().chest_type = CHEST_PORTAL;
+        assert_eq!(c.move_inventory_items_from_array_to_index_count(&me, &from(1, 5), 0, 1), 0);
+        // no inventory loaded: the destination is nil and the items are lost
+        c.st.borrow_mut().chest_type = CHEST_STANDARD;
+        c.st.borrow_mut().inventory_items = None;
+        let f = from(2, 5);
+        assert_eq!(c.move_inventory_items_from_array_to_index_count(&me, &f, 3, 2), 2);
+        assert!(f.borrow().is_empty());
+        // an out-of-range slot raises
+        c.update_inventory_with_data(None);
+        let e = crate::foundation::exception::catch_ns(|| {
+            c.move_inventory_items_from_array_to_index_count(&me, &from(1, 5), 40, 1)
+        })
+        .unwrap_err();
+        assert_eq!(e.name, "NSRangeException");
+        // shelves report their achievement
+        let shelf = chest_at(&w, &d, 8, &mk_item(0xa1), None, Some("o"));
+        assert_eq!(shelf.move_inventory_items_from_array_to_index_count(&obj(&shelf), &from(1, 5), 0, 1), 1);
+    }
+
+    #[test]
+    fn titles_and_object_views() {
+        let (w, d, _pb) = world_with_block("chest_views");
+        for (item, title) in [
+            (0x413, "CHEST"),
+            (0x429, "SAFE"),
+            (0xa1, "SHELF"),
+            (0x430, "GOLDEN CHEST"),
+            (0x432, "PORTAL CHEST"),
+            (0xcf, "CABINET"),
+            (0x450, "FEEDER CHEST"),
+        ] {
+            let c = chest_at(&w, &d, 4, &mk_item(item), None, Some("o"));
+            let me = obj(&c);
+            assert_eq!(c.title_string(), title);
+            assert_eq!(c.action_title(), format!("USE {title}"));
+            assert_eq!(me.class_info().name, "Chest");
+            assert!(me.occupies_normal_contents());
+            assert_eq!(me.freeblock_creation_item_type(), item as i32);
+            assert!(me.free_block_creation_save_dict(&me).is_some());
+            assert!(c.requires_human_interaction() && c.is_paintable());
+            me.world_contents_changed(&me, &mut vec![]);
+            me.set_needs_removed(&me, false);
+            me.blockheads_loaded(&me);
+        }
+    }
+
+    #[test]
+    fn using_a_chest() {
+        let (w, d, _pb) = world_with_block("chest_use");
+        let me_bh = TestBh::new(7, false);
+        let bh: ObjRef = me_bh.clone();
+        let other: ObjRef = TestBh::new(8, false);
+        let safe = chest_at(&w, &d, 4, &mk_item(0x429), None, Some("c7"));
+        let sme = obj(&safe);
+        // the server's own blockheads may use anything
+        w.set_is_admin(true);
+        assert!(safe.can_be_used_by_blockhead(&sme, &bh));
+        w.set_is_admin(false);
+        // an owner sees their safe, strangers do not, and a busy safe belongs to its user
+        assert!(safe.can_be_used_by_blockhead(&sme, &bh));
+        assert!(!safe.can_be_used_by_blockhead(&sme, &other));
+        let plain = chest_at(&w, &d, 5, &mk_item(0x413), None, Some("c7"));
+        assert!(plain.can_be_used_by_blockhead(&obj(&plain), &other));
+        safe.start_interaction_with_blockhead(&sme, &bh);
+        assert!(!safe.can_be_used_by_blockhead(&sme, &other));
+        // removing while someone from another machine is using it only marks it
+        let remote: ObjRef = TestBh::new(9, true);
+        safe.io.borrow_mut().current_blockhead = Some(remote);
+        safe.remove(&sme, None);
+        assert!(!sme.needs_removed());
+        assert!(safe.io.borrow().needs_to_be_removed_when_interaction_ends);
+        safe.io.borrow_mut().current_blockhead = Some(bh.clone());
+        safe.remove(&sme, None);
+        assert!(sme.needs_removed());
+        assert!(me_bh.log.borrow().iter().any(|l| l == "stop"));
+        // a second removal and replicas do nothing
+        safe.remove(&sme, None);
+        // moving or deleting a used chest stops its user
+        let c2 = chest_at(&w, &d, 6, &mk_item(0x413), None, Some("c7"));
+        let m2 = obj(&c2);
+        c2.start_interaction_with_blockhead(&m2, &bh);
+        c2.update_position(&m2, IntPair { x: 6, y: 10 });
+        c2.update_position(&m2, IntPair { x: 7, y: 10 });
+        c2.set_needs_removed(&m2, true);
+        // (removing the safe stopped its user twice: once in remove, once in set_needs_removed)
+        assert_eq!(me_bh.log.borrow().iter().filter(|l| *l == "stop").count(), 4);
+        c2.remove_from_macro_block(&m2);
+        c2.dealloc(&m2);
+        assert!(c2.st.borrow().inventory_items.is_none());
+        // painting asks for a send on servers only
+        let c3 = chest_at(&w, &d, 9, &mk_item(0x413), None, Some("c7"));
+        let m3 = obj(&c3);
+        c3.paint(&m3, 3);
+        assert_eq!(c3.io.borrow().paint_color, 3);
+        assert!(m3.update_needs_to_be_sent());
+        m3.set_update_needs_to_be_sent(false);
+        c3.base.borrow_mut().is_net = true;
+        c3.paint(&m3, 4);
+        assert!(!m3.update_needs_to_be_sent());
+    }
+
+    #[test]
+    fn chests_ignore_world_changes_outside_their_column() {
+        let (w, d, pb) = world_with_block("chest_wc2");
+        let shelf = chest_at(&w, &d, 20, &mk_item(0xa1), None, Some("o"));
+        let sm = obj(&shelf);
+        tile(pb, 20, 10).set_back_wall_type_index(2);
+        sm.world_changed(&sm, &mut vec![IntPair { x: 20, y: 5 }]);
+        assert!(sm.needs_removed());
+        // a shelf at the world edge: the tile of its own column is unloaded
+        let edge = chest_at(&w, &d, 0, &mk_item(0xa1), None, Some("o"));
+        let em = obj(&edge);
+        em.world_changed(&em, &mut vec![IntPair { x: 0, y: 5 }]);
+        assert!(!em.needs_removed());
+    }
+
+    #[test]
+    fn move_and_remove_edge_cases() {
+        let (w, d, _pb) = world_with_block("chest_edge");
+        let c = chest_at(&w, &d, 4, &mk_item(0x413), None, Some("o"));
+        let me = obj(&c);
+        let from = |n: usize, t: u32| -> SubSlot { Rc::new(RefCell::new((0..n).map(|_| mk_item(t)).collect())) };
+        // stacking looks past slots of other kinds, then falls back to an empty slot
+        c.st.borrow().inventory_items.as_ref().unwrap()[0].borrow_mut().push(mk_item(6));
+        assert_eq!(c.move_inventory_items_from_array_to_index_count(&me, &from(1, 5), -1, 1), 1);
+        assert_eq!(c.st.borrow().inventory_items.as_ref().unwrap()[1].borrow().len(), 1);
+        // a full destination takes nothing
+        c.st.borrow().inventory_items.as_ref().unwrap()[2].borrow_mut().extend((0..99).map(|_| mk_item(7)));
+        assert_eq!(c.move_inventory_items_from_array_to_index_count(&me, &from(2, 7), 2, 2), 0);
+        // no inventory and no index to assign
+        c.st.borrow_mut().inventory_items = None;
+        assert_eq!(c.move_inventory_items_from_array_to_index_count(&me, &from(1, 5), -1, 1), 0);
+        assert!(c.slot_blobs(false).is_empty());
+        // portal chests have nothing to remove
+        c.st.borrow_mut().chest_type = CHEST_PORTAL;
+        assert!(!c.remove_item_if_available(&me, 5));
+    }
+
+    #[test]
+    fn shelves_without_slots_and_busy_chests() {
+        let (w, d, pb) = world_with_block("chest_busy");
+        let shelf = chest_at(&w, &d, 4, &mk_item(0xa1), None, Some("o"));
+        let me = obj(&shelf);
+        shelf.st.borrow_mut().inventory_items = None;
+        shelf.st.borrow_mut().shelf_render_items = [1, 2, 3, 4];
+        shelf.st.borrow_mut().shelf_item_data_bs = [5, 6, 7, 8];
+        let b = shelf.update_net_data_for_client(&me, None).unwrap();
+        assert_eq!(u16::from_le_bytes([b[0x2a], b[0x2b]]), 2);
+        assert_eq!(u16::from_le_bytes([b[0x32], b[0x33]]), 6);
+        // a user on the owning machine: the remote user id is read back and the inventory pushed again
+        let chest = chest_at(&w, &d, 8, &mk_item(0x413), None, Some("o"));
+        let cme = obj(&chest);
+        let mut nd = chest.update_net_data_for_client(&cme, None).unwrap();
+        nd[0x18..0x20].copy_from_slice(&5u64.to_le_bytes());
+        nd[0x22] = 1;
+        chest.remote_update(&cme, &nd);
+        chest.remote_update(&cme, &nd);
+        assert_eq!(chest.io.borrow().remote_blockhead_in_use_unique_id, 5);
+        // removed chests do not tick, replicas without users forget their inventory
+        chest.base.borrow_mut().needs_removed = true;
+        chest.update_accurate_dt_is_simulation(&cme, 0.1, 0.1, false);
+        // a shelf whose own tile is unloaded still survives the column check
+        *w.macro_tiles().get(0).unwrap().physical_block.borrow_mut() = None;
+        me.world_changed(&me, &mut vec![IntPair { x: 4, y: 5 }]);
+        assert!(!me.needs_removed());
+        let _ = pb;
+        // the plain object hooks
+        let other: ObjRef = TestBh::new(3, false);
+        chest.blockhead_unloaded(&cme, &other);
+        assert!(chest.io_state().borrow().current_blockhead.is_none());
+    }
+
+    #[test]
+    fn containers_and_ownerless_safes() {
+        let (w, d, _pb) = world_with_block("chest_cont");
+        let c = chest_at(&w, &d, 4, &mk_item(0x413), None, Some("o"));
+        let me = obj(&c);
+        // a basket is not stackable: it goes to an empty slot without looking for a stack
+        let basket: SubSlot = Rc::new(RefCell::new(vec![InventoryItem::new(ItemType(0xc), 0, 0, None, None)]));
+        assert_eq!(c.move_inventory_items_from_array_to_index_count(&me, &basket, -1, 1), 1);
+        assert_eq!(c.st.borrow().inventory_items.as_ref().unwrap()[0].borrow().len(), 1);
+        // a safe nobody owns can be used by anyone
+        let safe = chest_at(&w, &d, 8, &mk_item(0x429), None, None);
+        let sme = obj(&safe);
+        assert_eq!(sme.owner_id(), None);
+        let user: ObjRef = TestBh::new(7, false);
+        assert!(safe.can_be_used_by_blockhead(&sme, &user));
+        // a remote update while someone uses the chest leaves owner and slots alone
+        let mut nd = c.update_net_data_for_client(&me, None).unwrap();
+        c.io.borrow_mut().current_blockhead = Some(user.clone());
+        nd[0x40..].fill(0);
+        c.remote_update(&me, &nd);
+        c.io.borrow_mut().current_blockhead = None;
+        // an occupied chest is for its user only
+        let other: ObjRef = TestBh::new(8, false);
+        c.start_interaction_with_blockhead(&me, &user);
+        assert!(!c.can_be_used_by_blockhead(&me, &other));
+    }
 }

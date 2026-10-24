@@ -25,7 +25,7 @@ use crate::types::item_type::ItemType;
 use crate::types::netdata::TradingPostNetData;
 use crate::types::structs::{IntPair, WireStruct};
 use crate::world::helpers::{tile_is_half_depth, tile_is_solid};
-use crate::world::state::{TileRef, World};
+use crate::world::state::World;
 use crate::world::tiles::tile_at_world_position_loaded;
 
 /// `TradingPost: InteractionObject` (instance size 0xd0).
@@ -260,11 +260,11 @@ impl TradingPost {
         let me = Self::alloc(world, dw);
         let me_obj: ObjRef = me.clone();
         let (w, d) = me.links.refs();
-        if !interaction_object_init_with_world_dynamic_world_at_position_cache_item_flipped_save_dict_placed_by_client_client_name(
+        // the base initialiser always succeeds here, `None` is only the ObjC `self = nil` shape
+        interaction_object_init_with_world_dynamic_world_at_position_cache_item_flipped_save_dict_placed_by_client_client_name(
             &me_obj, &w, &d, pos, cache, item, flipped, save_dict, client_id, client_name,
-        ) {
-            return None;
-        }
+        )
+            .then_some(())?;
         let sd = save_dict.map(|d| PlistValue::Dict(d.clone()));
         me.init_slots_with_save_dict(sd.as_ref());
         {
@@ -295,9 +295,9 @@ impl TradingPost {
         let me = Self::alloc(world, dw);
         let me_obj: ObjRef = me.clone();
         let (w, d) = me.links.refs();
-        if !interaction_object_init_with_world_dynamic_world_save_dict_cache(&me_obj, &w, &d, save_dict, cache) {
-            return None;
-        }
+        // the base initialiser always succeeds here, `None` is only the ObjC `self = nil` shape
+        interaction_object_init_with_world_dynamic_world_save_dict_cache(&me_obj, &w, &d, save_dict, cache)
+            .then_some(())?;
         let sd = PlistValue::Dict(save_dict.clone());
         if me_obj.owner_id().is_none() {
             me_obj.set_owner_id(dict_str(Some(&sd), "sellerClientID"));
@@ -337,11 +337,9 @@ impl TradingPost {
             st.coin_count = hdr.coin_count as i32;
             st.price_tier = hdr.price_tier as i32;
         }
-        for b in dw.blockheads() {
-            if let Some(bh) = handle::downcast::<crate::blockhead::blockhead::Blockhead>(&b) {
-                bh.net_interaction_object_was_loaded(&me_obj);
-            }
-        }
+        let blockheads = dw.blockheads();
+        let loaded = blockheads.iter().filter_map(|b| handle::downcast::<crate::blockhead::blockhead::Blockhead>(b));
+        loaded.for_each(|bh| bh.net_interaction_object_was_loaded(&me_obj));
         me.init_sub_derived_items();
         Some(me)
     }
@@ -654,25 +652,23 @@ impl DynamicObject for TradingPost {
             s.price_tier = st.price_tier as u16;
         }
         let mut out = s.to_vec();
-        let mut dict = PlistValue::mutable_dict();
+        let mut dd = crate::objects::base::new_mutable_dict();
         let embed = self.st.borrow().inventory_needs_to_be_sent_with_update;
         let slot_blobs = if embed { Some(self.sell_slot_blobs()) } else { None };
-        if let PlistValue::Dict(dd) = &mut dict {
-            if let Some(o) = me.owner_id() {
-                dd.map.insert("ownerID".to_string(), PlistValue::string(o));
-                if let Some(n) = self.st.borrow().seller_client_name.clone() {
-                    dd.map.insert("sellerClientName".to_string(), PlistValue::string(n));
-                }
-            }
-            if let Some(n) = self.io.borrow().owner_name.clone() {
-                dd.map.insert("ownerName".to_string(), PlistValue::string(n));
-            }
-            if let Some(b) = slot_blobs {
-                dd.map.insert("sellSlot".to_string(), b);
-                self.st.borrow_mut().inventory_needs_to_be_sent_with_update = false;
+        if let Some(o) = me.owner_id() {
+            dd.map.insert("ownerID".to_string(), PlistValue::string(o));
+            if let Some(n) = self.st.borrow().seller_client_name.clone() {
+                dd.map.insert("sellerClientName".to_string(), PlistValue::string(n));
             }
         }
-        out.extend_from_slice(&gz_plist_bytes(&dict));
+        if let Some(n) = self.io.borrow().owner_name.clone() {
+            dd.map.insert("ownerName".to_string(), PlistValue::string(n));
+        }
+        if let Some(b) = slot_blobs {
+            dd.map.insert("sellSlot".to_string(), b);
+            self.st.borrow_mut().inventory_needs_to_be_sent_with_update = false;
+        }
+        out.extend_from_slice(&gz_plist_bytes(&PlistValue::Dict(dd)));
         Some(out)
     }
     /// `-remoteUpdate:` (trap 5: super first, the overwrite runs even on a just-removed object).
@@ -855,9 +851,6 @@ impl InteractionObjectLike for TradingPost {
     }
 }
 
-#[allow(dead_code)]
-fn _unused(_: TileRef) {}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -906,10 +899,8 @@ mod tests {
         for k in ["sellerClientName", "sellSlot", "coinCount", "priceTier", "interactionObjectType"] {
             assert!(d.map.get(&k.to_string()).is_some(), "{k}");
         }
-        match d.map.get(&"sellSlot".to_string()).unwrap() {
-            PlistValue::Array(a) => assert_eq!(a.items.len(), 2),
-            _ => panic!(),
-        }
+        let Some(PlistValue::Array(a)) = d.map.get(&"sellSlot".to_string()) else { unreachable!("sellSlot") };
+        assert_eq!(a.items.len(), 2);
         assert_eq!(me.object_type(), 48);
         assert_eq!(p.interaction_object_type(), 5);
         assert_eq!(p.title(), "SHOP");
@@ -1001,5 +992,378 @@ mod tests {
         // a solid left neighbour keeps the post
         tile(pb, 9, 10).set_type_index(6);
         assert!(!support_lost(&w, IntPair { x: 10, y: 10 }, &[IntPair { x: 10, y: 9 }]));
+    }
+
+    use crate::objects::interaction_object::testutil::TestBh;
+    use std::cell::Cell;
+
+    /// Cash and inventory seam double.
+    struct Api {
+        cash: Cell<i32>,
+        spent: Cell<i32>,
+    }
+    impl BlockheadInventoryApi for Api {
+        fn total_cash(&self, _b: &ObjRef) -> i32 {
+            self.cash.get()
+        }
+        fn subtract_cash(&self, _b: &ObjRef, amount: i32) {
+            self.spent.set(self.spent.get() + amount);
+        }
+    }
+
+    #[test]
+    fn inventory_seam_defaults_and_item_copies() {
+        let b: ObjRef = TestBh::new(1, false);
+        let api = blockhead_inventory_api();
+        assert_eq!(api.total_cash(&b), 0);
+        api.subtract_cash(&b, 5);
+        assert_eq!(api.count_of_inventory_items_of_type_include_actions(&b, 5, false), 0);
+        assert_eq!(
+            api.count_of_inventory_items_with_specific_data_b_of_type_data_b_include_actions(&b, 5, 1, false),
+            0
+        );
+        assert_eq!(api.usage_multiplier_for_first_item_of_type(&b, 5), 1.0);
+        assert_eq!(api.subtract_items_from_inventory_of_type_count_data_b(&b, 5, 2, -1), 0);
+        set_blockhead_inventory_api(Rc::new(Api { cash: Cell::new(77), spent: Cell::new(0) }));
+        assert_eq!(blockhead_inventory_api().total_cash(&b), 77);
+        // copies share their sub slots
+        let basket = InventoryItem::new(ItemType(0xc), 1, 2, None, None);
+        let copy = clone_inventory_item(&basket.borrow());
+        assert_eq!((copy.item_type, copy.data_a, copy.data_b), (ItemType(0xc), 1, 2));
+        assert!(Rc::ptr_eq(&copy.sub_items.as_ref().unwrap()[0], &basket.borrow().sub_items.as_ref().unwrap()[0]));
+        assert_eq!(sub_items_owned(&basket.borrow()).unwrap().len(), 4);
+        assert!(sub_items_owned(&InventoryItem::new(ItemType(5), 0, 0, None, None).borrow()).is_none());
+    }
+
+    #[test]
+    fn replicas_and_server_aliases() {
+        let (w, d, _pb) = world_with_block("tp_f");
+        install_server(&d);
+        // the owner's alias becomes the seller name on a server
+        let it = InventoryItem::new(ItemType(168), 0, 0, None, None);
+        let p = TradingPost::new(
+            &w,
+            &d,
+            IntPair { x: 10, y: 10 },
+            None,
+            Some(&it.borrow()),
+            false,
+            None,
+            Some("owner1"),
+            None,
+        )
+        .unwrap();
+        assert_eq!(p.st.borrow().seller_client_name.as_deref(), Some("Ally"));
+        let unknown = TradingPost::new(
+            &w,
+            &d,
+            IntPair { x: 12, y: 10 },
+            None,
+            Some(&it.borrow()),
+            false,
+            None,
+            Some("zed"),
+            None,
+        )
+        .unwrap();
+        assert_eq!(unknown.st.borrow().seller_client_name, None);
+        // net replica with a blockhead in the world
+        let me: ObjRef = p.clone();
+        p.set_coin_count(3);
+        let bytes = me.creation_net_data_for_client(&me, None).unwrap();
+        let (bw, _bd, bdw) = crate::blockhead::blockhead::testutil::setup();
+        d.blockheads.borrow_mut().push(crate::blockhead::blockhead::testutil::new_bh(&bw, &bdw, 0));
+        assert_eq!(d.blockheads().len(), 1);
+        assert!(
+            crate::objects::handle::downcast::<crate::blockhead::blockhead::Blockhead>(&d.blockheads()[0]).is_some()
+        );
+        let rep = TradingPost::from_net_data(&w, &d, None, &bytes).unwrap();
+        d.blockheads.borrow_mut().clear();
+        assert_eq!(rep.coin_count(), 3);
+        assert_eq!(rep.st.borrow().seller_client_name.as_deref(), Some("Ally"));
+        let mut far = bytes.clone();
+        far[8..12].copy_from_slice(&900u32.to_le_bytes());
+        far[12..16].copy_from_slice(&900u32.to_le_bytes());
+        assert!(TradingPost::from_net_data(&w, &d, None, &far).is_none());
+        let e = crate::foundation::exception::catch_ns(|| {
+            TradingPost::from_net_data(&w, &d, None, &bytes[..0x2c]).is_some()
+        })
+        .unwrap_err();
+        assert_eq!(e.name, "NSRangeException");
+    }
+
+    #[test]
+    fn price_tier_and_contents_changes() {
+        let (_w, _d, p) = mk("tp_g", Some("cid"), None);
+        let me: ObjRef = p.clone();
+        p.set_price_tier(&me, 4);
+        assert_eq!((p.price_tier(), p.price()), (4, 5));
+        assert!(p.st.borrow().needs_to_update_bitmap_string);
+        p.set_price_tier(&me, -1);
+        assert_eq!(p.price(), 0);
+        me.set_update_needs_to_be_sent(false);
+        p.contents_did_change(&me);
+        assert!(me.update_needs_to_be_sent() && p.st.borrow().inventory_needs_to_be_sent_with_update);
+    }
+
+    #[test]
+    fn moving_containers_into_the_sell_slot_spills_their_contents() {
+        let (_w, _d, p) = mk("tp_h", Some("cid"), None);
+        let me: ObjRef = p.clone();
+        let user: ObjRef = TestBh::new(3, false);
+        p.io.borrow_mut().current_blockhead = Some(user);
+        let blob = |t: u32| PlistValue::data(InventoryItem::new(ItemType(t), 1, 2, None, None).borrow().save_data());
+        // a chest item with saved slots: every stored item spills out as a free block, the chest itself stays empty
+        let mut sd = crate::objects::base::new_mutable_dict();
+        sd.map.insert(
+            "saveItemSlots".to_string(),
+            mutable_array_of(vec![mutable_array_of(vec![blob(5), blob(11), PlistValue::int(1)]), PlistValue::int(2)]),
+        );
+        let chest = InventoryItem::new(ItemType(0x413), 0, 0, None, Some(PlistValue::Dict(sd)));
+        let from: SubSlot = Rc::new(RefCell::new(vec![chest.clone()]));
+        assert_eq!(p.move_inventory_items_to_sell_slot_from_array_count(&me, &from, 1), 1);
+        assert!(p.sell_slot()[0].borrow().dynamic_object_save_dict.is_none());
+        // the same for a cabinet-like item that nests its chest in the dictionary, and for one without anything saved
+        let mut inner = crate::objects::base::new_mutable_dict();
+        inner.map.insert("saveItemSlots".to_string(), mutable_array_of(vec![mutable_array_of(vec![blob(6)])]));
+        let mut outer = crate::objects::base::new_mutable_dict();
+        outer.map.insert("chest".to_string(), PlistValue::Dict(inner));
+        let nested = InventoryItem::new(ItemType(0xce), 0, 0, None, Some(PlistValue::Dict(outer)));
+        let bare = InventoryItem::new(ItemType(0x429), 0, 0, None, None);
+        let junk = InventoryItem::new(ItemType(0xa1), 0, 0, None, Some(PlistValue::int(1)));
+        for item in [nested, bare, junk] {
+            let f: SubSlot = Rc::new(RefCell::new(vec![item]));
+            let before = p.sell_slot().len();
+            // containers only stack with their own kind
+            p.st.borrow_mut().sell_slot.clear();
+            assert_eq!(p.move_inventory_items_to_sell_slot_from_array_count(&me, &f, 1), 1);
+            assert_eq!(p.sell_slot().len(), 1, "{before}");
+        }
+        // a basket spills its sub items
+        let basket = InventoryItem::new(ItemType(0xc), 0, 0, None, None);
+        basket.borrow().sub_items.as_ref().unwrap()[1].borrow_mut().extend([
+            InventoryItem::new(ItemType(5), 0, 0, None, None),
+            InventoryItem::new(ItemType(11), 0, 0, None, None),
+        ]);
+        p.st.borrow_mut().sell_slot.clear();
+        let f: SubSlot = Rc::new(RefCell::new(vec![basket]));
+        assert_eq!(p.move_inventory_items_to_sell_slot_from_array_count(&me, &f, 5), 1);
+        // a slot only takes its own kind
+        p.st.borrow_mut().sell_slot.clear();
+        let f: SubSlot = Rc::new(RefCell::new(vec![InventoryItem::new(ItemType(5), 0, 0, None, None)]));
+        assert_eq!(p.move_inventory_items_to_sell_slot_from_array_count(&me, &f, 1), 1);
+        let again: SubSlot = Rc::new(RefCell::new(vec![InventoryItem::new(ItemType(5), 0, 0, None, None)]));
+        assert_eq!(p.move_inventory_items_to_sell_slot_from_array_count(&me, &again, 1), 1);
+        assert_eq!(p.sell_slot().len(), 2);
+        let g: SubSlot = Rc::new(RefCell::new(vec![InventoryItem::new(ItemType(6), 0, 0, None, None)]));
+        assert_eq!(p.move_inventory_items_to_sell_slot_from_array_count(&me, &g, 1), 0);
+        // a basket without any slots has nothing to spill
+        p.st.borrow_mut().sell_slot.clear();
+        let bare = InventoryItem::new(ItemType(0xc), 0, 0, None, None);
+        bare.borrow_mut().sub_items = None;
+        let h: SubSlot = Rc::new(RefCell::new(vec![bare]));
+        assert_eq!(p.move_inventory_items_to_sell_slot_from_array_count(&me, &h, 1), 1);
+        // containers cannot be stacked
+        let sword = || InventoryItem::new(ItemType(0xc), 0, 0, None, None);
+        p.st.borrow_mut().sell_slot.clear();
+        let f: SubSlot = Rc::new(RefCell::new(vec![sword(), sword()]));
+        assert_eq!(p.move_inventory_items_to_sell_slot_from_array_count(&me, &f, 1), 1);
+        assert_eq!(p.move_inventory_items_to_sell_slot_from_array_count(&me, &f, 1), 0);
+        // nothing to move
+        let empty: SubSlot = Rc::new(RefCell::new(vec![]));
+        assert_eq!(p.move_inventory_items_to_sell_slot_from_array_count(&me, &empty, 1), 0);
+        assert_eq!(p.move_inventory_items_to_sell_slot_from_array_count(&me, &f, 0), 0);
+    }
+
+    #[test]
+    fn buying_from_a_shop() {
+        let (w, _d, p) = mk("tp_i", Some("seller"), Some(slot_dict(&[(5, 0), (11, 0), (5, 0), (5, 0)], 0, 3)));
+        let me: ObjRef = p.clone();
+        let buyer: ObjRef = TestBh::new(5, false);
+        // no buyer, too many wanted, not enough cash
+        p.buy_button_tapped_with_quantity(&me, 1);
+        p.io.borrow_mut().current_blockhead = Some(buyer.clone());
+        p.buy_button_tapped_with_quantity(&me, 9);
+        let api = Rc::new(Api { cash: Cell::new(3), spent: Cell::new(0) });
+        set_blockhead_inventory_api(api.clone());
+        p.buy_button_tapped_with_quantity(&me, 2);
+        assert_eq!(p.sell_slot().len(), 3);
+        // enough cash for two at 4 each; the seller's keys never travel with the goods
+        api.cash.set(100);
+        let mut sd = crate::objects::base::new_mutable_dict();
+        sd.map.insert("sellerClientID".to_string(), PlistValue::string("x"));
+        sd.map.insert("keep".to_string(), PlistValue::int(1));
+        p.st.borrow().sell_slot[2].borrow_mut().dynamic_object_save_dict = Some(PlistValue::Dict(sd));
+        p.buy_button_tapped_with_quantity(&me, 2);
+        assert_eq!((api.spent.get(), p.coin_count()), (8, 8));
+        assert_eq!(p.sell_slot().len(), 1);
+        assert!(me.update_needs_to_be_sent());
+        // crystals in the slot are never handed out
+        p.st.borrow_mut().sell_slot.push(InventoryItem::new(ItemType(11), 0, 0, None, None));
+        p.buy_button_tapped_with_quantity(&me, 1);
+        assert_eq!(p.sell_slot().len(), 1);
+        // seller test and title
+        let seller_bh: ObjRef = TestBh::new(6, false);
+        me.set_owner_id(Some("c6".into()));
+        assert!(p.blockhead_is_seller(&me, &seller_bh));
+        assert!(!p.blockhead_is_seller(&me, &buyer));
+        me.set_owner_id(None);
+        assert!(p.blockhead_is_seller(&me, &buyer));
+        let stub = crate::blockhead::blockhead::testutil::stub(1, true);
+        assert!(p.blockhead_is_seller(&me, &stub), "no net id and no owner");
+        me.set_owner_id(Some("server".into()));
+        assert!(p.blockhead_is_seller(&me, &buyer));
+        assert_eq!(p.sell_title(), "SHOP (Bob)");
+        p.st.borrow_mut().seller_client_name = None;
+        assert_eq!(p.sell_title(), "SHOP");
+        let _ = w;
+    }
+
+    #[test]
+    fn using_removing_and_hooks() {
+        let (w, d, pb) = world_with_block("tp_j");
+        let it = InventoryItem::new(ItemType(168), 0, 0, None, None);
+        let p =
+            TradingPost::new(&w, &d, IntPair { x: 10, y: 10 }, None, Some(&it.borrow()), false, None, Some("c"), None)
+                .unwrap();
+        let me: ObjRef = p.clone();
+        assert_eq!(me.class_info().name, "TradingPost");
+        assert!(me.as_any().downcast_ref::<TradingPost>().is_some());
+        assert!(me.occupies_normal_contents());
+        assert_eq!(me.freeblock_creation_item_type(), 168);
+        assert!(me.free_block_creation_save_dict(&me).is_some());
+        assert_eq!(p.destroy_item_type(), 168);
+        assert!(p.requires_human_interaction() && p.is_paintable());
+        assert!(p.io_state().borrow().current_blockhead.is_none());
+        me.update_accurate_dt_is_simulation(&me, 0.1, 0.1, false);
+        me.world_contents_changed(&me, &mut vec![]);
+        me.blockheads_loaded(&me);
+        let other: ObjRef = TestBh::new(1, false);
+        me.blockhead_unloaded(&me, &other);
+        // painting
+        p.paint(&me, 4);
+        assert!(me.update_needs_to_be_sent());
+        // remote update with a user present only touches the base state; without a sell slot key it is kept
+        let mut upd = me.update_net_data_for_client(&me, None).unwrap();
+        p.io.borrow_mut().current_blockhead = Some(other.clone());
+        me.remote_update(&me, &upd);
+        p.io.borrow_mut().current_blockhead = None;
+        me.remote_update(&me, &upd);
+        upd.truncate(0x30);
+        let mut dict = PlistValue::mutable_dict();
+        if let PlistValue::Dict(dd) = &mut dict {
+            dd.map.insert("ownerID".to_string(), PlistValue::string("c"));
+        }
+        upd.extend_from_slice(&gz_plist_bytes(&dict));
+        me.remote_update(&me, &upd);
+        // support check on a real change; replicas ignore it
+        tile(pb, 10, 10).set_back_wall_type_index(2);
+        me.world_changed(&me, &mut vec![IntPair { x: 10, y: 9 }]);
+        assert!(me.needs_removed());
+        // removal in use by a foreign user is postponed, by a local one it stops them
+        let q =
+            TradingPost::new(&w, &d, IntPair { x: 14, y: 10 }, None, Some(&it.borrow()), false, None, Some("c"), None)
+                .unwrap();
+        let qm: ObjRef = q.clone();
+        q.io.borrow_mut().is_in_use = true;
+        q.io.borrow_mut().current_blockhead = Some(TestBh::new(2, true));
+        q.remove(&qm, None);
+        assert!(!qm.needs_removed());
+        q.io.borrow_mut().current_blockhead = None;
+        q.io.borrow_mut().remote_blockhead_in_use_unique_id = 4;
+        q.remove(&qm, None);
+        assert!(!qm.needs_removed());
+        q.io.borrow_mut().remote_blockhead_in_use_unique_id = 0;
+        let local = TestBh::new(3, false);
+        q.io.borrow_mut().current_blockhead = Some(local.clone());
+        q.remove(&qm, None);
+        assert!(qm.needs_removed());
+        assert!(local.log.borrow().iter().any(|l| l == "stop"));
+        q.remove(&qm, None);
+        // replicas
+        let r =
+            TradingPost::new(&w, &d, IntPair { x: 18, y: 10 }, None, Some(&it.borrow()), false, None, Some("c"), None)
+                .unwrap();
+        r.base.borrow_mut().is_net = true;
+        let rm: ObjRef = r.clone();
+        rm.world_changed(&rm, &mut vec![IntPair { x: 18, y: 9 }]);
+        r.remove(&rm, None);
+        r.paint(&rm, 2);
+        me.dealloc(&me);
+        assert!(p.sell_slot().is_empty());
+    }
+
+    #[test]
+    fn support_check_details() {
+        let (w, _d, pb) = world_with_block("tp_k");
+        let pos = IntPair { x: 10, y: 10 };
+        let hit = [IntPair { x: 10, y: 9 }];
+        tile(pb, 10, 10).set_back_wall_type_index(2);
+        assert!(support_lost(&w, pos, &hit));
+        // copper wire below, a half depth tile below, a wire beside it each keep the post
+        tile(pb, 10, 9).set_contents(CONTENTS_COPPER_WIRE);
+        assert!(!support_lost(&w, pos, &hit));
+        tile(pb, 10, 9).set_contents(0);
+        for (x, y) in [(9, 10), (11, 10), (10, 11)] {
+            tile(pb, x, y).set_contents(CONTENTS_COPPER_WIRE);
+            assert!(!support_lost(&w, pos, &hit), "wire at {x},{y}");
+            tile(pb, x, y).set_contents(0);
+            tile(pb, x, y).set_type_index(6);
+            assert!(!support_lost(&w, pos, &hit), "solid at {x},{y}");
+            tile(pb, x, y).set_type_index(2);
+        }
+        assert!(support_lost(&w, pos, &hit));
+        // wrap-around: a post at the far edge hears of a change on the other side of the seam
+        assert!(!support_lost(&w, IntPair { x: 127, y: 10 }, &[IntPair { x: 0, y: 9 }]));
+        assert!(!support_lost(&w, IntPair { x: 0, y: 10 }, &[IntPair { x: 127, y: 9 }]));
+        // an own tile outside the loaded area is no support problem
+        assert!(!support_lost(&w, IntPair { x: 10, y: 32 }, &[IntPair { x: 10, y: 31 }]));
+        // an unloaded neighbour counts as blocked
+        tile(pb, 0, 10).set_back_wall_type_index(2);
+        assert!(!support_lost(&w, IntPair { x: 0, y: 10 }, &[IntPair { x: 0, y: 9 }]));
+    }
+
+    #[test]
+    fn legacy_seller_keys_and_ownerless_posts() {
+        let (w, d, _pb) = world_with_block("tp_l");
+        install_server(&d);
+        let mut sd = slot_dict(&[(5, 0)], 1, 2);
+        if let Some(PlistValue::Array(a)) = sd.map.get_mut(&"sellSlot".to_string()) {
+            a.items.push(PlistValue::int(4));
+        }
+        sd.map.insert("sellerClientID".to_string(), PlistValue::string("legacy"));
+        sd.map.insert("sellerClientName".to_string(), PlistValue::string("Old"));
+        let it = InventoryItem::new(ItemType(168), 0, 0, None, None);
+        // no client placed it: the dictionary supplies seller id and name, foreign slot entries are ignored
+        let p =
+            TradingPost::new(&w, &d, IntPair { x: 10, y: 10 }, None, Some(&it.borrow()), false, Some(&sd), None, None)
+                .unwrap();
+        assert_eq!((p.clone() as ObjRef).owner_id().as_deref(), Some("legacy"));
+        assert_eq!(p.st.borrow().seller_client_name.as_deref(), Some("Old"));
+        assert_eq!(p.sell_slot().len(), 1);
+        // nobody at all: no alias lookup either
+        let bare =
+            TradingPost::new(&w, &d, IntPair { x: 12, y: 10 }, None, Some(&it.borrow()), false, None, None, None)
+                .unwrap();
+        assert_eq!((bare.clone() as ObjRef).owner_id(), None);
+        assert_eq!(bare.st.borrow().seller_client_name, None);
+        // a stored name is kept, not looked up
+        let known = TradingPost::new(
+            &w,
+            &d,
+            IntPair { x: 14, y: 10 },
+            None,
+            Some(&it.borrow()),
+            false,
+            Some(&sd),
+            Some("owner1"),
+            Some("Mine"),
+        )
+        .unwrap();
+        assert_eq!(known.st.borrow().seller_client_name.as_deref(), Some("Mine"));
+        // the same shape when loading
+        let me: ObjRef = known.clone();
+        let loaded = TradingPost::from_save_dict(&w, &d, &me.get_save_dict(&me), None).unwrap();
+        assert_eq!(loaded.st.borrow().seller_client_name.as_deref(), Some("Mine"));
     }
 }

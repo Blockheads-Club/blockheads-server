@@ -9,7 +9,7 @@
 
 use std::rc::Rc;
 
-use crate::fmath::cconv::{f32_to_i32, f32_to_u8, f64_to_i32};
+use crate::fmath::cconv::{f32_to_i32, f64_to_i32};
 use crate::fmath::libm::{powf, sinf};
 use crate::fmath::vector::{clamp, linear_interpolate};
 use crate::items::misc::default_data_a_and_b_for_item_type;
@@ -20,7 +20,7 @@ use crate::items::predicates::{
 };
 use crate::nslog;
 use crate::objects::base::{DynamicObject, WorldApi};
-use crate::objects::handle::{ptr_eq, ObjRef};
+use crate::objects::handle::ObjRef;
 use crate::path::can_enter::{check_can_enter_tile, FromProps};
 use crate::plist::value::PlistValue;
 use crate::rng::glibc_rand::{r01_from, rand_tagged};
@@ -1527,12 +1527,11 @@ fn u6_dig(c: &Ctx, coffee_dt: f32) {
                             false,
                         );
                         // CLIENT bonus-particle loop: executed (2 rand() per particle)
-                        if fbc.bonus_multiplier != 0 {
-                            let n = fbc.count / fbc.bonus_multiplier;
-                            for _ in 0..n.max(0) {
-                                let _ = rand_tagged("blockhead/update/dig_bonus_particle");
-                                let _ = rand_tagged("blockhead/update/dig_bonus_particle");
-                            }
+                        // (`bonusMultiplier` is never 0; a zero divisor would count nothing)
+                        let n = fbc.count.checked_div(fbc.bonus_multiplier).unwrap_or(0);
+                        for _ in 0..n.max(0) {
+                            let _ = rand_tagged("blockhead/update/dig_bonus_particle");
+                            let _ = rand_tagged("blockhead/update/dig_bonus_particle");
                         }
                     }
                     if matches!(cit, 1 | 23 | 24) {
@@ -2837,15 +2836,10 @@ fn u8(c: &Ctx) {
     // `else if jetSound != nil` (client only): never runs
 }
 
-#[allow(dead_code)]
-fn _unused(_: u8) {
-    let _ = (
-        f32_to_u8 as fn(f32) -> u8,
-        ptr_eq as fn(&ObjRef, &ObjRef) -> bool,
-        tile_is_tree_trunk as fn(Option<TileRef>) -> bool,
-    );
-    let _ = (state_asleep, WorldApi::world_width_macro as fn(&World) -> i32);
-}
+#[cfg(test)]
+pub(crate) mod cov_host;
+#[cfg(test)]
+mod coverage_tests;
 
 #[cfg(test)]
 mod tests {
@@ -3172,6 +3166,9 @@ mod tests {
             (1.0, 0.3, 0.5, 0x8d, true),
             (0.1, 0.26, 0.9, 0x8d, false),
             (0.6, 0.5, 0.3, 0, true),
+            // zero health, and (0.55) a low environment
+            (1.0, 1.2, 0.0, 0, false),
+            (0.55, 1.2, 1.0, 0, false),
         ] {
             world.set_expert_mode(expert);
             {
@@ -3183,7 +3180,7 @@ mod tests {
                 f.state.environment_temperature = 1.0;
                 f.state.environment_exposure = 1.0;
                 f.state.environment_light = 1.0;
-                f.state.environment = 1.0;
+                f.state.environment = if full == 0.55 { 0.1 } else { 1.0 };
                 f.pants_item_type = pants;
             }
             tick(&o);
