@@ -393,7 +393,7 @@ impl TileRef {
     }
 
     pub fn set_type_index(&self, v: u8) {
-        self.update(|t| t.type_index = v)
+        self.update(|t| t.retype(v))
     }
     pub fn set_back_wall_type_index(&self, v: u8) {
         self.update(|t| t.back_wall_type_index = v)

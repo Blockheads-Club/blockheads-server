@@ -2,6 +2,10 @@ use super::*;
 use bhmod_core::config::FILE_NAME;
 
 fn mod_dir(root: &Path, id: &str, cosmetics: &str) {
+    mod_dir_with(root, id, &format!("cosmetics = [{cosmetics}]"));
+}
+
+fn mod_dir_with(root: &Path, id: &str, content: &str) {
     let d = root.join(id);
     std::fs::create_dir_all(d.join("client")).unwrap();
     std::fs::write(d.join("client/main.luau"), "-- nothing\n").unwrap();
@@ -10,7 +14,7 @@ fn mod_dir(root: &Path, id: &str, cosmetics: &str) {
         format!(
             "schema = 1\nid = \"{id}\"\nversion = \"1.0.0\"\nname = {{ en = \"X\" }}\nauthors = [\"me\"]\nlicense = \"MIT\"\n\
              api = \"^0.1\"\n[sides]\nclient = true\n[entry]\nclient = {{ runtime = \"lua\", path = \"client/main.luau\" }}\n\
-             [content]\ncosmetics = [{cosmetics}]\n"
+             [content]\n{content}\n"
         ),
     )
     .unwrap();
@@ -141,4 +145,41 @@ fn a_broken_sidecar_turns_content_off_and_stays_untouched() {
     let (c, log) = run(&mods, &["hats"], &side3);
     assert_eq!(c, Content::default());
     assert!(log[0].contains("no free cosmetics id"), "{log:?}");
+}
+
+const DECOR: &str = "items = [{ key = \"decor:lamp\", texture = \"assets/a.png\" }, \
+                     { key = \"decor:plaque\", texture = \"assets/a.png\" }]\n\
+                     blocks = [{ key = \"decor:brick\", texture = \"assets/a.png\", base = \"red-bricks\", drops = \"decor:plaque\" },\n\
+                     { key = \"decor:plain\", texture = \"assets/a.png\", base = \"cobblestone\" },\n\
+                     { key = \"decor:nobase\", texture = \"assets/a.png\" }]";
+
+#[test]
+fn items_and_variant_blocks_are_registered() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mods = tmp.path().join("mods");
+    mod_dir_with(&mods, "decor", DECOR);
+    let side = tmp.path().join("world/mods/registry.toml");
+    let (c, log) = run(&mods, &["decor"], &side);
+    assert!(log.is_empty(), "{log:?}");
+    assert!(!c.has_cosmetics());
+    assert_eq!(c.items, BTreeSet::from([1107, 1108]));
+    // Blocks without a base are ids but no variants; drops resolve to the item id.
+    assert_eq!(c.id(Kind::Blocks, "decor:nobase"), Some(2));
+    assert_eq!(
+        c.variants,
+        BTreeMap::from([(1, VariantInfo { base: 11, drops: Some(1108) }), (3, VariantInfo { base: 10, drops: None }),])
+    );
+    assert_eq!(c.id(Kind::Items, "decor:lamp"), Some(1107));
+    // The tables the game rules see: variants only when they are switched on.
+    assert_eq!(c.tables(false).items, BTreeSet::from([1107, 1108]));
+    assert!(c.tables(false).variants.is_empty());
+    assert_eq!(c.tables(true).variants[&1], VariantInfo { base: 11, drops: Some(1108) });
+    // Ids that do not fit the game's types are left out of the tables.
+    let wide = Content {
+        items: BTreeSet::from([1107, u64::from(u32::MAX) + 1]),
+        variants: BTreeMap::from([(70_000, VariantInfo { base: 10, drops: None })]),
+        ..Content::default()
+    };
+    assert_eq!(wide.tables(true), ContentTables { items: BTreeSet::from([1107]), variants: BTreeMap::new() });
+    assert_eq!(Content::default().tables(true), ContentTables::default());
 }

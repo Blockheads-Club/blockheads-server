@@ -6,12 +6,15 @@
 //! the file is left exactly as it was, so fixing it brings the ids back. A server whose mods declare no content
 //! touches nothing.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use bhmod_content::registry::{declared, Wire};
 use bhmod_content::{Kind, Registry};
 use bhmod_core::discover::discover;
+use bhmod_manifest::content::base_tile;
+
+use super::{ContentTables, VariantInfo};
 
 /// The content of the offered mods.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -20,12 +23,28 @@ pub struct Content {
     pub wire: Wire,
     /// Cosmetic id to its slot.
     pub cosmetics: BTreeMap<u64, String>,
+    /// The `ItemType`s of the mods' items.
+    pub items: BTreeSet<u64>,
+    /// Variant blocks by id (only those that name a known `base`).
+    pub variants: BTreeMap<u64, VariantInfo>,
 }
 
 impl Content {
     /// True when some cosmetic can be worn.
     pub fn has_cosmetics(&self) -> bool {
         !self.cosmetics.is_empty()
+    }
+
+    /// What the game rules need to know: the mod items and, when `variants_on`, the variant blocks.
+    pub fn tables(&self, variants_on: bool) -> ContentTables {
+        ContentTables {
+            items: self.items.iter().filter_map(|i| u32::try_from(*i).ok()).collect(),
+            variants: if variants_on {
+                self.variants.iter().filter_map(|(id, v)| Some((u16::try_from(*id).ok()?, *v))).collect()
+            } else {
+                BTreeMap::new()
+            },
+        }
     }
 
     /// The key of a content id of `kind` in this world.
@@ -77,7 +96,21 @@ pub fn build(dir: &Path, offered: &[String], sidecar: &Path, log: &mut dyn FnMut
             }
         }
     }
-    Content { wire, cosmetics }
+    let mut items = BTreeSet::new();
+    let mut variants = BTreeMap::new();
+    for m in &manifests {
+        items.extend(m.content.items.iter().filter_map(|i| registry.id(Kind::Items, &i.key)));
+        for b in &m.content.blocks {
+            let (Some(id), Some(base)) = (registry.id(Kind::Blocks, &b.key), b.base.as_deref().and_then(base_tile))
+            else {
+                continue;
+            };
+            let drops =
+                b.drops.as_deref().and_then(|k| registry.id(Kind::Items, k)).and_then(|i| u32::try_from(i).ok());
+            variants.insert(id, VariantInfo { base: base.tile_type, drops });
+        }
+    }
+    Content { wire, cosmetics, items, variants }
 }
 
 #[cfg(test)]

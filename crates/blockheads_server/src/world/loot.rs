@@ -120,6 +120,12 @@ pub fn item_type_from_tile_is_foregorund(tile: TileRef, pos: IntPair, is_foregro
     let t = tile.get();
     let r = Some(tile);
     if !is_foreground {
+        // Mods (not in the original): a variant block gives its own item.
+        if let Some(item) =
+            crate::mods::variant_drop(&t.padding, t.type_index, crate::world::tiles::wrapped_x(world, pos.x), pos.y)
+        {
+            return ItemType(item);
+        }
         let v: u32 = match t.type_index {
             // AIR, WATER, SNOW: by contents
             2 | 3 | 5 => {
@@ -487,6 +493,39 @@ mod tests {
             let mut c = 0;
             assert_eq!(random_bonus_item_type_for_tile(Some(t), p, &mut c, &w).0, want, "type {}", ty);
         }
+    }
+
+    #[cfg(feature = "mods")]
+    #[test]
+    fn variant_block_gives_its_own_item() {
+        use crate::mods::{set_tables, ContentTables, VariantInfo};
+        let p = IntPair { x: 3, y: 0 };
+        let (w, t) = tile_of(11, 0);
+        assert_eq!(item_type_from_tile_is_foregorund(t, p, false, &w).0, 0x402);
+        let mut tables = ContentTables::default();
+        tables.variants.insert(5, VariantInfo { base: 11, drops: Some(1108) });
+        tables.variants.insert(6, VariantInfo { base: 11, drops: None });
+        set_tables(tables);
+        let mark = |id: u16| {
+            let v = bhmod_content::variant::Variant { id, base: 11, layer: 0, data: 0 };
+            t.update(|x| x.padding = bhmod_content::variant::encode(&v, 3, 0));
+        };
+        mark(5);
+        assert_eq!(item_type_from_tile_is_foregorund(t, p, false, &w).0, 1108);
+        // The position wraps like the tile's: the same record at the wrapped x.
+        let width = w.world_width_macro * 32;
+        assert_eq!(item_type_from_tile_is_foregorund(t, IntPair { x: 3 + width, y: 0 }, false, &w).0, 1108);
+        // No drop declared, another tile, a changed block: the vanilla drop.
+        mark(6);
+        assert_eq!(item_type_from_tile_is_foregorund(t, p, false, &w).0, 0x402);
+        mark(5);
+        assert_eq!(item_type_from_tile_is_foregorund(t, IntPair { x: 4, y: 0 }, false, &w).0, 0x402);
+        t.set_type_index(10);
+        assert_eq!(item_type_from_tile_is_foregorund(t, p, false, &w).0, 0x400);
+        // Foreground contents never come from a variant.
+        mark(5);
+        assert_eq!(item_type_from_tile_is_foregorund(t, p, true, &w).0, 0);
+        set_tables(ContentTables::default());
     }
 
     #[test]

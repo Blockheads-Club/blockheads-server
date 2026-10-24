@@ -439,3 +439,49 @@ fn the_query_face_the_server_face_and_the_loader_adapter() {
         let _ = (adapter.max_of_rock_and_dirt_height_for_x(5), adapter.lake_height_for_x(5));
     });
 }
+
+#[test]
+fn mods_hooks_give_items_and_edit_tile_records() {
+    isolated(|| {
+        use crate::world::lifecycle::WorldCoreHooks as W;
+        let f = fx("hk_mods_records");
+        // Nobody owns a blockhead yet, and a glue without a dynamic world gives nothing.
+        assert!(!W::mods_give_item(&*f.g, "p1", 1107, 1));
+        assert!(!W::mods_give_item(&*f.dead, "p1", 1107, 1));
+        f.bh().set_client_id("p1");
+        f.dw.net_blockheads.borrow_mut().push(f.bh_obj.clone());
+        assert!(!W::mods_give_item(&*f.g, "p2", 1107, 1));
+        assert!(W::mods_give_item(&*f.g, "p1", 1107, 3));
+
+        // The tile record: wrapped x, block type and the 16 spare bytes of a loaded tile.
+        let (wx, ty, pad) = W::mods_tile_record(&*f.g, 5, 9).unwrap();
+        assert_eq!((wx, pad), (5, [0; 16]));
+        assert_eq!(ty, f.tile.get().type_index);
+        assert_eq!(W::mods_tile_record(&*f.g, 5, -1), None);
+        assert_eq!(W::mods_tile_record(&*f.dead, 5, 9), None);
+        let width = f.world.world_width_macro * 32;
+        assert_eq!(W::mods_tile_record(&*f.g, 5 - width, 9).map(|r| r.0), Some(5));
+
+        // Setting it changes the block, keeps the bytes and tells the clients; the record gets the wrapped x.
+        let seen = std::cell::Cell::new((0, 0));
+        let record = |x: i32, y: i32| {
+            seen.set((x, y));
+            [x as u8; 16]
+        };
+        assert!(W::mods_set_tile_record(&*f.g, 5 - width, 9, 11, &record));
+        assert_eq!(seen.get(), (5, 9));
+        let t = f.tile.get();
+        assert_eq!((t.type_index, t.padding), (11, [5; 16]));
+        assert!(f.dw.world_changed_positions.borrow().contains(&IntPair { x: 5 - width, y: 9 }));
+        // A change of the block type from outside ends the record.
+        f.tile.set_type_index(2);
+        assert_eq!(f.tile.get().padding, [0; 16]);
+        assert!(!W::mods_set_tile_record(&*f.g, 5, -1, 11, &record));
+        assert!(!W::mods_set_tile_record(&*f.dead, 5, 9, 11, &record));
+        // A glue with a world but no dynamic world still edits the tile.
+        *f.g.dw.borrow_mut() = None;
+        assert!(W::mods_set_tile_record(&*f.g, 5, 9, 10, &record));
+        assert_eq!(f.tile.get().type_index, 10);
+        assert!(!W::mods_give_item(&*f.g, "p1", 1107, 1));
+    });
+}

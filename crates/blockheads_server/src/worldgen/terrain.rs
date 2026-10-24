@@ -818,6 +818,8 @@ impl Terrain {
                 t.paint_top = 0;
                 t.paint_left = 0;
                 t.paint_right = 0;
+                // Not in the original: a recycled block may hold a mod block's record (zero without mods).
+                t.padding = [0; 16];
                 cell.set(t);
             }
             let (r, d) = self.get_rock_and_dirt_height(p, world_x);

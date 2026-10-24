@@ -182,6 +182,40 @@ impl GameBridge for Bridge {
     fn cosmetics_of(&self, player: &str) -> Vec<(String, u64)> {
         self.net.borrow().worn(player)
     }
+    fn give_item(&self, player: &str, item: u64, count: u32) -> Result<(), ApiError> {
+        self.srv.upgrade().filter(|s| self.online(s, player)).ok_or(ApiError::StaleHandle)?;
+        let item = u32::try_from(item).map_err(|_| ApiError::InvalidArgument("item id out of range".into()))?;
+        if crate::world::lifecycle::core_hooks().mods_give_item(player, item, count) {
+            Ok(())
+        } else {
+            Err(ApiError::Internal("the player has no blockhead in the world".into()))
+        }
+    }
+    fn place_block(&self, x: i32, y: i32, block: u64) -> Result<(), ApiError> {
+        if !super::variant_blocks_enabled() {
+            return Err(ApiError::Unsupported);
+        }
+        let info = self.net.borrow().content.variants.get(&block).copied();
+        let (Some(info), Ok(id)) = (info, u16::try_from(block)) else {
+            return Err(ApiError::InvalidArgument("that block has no base block".into()));
+        };
+        let record = |wx: i32, wy: i32| {
+            bhmod_content::variant::encode(
+                &bhmod_content::variant::Variant { id, base: info.base, layer: 0, data: 0 },
+                wx,
+                wy,
+            )
+        };
+        if crate::world::lifecycle::core_hooks().mods_set_tile_record(x, y, info.base, &record) {
+            Ok(())
+        } else {
+            Err(ApiError::InvalidArgument(format!("the tile ({x}, {y}) is not loaded")))
+        }
+    }
+    fn block_at(&self, x: i32, y: i32) -> Option<u64> {
+        let (wx, type_index, padding) = crate::world::lifecycle::core_hooks().mods_tile_record(x, y)?;
+        super::variant_of(&padding, type_index, wx, y).map(|(id, _)| u64::from(id))
+    }
     fn channel_send(&self, _mod_id: &str, name: &str, target: &ChannelTarget, data: &[u8]) -> Result<(), ApiError> {
         let one = match target {
             ChannelTarget::Player(p) => Some(p.clone()),
@@ -552,6 +586,7 @@ pub(super) fn load(dir: &Path, save_id: Option<&str>, server: &Rc<BHServer>) -> 
     let content = super::content::build(dir, &offered, &world_dir.join("mods/registry.toml"), &mut |m| {
         GameBridge::log(&*bridge, None, LogLevel::Error, &m)
     });
+    super::set_tables(content.tables(super::variant_blocks_enabled()));
     net.borrow_mut().catalog = catalog;
     net.borrow_mut().content = content;
     Some(Rc::new(ServerMods {
@@ -607,6 +642,7 @@ mod tests {
         b.net.borrow_mut().content = crate::mods::content::Content {
             wire: [("cosmetics".to_string(), [("hats:crown".to_string(), 1u64)].into())].into(),
             cosmetics: [(1, "hat".to_string())].into(),
+            ..Default::default()
         };
         assert_eq!(b.content_id(ContentKind::Cosmetic, "hats:crown"), Some(1));
         assert_eq!(b.content_id(ContentKind::Cosmetic, "hats:none"), None);
@@ -721,12 +757,90 @@ mod tests {
         b.net.borrow_mut().content = crate::mods::content::Content {
             wire: [("cosmetics".to_string(), [("hats:crown".to_string(), 1u64)].into())].into(),
             cosmetics: [(1, "hat".to_string())].into(),
+            ..Default::default()
         };
         assert_eq!(b.set_cosmetic(&pid, "hat", Some(1)), Ok(()));
         assert_eq!(b.cosmetics_of(&pid), vec![("hat".to_string(), 1)]);
         assert_eq!(b.set_cosmetic(&pid, "hat", None), Ok(()));
         assert!(b.cosmetics_of(&pid).is_empty());
         assert_eq!(b.set_cosmetic("nobody", "hat", Some(1)), Err(ApiError::StaleHandle));
+    }
+
+    /// The mod seams of the world: a recorder in place of the production glue.
+    #[derive(Default)]
+    struct World {
+        given: RefCell<Vec<(String, u32, u32)>>,
+        tile: RefCell<Option<(u8, [u8; 16])>>,
+        has_blockhead: bool,
+    }
+    impl crate::world::lifecycle::WorldCoreHooksStub for World {
+        fn mods_give_item(&self, client_id: &str, item: u32, count: u32) -> bool {
+            self.given.borrow_mut().push((client_id.to_string(), item, count));
+            self.has_blockhead
+        }
+        fn mods_tile_record(&self, x: i32, _y: i32) -> Option<(i32, u8, [u8; 16])> {
+            let (ty, pad) = (*self.tile.borrow())?;
+            Some((x.rem_euclid(1024), ty, pad))
+        }
+        fn mods_set_tile_record(&self, x: i32, y: i32, base: u8, record: &dyn Fn(i32, i32) -> [u8; 16]) -> bool {
+            if y < 0 {
+                return false;
+            }
+            *self.tile.borrow_mut() = Some((base, record(x.rem_euclid(1024), y)));
+            true
+        }
+    }
+
+    #[test]
+    fn items_and_variant_blocks_through_the_bridge() {
+        use crate::mods::{set_config, set_tables, ModsConfig};
+        let h = Harness::new("m_bridge_items");
+        let pid = h.join("Ann");
+        let b = Bridge { srv: Rc::downgrade(&h.srv), net: Rc::default() };
+        let world = Rc::new(World { has_blockhead: true, ..World::default() });
+        crate::world::lifecycle::set_core_hooks(world.clone());
+
+        // Items: the player must be online, the world must have a blockhead for them.
+        assert_eq!(b.give_item("nobody", 1107, 2), Err(ApiError::StaleHandle));
+        assert_eq!(
+            b.give_item(&pid, u64::from(u32::MAX) + 1, 2),
+            Err(ApiError::InvalidArgument("item id out of range".into()))
+        );
+        assert_eq!(b.give_item(&pid, 1107, 2), Ok(()));
+        assert_eq!(*world.given.borrow(), vec![(pid.clone(), 1107, 2)]);
+        let empty = Rc::new(World::default());
+        crate::world::lifecycle::set_core_hooks(empty);
+        assert!(matches!(b.give_item(&pid, 1107, 1), Err(ApiError::Internal(_))));
+        crate::world::lifecycle::set_core_hooks(world.clone());
+
+        // Variant blocks are off unless the server owner turned them on.
+        let variant = crate::mods::VariantInfo { base: 11, drops: None };
+        b.net.borrow_mut().content.variants.insert(3, variant);
+        assert_eq!(b.place_block(5, 9, 3), Err(ApiError::Unsupported));
+        set_config(ModsConfig { variant_blocks: true, ..ModsConfig::default() });
+        set_tables(b.net.borrow().content.tables(true));
+        assert_eq!(b.place_block(5, 9, 3), Ok(()));
+        let (ty, pad) = world.tile.borrow().unwrap();
+        let rec = bhmod_content::variant::decode(&pad, ty, 5, 9).unwrap();
+        assert_eq!((ty, rec.id, rec.base, rec.layer), (11, 3, 11, 0));
+        assert_eq!(b.block_at(5, 9), Some(3));
+        // The tile's x wraps: the record belongs to the wrapped position.
+        assert_eq!(b.place_block(5 + 1024, 9, 3), Ok(()));
+        assert_eq!(b.block_at(5 + 1024, 9), Some(3));
+        assert_eq!(b.block_at(6, 9), None);
+        // Unknown blocks, blocks without a base, ids too wide for a tile, tiles that are not loaded.
+        assert!(matches!(b.place_block(5, 9, 4), Err(ApiError::InvalidArgument(_))));
+        b.net.borrow_mut().content.variants.insert(70_000, variant);
+        assert!(matches!(b.place_block(5, 9, 70_000), Err(ApiError::InvalidArgument(_))));
+        assert!(matches!(b.place_block(5, -1, 3), Err(ApiError::InvalidArgument(_))));
+        // A plain tile, and no tile at all.
+        *world.tile.borrow_mut() = Some((11, [0; 16]));
+        assert_eq!(b.block_at(5, 9), None);
+        *world.tile.borrow_mut() = None;
+        assert_eq!(b.block_at(5, 9), None);
+        set_config(ModsConfig::default());
+        set_tables(Default::default());
+        crate::world::lifecycle::set_core_hooks(Rc::new(crate::world::lifecycle::NullCoreHooks));
     }
 
     #[test]

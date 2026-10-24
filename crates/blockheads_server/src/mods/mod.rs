@@ -69,6 +69,66 @@ pub struct ModsConfig {
     pub dir: Option<PathBuf>,
     /// True never loads mods, whatever the directory holds.
     pub disabled: bool,
+    /// True lets mods place variant blocks (`content.place-block`, a tile record in `Tile.padding`). Off by default
+    /// until the check that no vanilla client path reads or clears those tile bytes is done on a device. Also set by
+    /// `BLOCKHEADS_MODS_VARIANT_BLOCKS` = `1`, `true`, `yes` or `on`.
+    pub variant_blocks: bool,
+}
+
+/// Whether variant blocks are on: [`ModsConfig::variant_blocks`] or `BLOCKHEADS_MODS_VARIANT_BLOCKS`.
+pub fn variant_blocks_enabled() -> bool {
+    config().variant_blocks || flag_on(std::env::var("BLOCKHEADS_MODS_VARIANT_BLOCKS").ok().as_deref())
+}
+
+fn flag_on(v: Option<&str>) -> bool {
+    v.is_some_and(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+}
+
+/// A variant block as the game rules see it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VariantInfo {
+    /// `Tile.typeIndex` of the vanilla block it is based on.
+    pub base: u8,
+    /// The `ItemType` mining it gives instead of the base block's item.
+    pub drops: Option<u32>,
+}
+
+/// What the game rules need to know about mod content. Empty (and everything below inert) unless content mods
+/// loaded; set by the mod host when it loads.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ContentTables {
+    /// The `ItemType`s of mod items (registry kind `items`).
+    pub items: std::collections::BTreeSet<u32>,
+    /// Variant blocks by registry id.
+    pub variants: std::collections::BTreeMap<u16, VariantInfo>,
+}
+
+/// Installs (or, with the default value, removes) the content tables of this server thread.
+pub fn set_tables(t: ContentTables) {
+    TABLES.with(|x| *x.borrow_mut() = t);
+}
+
+/// True for the `ItemType` of a mod item of this world.
+pub fn is_mod_item(item: u32) -> bool {
+    TABLES.with(|t| t.borrow().items.contains(&item))
+}
+
+/// The variant block record of a tile, if it has a valid one: the tile at `(x, y)` with `type_index` and `padding`.
+#[cfg(feature = "mods")]
+pub fn variant_of(padding: &[u8; 16], type_index: u8, x: i32, y: i32) -> Option<(u16, VariantInfo)> {
+    let v = bhmod_content::variant::decode(padding, type_index, x, y)?;
+    TABLES.with(|t| t.borrow().variants.get(&v.id).copied().filter(|i| i.base == type_index).map(|i| (v.id, i)))
+}
+
+/// The item mining the variant block of a tile gives (see [`variant_of`]), if it has one that names a drop.
+pub fn variant_drop(padding: &[u8; 16], type_index: u8, x: i32, y: i32) -> Option<u32> {
+    variant_of(padding, type_index, x, y)?.1.drops
+}
+
+/// Without the `mods` feature there are no variant blocks.
+#[cfg(not(feature = "mods"))]
+pub fn variant_of(_padding: &[u8; 16], _type_index: u8, _x: i32, _y: i32) -> Option<(u16, VariantInfo)> {
+    None
 }
 
 /// What the mods decided about a chat message.
@@ -154,6 +214,7 @@ thread_local! {
     static HOOKS: RefCell<Option<Rc<dyn ModHooks>>> = const { RefCell::new(None) };
     static CONFIG: RefCell<ModsConfig> = RefCell::new(ModsConfig::default());
     static ACTOR: RefCell<Option<String>> = const { RefCell::new(None) };
+    static TABLES: RefCell<ContentTables> = RefCell::new(ContentTables::default());
 }
 
 /// While alive, tile changes and damage are attributed to a player (the request being handled). Only set when a
@@ -185,6 +246,9 @@ pub fn hooks() -> Option<Rc<dyn ModHooks>> {
 
 /// Installs (or removes) the mod host of this server thread.
 pub fn install(h: Option<Rc<dyn ModHooks>>) {
+    if h.is_none() {
+        set_tables(ContentTables::default());
+    }
     HOOKS.with(|c| *c.borrow_mut() = h);
 }
 
@@ -298,7 +362,7 @@ mod tests {
 
     #[test]
     fn config_and_dir_resolution() {
-        set_config(ModsConfig { dir: Some(PathBuf::from("/x/mods")), disabled: false });
+        set_config(ModsConfig { dir: Some(PathBuf::from("/x/mods")), ..ModsConfig::default() });
         assert_eq!(mods_dir(), PathBuf::from("/x/mods"));
         set_config(ModsConfig::default());
         assert_eq!(config(), ModsConfig::default());
@@ -381,6 +445,50 @@ mod tests {
         if let Some(v) = saved {
             std::env::set_var("BLOCKHEADS_MODS_BUDGET_SCALE", v);
         }
+    }
+
+    #[test]
+    fn content_tables_and_the_variant_flag() {
+        assert!(!is_mod_item(1107));
+        assert_eq!(variant_of(&[0; 16], 11, 3, 4), None);
+        let mut t = ContentTables::default();
+        t.items.insert(1107);
+        t.variants.insert(5, VariantInfo { base: 11, drops: Some(1108) });
+        t.variants.insert(6, VariantInfo { base: 10, drops: None });
+        set_tables(t);
+        assert!(is_mod_item(1107) && !is_mod_item(1106));
+        #[cfg(feature = "mods")]
+        {
+            let rec = |id: u16, base: u8, x: i32, y: i32| {
+                bhmod_content::variant::encode(&bhmod_content::variant::Variant { id, base, layer: 0, data: 0 }, x, y)
+            };
+            let pad = rec(5, 11, 3, 4);
+            assert_eq!(variant_of(&pad, 11, 3, 4), Some((5, VariantInfo { base: 11, drops: Some(1108) })));
+            assert_eq!(variant_drop(&pad, 11, 3, 4), Some(1108));
+            // Another tile, another block type, an id the world does not know, a variant without a drop.
+            assert_eq!(variant_of(&pad, 11, 4, 4), None);
+            assert_eq!(variant_of(&pad, 10, 3, 4), None);
+            assert_eq!(variant_of(&rec(9, 11, 3, 4), 11, 3, 4), None);
+            assert_eq!(variant_of(&rec(5, 10, 3, 4), 10, 3, 4), None);
+            let plain = rec(6, 10, 3, 4);
+            assert_eq!(variant_of(&plain, 10, 3, 4).map(|v| v.0), Some(6));
+            assert_eq!(variant_drop(&plain, 10, 3, 4), None);
+        }
+        // Removing the host removes the tables.
+        install(None);
+        assert!(!is_mod_item(1107));
+
+        assert!(!flag_on(None) && !flag_on(Some("")) && !flag_on(Some("0")) && !flag_on(Some("maybe")));
+        assert!(flag_on(Some("1")) && flag_on(Some(" Yes ")) && flag_on(Some("ON")) && flag_on(Some("true")));
+        // Tests run single-threaded (.cargo/config.toml).
+        assert!(!variant_blocks_enabled());
+        std::env::set_var("BLOCKHEADS_MODS_VARIANT_BLOCKS", "1");
+        assert!(variant_blocks_enabled());
+        std::env::remove_var("BLOCKHEADS_MODS_VARIANT_BLOCKS");
+        set_config(ModsConfig { variant_blocks: true, ..ModsConfig::default() });
+        assert!(variant_blocks_enabled());
+        set_config(ModsConfig::default());
+        assert!(!variant_blocks_enabled());
     }
 
     #[test]

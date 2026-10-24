@@ -409,6 +409,7 @@ fn with_cosmetics(n: &mut ModNet) {
         wire: [("cosmetics".to_string(), [("hats:crown".to_string(), 1u64), ("hats:ember".to_string(), 2)].into())]
             .into(),
         cosmetics: [(1, "hat".to_string()), (2, "hair".to_string())].into(),
+        ..Content::default()
     };
 }
 

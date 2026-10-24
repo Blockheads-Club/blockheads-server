@@ -27,6 +27,11 @@ fn wrap_x(x: i32, w: i32) -> i32 {
     }
 }
 
+/// The x of the tile at world x `x` after wrapping around the world (what the tile stores its coordinates as).
+pub fn wrapped_x(world: &World, x: i32) -> i32 {
+    wrap_x(x, wt(world))
+}
+
 /// `getWorldPosForWorldIndex`: `(idx % Wt, idx / Wt)`, signed C ops, no range check.
 pub fn get_world_pos_for_world_index(idx: i32, world: &World) -> IntPair {
     world_pos_at_world_index(idx, world)

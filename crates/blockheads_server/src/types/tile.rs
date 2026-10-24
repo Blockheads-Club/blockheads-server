@@ -3,6 +3,18 @@ use super::structs::WireStruct;
 
 include!("tile_gen.rs");
 
+impl Tile {
+    /// Changes the block type. A mod block (`bhmod_content::variant`) keeps its record in `padding`; a change of the
+    /// block type ends it, so the padding is cleared (it is zero in every vanilla world, so nothing observable
+    /// changes without mods).
+    pub fn retype(&mut self, type_index: u8) {
+        if self.type_index != type_index {
+            self.type_index = type_index;
+            self.padding = [0; 16];
+        }
+    }
+}
+
 pub const BLOCK_DIM: usize = 32;
 pub const BLOCK_TILES: usize = 1024;
 pub const TILE_SIZE: usize = 64;
@@ -79,6 +91,16 @@ mod hand_tests {
         assert_eq!(&b[0x24..0x26], &[0xef, 0xbe]); // paintBot @0x24
         assert_eq!(&b[0x28..0x30], &[8, 7, 6, 5, 4, 3, 2, 1]); // dynamicObjectOwner @0x28 LE
         assert!(b[0xd] == 0 && b[0x17] == 0 && b[0x26..0x28] == [0, 0] && b[0x30..].iter().all(|&x| x == 0));
+    }
+    #[test]
+    fn retype_ends_a_mod_record_only_when_the_block_changes() {
+        let mut t = Tile::default();
+        t.type_index = 11;
+        t.padding = [7; 16];
+        t.retype(11);
+        assert_eq!(t.padding, [7; 16]);
+        t.retype(2);
+        assert_eq!((t.type_index, t.padding), (2, [0; 16]));
     }
     #[test]
     fn block_blob_roundtrip() {

@@ -191,7 +191,8 @@ pub fn item_type_is_valid_fill_item(t: ItemType) -> bool {
     if v > 343 && v < 1024 {
         return false;
     }
-    if v > 1105 {
+    // Mods (not in the original): the items of the loaded content mods are real item types above the vanilla ones.
+    if v > 1105 && !crate::mods::is_mod_item(t.0) {
         return false;
     }
     !matches!(
@@ -1195,6 +1196,21 @@ mod tests {
         assert!(item_type_is_valid_fill_item(I::ITEM_COBBLESTONE));
         assert!(item_type_is_valid_fill_item(ItemType((-5i32) as u32)));
         assert!(!item_type_is_valid_inventory_item(I::ITEM_FREEZE_WATER));
+    }
+
+    #[test]
+    fn mod_items_are_valid_inventory_items() {
+        use crate::mods::{set_tables, ContentTables};
+        assert!(!item_type_is_valid_inventory_item(ItemType(1107)));
+        let mut t = ContentTables::default();
+        t.items.insert(1107);
+        set_tables(t);
+        assert!(item_type_is_valid_inventory_item(ItemType(1107)));
+        // Only the ones the world registered, and vanilla ids are unaffected.
+        assert!(!item_type_is_valid_inventory_item(ItemType(1108)));
+        assert!(!item_type_is_valid_fill_item(I::ITEM_ROCK));
+        set_tables(ContentTables::default());
+        assert!(!item_type_is_valid_inventory_item(ItemType(1107)));
     }
 
     #[test]

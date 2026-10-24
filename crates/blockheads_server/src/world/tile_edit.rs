@@ -442,7 +442,7 @@ impl World {
                 }
                 if !matches!(tile.type_index(), 5 | 3 | 0x1f | 0x19 | 0x21..=0x25) {
                     tile.update(|t| {
-                        t.type_index = TILE_AIR;
+                        t.retype(TILE_AIR);
                         t.partial_content_left = 0;
                     });
                 }
@@ -492,7 +492,7 @@ impl World {
     pub fn remove_water_tile_at_pos(&self, pos: IntPair) {
         if let Some(tile) = self.tile_at(pos.x, pos.y) {
             tile.update(|t| {
-                t.type_index = TILE_AIR;
+                t.retype(TILE_AIR);
                 t.partial_content_left = 0;
             });
             let d = deps();
@@ -1583,7 +1583,7 @@ impl World {
         if tile_is_not_unmined_block_so_can_be_removed_on_repair(Some(tile)) {
             tile.update(|t| {
                 t.contents = 0;
-                t.type_index = TILE_AIR;
+                t.retype(TILE_AIR);
             });
             if back_wall_removes_with_repair_tool(Some(tile)) {
                 tile.set_back_wall_type_index(TILE_AIR);

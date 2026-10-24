@@ -905,7 +905,7 @@ impl DynamicWorld {
                     t.background_contents = 0;
                     t.foreground_contents = 0;
                     t.contents = 0;
-                    t.type_index = 2;
+                    t.retype(2);
                     t.back_wall_type_index = 2;
                 });
             }
@@ -913,7 +913,7 @@ impl DynamicWorld {
         hooks.place_basic_portal_workbench(at);
         if let Some(t) = tile_at_world_position_loaded(at.x, at.y - 1, &world) {
             t.update(|t| {
-                t.type_index = 0x19;
+                t.retype(0x19);
                 t.contents = 0;
                 t.zone_type_index = 1;
             });

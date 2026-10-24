@@ -484,7 +484,7 @@ impl Workbench {
                 t.update(|t| {
                     t.contents = 0;
                     if (0..=5).contains(&level) {
-                        t.type_index = (42 + level) as u8;
+                        t.retype((42 + level) as u8);
                     }
                     if t.back_wall_type_index == 2 {
                         t.back_wall_type_index = 10;
@@ -1280,7 +1280,7 @@ impl Workbench {
         if let (Some(t), Some(w)) = (stone, &world) {
             if (1..=5).contains(&level) {
                 let idx = if ty == WB_BASIC_PORTAL { 0x20 + level } else { 0x2a + level };
-                t.update(|t| t.type_index = idx as u8);
+                t.update(|t| t.retype(idx as u8));
                 if report_achievement {
                     let cur = self.io.borrow().current_blockhead.clone();
                     let controlled = match &cur {

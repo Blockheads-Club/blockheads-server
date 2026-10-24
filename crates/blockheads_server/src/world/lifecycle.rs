@@ -306,6 +306,21 @@ pub trait WorldCoreHooks, stub WorldCoreHooksStub {
     fn dynamic_world_all_blockheads_including_net(&self) -> Vec<ObjRef> {
         Vec::new()
     }
+    /// Mods (not in the original): drops `count` free blocks of `item` on the blockhead of the player `client_id`,
+    /// reserved for that blockhead (the mod API `content.give-item`). False when the player has no blockhead.
+    fn mods_give_item(&self, client_id: &str, item: u32, count: u32) -> bool {
+        false
+    }
+    /// Mods: the tile at `(x, y)` as `(wrapped x, block type, the 16 spare bytes)`; `None` when it is not loaded.
+    fn mods_tile_record(&self, x: i32, y: i32) -> Option<(i32, u8, [u8; 16])> {
+        None
+    }
+    /// Mods: sets the block type and the spare bytes of the loaded tile at `(x, y)` and sends the block to the
+    /// clients (the mod API `content.place-block`). `record` makes the spare bytes for the tile's wrapped
+    /// coordinates. False when the tile is not loaded.
+    fn mods_set_tile_record(&self, x: i32, y: i32, base: u8, record: &dyn Fn(i32, i32) -> [u8; 16]) -> bool {
+        false
+    }
     /// `-clientConnected:`
     fn dynamic_world_client_connected(&self, client_id: &str) {}
     /// `-clientDisconnected:simulate:`
@@ -2340,6 +2355,9 @@ mod hook_default_tests {
         let _ = WorldCoreHooksStub::dynamic_world_blockhead_previews(&h);
         let _ = WorldCoreHooksStub::dynamic_world_blockheads(&h);
         let _ = WorldCoreHooksStub::dynamic_world_all_blockheads_including_net(&h);
+        assert!(!WorldCoreHooksStub::mods_give_item(&h, "x", 1107, 1));
+        assert!(WorldCoreHooksStub::mods_tile_record(&h, 0, 0).is_none());
+        assert!(!WorldCoreHooksStub::mods_set_tile_record(&h, 0, 0, 10, &|_, _| [0; 16]));
         WorldCoreHooksStub::dynamic_world_client_connected(&h, "x");
         WorldCoreHooksStub::dynamic_world_client_disconnected_simulate(&h, "x", false);
         WorldCoreHooksStub::dynamic_world_stop_all_blockhead_actions_for_client_due_to_kick(&h, "x");

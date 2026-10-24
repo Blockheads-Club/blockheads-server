@@ -409,6 +409,48 @@ impl BlockheadGlue {
 // =====================================================================================================
 
 impl WorldCoreHooks for Glue {
+    // ---- Mods
+    fn mods_give_item(&self, client_id: &str, item: u32, count: u32) -> bool {
+        let Some(d) = self.dw() else { return false };
+        let all = d.all_blockheads_including_net();
+        let Some(bh) = all.iter().find(|b| bh_of(b).and_then(|x| x.client_id()).as_deref() == Some(client_id)) else {
+            return false;
+        };
+        let pos = bh_of(bh).map_or(IntPair { x: 0, y: 0 }, |x| x.pos());
+        for _ in 0..count {
+            d.create_free_block_at_position_of_type_data_a_data_b_sub_items_dynamic_object_save_dict_hovers_play_sound_priority_blockhead(
+                pos,
+                crate::types::item_type::ItemType(item),
+                0,
+                0,
+                None,
+                None,
+                false,
+                0,
+                Some(bh),
+            );
+        }
+        true
+    }
+    fn mods_tile_record(&self, x: i32, y: i32) -> Option<(i32, u8, [u8; 16])> {
+        let world = self.world()?;
+        let t = crate::world::tiles::tile_at_world_position_loaded(x, y, &world)?.get();
+        Some((crate::world::tiles::wrapped_x(&world, x), t.type_index, t.padding))
+    }
+    fn mods_set_tile_record(&self, x: i32, y: i32, base: u8, record: &dyn Fn(i32, i32) -> [u8; 16]) -> bool {
+        let Some(world) = self.world() else { return false };
+        let Some(tile) = crate::world::tiles::tile_at_world_position_loaded(x, y, &world) else { return false };
+        let padding = record(crate::world::tiles::wrapped_x(&world, x), y);
+        tile.update(|t| {
+            t.retype(base);
+            t.padding = padding;
+        });
+        if let Some(d) = self.dw() {
+            d.world_changed_at_pos_send_reliably(IntPair { x, y }, true);
+        }
+        true
+    }
+
     // ---- BHServer
     fn server_send_network_data_to_peers_reliable(&self, data: &[u8], peers: Option<&[String]>, reliable: bool) {
         if let Some(s) = self.srv() {
