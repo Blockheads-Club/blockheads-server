@@ -911,7 +911,7 @@ impl Blockhead {
                     o.as_interaction_like().map_or(false, |i| i.can_be_used_in_expert_mode_when_not_owned())
                 });
                 let local = h.dynamic_world_local_net_id();
-                let owner_is_local = o.as_ref().map_or(false, |o| o.owner_id().map_or(false, |oid| oid == local));
+                let owner_is_local = o.as_ref().map_or(false, |o| o.owner_id() == Some(local));
                 let cant_use = !world.is_admin() && world.expert_mode() && !can_use_expert && !owner_is_local;
                 if !cant_use {
                     return InteractionType::INTERACTION_CRAFT;
@@ -2807,10 +2807,10 @@ mod tests {
         b.base.borrow_mut().is_net = true;
         h.light_index.set(None);
         b.update_position(IntPair { x: 9, y: 8 });
-        assert!(h.take().iter().all(|l| !l.starts_with("load")));
+        assert!(!format!("|{}", h.take().join("|")).contains("|load"));
         h.light_index.set(Some(-1));
         b.update_position(IntPair { x: 10, y: 8 });
-        assert!(h.take().iter().all(|l| !l.starts_with("load")));
+        assert!(!format!("|{}", h.take().join("|")).contains("|load"));
         h.light_index.set(Some(3));
         b.update_position(IntPair { x: 11, y: 8 });
         let l = h.take();

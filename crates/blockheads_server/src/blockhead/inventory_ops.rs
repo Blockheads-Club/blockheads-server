@@ -657,7 +657,7 @@ impl Blockhead {
                 let mut out_item = item.clone();
                 let spill = |sub: &InventoryItem| {
                     if sub.item_type != ItemType::ITEM_TIME_CRYSTAL {
-                        let sv = sub.sub_items.as_ref().map(|s| slots_to_vecs(s));
+                        let sv = sub.sub_items.as_deref().map(slots_to_vecs);
                         h.create_free_block_at_position_of_type_data_a_data_b_sub_items_dynamic_object_save_dict_hovers_play_sound_priority_blockhead(
                             self.pos(),
                             sub.item_type,

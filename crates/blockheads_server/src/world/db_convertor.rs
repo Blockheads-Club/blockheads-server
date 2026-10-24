@@ -604,7 +604,8 @@ mod tests {
     fn setup(
         tag: &str,
     ) -> (Rc<World>, String, Vec<Rc<Database>>, (Rc<DatabaseEnvironment>, std::sync::MutexGuard<'static, ()>)) {
-        let guard = crate::world::lifecycle::testkit::HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let guard =
+            crate::world::lifecycle::testkit::HOME_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let home = tmpdir(tag);
         crate::foundation::paths::set_home_for_test(&home);
         let world = World::alloc(32);
@@ -810,7 +811,8 @@ mod more_tests {
     type Setup = (Rc<World>, String, Vec<Rc<Database>>, (Rc<DatabaseEnvironment>, std::sync::MutexGuard<'static, ()>));
 
     fn setup(tag: &str) -> Setup {
-        let guard = crate::world::lifecycle::testkit::HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let guard =
+            crate::world::lifecycle::testkit::HOME_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let home = format!("{}/bhwc_conv2_{}_{}", std::env::temp_dir().display(), tag, std::process::id());
         let _ = std::fs::remove_dir_all(&home);
         std::fs::create_dir_all(&home).unwrap();

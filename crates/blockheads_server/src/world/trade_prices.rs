@@ -121,7 +121,7 @@ mod tests {
     use crate::world::lifecycle::testkit::*;
 
     fn sandbox(tag: &str) -> std::sync::MutexGuard<'static, ()> {
-        let g = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let g = HOME_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let home = format!("{}/bhwc_{}_{}", std::env::temp_dir().display(), tag, std::process::id());
         let _ = std::fs::remove_dir_all(&home);
         std::fs::create_dir_all(format!("{}/GNUstep/Library/ApplicationSupport/TheBlockheads/saves/sv", home)).unwrap();
@@ -236,7 +236,7 @@ mod more_tests {
 
     #[test]
     fn existing_multipliers_are_kept_and_missing_ones_tolerated() {
-        let g = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let g = HOME_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let home = format!("{}/bhtp_{}", std::env::temp_dir().display(), std::process::id());
         let _ = std::fs::remove_dir_all(&home);
         std::fs::create_dir_all(format!("{home}/GNUstep/Library/ApplicationSupport/TheBlockheads/saves/sv")).unwrap();

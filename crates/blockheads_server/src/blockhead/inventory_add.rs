@@ -664,7 +664,7 @@ impl Blockhead {
             } else {
                 // ITEM_DIAMOND hovering in a diamond tree: "grp.diamond_tree" (empty World method), tile unused.
                 let _ = tile;
-                let sub_vecs = fbd.sub_items.as_ref().map(|s| super::inventory_model::slots_to_vecs(s));
+                let sub_vecs = fbd.sub_items.as_deref().map(super::inventory_model::slots_to_vecs);
                 let item = InventoryItem::new(
                     ty,
                     fbd.data_a,

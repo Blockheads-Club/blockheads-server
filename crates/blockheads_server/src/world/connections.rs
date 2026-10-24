@@ -755,7 +755,7 @@ mod tests {
         assert_eq!(f.rec.sc_created.borrow().clone(), vec![("c0".to_string(), 31), ("c1".to_string(), 30)]);
         let calls = f.rec.calls.borrow().clone();
         // creation order: ServerClient, then unarchive, then dynamicWorld, then fullyLoad
-        let pos = |p: &str| calls.iter().position(|c| c == p).unwrap_or_else(|| panic!("{} in {:?}", p, calls));
+        let pos = |p: &str| calls.iter().position(|c| c == p).expect("the call is in the list");
         assert!(pos("sc_create") < pos("unarchive c0"));
         assert!(pos("unarchive c0") < pos("dw_client_connected c0"));
         assert!(pos("dw_client_connected c0") < pos("fully_load 0 0 31"));
@@ -1085,7 +1085,7 @@ mod tests {
 
     #[test]
     fn mute_list_round_trips_through_the_file() {
-        let _g = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = HOME_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let home = format!("{}/bhwc_mute_{}", std::env::temp_dir().display(), std::process::id());
         let _ = std::fs::remove_dir_all(&home);
         crate::foundation::paths::set_home_for_test(&home);
@@ -1112,7 +1112,7 @@ mod more_tests {
 
     /// Own home directory: the mute list is written below it.
     fn sandbox(tag: &str) -> std::sync::MutexGuard<'static, ()> {
-        let g = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let g = HOME_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let home = format!("{}/bhcn_{}_{}", std::env::temp_dir().display(), tag, std::process::id());
         let _ = std::fs::remove_dir_all(&home);
         std::fs::create_dir_all(format!("{home}/GNUstep/Library/ApplicationSupport/TheBlockheads/saves/sv")).unwrap();

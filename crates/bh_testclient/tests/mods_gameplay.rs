@@ -206,6 +206,22 @@ fn plot(x: i32, y: i32) -> (i32, i32) {
     (x.div_euclid(PLOT), y.div_euclid(PLOT))
 }
 
+/// Requests (and waits for) every macro block the search window of `spot` touches, so the search does not depend on
+/// which neighbours the server happened to have streamed already (a portal near a block edge has part of its window
+/// in the next block, east or north/south, and under load the server's own streaming arrives late).
+fn load_spot_window(s: &mut Session, x: i32, y: i32) {
+    let mut seen = Vec::new();
+    for bx in [x, x + 3, x + 28] {
+        for by in [y - 9, y, y + 8] {
+            let i = s.macro_index_for_tile(bx, by);
+            if !seen.contains(&i) {
+                seen.push(i);
+                load_block_at(s, bx, by);
+            }
+        }
+    }
+}
+
 /// An air tile standing on solid ground east of `(x, y)`, with another air tile and a solid tile in the same plot.
 fn spot(s: &Session, x: i32, y: i32) -> ((i32, i32), (i32, i32), (i32, i32)) {
     for cx in x + 3..x + 28 {
@@ -306,9 +322,7 @@ fn gameplay_events_and_cancellation() {
     // Alice stands on free ground and buys the plot.
     let mut alice = srv.join("ALICE");
     let (px, py) = (summary_int(&alice, "startPortalPos.x"), summary_int(&alice, "startPortalPos.y"));
-    for dx in [0, 32] {
-        load_block_at(&mut alice, px + dx, py);
-    }
+    load_spot_window(&mut alice, px, py);
     let ((x, y), (ax, ay), (gx, gy)) = spot(&alice, px, py);
     load_block_at(&mut alice, x, y - 16);
     let alice_bh = spawn_blockhead(&mut alice, x, y);

@@ -2478,7 +2478,7 @@ mod tests {
             );
             for k in d1.map.keys_in_order() {
                 let a = d1.map.get(&k).unwrap();
-                let b = d2.map.get(&k).unwrap_or_else(|| panic!("missing {k} in reloaded {tt}"));
+                let b = d2.map.get(&k).expect("a key of the saved tree is missing after the reload");
                 if k == "treeFruit" || k == "uniqueID" {
                     continue;
                 }

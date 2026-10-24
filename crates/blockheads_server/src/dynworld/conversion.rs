@@ -77,7 +77,7 @@ mod tests {
     /// contract 8 item 15: the list stays non-nil until the last directory is converted; files are moved.
     #[test]
     fn converts_one_dir_per_step() {
-        let _cl = crate::foundation::clock::TEST_CLOCK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _cl = crate::foundation::clock::TEST_CLOCK_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         crate::foundation::clock::set_virtual(Some(1000.0));
         let d = dw("conv", 1);
         let base = d.world_save_directory.clone();
@@ -110,7 +110,7 @@ mod tests {
     /// The pump gives up when the list or the queue is gone; removing from a missing list is harmless.
     #[test]
     fn pump_gives_up_without_work() {
-        let _cl = crate::foundation::clock::TEST_CLOCK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _cl = crate::foundation::clock::TEST_CLOCK_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         crate::foundation::clock::set_virtual(Some(2000.0));
         let d = dw("conv_idle", 1);
         d.main_thread_remove_dir_from_conversion_list("0_0");

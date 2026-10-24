@@ -1077,7 +1077,7 @@ mod tests {
         for (a, b) in before.iter().zip(after.iter()) {
             assert_eq!((a.back_wall_type_index, a.zone_type_index), (b.back_wall_type_index, b.zone_type_index));
         }
-        assert!(host.chests.borrow().iter().all(|(_, troll, treasure)| !troll && *treasure));
+        assert!(host.chests.borrow().is_empty(), "an old block gets no chests from the passes");
         set_host(None);
     }
 

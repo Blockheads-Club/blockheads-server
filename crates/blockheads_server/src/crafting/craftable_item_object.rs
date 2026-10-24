@@ -371,7 +371,7 @@ mod tests {
         let plain = CraftableItemObject::init_with_craftable_item(sample());
         let any = plain.clone().into_any_rc();
         assert!(any.downcast::<CraftableItemObject>().is_ok());
-        assert_eq!(plain.free_block_creation_item_save_dict().map(|d| d.map.len()), None);
+        assert!(plain.free_block_creation_item_save_dict().is_none());
         let mut ci = sample();
         ci.seconds_required = 99;
         plain.set_craftable_item(ci);

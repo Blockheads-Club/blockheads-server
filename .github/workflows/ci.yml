@@ -168,8 +168,8 @@ jobs:
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@cargo-llvm-cov
-      # Policy is 100 % line coverage; scripts/coverage-gate.sh holds the gates (mod host at 100 %, per-crate floors
-      # for the rest, only ever raised) and fails the job below them.
+      # Policy is 100 % line coverage of the whole workspace; scripts/coverage-gate.sh holds the gates (both crates at
+      # 100 %, the mod host file by file as well) and fails the job below them. See docs/development.md.
       - name: Measure
         run: |
           status=0

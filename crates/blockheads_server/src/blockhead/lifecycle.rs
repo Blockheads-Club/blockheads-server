@@ -896,9 +896,9 @@ impl Blockhead {
         u.sub_animation_type = f.state.sub_animation_type as u8;
         // `[dynamicWorld activeBlockhead] == self` is false on the server (activeBlockhead is nil)
         u.is_currently_active = f.is_currently_active_blockhead_according_to_net_data as u8;
-        u.ride_object_id = f.ride_object.as_ref().map_or(0, |o| o.unique_id());
+        u.ride_object_id = f.ride_object.as_deref().map_or(0, <dyn DynamicObject>::unique_id);
         u.interaction_object_id = f.interaction_object.as_ref().map_or(0, |o| o.unique_id());
-        u.interaction_workbench_id = f.interaction_workbench.as_ref().map_or(0, |o| o.unique_id());
+        u.interaction_workbench_id = f.interaction_workbench.as_deref().map_or(0, <dyn DynamicObject>::unique_id);
 
         let proceed = (!is_net && fishing_valid) || dw_is_server;
         if proceed && (f.fishing_rod_cast_x != 0 || f.fishing_rod_cast_y != 0) {
@@ -981,7 +981,7 @@ impl Blockhead {
                 set(&mut d, "lastKnownBoatPosition.x", PlistValue::int(f.last_known_ride_object_position.x as i64));
                 set(&mut d, "lastKnownBoatPosition.y", PlistValue::int(f.last_known_ride_object_position.y as i64));
             } else if !f.last_path_was_falling {
-                let path_count = f.path.as_ref().map_or(0, |p| p.len());
+                let path_count = f.path.as_ref().map_or(0, Vec::len);
                 if path_count != 0 || f.from_square != f.to_square {
                     set(&mut d, "loadRequiresRecalculation", PlistValue::boolean(true));
                     set(&mut d, "finalGoalSquare.x", PlistValue::int(f.final_goal_square.x as i64));
@@ -1480,6 +1480,36 @@ mod tests {
         assert_eq!((u.fishing_rod_cast_x, u.fishing_rod_cast_y), (5000, -2500));
         assert_eq!(u.is_in_jet_pack_free_flight_mode, 1);
         assert_eq!(b.bh.borrow().jetpack_send_update_timer, 0.0);
+        // references: the item being used, the fishing rod, the ridden object and the workbench
+        {
+            let mut f = b.bh.borrow_mut();
+            f.interaction_item = Some(InventoryItem::new(ItemType(0x8c), 0, 0, None, None));
+            f.fishing_rod = Some(Rc::new(()));
+            f.ride_object = Some(stub(32, true));
+            f.interaction_workbench = Some(stub(45, true));
+            f.path = Some(vec![]);
+        }
+        let (ride_id, wb_id) = {
+            let f = b.bh.borrow();
+            (f.ride_object.as_ref().unwrap().unique_id(), f.interaction_workbench.as_ref().unwrap().unique_id())
+        };
+        let u = BlockheadUpdateData::read_le(&b.update_net_data_for_client_impl(None));
+        assert_eq!((u.interaction_item_type, u.ride_object_id, u.interaction_workbench_id), (0x8c, ride_id, wb_id));
+        assert_eq!(b.interaction_item_type(), 0x8c);
+        assert_eq!(b.craft_count_or_extra_data(), 0);
+        let mut extra = crate::blockhead::blockhead::PathExtraData::new();
+        extra.set("craftCountOrExtraData", crate::blockhead::blockhead::ExtraValue::Int(7));
+        b.bh.borrow_mut().path_extra_data = Some(extra);
+        assert_eq!(b.craft_count_or_extra_data(), 7);
+        {
+            let mut f = b.bh.borrow_mut();
+            f.interaction_item = None;
+            f.fishing_rod = None;
+            f.ride_object = None;
+            f.interaction_workbench = None;
+            f.path = None;
+            f.path_extra_data = None;
+        }
         // preview data
         b.bh.borrow_mut().name = Some("Zed".into());
         let pd = b.preview_data();

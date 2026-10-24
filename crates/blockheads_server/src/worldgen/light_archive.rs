@@ -112,6 +112,11 @@ impl WorldTileLoader {
     /// the XML plist array of `"x_y"` strings), removes `<id>_allIndexes` and logs. Split out so it is testable
     /// while the `faithful-crashes` abort sits in front of it.
     pub(crate) fn archive_light_block_indices(&self, client_id: &str, indices: impl Iterator<Item = u64>) {
+        // The body is not generic, so its lines count once (not once per iterator type).
+        self.archive_light_block_index_list(client_id, &indices.collect::<Vec<u64>>());
+    }
+
+    fn archive_light_block_index_list(&self, client_id: &str, indices: &[u64]) {
         let db = match self.light_block_database() {
             Some(d) => d,
             None => return,
@@ -125,7 +130,7 @@ impl WorldTileLoader {
         let mut block_data: Vec<u8> = Vec::new();
         let mut counter = 0usize;
         // block body of 2.7, once per index
-        for idx in indices {
+        for &idx in indices {
             let mp = macro_pos_for_macro_index(idx as i32, &world);
             let pos_key = format!("{}_{}", mp.x, mp.y);
             let db_key = format!("{}_{}", client_id, pos_key);

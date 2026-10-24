@@ -124,9 +124,7 @@ pub(crate) fn tail_string(d: &Option<PlistValue>, key: &str) -> Option<String> {
 pub(crate) fn owner_from_client_or_save(client_id: Option<&str>, save_dict: Option<&PlistDict>) -> Option<String> {
     match client_id {
         Some(c) => Some(c.to_string()),
-        None => {
-            save_dict.and_then(|d| d.map.get(&"ownerID".to_string())).and_then(|v| v.as_str()).map(|s| s.to_string())
-        }
+        None => sd_get(save_dict, "ownerID").and_then(PlistValue::as_str).map(str::to_string),
     }
 }
 
@@ -255,7 +253,8 @@ impl Column {
         if let Some(o) = owner_from_client_or_save(client_id, save_dict) {
             me.base.borrow_mut().owner_id = Some(o);
         }
-        me.st.borrow_mut().paint_color = sd_get(save_dict, "paintColor").map_or(0, |v| v.unsigned_int_value()) as u16;
+        me.st.borrow_mut().paint_color =
+            sd_get(save_dict, "paintColor").map_or(0, PlistValue::unsigned_int_value) as u16;
         Some(me_obj)
     }
 

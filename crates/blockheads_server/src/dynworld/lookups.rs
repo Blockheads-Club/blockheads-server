@@ -274,7 +274,7 @@ pub trait DwOpsHooks, stub DwOpsHooksStub {
     #[provided]
     fn cave_troll_control_is_local(&self, troll: &ObjRef) -> bool {
         crate::objects::handle::downcast::<crate::npc::cave_troll::CaveTroll>(troll)
-            .map_or(false, |t| t.control_is_local())
+            .is_some_and(crate::npc::cave_troll::CaveTroll::control_is_local)
     }
     /// `[[bh currentItem] itemType]` (0 when the blockhead or its item is nil)
     fn blockhead_current_item_type(&self, bh: &ObjRef) -> i32 {

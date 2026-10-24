@@ -396,7 +396,11 @@ impl Blockhead {
                 return true;
             }
         }
-        t == 5 && io.map_or(false, |o| o.as_interaction_like().map_or(false, |i| i.requires_human_interaction()))
+        t == 5
+            && io
+                .as_deref()
+                .and_then(crate::objects::base::DynamicObject::as_interaction_like)
+                .map_or(false, crate::objects::interaction_object::InteractionObjectLike::requires_human_interaction)
     }
 
     /// `-setPaused:`. The `FishingRod` has no pause state in this port.

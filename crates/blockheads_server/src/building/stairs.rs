@@ -94,7 +94,8 @@ impl Stairs {
         if let Some(o) = owner_from_client_or_save(client_id, save_dict) {
             me.base.borrow_mut().owner_id = Some(o);
         }
-        me.st.borrow_mut().paint_color = sd_get(save_dict, "paintColor").map_or(0, |v| v.unsigned_int_value()) as u16;
+        me.st.borrow_mut().paint_color =
+            sd_get(save_dict, "paintColor").map_or(0, PlistValue::unsigned_int_value) as u16;
         me.init_sub_derived_items();
         me.update_configuration(&me_obj);
         Some(me_obj)

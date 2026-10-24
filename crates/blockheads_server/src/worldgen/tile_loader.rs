@@ -1490,7 +1490,7 @@ mod loader_more_tests {
 
     #[test]
     fn a_server_world_keeps_light_blocks_in_its_own_database() {
-        let g = crate::world::lifecycle::testkit::HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let g = crate::world::lifecycle::testkit::HOME_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let home = format!("{}/bhwg_server_{}", std::env::temp_dir().display(), std::process::id());
         let _ = std::fs::remove_dir_all(&home);
         std::fs::create_dir_all(&home).unwrap();
@@ -1524,7 +1524,7 @@ mod loader_more_tests {
     /// The light block database of a server world cannot be opened when its directory path is blocked by a file.
     #[test]
     fn a_blocked_light_block_directory_is_logged_and_survived() {
-        let g = crate::world::lifecycle::testkit::HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let g = crate::world::lifecycle::testkit::HOME_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let home = format!("{}/bhwg_blocked_{}", std::env::temp_dir().display(), std::process::id());
         let _ = std::fs::remove_dir_all(&home);
         let saves = format!("{home}/GNUstep/Library/ApplicationSupport/TheBlockheads/saves");

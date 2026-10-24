@@ -29,12 +29,26 @@ repository. They skip cleanly unless these environment variables are set:
 - `BH_REF_BINARY` - reference binary for gdb RNG traces
 - `BH_PARITY=1` - enable the docker-based parity tests
 
-Coverage: `scripts/coverage-gate.sh` (what CI runs; needs cargo-llvm-cov). The policy is 100 % line coverage. The mod
-host seam (with the 0xBC protocol) and the test client's modded mode are gated at 100 %, file by file; the rest of the
-port is gated at per-crate floors (server 80 %, test client library 70 %, measured in CI 81.07 % and 70.6 %) that only go up.
-The probe tools and the command-line mains of the test client are not measured; the docker-only parts of the harness
-count as they are (their tests skip without the reference environment). `scripts/mods-coverage.sh` is the quick local
-check of the 100 % part.
+Coverage: `scripts/coverage-gate.sh` (what CI runs, without the reference environment or docker; needs cargo-llvm-cov).
+The whole workspace is gated at 100 % line coverage: `blockheads_server` and `bh_testclient` at 100 % each, and the mod
+host seam (with the 0xBC protocol) and the test client's modded mode file by file as well. The floors never go down. Not
+measured: the probe tools, the command-line mains of the test client, and `*_golden.rs` (tests that replay oracle
+fixtures; they skip in CI). `scripts/mods-coverage.sh` is the quick local check of the mod host part.
+
+Keeping it at 100 %. `llvm-cov report` scores every function by its instantiations: a function counts its most covered
+instantiation per file group, and the copies compiled into different test binaries are different instantiations. So:
+- **One-binary rule.** Cover every function (and every closure in it) completely inside ONE test binary, preferably the
+  `blockheads_server` lib unit tests. Covering half of it from the lib tests and half from `tests/` or from
+  `bh_testclient` leaves lines missed in the report although a merged view shows them covered.
+- Generic functions (`impl Into`, `impl AsRef`, `impl FnOnce`, `impl Iterator` parameters) are one function per type: keep
+  a thin generic wrapper and put the body in a non-generic function.
+- Closures that never run count as missed lines: no `unwrap_or_else(|| panic!(..))` or `.map_or(0, |x| ..)` whose
+  closure never gets called in a test; use `expect`, eager `unwrap_or`, or a function path (`.map_or(0, Vec::len)`,
+  `.and_then(PlistValue::as_str)`); lock guards use `unwrap_or_else(std::sync::PoisonError::into_inner)`. In test
+  helpers, no `panic!` arms and no `.all(|..|)` over a list that is always empty.
+- `let .. else { unreachable!() }` on one line (scrutinee in its own `let`), and no `else if let` that always matches.
+- Tests that need the reference fixtures go into `<module>_golden.rs` (`#[cfg(test)] #[path = "x_golden.rs"] mod golden;`).
+- Test code is measured like any other: platform-specific tests are gated with `cfg` (the gate runs on Linux).
 
 ### Developing against a local mod-sdk
 

@@ -104,7 +104,7 @@ impl Door {
         if is_iron(item_type) {
             let v = match client_id {
                 Some(c) => Some(c.to_string()),
-                None => sd_get(save_dict, "ironPlaceClientID").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                None => sd_get(save_dict, "ironPlaceClientID").and_then(PlistValue::as_str).map(str::to_string),
             };
             if v.is_some() {
                 me.st.borrow_mut().iron_place_client_id = v;
