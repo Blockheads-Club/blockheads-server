@@ -969,6 +969,8 @@ mod tests {
         // A save whose stored id differs from its directory has nothing to remove.
         plain_save(&root, "dir", |m| {
             m.map.insert("saveID".to_string(), PlistValue::string("other"));
+            // Dated, so the listing never compares it with a missing date whatever order the directory is read in.
+            m.map.insert("saveDate".to_string(), PlistValue::Date(1.0));
         });
         assert!(delete_saved_world("other"));
         // Creating needs a writable saves directory.

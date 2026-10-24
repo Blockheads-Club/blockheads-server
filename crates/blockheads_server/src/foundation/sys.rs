@@ -313,6 +313,7 @@ pub(crate) mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn process_ending_functions() {
         use std::os::unix::process::ExitStatusExt;

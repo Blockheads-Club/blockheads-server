@@ -276,6 +276,8 @@ fn a_player_owner_of_a_real_match_uses_the_owner_commands() {
     assert_ne!(h.srv.credit(), 99.0);
 }
 
+// `read_statm` exists only where procfs does (not macOS, not Windows).
+#[cfg(not(any(target_vendor = "apple", windows)))]
 #[test]
 fn statm_failures_are_reported_and_swallowed() {
     assert!(read_statm("/definitely/not/here").is_none());
