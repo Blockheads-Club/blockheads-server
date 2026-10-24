@@ -988,8 +988,8 @@ impl FreeBlock {
                 }
             }
         } else {
-            // `priority.is_none()` was false above, so it is set here.
-            let pb = priority.expect("a priority blockhead");
+            // `priority.is_none()` was false above and nothing in between changes it: it is set here.
+            let pb = self.priority_blockhead().expect("a priority blockhead");
             if !pb.needs_removed() {
                 let bfp = pb.float_pos();
                 let goal = Vector2 { x: bfp.x + 0.0f32, y: bfp.y + 0.5f32 };
