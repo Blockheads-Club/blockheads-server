@@ -132,7 +132,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc-multilib g++-multilib
-      - run: cargo test -p blockheads_server --target i686-unknown-linux-gnu
+      # The lib tests run in several processes (a 32-bit one cannot hold all their worlds), see the script.
+      - run: scripts/test-32bit.sh
 
   windows-arm-check:
     runs-on: windows-11-arm
