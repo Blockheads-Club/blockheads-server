@@ -94,11 +94,11 @@ impl TrainStation {
         let me = Self::alloc(world, dw);
         let o: ObjRef = me.clone();
         let (wref, dref): (WorldRef, DynamicWorldRef) = (world.clone(), dw.clone());
-        if !interaction_object_init_with_world_dynamic_world_at_position_cache_item_flipped_save_dict_placed_by_client_client_name(
+        // the InteractionObject initialisers only fail through the net-data path, never here
+        let inited = interaction_object_init_with_world_dynamic_world_at_position_cache_item_flipped_save_dict_placed_by_client_client_name(
             &o, &wref, &dref, pos, cache, item, flipped, save_dict, client_id, client_name,
-        ) {
-            return None;
-        }
+        );
+        debug_assert!(inited);
         let text =
             save_dict.and_then(|d| d.map.get(&"text".to_string())).and_then(|v| v.as_str()).map(|s| s.to_string());
         *me.text.borrow_mut() = Some(text.unwrap_or_else(|| "TRAIN".to_string()));
@@ -133,9 +133,9 @@ impl TrainStation {
         let me = Self::alloc(world, dw);
         let o: ObjRef = me.clone();
         let (wref, dref): (WorldRef, DynamicWorldRef) = (world.clone(), dw.clone());
-        if !interaction_object_init_with_world_dynamic_world_save_dict_cache(&o, &wref, &dref, save_dict, cache) {
-            return None;
-        }
+        let inited =
+            interaction_object_init_with_world_dynamic_world_save_dict_cache(&o, &wref, &dref, save_dict, cache);
+        debug_assert!(inited);
         *me.text.borrow_mut() = save_dict.map.get(&"text".to_string()).and_then(|v| v.as_str()).map(|s| s.to_string());
         Some(o)
     }
@@ -442,6 +442,9 @@ fn _creation_helper(me: &ObjRef) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::interaction::sign::testkit::{tile, world_with_block};
+    use crate::objects::base::{new_mutable_dict, DynamicObject};
+    use crate::world::state::PhysicalBlockRef;
 
     /// : the 3x2 footprint order and the swapped-tile placement quirk are encoded in `new`/`remove`; here the
     /// pure parts: title formatting and constants.
@@ -452,5 +455,268 @@ mod tests {
         assert_eq!(ITEM_TRAIN_STATION, 200);
         assert_eq!(ITEM_RAIL, 199);
         assert_eq!(format!("{} STATION", "TRAIN"), "TRAIN STATION");
+    }
+
+    fn fixture(name: &str) -> (Rc<World>, Rc<DynamicWorld>, PhysicalBlockRef) {
+        let (w, d, pb) = world_with_block(name);
+        for x in 0..32 {
+            tile(pb, x, 9).set_type_index(1);
+        }
+        *w.distance_ordered_food_types.borrow_mut() = (0..31).collect();
+        (w, d, pb)
+    }
+
+    fn station(w: &Rc<World>, d: &Rc<DynamicWorld>, x: i32, text: Option<&str>) -> ObjRef {
+        let it = InventoryItem::new(ItemType(ITEM_TRAIN_STATION as u32), 0, 0, None, None);
+        let it = it.borrow();
+        let mut sd = new_mutable_dict();
+        if let Some(t) = text {
+            sd.map.insert("text".to_string(), PlistValue::string(t));
+        }
+        TrainStation::new(w, d, IntPair { x, y: 10 }, None, Some(&it), false, Some(&sd), Some("cid"), Some("Bob"))
+            .unwrap()
+    }
+
+    fn st(o: &ObjRef) -> &TrainStation {
+        handle::downcast::<TrainStation>(o).unwrap()
+    }
+
+    /// Placement fills the three rails (the quirk fetches x+1 for x-1 and vice versa), the text defaults to TRAIN.
+    #[test]
+    fn placement_fills_three_rails_and_defaults_text() {
+        let (w, d, pb) = fixture("ts_place");
+        let s = station(&w, &d, 10, None);
+        assert_eq!(st(&s).text_value().as_deref(), Some("TRAIN"));
+        assert_eq!(InteractionObjectLike::title(st(&s)), "TRAIN STATION");
+        for x in 9..=11 {
+            assert_ne!(tile(pb, x, 10).foreground_contents(), 0, "x={x}");
+        }
+        let s2 = station(&w, &d, 20, Some("Central"));
+        assert_eq!(SignTextDynamicObject::text(st(&s2)).as_deref(), Some("Central"));
+        assert!(SignTextDynamicObject::requires_single_line_text_editing(st(&s2)));
+        assert_eq!(s2.object_type(), DOT_TRAIN_STATION);
+        assert_eq!(s2.class_info().name, "TrainStation");
+        assert!(s2.occupies_normal_contents());
+        assert_eq!(s2.freeblock_creation_item_type(), ITEM_TRAIN_STATION);
+        assert_eq!(st(&s2).interaction_object_type(), IOT_TRAIN_STATION);
+        assert_eq!(st(&s2).destroy_item_type(), ITEM_TRAIN_STATION);
+        assert!(st(&s2).requires_human_interaction());
+        assert!(s2.should_add_to_macro_block());
+        assert!(s2.as_tap_choice().is_some() && s2.as_sign_text().is_some());
+        assert!(s2.as_interaction_object().is_some() && s2.as_interaction_like().is_some());
+        let _ = TapChoiceDynamicObject::action_title(st(&s2));
+        let _ = TapChoiceDynamicObject::is_double_height(st(&s2));
+        assert!(_creation_helper(&s2).is_some());
+    }
+
+    /// Placement outside any loaded tile leaves the rails alone; a nil save-dict text shows as `(null)`.
+    #[test]
+    fn save_dict_round_trip_and_null_title() {
+        let (w, d, _pb) = fixture("ts_save");
+        let s = station(&w, &d, 10, Some("Hub"));
+        let sd = s.get_save_dict(&s);
+        assert_eq!(sd.map.get(&"text".to_string()).and_then(|v| v.as_str()), Some("Hub"));
+        assert!(s.free_block_creation_save_dict(&s).is_some());
+        let again = TrainStation::from_save_dict(&w, &d, &sd, None).unwrap();
+        assert_eq!(st(&again).text_value().as_deref(), Some("Hub"));
+        let mut bare = sd.clone();
+        bare.map.remove(&"text".to_string());
+        let nil = TrainStation::from_save_dict(&w, &d, &bare, None).unwrap();
+        assert_eq!(st(&nil).text_value(), None);
+        assert_eq!(InteractionObjectLike::title(st(&nil)), "(null) STATION");
+        assert!(!nil.get_save_dict(&nil).map.contains_key(&"text".to_string()));
+        nil.dealloc(&nil);
+        s.dealloc(&s);
+        assert_eq!(st(&s).text_value(), None);
+    }
+
+    /// `setText:` is a no-op for an equal string, a change otherwise (also to nil); the net image round-trips.
+    #[test]
+    fn set_text_and_net_data() {
+        let (w, d, _pb) = fixture("ts_text");
+        let s = station(&w, &d, 10, Some("A"));
+        st(&s).set_text_value(&s, Some("A"));
+        st(&s).set_text_value(&s, Some("B"));
+        assert_eq!(st(&s).text_value().as_deref(), Some("B"));
+        st(&s).set_text_value(&s, None);
+        assert_eq!(st(&s).text_value(), None);
+        st(&s).set_text_value(&s, None);
+        SignTextDynamicObject::set_text(st(&s), &s, Some("C"));
+        let nd = s.creation_net_data_for_client(&s, None).unwrap();
+        assert_eq!(nd, s.update_net_data_for_client(&s, None).unwrap());
+        assert!(nd.len() > 0x28);
+        let copy = TrainStation::from_net_data(&w, &d, None, &nd).unwrap();
+        assert_eq!(st(&copy).text_value().as_deref(), Some("C"));
+        assert_eq!(copy.owner_id().as_deref(), Some("cid"));
+        assert_eq!(copy.owner_name().as_deref(), Some("Bob"));
+        // a head-only image has no tail: every field is nil
+        let head = TrainStation::from_net_data(&w, &d, None, &nd[..0x28]).unwrap();
+        assert_eq!(st(&head).text_value(), None);
+    }
+
+    /// `remoteUpdate:` copies text and owner from the tail unless a blockhead is using the station.
+    #[test]
+    fn remote_update_applies_tail() {
+        let (w, d, _pb) = fixture("ts_remote");
+        let s = station(&w, &d, 10, Some("old"));
+        let src = station(&w, &d, 20, Some("new"));
+        let nd = src.creation_net_data_for_client(&src, None).unwrap();
+        s.remote_update(&s, &nd);
+        assert_eq!(st(&s).text_value().as_deref(), Some("new"));
+        assert_eq!(s.owner_id().as_deref(), Some("cid"));
+        // short image raises (range exception) before touching anything
+        let bh = crate::blockhead::blockhead::testutil::new_bh(&w, &(d.clone() as DynamicWorldRef), 0);
+        st(&s).io.borrow_mut().current_blockhead = Some(bh);
+        let other = station(&w, &d, 25, Some("other"));
+        let nd2 = other.creation_net_data_for_client(&other, None).unwrap();
+        s.remote_update(&s, &nd2);
+        assert_eq!(st(&s).text_value().as_deref(), Some("new"));
+    }
+
+    #[test]
+    #[should_panic]
+    fn short_net_data_raises() {
+        let (w, d, _pb) = fixture("ts_short");
+        let _ = TrainStation::from_net_data(&w, &d, None, &[0u8; 0x10]);
+    }
+
+    /// `removeRail` on `setNeedsRemoved:`, then the support check in `worldChanged:` (wrap and non-wrap branches).
+    #[test]
+    fn world_changed_removes_unsupported_station() {
+        let (w, d, pb) = fixture("ts_wc");
+        let s = station(&w, &d, 10, None);
+        // unrelated positions and net copies are ignored
+        s.world_changed(&s, &mut vec![IntPair { x: 10, y: 3 }, IntPair { x: 30, y: 9 }]);
+        assert!(!s.needs_removed());
+        // footprint reaching into an unloaded macro tile: the missing tile is skipped
+        let edge = station(&w, &d, 31, None);
+        edge.world_changed(&edge, &mut vec![IntPair { x: 31, y: 9 }]);
+        assert!(!edge.needs_removed());
+        // a supported footprint stays
+        s.world_changed(&s, &mut vec![IntPair { x: 10, y: 9 }]);
+        assert!(!s.needs_removed());
+        // far right in the wrapped world (d >= full / 2), still unrelated
+        s.world_changed(&s, &mut vec![IntPair { x: 100, y: 9 }]);
+        assert!(!s.needs_removed());
+        // support gone under the right edge
+        tile(pb, 11, 9).set_type_index(2);
+        s.world_changed(&s, &mut vec![IntPair { x: 11, y: 9 }]);
+        assert!(s.needs_removed());
+        // net copies never remove themselves
+        let n = station(&w, &d, 20, None);
+        n.base().borrow_mut().is_net = true;
+        tile(pb, 20, 9).set_type_index(2);
+        n.world_changed(&n, &mut vec![IntPair { x: 20, y: 9 }]);
+        assert!(!n.needs_removed());
+        // wrapped distance: world is 4 macro wide (128 tiles); x = 127 is one tile left of 0
+        let e = station(&w, &d, 1, None);
+        tile(pb, 1, 9).set_type_index(2);
+        e.world_changed(&e, &mut vec![IntPair { x: 127, y: 9 }]);
+        assert!(!e.needs_removed());
+        e.set_needs_removed(&e, false);
+        // the mirror image: x = 127 sees a change at x = 1 as two tiles to its right
+        let f = station(&w, &d, 127, None);
+        f.world_changed(&f, &mut vec![IntPair { x: 1, y: 9 }]);
+        assert!(!f.needs_removed());
+    }
+
+    /// `remove:` guards, the in-use deferral and the full footprint removal with the item drop.
+    #[test]
+    fn remove_paths() {
+        let (w, d, _pb) = fixture("ts_rm");
+        let bh = crate::blockhead::blockhead::testutil::new_bh(&w, &(d.clone() as DynamicWorldRef), 0);
+        // a net copy is left alone
+        let n = station(&w, &d, 20, None);
+        n.base().borrow_mut().is_net = true;
+        InteractionObjectLike::remove(st(&n), &n, None);
+        assert!(!n.needs_removed());
+        // in use by a net blockhead: deferred
+        let a = station(&w, &d, 6, None);
+        st(&a).io.borrow_mut().is_in_use = true;
+        st(&a).io.borrow_mut().remote_blockhead_in_use_unique_id = 5;
+        InteractionObjectLike::remove(st(&a), &a, None);
+        assert!(st(&a).io.borrow().needs_to_be_removed_when_interaction_ends);
+        assert!(!a.needs_removed());
+        // in use locally: the blockhead stops interacting, then the removal runs
+        let b = station(&w, &d, 12, None);
+        {
+            let mut io = st(&b).io.borrow_mut();
+            io.is_in_use = true;
+            io.current_blockhead = Some(bh.clone());
+        }
+        InteractionObjectLike::remove(st(&b), &b, Some(&bh));
+        assert!(b.needs_removed());
+        // already removed: nothing more happens
+        InteractionObjectLike::remove(st(&b), &b, None);
+        // in use by something that is no blockhead: just removed
+        let e = station(&w, &d, 24, None);
+        {
+            let mut io = st(&e).io.borrow_mut();
+            io.is_in_use = true;
+            io.current_blockhead = Some(crate::blockhead::blockhead::testutil::stub(1, false));
+        }
+        InteractionObjectLike::remove(st(&e), &e, None);
+        assert!(e.needs_removed());
+        // marked in use without a blockhead: nothing to stop
+        let f = station(&w, &d, 28, None);
+        st(&f).io.borrow_mut().is_in_use = true;
+        InteractionObjectLike::remove(st(&f), &f, None);
+        assert!(f.needs_removed());
+        // plain removal
+        let c = station(&w, &d, 18, None);
+        InteractionObjectLike::remove(st(&c), &c, None);
+        assert!(c.needs_removed());
+    }
+
+    /// Admin shortcut, owner check on `localNetID`.
+    #[test]
+    fn can_be_used_rules() {
+        let _h = crate::blockhead::blockhead::testutil::TestHost::install();
+        let (w, d, _pb) = fixture("ts_use");
+        w.set_is_admin(true);
+        let bh = crate::blockhead::blockhead::testutil::new_bh(&w, &(d.clone() as DynamicWorldRef), 0);
+        let s = station(&w, &d, 10, None);
+        // the world is admin: any blockhead may use it unless server-controlled
+        assert!(InteractionObjectLike::can_be_used_by_blockhead(st(&s), &s, &bh));
+        crate::blockhead::blockhead::testutil::bh_of(&bh)
+            .bh
+            .borrow_mut()
+            .is_client_blockhead_being_controlled_by_server = true;
+        crate::blockhead::blockhead::testutil::bh_of(&bh).set_client_id("someone");
+        // controlled by the server: the admin shortcut is off and the owner ("cid") differs
+        assert!(!InteractionObjectLike::can_be_used_by_blockhead(st(&s), &s, &bh));
+        crate::blockhead::blockhead::testutil::bh_of(&bh).set_client_id("cid");
+        assert!(InteractionObjectLike::can_be_used_by_blockhead(st(&s), &s, &bh));
+        // no owner: only the base rule applies
+        s.set_owner_id(None);
+        assert!(InteractionObjectLike::can_be_used_by_blockhead(st(&s), &s, &bh));
+        {
+            let mut io = st(&s).io.borrow_mut();
+            io.is_in_use = true;
+            io.current_blockhead = Some(crate::blockhead::blockhead::testutil::stub(1, false));
+        }
+        assert!(!InteractionObjectLike::can_be_used_by_blockhead(st(&s), &s, &bh));
+    }
+
+    /// The lifecycle hooks forward to the InteractionObject base.
+    #[test]
+    fn lifecycle_hooks_forward() {
+        let (w, d, _pb) = fixture("ts_life");
+        let bh = crate::blockhead::blockhead::testutil::new_bh(&w, &(d.clone() as DynamicWorldRef), 0);
+        let s = station(&w, &d, 10, None);
+        assert!(std::ptr::eq(InteractionObjectLike::io_state(st(&s)), &st(&s).io));
+        s.blockheads_loaded(&s);
+        s.update_accurate_dt_is_simulation(&s, 0.016, 0.016, false);
+        s.blockhead_unloaded(&s, &bh);
+    }
+
+    /// A net image whose macro tile has no physical block is refused.
+    #[test]
+    fn net_data_without_a_loaded_tile_is_refused() {
+        let (w, d, _pb) = fixture("ts_net_nil");
+        let far = station(&w, &d, 10, None);
+        far.base().borrow_mut().pos = IntPair { x: 70, y: 10 };
+        let nd = far.creation_net_data_for_client(&far, None).unwrap();
+        assert!(TrainStation::from_net_data(&w, &d, None, &nd).is_none());
     }
 }

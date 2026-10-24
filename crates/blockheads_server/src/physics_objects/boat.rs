@@ -191,9 +191,9 @@ impl Boat {
         let me_obj: ObjRef = me.clone();
         let wref: WorldRef = world.clone();
         let dref: DynamicWorldRef = dw.clone();
-        if !base_init_with_world_dynamic_world_at_position_cache(&me_obj, &wref, &dref, pos, cache) {
-            return None;
-        }
+        // the base initialiser always succeeds when the position is given
+        let inited = base_init_with_world_dynamic_world_at_position_cache(&me_obj, &wref, &dref, pos, cache);
+        debug_assert!(inited);
         let mut fp = me.fp();
         fp.y = 0.5f32 + me.pos().y as f32;
         me.set_fp(fp);
@@ -219,9 +219,8 @@ impl Boat {
         let me_obj: ObjRef = me.clone();
         let wref: WorldRef = world.clone();
         let dref: DynamicWorldRef = dw.clone();
-        if !base_init_with_world_dynamic_world_save_dict_cache(&me_obj, &wref, &dref, save_dict, cache) {
-            return None;
-        }
+        let inited = base_init_with_world_dynamic_world_save_dict_cache(&me_obj, &wref, &dref, save_dict, cache);
+        debug_assert!(inited);
         {
             let mut st = me.st.borrow_mut();
             st.saved_blockhead_index = -1;
@@ -384,11 +383,8 @@ impl Boat {
                 // teleport
                 self.set_fp(Vector2 { x: 0.5f32 + goal.x as f32, y: 0.5f32 + goal.y as f32 });
                 me.update_position(me, goal);
-                if !is_net && !rider_is_net(&rider) {
-                    // dead in every configuration (update (3)); kept literal
-                    self.notify_changed();
-                    self.set_update_needs_to_be_sent(true);
-                }
+                // (the original follows with a notification for `!isNet && !rider.isNet`, which this block - entered
+                // only when the boat or its rider is a network one - can never reach)
             } else {
                 if pos.x + 1 < goal.x || goal.x < pos.x - 1 {
                     self.st.borrow_mut().actual_x_speed += 0.2f32 * (dxw as f32);
@@ -1112,5 +1108,406 @@ mod tests {
         b.blockhead_unloaded(&b, &rider);
         assert!(bm(&b).rider().is_none());
         assert_eq!(bm(&b).target_x_speed(), 0.0);
+    }
+
+    fn net_boat(w: &Rc<World>, dw: &Rc<DynamicWorld>, x: i32, y: i32) -> ObjRef {
+        let b = Boat::new(w, dw, IntPair { x, y }, None, None, Some("o")).unwrap();
+        let nd = b.creation_net_data_for_client(&b, None).unwrap();
+        Boat::from_net_data(w, dw, None, &nd).unwrap()
+    }
+
+    /// Paused riders and simulation ticks do nothing; a dead rider is let go; the dt clamp.
+    #[test]
+    fn early_outs_and_dead_riders() {
+        let (w, dw, _r) = flat("boat_early", 5);
+        water_column(&w, 10, 6, 9);
+        let b = Boat::new(&w, &dw, IntPair { x: 10, y: 7 }, None, None, Some("o")).unwrap();
+        let rider = blockhead(1, false);
+        bm(&b).add_rider_opt(&b, Some(&rider));
+        let y0 = b.float_pos().y;
+        crate::blockhead::blockhead::as_blockhead(&rider).unwrap().bh.borrow_mut().paused = true;
+        b.update_accurate_dt_is_simulation(&b, 0.05, 0.05, false);
+        assert_eq!(b.float_pos().y, y0);
+        crate::blockhead::blockhead::as_blockhead(&rider).unwrap().bh.borrow_mut().paused = false;
+        b.update_accurate_dt_is_simulation(&b, 0.05, 0.05, true);
+        assert_eq!(b.float_pos().y, y0);
+        // a dead local rider is dropped and the boat is announced; a dead net rider is dropped silently
+        rider.base().borrow_mut().needs_removed = true;
+        b.set_update_needs_to_be_sent(false);
+        b.update_accurate_dt_is_simulation(&b, 0.05, 0.05, true);
+        assert!(bm(&b).rider().is_none() && b.update_needs_to_be_sent());
+        let net = blockhead(2, true);
+        bm(&b).add_rider_opt(&b, Some(&net));
+        net.base().borrow_mut().needs_removed = true;
+        b.set_update_needs_to_be_sent(false);
+        b.update_accurate_dt_is_simulation(&b, 0.05, 0.05, true);
+        assert!(bm(&b).rider().is_none() && !b.update_needs_to_be_sent());
+    }
+
+    /// A network boat walks towards its goal; a far goal teleports it.
+    #[test]
+    fn network_smoothing() {
+        let (w, dw, _r) = flat("boat_smooth", 5);
+        water_column(&w, 10, 6, 14);
+        water_column(&w, 12, 6, 14);
+        let nb = net_boat(&w, &dw, 10, 8);
+        bm(&nb).st.borrow_mut().remote_goal_pos = IntPair { x: 13, y: 10 };
+        nb.update_accurate_dt_is_simulation(&nb, 0.05, 0.05, false);
+        assert!(bm(&nb).actual_x_speed() > 0.0);
+        assert!(bm(&nb).st.borrow().y_speed != 0.0);
+        // a goal to the left, within reach: the speed goes negative
+        let nb2 = net_boat(&w, &dw, 12, 8);
+        bm(&nb2).st.borrow_mut().remote_goal_pos = IntPair { x: 8, y: 8 };
+        nb2.update_accurate_dt_is_simulation(&nb2, 0.05, 0.05, false);
+        assert!(bm(&nb2).actual_x_speed() < 0.0);
+        // a goal vertically far away teleports
+        let nb3 = net_boat(&w, &dw, 10, 8);
+        bm(&nb3).st.borrow_mut().remote_goal_pos = IntPair { x: 10, y: 20 };
+        nb3.update_accurate_dt_is_simulation(&nb3, 0.05, 0.05, false);
+        assert!(nb3.pos().y >= 19, "teleported up to the goal row");
+        // a goal on the other side of the world seam is near, not far
+        let nb4 = net_boat(&w, &dw, 125, 8);
+        bm(&nb4).st.borrow_mut().remote_goal_pos = IntPair { x: 2, y: 8 };
+        nb4.update_accurate_dt_is_simulation(&nb4, 0.05, 0.05, false);
+        assert!(bm(&nb4).actual_x_speed() > 0.0);
+        // a boat with a local rider is not smoothed
+        let b = Boat::new(&w, &dw, IntPair { x: 10, y: 8 }, None, None, Some("o")).unwrap();
+        bm(&b).add_rider_opt(&b, Some(&blockhead(9, false)));
+        bm(&b).st.borrow_mut().remote_goal_pos = IntPair { x: 50, y: 8 };
+        b.update_accurate_dt_is_simulation(&b, 0.05, 0.05, false);
+        assert_eq!(b.pos().x, 10);
+    }
+
+    /// Sailing into walls and the ground: horizontal blocks stop the speed, vertical blocks the fall; a boat
+    /// that lands on the ground without room is crushed, a network replica is not.
+    #[test]
+    fn collisions() {
+        let (w, dw, _r) = flat("boat_coll", 5);
+        // a pool 4 wide with solid walls
+        for x in 20..=26 {
+            water_column(&w, x, 6, 8);
+        }
+        for y in 6..=9 {
+            tile(&w, 19, y).update(|t| t.type_index = 6);
+            tile(&w, 27, y).update(|t| t.type_index = 6);
+        }
+        let b = Boat::new(&w, &dw, IntPair { x: 25, y: 7 }, None, None, Some("o")).unwrap();
+        bm(&b).st.borrow_mut().actual_x_speed = 20.0;
+        let mut stopped = false;
+        for _ in 0..200 {
+            b.update_accurate_dt_is_simulation(&b, 0.05, 0.05, false);
+            if bm(&b).actual_x_speed() == 0.0 {
+                stopped = true;
+            }
+        }
+        assert!(stopped && !b.needs_removed());
+        // the other wall
+        bm(&b).st.borrow_mut().actual_x_speed = -30.0;
+        for _ in 0..200 {
+            b.update_accurate_dt_is_simulation(&b, 0.05, 0.05, false);
+        }
+        assert!(!b.needs_removed());
+        // a network replica falling on the ground stays where it is
+        let rep = net_boat(&w, &dw, 40, 9);
+        for _ in 0..200 {
+            rep.update_accurate_dt_is_simulation(&rep, 0.05, 0.05, false);
+        }
+        assert!(!rep.needs_removed());
+        // a boat with solid ground right below its start and room only above: bounces its speed away
+        tile(&w, 50, 8).update(|t| t.type_index = 6);
+        let low = Boat::new(&w, &dw, IntPair { x: 50, y: 9 }, None, None, Some("o")).unwrap();
+        bm(&low).st.borrow_mut().y_speed = -5.0;
+        low.update_accurate_dt_is_simulation(&low, 0.05, 0.05, false);
+        bm(&low).st.borrow_mut().y_speed = 5.0;
+        low.update_accurate_dt_is_simulation(&low, 0.05, 0.05, false);
+    }
+
+    /// The local rider steers: the speed follows the target, walls stop it, the control event goes out.
+    #[test]
+    fn steering() {
+        let (w, dw, _r) = flat("boat_steer", 5);
+        for x in 20..=40 {
+            water_column(&w, x, 6, 8);
+        }
+        tile(&w, 41, 7).update(|t| t.type_index = 6);
+        tile(&w, 41, 8).update(|t| t.type_index = 6);
+        tile(&w, 19, 7).update(|t| t.type_index = 6);
+        tile(&w, 19, 8).update(|t| t.type_index = 6);
+        let b = Boat::new(&w, &dw, IntPair { x: 30, y: 7 }, None, None, Some("o")).unwrap();
+        let rider = blockhead(1, false);
+        dw.blockheads.borrow_mut().push(rider.clone());
+        dw.active_blockhead_index.set(0);
+        bm(&b).add_rider_opt(&b, Some(&rider));
+        let r = b.as_ridable().unwrap();
+        // the active blockhead keeps its target
+        r.set_target_velocity(Vector2 { x: 1.0, y: 0.0 });
+        b.set_update_needs_to_be_sent(false);
+        for _ in 0..30 {
+            b.update_accurate_dt_is_simulation(&b, 0.05, 0.05, false);
+        }
+        assert!(bm(&b).actual_x_speed() > 2.0);
+        assert!(b.pos().x > 30);
+        assert!(b.update_needs_to_be_sent(), "the control event timer fired");
+        // leftwards, and into the wall on the right
+        r.set_target_velocity(Vector2 { x: -1.0, y: 0.0 });
+        for _ in 0..60 {
+            b.update_accurate_dt_is_simulation(&b, 0.05, 0.05, false);
+        }
+        assert!(bm(&b).actual_x_speed() < 0.0);
+        // a small target means no thrust
+        r.set_target_velocity(Vector2 { x: 0.1, y: 0.0 });
+        b.update_accurate_dt_is_simulation(&b, 0.05, 0.05, false);
+        // pushing against the wall: the speed dies
+        bm(&b).st.borrow_mut().target_x_speed = 6.0;
+        let wall = Boat::new(&w, &dw, IntPair { x: 40, y: 7 }, None, None, Some("o")).unwrap();
+        let rider2 = blockhead(2, false);
+        dw.blockheads.borrow_mut().push(rider2.clone());
+        bm(&wall).add_rider_opt(&wall, Some(&rider2));
+        dw.active_blockhead_index.set(1);
+        for _ in 0..10 {
+            bm(&wall).st.borrow_mut().target_x_speed = 6.0;
+            wall.update_accurate_dt_is_simulation(&wall, 0.05, 0.05, false);
+        }
+        assert!(bm(&wall).actual_x_speed() < 6.0);
+        // the rider is not the active blockhead: the target is cleared
+        dw.active_blockhead_index.set(0);
+        bm(&wall).st.borrow_mut().target_x_speed = 6.0;
+        wall.update_accurate_dt_is_simulation(&wall, 0.05, 0.05, false);
+        assert_eq!(bm(&wall).target_x_speed(), 0.0);
+        // a replica rider is not steered by the server
+        let nrb = Boat::new(&w, &dw, IntPair { x: 30, y: 7 }, None, None, Some("o")).unwrap();
+        bm(&nrb).add_rider_opt(&nrb, Some(&blockhead(3, true)));
+        nrb.update_accurate_dt_is_simulation(&nrb, 0.05, 0.05, false);
+    }
+
+    /// A saved rider comes back with the blockheads; a server-controlled one is let go; a bad index is ignored.
+    #[test]
+    fn saved_rider_restore() {
+        let (w, dw, _r) = flat("boat_restore", 5);
+        set_host(Rc::new(RideHost));
+        let local = blockhead(4, false);
+        dw.blockheads.borrow_mut().push(local.clone());
+        let b = Boat::new(&w, &dw, IntPair { x: 10, y: 7 }, None, None, Some("o")).unwrap();
+        bm(&b).add_rider_opt(&b, Some(&local));
+        let sd = b.get_save_dict(&b);
+        let l = Boat::from_save_dict(&w, &dw, &sd, None).unwrap();
+        l.blockheads_loaded(&l);
+        assert!(bm(&l).rider().is_some() && bm(&l).being_controlled());
+        assert!(crate::blockhead::blockhead::as_blockhead(&local).unwrap().bh.borrow().ride_object.is_some());
+        // index out of range: nobody, but the boat counts as controlled
+        let mut far = sd.clone();
+        far.map.insert("currentBlockheadIndex".to_string(), PlistValue::int(9));
+        let f = Boat::from_save_dict(&w, &dw, &far, None).unwrap();
+        f.blockheads_loaded(&f);
+        assert!(bm(&f).rider().is_none() && bm(&f).being_controlled());
+        // no saved rider at all: nothing happens
+        let plain = Boat::new(&w, &dw, IntPair { x: 12, y: 7 }, None, None, Some("o")).unwrap();
+        let n = Boat::from_save_dict(&w, &dw, &plain.get_save_dict(&plain), None).unwrap();
+        n.blockheads_loaded(&n);
+        assert!(!bm(&n).being_controlled());
+        // (a boat placed by a player starts with saved index 0 and takes the first blockhead aboard)
+        plain.blockheads_loaded(&plain);
+        assert!(bm(&plain).rider().is_some());
+        // a server-controlled rider is dismissed
+        crate::blockhead::blockhead::as_blockhead(&local)
+            .unwrap()
+            .bh
+            .borrow_mut()
+            .is_client_blockhead_being_controlled_by_server = true;
+        let c = Boat::from_save_dict(&w, &dw, &sd, None).unwrap();
+        c.blockheads_loaded(&c);
+        assert!(bm(&c).rider().is_none() && !bm(&c).being_controlled());
+        // and cannot board
+        bm(&b).st.borrow_mut().rider = None;
+        bm(&b).add_rider_opt(&b, Some(&local));
+        assert!(bm(&b).rider().is_none());
+        set_host(Rc::new(crate::blockhead::blockhead::NullHost));
+    }
+
+    /// `remoteUpdate:` with a local rider aboard: the same or no rider keeps it, another id dismisses it.
+    #[test]
+    fn remote_update_with_a_local_rider() {
+        let (w, dw, _r) = flat("boat_remote_local", 5);
+        set_host(Rc::new(RideHost));
+        let b = Boat::new(&w, &dw, IntPair { x: 10, y: 7 }, None, None, Some("o")).unwrap();
+        let rider = blockhead(6, false);
+        bm(&b).add_rider_opt(&b, Some(&rider));
+        let mut nd = BoatCreationNetData::default();
+        nd.dynamic_object_net_data.pos_x = 10;
+        nd.dynamic_object_net_data.pos_y = 7;
+        nd.rider_id = 0;
+        b.remote_update(&b, &nd.to_vec());
+        assert!(bm(&b).rider().is_some());
+        nd.rider_id = 6;
+        b.remote_update(&b, &nd.to_vec());
+        assert!(bm(&b).rider().is_some());
+        nd.rider_id = 99;
+        b.remote_update(&b, &nd.to_vec());
+        assert!(bm(&b).rider().is_none());
+        // a removed boat ignores updates; an unknown net rider boards nobody
+        nd.rider_id = 12345;
+        b.remote_update(&b, &nd.to_vec());
+        assert!(bm(&b).rider().is_none());
+        b.base().borrow_mut().needs_removed = true;
+        b.remote_update(&b, &nd.to_vec());
+        set_host(Rc::new(crate::blockhead::blockhead::NullHost));
+    }
+
+    /// Faces: camera and rotation, removal of a rider, leftovers.
+    #[test]
+    fn rider_faces_and_leftovers() {
+        let (w, dw, _r) = flat("boat_faces", 5);
+        let b = Boat::new(&w, &dw, IntPair { x: 10, y: 7 }, None, None, Some("o")).unwrap();
+        let r = b.as_ridable().unwrap();
+        let rider = blockhead(8, true);
+        assert_eq!(r.camera_pos_for_blockhead(&rider), b.render_pos());
+        assert_eq!(r.rider_body_y_rotation_for_blockhead(&rider), BODY_ROTATION_INIT);
+        assert!(r.blockhead_can_ride_using_item(&rider, 0));
+        r.add_rider(&b, &rider);
+        assert!(!r.blockhead_can_ride_using_item(&rider, 0));
+        r.swipe_up_gesture(&b);
+        assert!(!r.jumps_on_swipe() && !r.requires_fuel() && r.acts_as_interaction_object().is_none());
+        assert!(!r.rider_d_pad_should_allow_up_down() && !r.rider_d_pad_should_give_discrete_values());
+        let tap = b.as_tap_choice().unwrap();
+        assert!(!tap.is_double_height());
+        // removing someone else leaves the rider; removing the rider frees the boat
+        r.remove_rider(&b, &blockhead(9, true));
+        assert!(bm(&b).rider().is_some());
+        r.remove_rider(&b, &rider);
+        assert!(bm(&b).rider().is_none() && !bm(&b).being_controlled());
+        b.world_changed(&b, &mut vec![IntPair { x: 1, y: 1 }]);
+        b.dealloc(&b);
+        // moving with a local rider marks the circumnavigation tracker; tap wrap near the seam
+        let b2 = Boat::new(&w, &dw, IntPair { x: 10, y: 7 }, None, None, Some("o")).unwrap();
+        bm(&b2).add_rider_opt(&b2, Some(&blockhead(10, false)));
+        b2.update_position(&b2, IntPair { x: 11, y: 7 });
+        let edge = Boat::new(&w, &dw, IntPair { x: 0, y: 7 }, None, None, Some("o")).unwrap();
+        assert!(bm(&edge).tap_is_within_body_radius(Vector2 { x: 128.2, y: 7.6 }));
+        let far = Boat::new(&w, &dw, IntPair { x: 127, y: 7 }, None, None, Some("o")).unwrap();
+        assert!(bm(&far).tap_is_within_body_radius(Vector2 { x: -0.2, y: 7.6 }));
+        // a replica image at an unloaded tile is refused
+        let src = Boat::new(&w, &dw, IntPair { x: 10, y: 7 }, None, None, Some("o")).unwrap();
+        src.base().borrow_mut().pos = IntPair { x: 10, y: 400 };
+        let nd = src.creation_net_data_for_client(&src, None).unwrap();
+        assert!(Boat::from_net_data(&w, &dw, None, &nd).is_none());
+        // net data without a tail has no owner
+        let nd = net_boat_head(&w, &dw);
+        assert!(nd.owner_id().is_none());
+    }
+
+    fn net_boat_head(w: &Rc<World>, dw: &Rc<DynamicWorld>) -> ObjRef {
+        let b = Boat::new(w, dw, IntPair { x: 10, y: 7 }, None, None, Some("o")).unwrap();
+        let nd = b.creation_net_data_for_client(&b, None).unwrap();
+        Boat::from_net_data(w, dw, None, &nd[..0x28]).unwrap()
+    }
+
+    /// A boat that bumps its head, one that starts inside a wall, one whose cell and float position disagree,
+    /// and a replica sailing into a wall.
+    #[test]
+    fn odd_collisions() {
+        let (w, dw, _r) = flat("boat_odd", 5);
+        // ceiling: water up to the solid tile above the boat
+        water_column(&w, 10, 6, 8);
+        tile(&w, 10, 9).update(|t| t.type_index = 6);
+        let b = Boat::new(&w, &dw, IntPair { x: 10, y: 7 }, None, None, Some("o")).unwrap();
+        bm(&b).st.borrow_mut().y_speed = 50.0;
+        bm(&b).set_fp_for_test(Vector2 { x: 10.5, y: 8.45 });
+        b.update_accurate_dt_is_simulation(&b, 0.05, 0.05, false);
+        assert_eq!(bm(&b).st.borrow().y_speed, 0.0);
+        // a boat in a wall: moving sideways stays blocked in place
+        tile(&w, 30, 8).update(|t| t.type_index = 6);
+        tile(&w, 31, 8).update(|t| t.type_index = 6);
+        tile(&w, 31, 7).update(|t| t.type_index = 6);
+        let stuck = Boat::new(&w, &dw, IntPair { x: 30, y: 7 }, None, None, Some("o")).unwrap();
+        bm(&stuck).st.borrow_mut().actual_x_speed = 2.5;
+        bm(&stuck).set_fp_for_test(Vector2 { x: 30.95, y: 7.5 });
+        stuck.update_accurate_dt_is_simulation(&stuck, 0.05, 0.05, false);
+        // the cell and the float position disagree and the speed points the other way
+        let off = Boat::new(&w, &dw, IntPair { x: 40, y: 7 }, None, None, Some("o")).unwrap();
+        bm(&off).set_fp_for_test(Vector2 { x: 40.5, y: 9.0 });
+        bm(&off).st.borrow_mut().y_speed = -3.0;
+        tile(&w, 40, 8).update(|t| t.type_index = 6);
+        off.update_accurate_dt_is_simulation(&off, 0.05, 0.05, false);
+        // a replica into a wall: the move is undone without announcing
+        for y in 6..=9 {
+            tile(&w, 61, y).update(|t| t.type_index = 6);
+        }
+        let rep = net_boat(&w, &dw, 60, 7);
+        bm(&rep).st.borrow_mut().actual_x_speed = 40.0;
+        bm(&rep).set_fp_for_test(Vector2 { x: 60.99, y: 7.5 });
+        rep.update_accurate_dt_is_simulation(&rep, 0.05, 0.05, false);
+        assert!(!rep.needs_removed());
+    }
+
+    impl Boat {
+        fn set_fp_for_test(&self, v: Vector2) {
+            self.set_fp(v);
+        }
+    }
+
+    /// A net rider aboard is replaced when the update names another one; goals across the seam both ways.
+    #[test]
+    fn net_riders_swap_and_seam_goals() {
+        let (w, dw, _r) = flat("boat_swap", 5);
+        set_host(Rc::new(RideHost));
+        let (a, b2) = (blockhead(70, true), blockhead(71, true));
+        dw.net_blockheads.borrow_mut().extend([a.clone(), b2.clone()]);
+        let b = Boat::new(&w, &dw, IntPair { x: 10, y: 7 }, None, None, Some("o")).unwrap();
+        let mut nd = BoatCreationNetData::default();
+        nd.dynamic_object_net_data.pos_x = 10;
+        nd.dynamic_object_net_data.pos_y = 7;
+        nd.rider_id = 70;
+        b.remote_update(&b, &nd.to_vec());
+        assert_eq!(bm(&b).rider().unwrap().unique_id(), 70);
+        nd.rider_id = 71;
+        b.remote_update(&b, &nd.to_vec());
+        assert_eq!(bm(&b).rider().unwrap().unique_id(), 71);
+        // the other direction around the seam
+        let nb = net_boat(&w, &dw, 2, 8);
+        bm(&nb).st.borrow_mut().remote_goal_pos = IntPair { x: 125, y: 8 };
+        nb.update_accurate_dt_is_simulation(&nb, 0.05, 0.05, false);
+        assert!(bm(&nb).actual_x_speed() < 0.0);
+        // a placement dict without an owner leaves the boat ownerless
+        let sd = new_mutable_dict();
+        let o = Boat::new(&w, &dw, IntPair { x: 14, y: 7 }, None, Some(&sd), None).unwrap();
+        assert!(o.owner_id().is_none());
+        // the compiled min()
+        assert_eq!(min_d(0.5, 1.0), 0.5);
+        assert_eq!(min_d(0.5, 0.25), 0.25);
+        set_host(Rc::new(crate::blockhead::blockhead::NullHost));
+    }
+
+    /// The active blockhead keeps the boat's target speed; a boat wedged in a wall (blocked, same cell) stays put.
+    #[test]
+    fn active_rider_and_wedged_boat() {
+        let (w, dw, _r) = flat("boat_active", 5);
+        for x in 20..=30 {
+            water_column(&w, x, 6, 8);
+        }
+        let b = Boat::new(&w, &dw, IntPair { x: 25, y: 7 }, None, None, Some("o")).unwrap();
+        let rider = blockhead(1, false);
+        dw.blockheads.borrow_mut().push(rider.clone());
+        dw.active_blockhead_index.set(0);
+        assert!(dw.active_blockhead().is_some());
+        bm(&b).add_rider_opt(&b, Some(&rider));
+        bm(&b).st.borrow_mut().target_x_speed = 6.0;
+        b.update_accurate_dt_is_simulation(&b, 0.05, 0.05, false);
+        assert_eq!(bm(&b).target_x_speed(), 6.0);
+        // wedged: the boat's own cell is half in the ground and a push to the right is blocked
+        water_column(&w, 40, 7, 7);
+        tile(&w, 40, 8).update(|t| t.type_index = 6);
+        tile(&w, 41, 7).update(|t| t.type_index = 6);
+        tile(&w, 41, 8).update(|t| t.type_index = 6);
+        let wedge = Boat::new(&w, &dw, IntPair { x: 40, y: 7 }, None, None, Some("o")).unwrap();
+        bm(&wedge).st.borrow_mut().actual_x_speed = 2.5;
+        bm(&wedge).st.borrow_mut().y_speed = 0.0;
+        bm(&wedge).set_fp_for_test(Vector2 { x: 40.95, y: 7.5 });
+        wedge.update_accurate_dt_is_simulation(&wedge, 0.05, 0.05, false);
+        assert_eq!(wedge.pos(), IntPair { x: 40, y: 7 });
+        // a replica with a network rider is not steered by the server
+        let rep = net_boat(&w, &dw, 25, 7);
+        bm(&rep).add_rider_opt(&rep, Some(&blockhead(5, true)));
+        assert!(bm(&rep).being_controlled());
+        rep.update_accurate_dt_is_simulation(&rep, 0.05, 0.05, false);
     }
 }

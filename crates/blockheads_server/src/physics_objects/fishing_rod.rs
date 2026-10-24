@@ -214,16 +214,10 @@ impl FishingRod {
             if !self.st.borrow().line_locations.is_empty() {
                 let mut distance = 4.0f32 * dt;
                 while (distance as f64) > 0.0001f64 {
+                    // the loop is only entered with rope left, and the pass that uses up the last point returns
                     let (back, hook_pos) = {
                         let st = self.st.borrow();
-                        match st.line_locations.last() {
-                            Some(b) => (*b, st.hook_pos),
-                            None => {
-                                drop(st);
-                                self.finish_reel();
-                                return;
-                            }
-                        }
+                        (*st.line_locations.last().expect("rope left inside the reel loop"), st.hook_pos)
                     };
                     let v = back.sub(hook_pos);
                     let len = v.length();
@@ -636,5 +630,176 @@ mod tests {
         assert!(!rod2.valid());
         rod2.blockhead_unloaded(&bh);
         assert!(rod2.blockhead().is_none());
+    }
+
+    /// A rod held by a real blockhead: finishing the reel stops the blockhead's fishing.
+    #[test]
+    fn reeling_in_stops_the_real_blockhead_fishing() {
+        use crate::blockhead::blockhead::testutil::{new_bh, setup as bh_setup, TestHost};
+        let host = TestHost::install();
+        let (bw, _m, bdw) = bh_setup();
+        let bh = new_bh(&bw, &bdw, 0);
+        let (w, _dw, _r) = flat("rod_realbh", 5);
+        let rod = FishingRod::init_with_world_blockhead_cache(&w, &bh, None);
+        rod.st.borrow_mut().line_locations = vec![Vector2 { x: 20.0, y: 20.0 }];
+        rod.st.borrow_mut().hook_pos = Vector2 { x: 20.5, y: 20.0 };
+        rod.set_hooked_fish(Some(dummy(0.0, 0.0)));
+        for _ in 0..20 {
+            rod.update_accurate_dt_is_simulation(0.1, 0.1, false);
+        }
+        assert!(rod.st.borrow().line_locations.is_empty());
+        let _ = host.take();
+    }
+
+    /// A hooked fish drags the hook along a longer rope: the hook sinks in the air, rests on the ground, and
+    /// the rope relaxes through air, ground and water.
+    #[test]
+    fn hooked_fish_with_a_long_rope() {
+        let (w, _dw, _r) = flat("rod_long", 5);
+        // water with some fill at (30..34, 9)
+        for x in 30..36 {
+            tile(&w, x, 9).update(|t| {
+                t.type_index = 3;
+                t.partial_content_left = 120;
+            });
+        }
+        let rod = FishingRod::init_with_world_blockhead_cache(&w, &dummy(20.0, 10.0), None);
+        {
+            let mut st = rod.st.borrow_mut();
+            st.casting = false;
+            st.line_locations = (0..6).map(|i| Vector2 { x: 20.0 + i as f32 * 1.5, y: 9.5 }).collect();
+            st.hook_pos = Vector2 { x: 32.2, y: 9.2 };
+        }
+        rod.set_hooked_fish(Some(dummy(0.0, 0.0)));
+        for _ in 0..3 {
+            rod.update_accurate_dt_is_simulation(0.01, 0.01, false);
+        }
+        // the hook sits in open air and over the ground
+        {
+            let mut st = rod.st.borrow_mut();
+            st.hook_pos = Vector2 { x: 22.2, y: 6.01 };
+        }
+        rod.update_accurate_dt_is_simulation(0.01, 0.01, false);
+        {
+            let mut st = rod.st.borrow_mut();
+            st.hook_pos = Vector2 { x: 22.2, y: 6.001 };
+            // rope points down in the ground
+            st.line_locations[2] = Vector2 { x: 23.0, y: 5.5 };
+            st.line_locations[3] = Vector2 { x: 24.0, y: 6.01 };
+        }
+        rod.update_accurate_dt_is_simulation(0.01, 0.01, false);
+        // a hook in water that is not deep enough yet
+        {
+            let mut st = rod.st.borrow_mut();
+            st.hook_pos = Vector2 { x: 32.2, y: 9.8 };
+        }
+        rod.update_accurate_dt_is_simulation(0.01, 0.01, false);
+        assert!(rod.hooked_fish().is_some());
+        // a hooked fish keeps the cast from flying on
+        rod.set_is_in_casting_animation(true);
+        rod.update_accurate_dt_is_simulation(0.01, 0.01, false);
+    }
+
+    /// A very long rope bleeds off horizontal speed; water below the rope points slackens them.
+    #[test]
+    fn long_rope_flight_and_water_slack() {
+        let (w, _dw, _r) = flat("rod_slack", 5);
+        for x in 40..60 {
+            tile(&w, x, 8).update(|t| {
+                t.type_index = 3;
+                t.partial_content_left = 250;
+            });
+        }
+        let rod = FishingRod::init_with_world_blockhead_cache(&w, &dummy(0.0, 0.0), None);
+        {
+            let mut st = rod.st.borrow_mut();
+            st.casting = false;
+            st.hook_in_air = true;
+            st.line_locations = (0..70).map(|i| Vector2 { x: 30.0 + i as f32 * 0.4, y: 8.5 }).collect();
+            st.hook_pos = Vector2 { x: 58.0, y: 8.6 };
+            st.hook_velocity = Vector2 { x: 4.0, y: 0.0 };
+        }
+        let before = rod.st.borrow().hook_velocity.x;
+        rod.update_accurate_dt_is_simulation(0.02, 0.02, false);
+        assert!(rod.st.borrow().hook_velocity.x.abs() <= before);
+    }
+
+    /// A rod whose holder is gone (or that is marked as a replica) finishes the reel without the achievement,
+    /// the kill or `stopFishing`; an idle rod does nothing; a hook resting on the ground is pushed up.
+    #[test]
+    fn replica_idle_and_resting_hook() {
+        let (w, _dw, _r) = flat("rod_replica", 5);
+        let bh = dummy(20.0, 10.0);
+        let rod = FishingRod::init_with_world_blockhead_cache(&w, &bh, None);
+        rod.update_accurate_dt_is_simulation(0.1, 0.1, false);
+        assert!(rod.is_casting());
+        rod.st.borrow_mut().is_net = true;
+        rod.blockhead_unloaded(&bh);
+        rod.st.borrow_mut().line_locations = vec![Vector2 { x: 20.0, y: 20.0 }];
+        rod.st.borrow_mut().hook_pos = Vector2 { x: 20.5, y: 20.0 };
+        rod.set_hooked_fish(Some(dummy(0.0, 0.0)));
+        for _ in 0..20 {
+            rod.update_accurate_dt_is_simulation(0.1, 0.1, false);
+        }
+        assert!(rod.st.borrow().line_locations.is_empty());
+        // the hook sinks into the ground and is pushed back up
+        let rod2 = FishingRod::init_with_world_blockhead_cache(&w, &bh, None);
+        {
+            let mut st = rod2.st.borrow_mut();
+            st.line_locations =
+                vec![Vector2 { x: 20.0, y: 6.0 }, Vector2 { x: 24.0, y: 6.0 }, Vector2 { x: 30.0, y: 6.0 }];
+            st.hook_pos = Vector2 { x: 22.0, y: 6.0 };
+        }
+        rod2.set_hooked_fish(Some(dummy(0.0, 0.0)));
+        rod2.update_accurate_dt_is_simulation(0.1, 0.1, false);
+        assert!(rod2.hook_pos().y > 6.0);
+    }
+
+    /// The direction a hooked fish pulls: along the last rope segment, or one segment back when the hook is on it.
+    #[test]
+    fn fish_direction_along_the_rope() {
+        let (w, _dw, _r) = flat("rod_dir", 5);
+        let rod = FishingRod::init_with_world_blockhead_cache(&w, &dummy(0.0, 0.0), None);
+        {
+            let mut st = rod.st.borrow_mut();
+            st.line_locations = vec![Vector2 { x: 0.0, y: 0.0 }, Vector2 { x: 0.0, y: 3.0 }];
+            st.hook_pos = Vector2 { x: 4.0, y: 3.0 };
+        }
+        assert_eq!(rod.hooked_fish_direction(), Vector2 { x: -1.0, y: 0.0 });
+        rod.set_hook_pos(Vector2 { x: 0.0, y: 3.0 });
+        assert_eq!(rod.hooked_fish_direction(), Vector2 { x: 0.0, y: -1.0 });
+    }
+
+    /// Setters and getters, the same fish hooked twice, a rod whose world is gone, and the test double.
+    #[test]
+    fn setters_and_edges() {
+        let (w, _dw, _r) = flat("rod_misc", 5);
+        let d = dummy(1.0, 2.0);
+        assert_eq!(d.class_info().name, "Dummy");
+        let rod = FishingRod::init_with_world_blockhead_cache(&w, &d, None);
+        rod.set_hooked_fish(None);
+        rod.st.borrow_mut().line_locations.push(Vector2 { x: 1.0, y: 1.0 });
+        let f = dummy(0.0, 0.0);
+        rod.set_hooked_fish(Some(f.clone()));
+        rod.set_hooked_fish(Some(f.clone()));
+        rod.set_hooked_fish(Some(dummy(0.0, 0.0)));
+        rod.set_hooked_fish(None);
+        rod.set_hook_pos(Vector2 { x: 3.0, y: 4.0 });
+        assert_eq!(rod.hook_pos(), Vector2 { x: 3.0, y: 4.0 });
+        rod.set_is_in_casting_animation(true);
+        rod.set_cast_animation_progress(0.125);
+        assert_eq!(rod.cast_animation_progress(), 0.125);
+        rod.set_hook_in_air(true);
+        rod.set_casting_right(true);
+        assert!(rod.hook_in_air() && rod.casting_right() && rod.is_in_casting_animation());
+        // a blockhead other than the holder leaves the rod alone
+        rod.blockhead_unloaded(&dummy(5.0, 5.0));
+        assert!(rod.blockhead().is_some());
+        // a rod whose world is gone does nothing
+        let gone = {
+            let (w2, _dw2, _r2) = flat("rod_gone", 5);
+            FishingRod::init_with_world_blockhead_cache(&w2, &d, None)
+        };
+        gone.update_accurate_dt_is_simulation(0.1, 0.1, false);
     }
 }

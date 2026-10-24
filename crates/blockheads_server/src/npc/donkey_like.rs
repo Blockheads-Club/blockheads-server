@@ -143,10 +143,8 @@ impl Default for DonkeyLikeState {
 pub trait DonkeyLikeClass {
     /// The DonkeyLike ivars.
     fn donkey_like(&self) -> &RefCell<DonkeyLikeState>;
-    /// `foodPlantType` (default `PLANT_CARROT`)
-    fn food_plant_type(&self) -> i32 {
-        PLANT_CARROT
-    }
+    /// `foodPlantType`: both classes set it (the base class's `PLANT_CARROT` is the donkey's).
+    fn food_plant_type(&self) -> i32;
     /// `flies` (default NO)
     fn flies(&self) -> bool {
         false
@@ -271,11 +269,10 @@ pub fn donkey_like_init_with_world_dynamic_world_at_position_cache_save_dict_is_
     was_placed: bool,
     client_id: Option<&str>,
 ) -> bool {
-    if !npc_init_with_world_dynamic_world_at_position_cache_save_dict_is_adult_was_placed_placed_by_client(
+    let inited = npc_init_with_world_dynamic_world_at_position_cache_save_dict_is_adult_was_placed_placed_by_client(
         me, world, dw, pos, cache, save_dict, is_adult, was_placed, client_id,
-    ) {
-        return false;
-    }
+    );
+    debug_assert!(inited); // the base initialisers cannot fail on this path
     dl(me).load_derived_stuff(me);
     true
 }
@@ -288,9 +285,8 @@ pub fn donkey_like_init_with_world_dynamic_world_save_dict_cache(
     save_dict: &PlistDict,
     cache: CacheRef,
 ) -> bool {
-    if !npc_init_with_world_dynamic_world_save_dict_cache(me, world, dw, save_dict, cache) {
-        return false;
-    }
+    let inited = npc_init_with_world_dynamic_world_save_dict_cache(me, world, dw, save_dict, cache);
+    debug_assert!(inited); // the base initialisers cannot fail on this path
     dl(me).load_derived_stuff(me);
     true
 }
@@ -1275,4 +1271,556 @@ fn run_steps(t: &mut Tick, dt: f32) {
     }
     let f = min1(10.0f32 * dt);
     t.s.head_down_fraction += (t.s.target_head_down_fraction - t.s.head_down_fraction) * f;
+}
+
+#[cfg(test)]
+mod ai_tests {
+    //! Seeded simulations of the walking AI on random terrain (walls, pits, pools, gates, food), with invariants
+    //! checked after every tick, plus the targeted rules the simulations rely on.
+    use super::*;
+    use crate::npc::donkey::Donkey;
+    use crate::npc::egg::test_support::TestPassiveEnv;
+    use crate::objects::base::testutil::{setup, MockDw, MockWorld};
+    use crate::objects::base::{DynamicWorldRef, WorldRef};
+    use crate::types::tile::Tile;
+    use std::rc::Rc;
+
+    /// Small deterministic generator for terrain and starting conditions (independent of the game's `rand()`).
+    struct Lcg(u64);
+    impl Lcg {
+        fn next(&mut self) -> u32 {
+            self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (self.0 >> 33) as u32
+        }
+        fn below(&mut self, n: u32) -> u32 {
+            self.next() % n
+        }
+    }
+
+    struct Rig {
+        _w: Rc<MockWorld>,
+        _dw: Rc<MockDw>,
+        env: Rc<TestPassiveEnv>,
+        me: ObjRef,
+    }
+
+    fn tile(ty: u8) -> Tile {
+        let mut t = Tile::default();
+        t.type_index = ty;
+        t
+    }
+
+    fn put(env: &TestPassiveEnv, x: i32, y: i32, t: Tile) {
+        env.tiles.borrow_mut().insert((x, y), t);
+    }
+
+    /// Ground at y = 2 (solid below), air above, then random features along the way.
+    fn rig(seed: u32) -> Rig {
+        let mut g = Lcg(seed as u64 * 7919 + 13);
+        let (w, dw, _l) = setup(4, 4);
+        let env = TestPassiveEnv::new();
+        env.install();
+        glibc_rand::srand(seed);
+        for x in 0..128 {
+            for y in 0..=1 {
+                put(&env, x, y, tile(1));
+            }
+            put(&env, x, 2, tile(1));
+            for y in 3..32 {
+                put(&env, x, y, tile(2));
+            }
+            if g.below(3) == 0 {
+                put(&env, x, 2, tile(27));
+            }
+        }
+        let food = if seed % 3 == 0 { contents_for_plant(9) } else { contents_for_plant(4) };
+        let mut x = 2;
+        while x < 126 {
+            match g.below(13) {
+                0 => {
+                    // a pit
+                    for dx in 0..=(g.below(3) as i32) {
+                        put(&env, x + dx, 2, tile(2));
+                        put(&env, x + dx, 1, tile(2));
+                    }
+                }
+                1 => {
+                    // a wall, one or two high
+                    for dy in 0..=(g.below(3) as i32) {
+                        put(&env, x, 3 + dy, tile(1));
+                    }
+                }
+                2 => {
+                    // a pool
+                    for dx in 0..=(g.below(4) as i32) {
+                        let mut t = tile(3);
+                        t.partial_content_left = [255u8, 128, 40][g.below(3) as usize];
+                        put(&env, x + dx, 2, t);
+                        put(&env, x + dx, 3, t);
+                    }
+                }
+                3 => {
+                    // a gate
+                    let mut t = tile(2);
+                    t.contents = 0x92;
+                    put(&env, x, 3, t);
+                }
+                4 => {
+                    // food
+                    let mut t = tile(2);
+                    t.foreground_contents = food;
+                    put(&env, x, 3, t);
+                    let plant: ObjRef = crate::objects::base::testutil::TestObj::new();
+                    env.food
+                        .borrow_mut()
+                        .insert(crate::objects::handle::obj_id(&plant), [50.0f32, 1000.0][g.below(2) as usize]);
+                    env.plants.borrow_mut().insert((x, 3), plant);
+                }
+                7 => {
+                    // tiles that are not loaded
+                    env.tiles.borrow_mut().remove(&(x, 3));
+                    env.tiles.borrow_mut().remove(&(x, 4));
+                }
+                6 => {
+                    // food of the other animal, with and without a plant behind it, and an unrelated sprite
+                    let mut t = tile(2);
+                    t.foreground_contents = [contents_for_plant(0), food, 0x10][g.below(3) as usize];
+                    put(&env, x, 3, t);
+                    if g.below(2) == 0 {
+                        let plant: ObjRef = crate::objects::base::testutil::TestObj::new();
+                        env.food.borrow_mut().insert(crate::objects::handle::obj_id(&plant), 700.0);
+                        env.plants.borrow_mut().insert((x, 3), plant);
+                    }
+                }
+                5 => {
+                    // a step up
+                    put(&env, x, 3, tile(1));
+                    put(&env, x + 1, 3, tile(1));
+                    put(&env, x + 1, 4, tile(1));
+                }
+                _ => {}
+            }
+            x += 1 + g.below(4) as i32;
+        }
+        let breed = [0i64, 0, 12, 23][g.below(4) as usize];
+        let mut sd = crate::objects::base::new_mutable_dict();
+        sd.map.insert("breed".into(), crate::plist::value::PlistValue::int(breed));
+        let wr: WorldRef = w.clone();
+        let dr: DynamicWorldRef = dw.clone();
+        let adult = g.below(3) != 0;
+        let _ = adult;
+        let start = IntPair { x: g.below(128) as i32, y: [3, 3, 3, 30, 0][g.below(5) as usize] };
+        let me = if seed % 3 == 0 {
+            crate::npc::yak::Yak::init_with_world_dynamic_world_at_position_cache_save_dict_is_adult_was_placed_placed_by_client(
+                &wr, &dr, start, None, Some(&sd), adult, false, None,
+            )
+        } else {
+            Donkey::init_with_world_dynamic_world_at_position_cache_save_dict_is_adult_was_placed_placed_by_client(
+                &wr, &dr, start, None, Some(&sd), adult, false, None,
+            )
+        }
+        .unwrap();
+        if g.below(6) == 0 {
+            me.base().borrow_mut().is_net = true;
+            dl(&me).donkey_like().borrow_mut().actual_x_speed = [-5.0f32, 5.0, 0.0][g.below(3) as usize];
+        }
+        if g.below(4) == 0 {
+            let rider: ObjRef = crate::objects::base::testutil::TestObj::new();
+            rider.base().borrow_mut().is_net = g.below(2) == 0;
+            let mut n = npc_state(&me).borrow_mut();
+            n.rider = Some(rider);
+            n.being_controlled = g.below(2) == 0;
+        }
+        {
+            let mut s = dl(&me).donkey_like().borrow_mut();
+            s.munch_motion_timer = [0.0f32, 899.95][g.below(2) as usize];
+            if g.below(4) == 0 {
+                s.back_pos.x = (me.float_pos().x + 100.0) % 128.0;
+            }
+            if g.below(3) == 0 {
+                s.remote_stop_pos = IntPair { x: 40 + g.below(10) as i32, y: 3 };
+            }
+            if g.below(3) == 0 {
+                s.jump_action_queued = true;
+                s.has_had_extra_mid_air_jump = true;
+            }
+        }
+        {
+            let mut n = npc_state(&me).borrow_mut();
+            n.age = [100.0f32, 899.0, 1000.0, 5000.0][g.below(4) as usize];
+            n.fullness = [100.0f32, 3000.0, 5390.0, 5500.0][g.below(4) as usize];
+            n.lay_cooldown_timer = 0.0;
+            n.lay_timer = [0.0f32, 0.0, 0.05][g.below(3) as usize];
+            n.mate_cooldown_timer = 0.0;
+        }
+        env.occupied.set(g.below(4) == 0);
+        env.npc_here.set(g.below(4) == 0);
+        if g.below(3) == 0 {
+            let partner = make_partner(&w, &dw, &mut g);
+            *env.breed_with.borrow_mut() = Some(partner);
+        }
+        Rig { _w: w, _dw: dw, env, me }
+    }
+
+    fn make_partner(w: &Rc<MockWorld>, dw: &Rc<MockDw>, _g: &mut Lcg) -> ObjRef {
+        let wr: WorldRef = w.clone();
+        let dr: DynamicWorldRef = dw.clone();
+        let p = Donkey::init_with_world_dynamic_world_at_position_cache_save_dict_is_adult_was_placed_placed_by_client(
+            &wr,
+            &dr,
+            IntPair { x: 31, y: 3 },
+            None,
+            None,
+            true,
+            false,
+            None,
+        )
+        .unwrap();
+        npc_state(&p).borrow_mut().age = 2000.0;
+        p
+    }
+
+    /// A walking donkey dropped from a great height takes fall damage when it lands.
+    #[test]
+    fn long_falls_hurt() {
+        let rig = rig(5);
+        let me = rig.me.clone();
+        npc_state(&me).borrow_mut().breed = 0;
+        npc_state(&me).borrow_mut().rider = None;
+        npc_state(&me).borrow_mut().being_controlled = false;
+        npc_state(&me).borrow_mut().age = 2000.0;
+        let x = me.pos().x;
+        for dx in -1..=1 {
+            put(&rig.env, x + dx, 2, tile(1));
+            for y in 3..32 {
+                put(&rig.env, x + dx, y, tile(2));
+            }
+        }
+        me.update_position(&me, IntPair { x, y: 30 });
+        me.base().borrow_mut().float_pos = Vector2 { x: x as f32 + 0.5, y: 30.0 };
+        dl(&me).donkey_like().borrow_mut().back_pos = Vector2 { x: x as f32 + 0.5, y: 30.0 };
+        for _ in 0..600 {
+            me.update_accurate_dt_is_simulation(&me, 0.05, 0.05, false);
+        }
+        assert!(npc_state(&me).borrow().damage > 0 || npc_state(&me).borrow().dead);
+    }
+
+    /// A donkey sitting across the world seam (negative float x) is carried back over it.
+    #[test]
+    fn negative_x_wraps() {
+        let rig = rig(6);
+        let me = rig.me.clone();
+        npc_state(&me).borrow_mut().rider = None;
+        npc_state(&me).borrow_mut().being_controlled = false;
+        me.base().borrow_mut().float_pos = Vector2 { x: -0.3, y: 3.0 };
+        me.update_accurate_dt_is_simulation(&me, 0.05, 0.05, false);
+        assert!(me.float_pos().x > 100.0);
+        // an already removed animal is left alone
+        me.base().borrow_mut().needs_removed = true;
+        let before = me.float_pos();
+        me.update_accurate_dt_is_simulation(&me, 0.05, 0.05, false);
+        assert_eq!(me.float_pos(), before);
+    }
+
+    /// A donkey on a flat floor at x = 40, adult, with `fullness`.
+    fn plain(breed: i64, fullness: f32) -> Rig {
+        let (w, dw, _l) = setup(4, 4);
+        let env = TestPassiveEnv::new();
+        env.install();
+        glibc_rand::srand(3);
+        for x in 0..128 {
+            put(&env, x, 0, tile(1));
+            put(&env, x, 1, tile(1));
+            put(&env, x, 2, tile(1));
+            for y in 3..12 {
+                put(&env, x, y, tile(2));
+            }
+        }
+        let mut sd = crate::objects::base::new_mutable_dict();
+        sd.map.insert("breed".into(), crate::plist::value::PlistValue::int(breed));
+        let wr: WorldRef = w.clone();
+        let dr: DynamicWorldRef = dw.clone();
+        let me =
+            Donkey::init_with_world_dynamic_world_at_position_cache_save_dict_is_adult_was_placed_placed_by_client(
+                &wr,
+                &dr,
+                IntPair { x: 40, y: 3 },
+                None,
+                Some(&sd),
+                true,
+                false,
+                None,
+            )
+            .unwrap();
+        {
+            let mut n = npc_state(&me).borrow_mut();
+            n.age = 2000.0;
+            n.fullness = fullness;
+            n.lay_cooldown_timer = 0.0;
+            n.lay_timer = 0.0;
+        }
+        dl(&me).donkey_like().borrow_mut().random_time_between_direction_changes = 100.0;
+        Rig { _w: w, _dw: dw, env, me }
+    }
+
+    /// Walking onto a plant tile: the animal eats its own food, ignores another animal's plant, a tile with other
+    /// sprites and a full stomach; a full animal starts the egg/baby timer.
+    #[test]
+    fn eating_and_laying() {
+        let food = contents_for_plant(4);
+        let walk = |rig: &Rig| {
+            let d = dl(&rig.me);
+            d.donkey_like().borrow_mut().actual_x_speed = 4.0;
+            d.donkey_like().borrow_mut().target_x_speed = 4.0;
+            d.donkey_like().borrow_mut().goal_x = 60;
+            rig.me.base().borrow_mut().float_pos = Vector2 { x: 40.95, y: 3.0 };
+            rig.me.update_accurate_dt_is_simulation(&rig.me, 0.1, 0.1, false);
+        };
+        let setup_tile = |rig: &Rig, fg: u8, plant: bool| {
+            let mut t = tile(2);
+            t.foreground_contents = fg;
+            put(&rig.env, 41, 3, t);
+            if plant {
+                let p: ObjRef = crate::objects::base::testutil::TestObj::new();
+                rig.env.food.borrow_mut().insert(crate::objects::handle::obj_id(&p), 1000.0);
+                rig.env.plants.borrow_mut().insert((41, 3), p);
+            }
+        };
+        // food and plant: eaten
+        let r = plain(0, 100.0);
+        setup_tile(&r, food, true);
+        walk(&r);
+        assert!(npc_state(&r.me).borrow().fullness > 200.0);
+        // the plant is gone
+        let r = plain(0, 100.0);
+        setup_tile(&r, food, false);
+        walk(&r);
+        assert!(npc_state(&r.me).borrow().fullness < 101.0);
+        // a unicorn does not eat the donkey's plant
+        let r = plain(12, 100.0);
+        setup_tile(&r, contents_for_plant(0), true);
+        walk(&r);
+        assert!(npc_state(&r.me).borrow().fullness < 101.0);
+        // other sprite
+        let r = plain(0, 100.0);
+        setup_tile(&r, 0x10, true);
+        walk(&r);
+        assert!(npc_state(&r.me).borrow().fullness < 101.0);
+        // a full stomach skips the meal; with the timers running no baby is started
+        let r = plain(0, 5500.0);
+        setup_tile(&r, food, true);
+        npc_state(&r.me).borrow_mut().lay_timer = 50.0;
+        walk(&r);
+        assert!(npc_state(&r.me).borrow().fullness > 5490.0);
+        // ... with the timers expired it starts one
+        let r = plain(0, 5500.0);
+        setup_tile(&r, 0, false);
+        walk(&r);
+        assert!(npc_state(&r.me).borrow().lay_timer > 0.0);
+    }
+
+    /// Mating when a partner is close enough.
+    #[test]
+    fn mating_partner() {
+        let r = plain(0, 1000.0);
+        let partner = make_partner(&r._w, &r._dw, &mut Lcg(1));
+        *r.env.breed_with.borrow_mut() = Some(partner.clone());
+        let d = dl(&r.me);
+        d.donkey_like().borrow_mut().actual_x_speed = 4.0;
+        r.me.base().borrow_mut().float_pos = Vector2 { x: 40.95, y: 3.0 };
+        r.me.update_accurate_dt_is_simulation(&r.me, 0.1, 0.1, false);
+        assert!(npc_state(&r.me).borrow().has_bred && npc_state(&partner).borrow().has_bred);
+    }
+
+    /// The position of the animal and of its float position disagree: a blocked step with no speed, and a gate
+    /// in the way of a free-looking tile.
+    #[test]
+    fn inconsistent_cell_and_gates() {
+        let r = plain(0, 1000.0);
+        put(&r.env, 41, 3, tile(1));
+        put(&r.env, 41, 4, tile(1));
+        r.me.base().borrow_mut().float_pos = Vector2 { x: 41.2, y: 3.0 };
+        r.me.update_accurate_dt_is_simulation(&r.me, 0.05, 0.05, false);
+        check(&r.me);
+        let r = plain(0, 1000.0);
+        let mut gate = tile(2);
+        gate.contents = 0x92;
+        put(&r.env, 41, 3, gate);
+        r.me.base().borrow_mut().float_pos = Vector2 { x: 41.2, y: 3.0 };
+        r.me.update_accurate_dt_is_simulation(&r.me, 0.05, 0.05, false);
+        check(&r.me);
+        // with a rider the gate does not matter
+        let r = plain(0, 1000.0);
+        put(&r.env, 41, 3, gate);
+        let rider: ObjRef = crate::objects::base::testutil::TestObj::new();
+        npc_state(&r.me).borrow_mut().rider = Some(rider);
+        r.me.base().borrow_mut().float_pos = Vector2 { x: 41.2, y: 3.0 };
+        r.me.update_accurate_dt_is_simulation(&r.me, 0.05, 0.05, false);
+        check(&r.me);
+    }
+
+    /// A hit on an animal that is dead, a replica or ridden by a controller only does the plain damage part.
+    #[test]
+    fn hits_on_special_animals() {
+        let r = plain(0, 1000.0);
+        let me = r.me.clone();
+        donkey_like_hit_with_force_blockhead(&me, 1, None);
+        let queued = dl(&me).donkey_like().borrow().jump_action_queued;
+        assert!(queued);
+        dl(&me).donkey_like().borrow_mut().jump_action_queued = false;
+        npc_state(&me).borrow_mut().being_controlled = true;
+        donkey_like_hit_with_force_blockhead(&me, 1, None);
+        assert!(dl(&me).donkey_like().borrow().jump_action_queued);
+        npc_state(&me).borrow_mut().being_controlled = false;
+        me.base().borrow_mut().is_net = true;
+        dl(&me).donkey_like().borrow_mut().jump_action_queued = false;
+        donkey_like_hit_with_force_blockhead(&me, 1, None);
+        assert!(!dl(&me).donkey_like().borrow().jump_action_queued);
+        me.base().borrow_mut().is_net = false;
+        npc_state(&me).borrow_mut().dead = true;
+        donkey_like_hit_with_force_blockhead(&me, 1, None);
+        // a net corpse waits for the server to remove it; a plain object is no donkey-like
+        me.base().borrow_mut().is_net = true;
+        me.update_accurate_dt_is_simulation(&me, 2.0, 2.0, false);
+        me.update_accurate_dt_is_simulation(&me, 2.0, 2.0, false);
+        assert!(!me.needs_removed());
+        let plain_obj: ObjRef = crate::objects::base::testutil::TestObj::new();
+        assert!(as_donkey_like(&plain_obj).is_none());
+        // wrapping a float distance past half the world
+        assert_eq!(wrap_float(100.0, 128), -28.0);
+        assert_eq!(wrap_float(-100.0, 128), 28.0);
+        assert_eq!(wrap_float(10.0, 128), 10.0);
+    }
+
+    /// A rider steers, is dismissed, the animal is captured or refused.
+    #[test]
+    fn riders_and_capture() {
+        let r = plain(0, 1000.0);
+        let me = r.me.clone();
+        let rider: ObjRef = crate::objects::base::testutil::TestObj::new();
+        let other: ObjRef = crate::objects::base::testutil::TestObj::new();
+        assert_eq!(donkey_like_ride_direction(&me), 0);
+        donkey_like_add_rider(&me, Some(&rider));
+        assert!(npc_state(&me).borrow().being_controlled);
+        donkey_like_set_target_velocity(&me, Vector2 { x: 1.0, y: 0.0 });
+        assert_eq!(donkey_like_ride_direction(&me), 1);
+        donkey_like_set_target_velocity(&me, Vector2 { x: -1.0, y: 0.0 });
+        assert_eq!(donkey_like_ride_direction(&me), -1);
+        donkey_like_set_target_velocity(&me, Vector2 { x: 0.0, y: 0.0 });
+        assert_eq!(donkey_like_ride_direction(&me), 0);
+        donkey_like_swipe_up_gesture(&me);
+        assert_eq!(dl(&me).donkey_like().borrow().jump_action_send_value, 1);
+        assert_eq!(donkey_like_rider_pos_for_blockhead(&me, &rider)[3], 1.0);
+        assert_eq!(donkey_like_render_pos(&me).y, me.float_pos().y + 0.3);
+        // a replica rider is not steered
+        let net: ObjRef = crate::objects::base::testutil::TestObj::new();
+        net.base().borrow_mut().is_net = true;
+        npc_state(&me).borrow_mut().rider = Some(net);
+        donkey_like_set_target_velocity(&me, Vector2 { x: 1.0, y: 0.0 });
+        // another rider than the current one cannot be removed
+        npc_state(&me).borrow_mut().rider = Some(rider.clone());
+        donkey_like_remove_rider(&me, &other);
+        assert!(npc_state(&me).borrow().rider.is_some());
+        donkey_like_blockhead_unloaded(&me, &rider);
+        donkey_like_remove_rider(&me, &rider);
+        assert!(npc_state(&me).borrow().rider.is_none());
+        donkey_like_add_rider(&me, None);
+        assert!(
+            donkey_like_blockhead_can_ride_using_item(&me, &other, 0)
+                == npc_of(&me).belongs_to_player_with_blockhead(&other)
+        );
+        // captured only with a cage; a tamed one only by its owner
+        assert!(donkey_like_can_be_captured_by_blockhead_with_item_type(&me, &other, ITEM_CAGE));
+        assert!(!donkey_like_can_be_captured_by_blockhead_with_item_type(&me, &other, 1));
+        assert!(donkey_like_cant_be_captured_tip_string_for_blockhead_with_item_type(&me, &other, ITEM_CAGE).is_none());
+        npc_state(&me).borrow_mut().tamed_client_id = Some("someone".to_string());
+        assert!(!donkey_like_can_be_captured_by_blockhead_with_item_type(&me, &other, ITEM_CAGE));
+        let tip = donkey_like_cant_be_captured_tip_string_for_blockhead_with_item_type(&me, &other, ITEM_CAGE).unwrap();
+        assert!(tip.starts_with("THAT DONKEY BELONGS TO"));
+        // dying twice is a single death; hits and feeding are reactions
+        donkey_like_react_to_being_hit(&me);
+        donkey_like_react_to_being_fed(&me);
+        donkey_like_die(&me, None);
+        donkey_like_die(&me, None);
+        assert!(npc_state(&me).borrow().dead);
+    }
+
+    /// The remote rider's input: stop positions, nudges, teleports and jumps.
+    #[test]
+    fn remote_rider_input() {
+        use crate::types::netdata::DonkeyLikeUpdateNetData;
+        let r = plain(0, 1000.0);
+        let me = r.me.clone();
+        let img = |x: i32, y: i32, target: f32, jump: u8| {
+            let mut u = DonkeyLikeUpdateNetData::default();
+            u.npc_update_net_data.dynamic_object_net_data.pos_x = x as u32;
+            u.npc_update_net_data.dynamic_object_net_data.pos_y = y as u32;
+            u.target_x_speed = (target * 255.0) as i16;
+            u.jump_action_send_value = jump;
+            u.random_goal_rotation = 51;
+            u
+        };
+        // no rider on an authoritative animal: ignored
+        donkey_like_do_donkey_like_remote_update(&me, img(40, 3, 5.0, 0));
+        assert_eq!(dl(&me).donkey_like().borrow().target_x_speed, 0.0);
+        // a local rider: ignored too
+        let local: ObjRef = crate::objects::base::testutil::TestObj::new();
+        npc_state(&me).borrow_mut().rider = Some(local);
+        donkey_like_do_donkey_like_remote_update(&me, img(40, 3, 5.0, 0));
+        assert_eq!(dl(&me).donkey_like().borrow().target_x_speed, 0.0);
+        // a remote rider: close position nudges, far position teleports
+        let net: ObjRef = crate::objects::base::testutil::TestObj::new();
+        net.base().borrow_mut().is_net = true;
+        npc_state(&me).borrow_mut().rider = Some(net);
+        donkey_like_do_donkey_like_remote_update(&me, img(44, 3, 5.0, 2));
+        assert_eq!(dl(&me).donkey_like().borrow().target_x_speed, 5.0);
+        assert!(dl(&me).donkey_like().borrow().jump_action_queued);
+        donkey_like_do_donkey_like_remote_update(&me, img(44, 3, -5.0, 0));
+        assert_eq!(dl(&me).donkey_like().borrow().target_x_speed, 3.5);
+        donkey_like_do_donkey_like_remote_update(&me, img(36, 3, 0.5, 0));
+        assert_eq!(dl(&me).donkey_like().borrow().target_x_speed, -3.5);
+        assert_eq!(dl(&me).donkey_like().borrow().remote_stop_pos, IntPair { x: 36, y: 3 });
+        donkey_like_do_donkey_like_remote_update(&me, img(41, 3, 5.0, 0));
+        donkey_like_do_donkey_like_remote_update(&me, img(70, 3, 5.0, 0));
+        assert_eq!(me.pos().x, 70);
+        // a replica without a rider takes the input as well, and keeps the jump value to itself
+        let nd = me.creation_net_data_for_client(&me, None).unwrap();
+        let rep = Donkey::init_with_world_dynamic_world_cache_net_data(
+            &(r._w.clone() as WorldRef),
+            &(r._dw.clone() as DynamicWorldRef),
+            None,
+            &nd,
+        )
+        .unwrap();
+        assert!(rep.is_net());
+        npc_state(&rep).borrow_mut().rider = None;
+        donkey_like_do_donkey_like_remote_update(&rep, img(40, 3, 5.0, 1));
+        assert_eq!(dl(&rep).donkey_like().borrow().jump_action_send_value, 0);
+    }
+
+    fn check(me: &ObjRef) {
+        let fp = me.float_pos();
+        assert!(fp.x.is_finite() && fp.y.is_finite(), "{fp:?}");
+        let s = dl(me).donkey_like().borrow().clone();
+        for v in [s.target_x_speed, s.actual_x_speed, s.y_speed, s.fall_timer, s.back_pos.x, s.back_pos.y] {
+            assert!(v.is_finite(), "{s:?}");
+        }
+    }
+
+    #[test]
+    fn walking_on_random_terrain() {
+        for seed in 1..=500u32 {
+            let rig = rig(seed);
+            let dts = [0.016f32, 0.05, 0.1, 0.5];
+            for i in 0..400 {
+                let dt = dts[((i / 7) % 4) as usize];
+                rig.me.update_accurate_dt_is_simulation(&rig.me, dt, dt, false);
+                check(&rig.me);
+                if rig.me.needs_removed() {
+                    break;
+                }
+            }
+            let _ = &rig.env;
+        }
+    }
 }

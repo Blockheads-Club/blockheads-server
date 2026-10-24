@@ -1863,6 +1863,8 @@ mod decision_table {
         let fly = O { fly: true, ..o() };
         ck("fly", &[(-1, -2, S)], UP_FROM, KF_STAND, fly, res(TT_FLY, KF_FLY, 6));
         ck("fly from hang", &[], UP_FROM, KF_HANG_BACK, fly, res(TT_HANG_TO_STAND_JUMP, KF_FLY, 42));
+        // open air all round but the cell above the origin is solid: no flight, the walking rules decide
+        ck("fly under a ceiling", &[(-1, -2, S), (-1, 1, S)], UP_FROM, KF_STAND, fly, REF);
         // behind-upper cell solid: no flight; the ordinary rules apply
         ck("fly blocked", &ledge(&[(-1, 1, S)]), UP_FROM, KF_STAND, fly, res(TT_CROUCH_UP, KF_STAND, 42));
         // a powered lift in the destination column

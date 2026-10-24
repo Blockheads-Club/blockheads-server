@@ -275,9 +275,9 @@ impl FreeBlock {
         let me_obj: ObjRef = me.clone();
         let wref: WorldRef = world.clone();
         let dref: DynamicWorldRef = dw.clone();
-        if !base_init_with_world_dynamic_world_at_position_cache(&me_obj, &wref, &dref, pos, cache) {
-            return None;
-        }
+        // the base initialiser always succeeds when the position is given
+        let inited = base_init_with_world_dynamic_world_at_position_cache(&me_obj, &wref, &dref, pos, cache);
+        debug_assert!(inited);
         {
             let mut st = me.st.borrow_mut();
             st.item_type = item_type;
@@ -314,10 +314,8 @@ impl FreeBlock {
         {
             let mut st = me.st.borrow_mut();
             st.bounce_timer = 1.0f32;
+            // (the original lowers this by another 0.1 when yVelocity is positive, which it never is yet)
             st.fall_speed = -0.05f32;
-            if 0.0f32 < st.y_velocity {
-                st.fall_speed -= 0.1f32; // dead in practice: yVelocity is still 0 here
-            }
         }
         let mut fp = me.fp();
         fp.y = 0.5f32 + me.pos().y as f32;
@@ -343,9 +341,8 @@ impl FreeBlock {
         let me_obj: ObjRef = me.clone();
         let wref: WorldRef = world.clone();
         let dref: DynamicWorldRef = dw.clone();
-        if !base_init_with_world_dynamic_world_save_dict_cache(&me_obj, &wref, &dref, save_dict, cache) {
-            return None;
-        }
+        let inited = base_init_with_world_dynamic_world_save_dict_cache(&me_obj, &wref, &dref, save_dict, cache);
+        debug_assert!(inited);
         let get = |k: &str| save_dict.map.get(&k.to_string());
         let fv = |k: &str| get(k).map_or(0.0f32, |v| v.float_value());
         {
@@ -990,7 +987,8 @@ impl FreeBlock {
                     self.notify_changed();
                 }
             }
-        } else if let Some(pb) = priority {
+        } else {
+            let pb = priority.expect("the other branch took the missing priority blockhead");
             if !pb.needs_removed() {
                 let bfp = pb.float_pos();
                 let goal = Vector2 { x: bfp.x + 0.0f32, y: bfp.y + 0.5f32 };
@@ -1405,6 +1403,13 @@ mod tests {
         assert_eq!(c[0x32], 1);
         assert!(c[0x33..0x38].iter().all(|b| *b == 0));
         let c2 = o2.creation_net_data_for_client(&o2, None).unwrap();
+        // a free block with a priority blockhead names it
+        let prio: ObjRef = crate::objects::base::testutil::TestObj::new();
+        prio.base().borrow_mut().unique_id = 31337;
+        fb(&o2).st.borrow_mut().priority_blockhead = Some(prio);
+        let c3 = o2.creation_net_data_for_client(&o2, None).unwrap();
+        assert_ne!(c3, c2);
+        fb(&o2).st.borrow_mut().priority_blockhead = None;
         assert_eq!(c2.len(), 0x38);
         assert_eq!(c2[0x32], 0);
         let u = o.update_net_data_for_client(&o, None).unwrap();
@@ -1473,5 +1478,498 @@ mod tests {
         assert_eq!(f.wrap_delta(1.0, 127.0), 2.0);
         assert_eq!(f.wrap_delta(127.0, 1.0), -2.0);
         assert_eq!(f.wrap_delta(5.0, 3.0), 2.0);
+    }
+
+    use crate::blockhead::blockhead::Blockhead;
+    use crate::world::misc::{install_deps, NullDeps, WorldOpsDepsStub};
+    use crate::world::state::Weather;
+
+    fn bh_at(id: u64, x: f32, y: f32) -> ObjRef {
+        let b = alloc_obj(|w| Blockhead::alloc(w));
+        b.base.borrow_mut().unique_id = id;
+        b.base.borrow_mut().float_pos = Vector2 { x, y };
+        b
+    }
+
+    fn water(w: &Rc<World>, x: i32, y: i32, fill: u8) {
+        tile(w, x, y).update(|t| {
+            t.type_index = 3;
+            t.partial_content_left = fill;
+        });
+    }
+
+    struct Windy;
+    impl WorldOpsDepsStub for Windy {
+        fn weather_wind_strength(&self) -> f32 {
+            1.0
+        }
+    }
+
+    /// Sub-item plumbing: time crystals are dropped, odd entries are skipped, every slot is kept.
+    #[test]
+    fn sub_item_filters() {
+        let (w, dw, _r) = flat("fb_subs", 5);
+        let crystal = InventoryItem::new(ItemType(ITEM_TIME_CRYSTAL as u32), 0, 0, None, None);
+        let stone = InventoryItem::new(ItemType(5), 0, 0, None, None);
+        let slots: Vec<SubSlot> =
+            vec![Rc::new(RefCell::new(vec![crystal.clone(), stone])), Rc::new(RefCell::new(vec![]))];
+        let o =
+            FreeBlock::new(&w, &dw, IntPair { x: 10, y: 9 }, 9, 0, 0, Some(&slots), None, None, true, None).unwrap();
+        assert_eq!(fb(&o).sub_items().unwrap().len(), 2);
+        assert_eq!(fb(&o).sub_items().unwrap()[0].borrow().len(), 1);
+        // only time crystals: no sub-items at all
+        let only: Vec<SubSlot> = vec![Rc::new(RefCell::new(vec![crystal.clone()]))];
+        let none =
+            FreeBlock::new(&w, &dw, IntPair { x: 12, y: 9 }, 9, 0, 0, Some(&only), None, None, true, None).unwrap();
+        assert!(fb(&none).sub_items().is_none());
+        // the plist form skips crystals and keeps empty slots
+        let plist = sub_items_to_plist(&slots);
+        let back = sub_items_from_plist(&plist);
+        assert_eq!(back.len(), 2);
+        assert_eq!(back[0].borrow().len(), 1);
+        // a slot that is no array, an entry that is no data, a time crystal entry
+        let mut crystal_plist = sub_items_to_plist(&[Rc::new(RefCell::new(vec![]))]);
+        if let PlistValue::Array(a) = &mut crystal_plist {
+            a.items.push(PlistValue::int(1));
+            a.items.push(mutable_array_of(vec![PlistValue::int(2), PlistValue::data(crystal.borrow().save_data())]));
+        }
+        let b2 = sub_items_from_plist(&crystal_plist);
+        assert_eq!(b2.len(), 3);
+        assert!(b2[1].borrow().is_empty() && b2[2].borrow().is_empty());
+        assert!(sub_items_from_plist(&PlistValue::int(3)).is_empty());
+    }
+
+    /// Setters, getters and the priority hand-off.
+    #[test]
+    fn accessors() {
+        let (w, dw, _r) = flat("fb_acc", 5);
+        let o = mk(&w, &dw, 10, 9, 9, true);
+        let f = fb(&o);
+        f.set_item_type(12);
+        f.set_data_a(3);
+        f.set_data_b(4);
+        f.set_creation_sound_play_time(1.5);
+        f.set_sound_type(2);
+        assert_eq!(
+            (f.item_type(), f.data_a(), f.data_b(), f.creation_sound_play_time(), f.sound_type()),
+            (12, 3, 4, 1.5, 2)
+        );
+        assert!(f.dynamic_object_save_dict().is_none());
+        assert_eq!(o.class_info().name, "FreeBlock");
+        // hovering blocks do not "fall"; a loose one over air does
+        assert!(!f.falling());
+        f.set_hovers(false);
+        assert!(f.falling());
+        // the priority blockhead can give up
+        f.st.borrow_mut().priority_blockhead = Some(bh_at(1, 0.0, 0.0));
+        o.set_update_needs_to_be_sent(false);
+        f.priority_blockhead_cannot_pickup(&o);
+        assert!(f.priority_blockhead().is_none() && o.update_needs_to_be_sent());
+    }
+
+    /// Loading a saved block: its priority blockhead is looked up, and a block that hovered for over fifteen
+    /// minutes drops (sliding down through the air) unless it is an item that is allowed to hover forever.
+    #[test]
+    fn loading_old_hovering_blocks() {
+        let (w, dw, _r) = flat("fb_load_old", 5);
+        w.set_world_time(0.0);
+        let o = mk(&w, &dw, 10, 20, 9, true);
+        let mut d = o.get_save_dict(&o);
+        // a priority blockhead that is online
+        let who = bh_at(42, 10.0, 20.0);
+        dw.blockheads.borrow_mut().push(who.clone());
+        d.map.insert("priorityBlockheadUinqueID".to_string(), PlistValue::int(42));
+        let r = FreeBlock::from_save_dict(&w, &dw, &d, None).unwrap();
+        assert!(fb(&r).priority_blockhead().is_some());
+        d.map.remove(&"priorityBlockheadUinqueID".to_string());
+        // an hour later the block lets go and slides down to the ground (at most 16 tiles)
+        w.set_world_time(1000.0);
+        let dropped = FreeBlock::from_save_dict(&w, &dw, &d, None).unwrap();
+        assert!(!fb(&dropped).hovers());
+        assert!(dropped.update_needs_to_be_sent());
+        assert_eq!(dropped.pos().y, 6);
+        // much later: too old for the slide (the 900 s head start has passed twice over)
+        w.set_world_time(5000.0);
+        let late = FreeBlock::from_save_dict(&w, &dw, &d, None).unwrap();
+        assert!(!fb(&late).hovers());
+        assert_eq!(late.pos().y, 20);
+        // blocks that may hover forever keep doing it
+        for item in [ITEM_PINE_CONE, 142, 205, 0xcd] {
+            let mut dd = d.clone();
+            dd.map.insert("itemType".to_string(), PlistValue::int(item as i64));
+            let keep = FreeBlock::from_save_dict(&w, &dw, &dd, None).unwrap();
+            assert!(fb(&keep).hovers(), "item {item}");
+        }
+        // and one with something under it stops its slide
+        tile(&w, 30, 18).update(|t| t.type_index = 6);
+        let mut d2 = d.clone();
+        d2.map.insert("pos_x".to_string(), PlistValue::int(30));
+        d2.map.insert("floatPos[VX]".to_string(), PlistValue::real_f32(30.5));
+        w.set_world_time(1000.0);
+        let stopped = FreeBlock::from_save_dict(&w, &dw, &d2, None).unwrap();
+        assert_eq!(stopped.pos().y, 19);
+    }
+
+    /// Net images: odd extra data, duplicate detection without ids, the priority blockhead lookup, and a replica at
+    /// an unloaded tile.
+    #[test]
+    fn net_init_variants() {
+        let (w, dw, _r) = flat("fb_net_variants", 5);
+        let who = bh_at(55, 10.0, 9.0);
+        dw.blockheads.borrow_mut().push(who.clone());
+        let mut sd = new_mutable_dict();
+        sd.map.insert("paintColor".to_string(), PlistValue::int(3));
+        // a priority blockhead with a save dict without an id: never a duplicate
+        let blob = FreeBlock::creation_net_data_for_freeblock_at_position(
+            IntPair { x: 30, y: 9 },
+            9,
+            0,
+            0,
+            None,
+            Some(&sd),
+            false,
+            Some(&who),
+            0,
+            0.0,
+        );
+        let mut avoid: VecDeque<u64> = VecDeque::new();
+        avoid.push_back(5);
+        let a = FreeBlock::from_net_data_avoid_freeblock_dupe_object_ids(&w, &dw, None, &blob, &mut avoid).unwrap();
+        assert_eq!(avoid.len(), 1);
+        assert!(fb(&a).priority_blockhead().is_some());
+        assert_eq!(fb(&a).st.borrow().paint_color, 3);
+        // extra data that does not parse as a plist is ignored
+        let mut junk = blob.clone();
+        junk.truncate(0x38);
+        junk.extend_from_slice(b"not a plist");
+        assert!(FreeBlock::from_net_data(&w, &dw, None, &junk).is_some());
+        // a save dict that is no dictionary
+        let mut extra = new_mutable_dict();
+        extra.map.insert("dynamicObjectSaveDict".to_string(), PlistValue::int(1));
+        let mut odd = blob.clone();
+        odd.truncate(0x38);
+        odd.extend_from_slice(&data_from_property_list(&PlistValue::Dict(extra)).unwrap());
+        let o = FreeBlock::from_net_data(&w, &dw, None, &odd).unwrap();
+        assert!(fb(&o).dynamic_object_save_dict().is_none());
+        // a head-only image claiming extra data has nothing to read
+        let mut headless = blob.clone();
+        headless.truncate(0x38);
+        assert!(FreeBlock::from_net_data(&w, &dw, None, &headless).is_some());
+        // a replica at an unloaded tile is refused
+        let far = FreeBlock::creation_net_data_for_freeblock_at_position(
+            IntPair { x: 30, y: 400 },
+            9,
+            0,
+            0,
+            None,
+            None,
+            true,
+            None,
+            0,
+            0.0,
+        );
+        assert!(FreeBlock::from_net_data(&w, &dw, None, &far).is_none());
+    }
+
+    /// Lifetimes: special items outlive ordinary ones; wind lets a hovering block go.
+    #[test]
+    fn lifetimes_and_wind() {
+        let (w, dw, _r) = flat("fb_life", 5);
+        w.set_world_time(0.0);
+        // a chest item (interaction object item) that is not hovering and is older than 27000 s goes away
+        let chest = mk(&w, &dw, 10, 9, 0x41f, false);
+        w.set_world_time(30000.0);
+        chest.update_accurate_dt_is_simulation(&chest, 0.2, 0.2, false);
+        w.set_world_time(0.0);
+        let train = mk(&w, &dw, 14, 9, 0xcd, false);
+        w.set_world_time(30000.0);
+        train.update_accurate_dt_is_simulation(&train, 0.2, 0.2, false);
+        assert!(train.needs_removed());
+        // wind above 0.9 releases a young hovering block
+        install_deps(Rc::new(Windy));
+        *w.weather.borrow_mut() = Some(Rc::new(Weather {}));
+        w.set_world_time(100.0);
+        let young = mk(&w, &dw, 18, 9, 5, true);
+        tile(&w, 18, 9).update(|t| t.contents = 3);
+        assert!(fb(&young).hovers());
+        young.update_accurate_dt_is_simulation(&young, 0.2, 0.2, false);
+        assert!(!fb(&young).hovers());
+        assert!(young.update_needs_to_be_sent());
+        install_deps(Rc::new(NullDeps));
+        *w.weather.borrow_mut() = None;
+    }
+
+    /// Embedded in the ground the block climbs out; lava burns it; replicas leave tiles that are not loaded alone.
+    #[test]
+    fn embedded_blocks() {
+        let (w, dw, _r) = flat("fb_embedded", 5);
+        // the cell above is solid, the one below is free? no: wedge it in a 1-tile pit and let it find the sides
+        for (x, solid_above, solid_below) in [(10, true, true), (14, true, true)] {
+            let _ = (solid_above, solid_below);
+            tile(&w, x, 8).update(|t| t.type_index = 6);
+            tile(&w, x, 9).update(|t| t.type_index = 6);
+            tile(&w, x, 10).update(|t| t.type_index = 6);
+        }
+        // right neighbour free
+        let o = mk(&w, &dw, 10, 9, 9, true);
+        fb(&o).set_hovers(false);
+        // (x,y+1) solid, (x,y-1) solid: the right-hand cell (11,9) is free
+        o.update_accurate_dt_is_simulation(&o, 0.2, 0.2, false);
+        assert_eq!(o.pos(), IntPair { x: 11, y: 9 });
+        // left only
+        tile(&w, 17, 9).update(|t| t.type_index = 6);
+        tile(&w, 17, 8).update(|t| t.type_index = 6);
+        tile(&w, 17, 10).update(|t| t.type_index = 6);
+        tile(&w, 18, 9).update(|t| t.type_index = 6);
+        let l = mk(&w, &dw, 17, 9, 9, true);
+        fb(&l).set_hovers(false);
+        l.update_accurate_dt_is_simulation(&l, 0.2, 0.2, false);
+        assert_eq!(l.pos(), IntPair { x: 16, y: 9 });
+        // below only
+        tile(&w, 20, 9).update(|t| t.type_index = 6);
+        tile(&w, 20, 10).update(|t| t.type_index = 6);
+        tile(&w, 19, 9).update(|t| t.type_index = 6);
+        tile(&w, 21, 9).update(|t| t.type_index = 6);
+        let d = mk(&w, &dw, 20, 9, 9, true);
+        fb(&d).set_hovers(false);
+        d.update_accurate_dt_is_simulation(&d, 0.2, 0.2, false);
+        assert_eq!(d.pos(), IntPair { x: 20, y: 8 });
+        // buried in lava
+        tile(&w, 25, 9).update(|t| t.type_index = TILE_LAVA);
+        let lava = mk(&w, &dw, 25, 9, 9, true);
+        fb(&lava).set_hovers(false);
+        lava.update_accurate_dt_is_simulation(&lava, 0.2, 0.2, false);
+        assert!(lava.needs_removed());
+        // a replica whose tile is not loaded does nothing
+        let src = mk(&w, &dw, 30, 9, 9, true);
+        let nd = src.creation_net_data_for_client(&src, None).unwrap();
+        let rep = FreeBlock::from_net_data(&w, &dw, None, &nd).unwrap();
+        rep.base().borrow_mut().is_net = true;
+        rep.base().borrow_mut().pos = IntPair { x: 30, y: 400 };
+        rep.update_accurate_dt_is_simulation(&rep, 0.2, 0.2, false);
+        assert!(!rep.needs_removed());
+    }
+
+    /// Blocks in and over water: drifting with the surface slope, sinking, resting on the surface or the bottom.
+    #[test]
+    fn blocks_in_water() {
+        let (w, dw, _r) = flat("fb_water", 5);
+        for x in 10..=20 {
+            water(&w, x, 6, 200);
+            water(&w, x, 7, 100 + (x as u8) * 5);
+        }
+        // a sloping surface pushes the block to the lower side
+        let o = mk(&w, &dw, 12, 7, 9, true);
+        fb(&o).set_hovers(false);
+        for _ in 0..40 {
+            o.update_accurate_dt_is_simulation(&o, 0.1, 0.1, false);
+        }
+        assert!(fb(&o).st.borrow().x_velocity_water != 0.0 || o.pos().x != 12);
+        // next to a wall the drift stops: right wall
+        tile(&w, 31, 7).update(|t| t.type_index = 6);
+        for x in 28..=30 {
+            water(&w, x, 7, 255);
+        }
+        water(&w, 29, 7, 0);
+        let r = mk(&w, &dw, 30, 7, 9, true);
+        fb(&r).set_hovers(false);
+        fb(&r).st.borrow_mut().x_velocity_water = 3.0;
+        r.base().borrow_mut().float_pos = Vector2 { x: 30.9, y: 7.8 };
+        r.update_accurate_dt_is_simulation(&r, 0.1, 0.1, false);
+        // left wall
+        tile(&w, 39, 7).update(|t| t.type_index = 6);
+        for x in 40..=42 {
+            water(&w, x, 7, 255);
+        }
+        let l = mk(&w, &dw, 40, 7, 9, true);
+        fb(&l).set_hovers(false);
+        fb(&l).st.borrow_mut().x_velocity_water = -3.0;
+        l.base().borrow_mut().float_pos = Vector2 { x: 40.2, y: 7.8 };
+        l.update_accurate_dt_is_simulation(&l, 0.1, 0.1, false);
+        // drifting into lava
+        tile(&w, 51, 7).update(|t| t.type_index = TILE_LAVA);
+        for x in 48..=50 {
+            water(&w, x, 7, 255);
+        }
+        let lv = mk(&w, &dw, 50, 7, 9, true);
+        fb(&lv).set_hovers(false);
+        fb(&lv).st.borrow_mut().x_velocity_water = 6.0;
+        lv.base().borrow_mut().float_pos = Vector2 { x: 50.2, y: 7.8 };
+        lv.update_accurate_dt_is_simulation(&lv, 0.5, 0.5, false);
+        assert!(lv.needs_removed());
+        // drifting into a plain wall: pushed back to its edge
+        tile(&w, 61, 7).update(|t| t.type_index = 6);
+        for x in 58..=60 {
+            water(&w, x, 7, 255);
+        }
+        let wl = mk(&w, &dw, 60, 7, 9, true);
+        fb(&wl).set_hovers(false);
+        fb(&wl).st.borrow_mut().x_velocity_water = 6.0;
+        wl.base().borrow_mut().float_pos = Vector2 { x: 60.2, y: 7.8 };
+        wl.update_accurate_dt_is_simulation(&wl, 0.5, 0.5, false);
+        // a tiny drift stops dead
+        water(&w, 80, 7, 255);
+        water(&w, 81, 7, 255);
+        let tiny = mk(&w, &dw, 80, 7, 9, true);
+        fb(&tiny).set_hovers(false);
+        fb(&tiny).st.borrow_mut().x_velocity_water = 0.0005;
+        tiny.update_accurate_dt_is_simulation(&tiny, 0.2, 0.2, false);
+        assert_eq!(fb(&tiny).st.borrow().x_velocity_water, 0.0);
+        // over water: sinks at the water's own pace, rests at 0.75 into the tile
+        water(&w, 70, 6, 255);
+        water(&w, 70, 7, 255);
+        let s = mk(&w, &dw, 70, 10, 9, true);
+        fb(&s).set_hovers(false);
+        for _ in 0..300 {
+            s.update_accurate_dt_is_simulation(&s, 0.1, 0.1, false);
+        }
+        assert!(s.float_pos().y < 10.0);
+    }
+
+    /// A falling block that runs into a solid cell below, into lava, and one landing in a shallow pool; huge frames.
+    #[test]
+    fn landing_variants() {
+        let (w, dw, _r) = flat("fb_land", 5);
+        // fast fall onto a roof one cell below the block
+        tile(&w, 10, 9).update(|t| t.type_index = 6);
+        let o = mk(&w, &dw, 10, 11, 9, true);
+        fb(&o).set_hovers(false);
+        o.base().borrow_mut().float_pos = Vector2 { x: 10.5, y: 10.0 };
+        fb(&o).st.borrow_mut().fall_speed = 0.2;
+        for _ in 0..10 {
+            o.update_accurate_dt_is_simulation(&o, 0.5, 0.5, false);
+        }
+        assert!(!o.needs_removed());
+        // falls into a lava cell
+        tile(&w, 20, 9).update(|t| t.type_index = TILE_LAVA);
+        let lv = mk(&w, &dw, 20, 12, 9, true);
+        fb(&lv).set_hovers(false);
+        lv.base().borrow_mut().float_pos = Vector2 { x: 20.5, y: 10.05 };
+        fb(&lv).st.borrow_mut().fall_speed = 0.2;
+        for _ in 0..20 {
+            lv.update_accurate_dt_is_simulation(&lv, 0.5, 0.5, false);
+        }
+        assert!(lv.needs_removed());
+        // a huge frame length is clamped by the min()s
+        let big = mk(&w, &dw, 30, 20, 9, true);
+        fb(&big).set_hovers(false);
+        big.update_accurate_dt_is_simulation(&big, 2.0, 2.0, false);
+        // a pool: the block settles at 0.75 into the surface cell
+        for x in 40..=42 {
+            water(&w, x, 6, 255);
+            water(&w, x, 7, 60);
+        }
+        let pool = mk(&w, &dw, 41, 9, 9, true);
+        fb(&pool).set_hovers(false);
+        for _ in 0..200 {
+            pool.update_accurate_dt_is_simulation(&pool, 0.1, 0.1, false);
+        }
+        assert!(pool.float_pos().y > 6.0);
+    }
+
+    /// Hover support and the pickup scan.
+    #[test]
+    fn hover_support_and_pickup_scan() {
+        let (w, dw, _r) = flat("fb_pickup", 5);
+        // a hovering block over empty contents lets go
+        let h = mk(&w, &dw, 10, 9, 9, true);
+        w.set_world_time(0.0);
+        h.update_accurate_dt_is_simulation(&h, 0.2, 0.2, false);
+        assert!(!fb(&h).hovers());
+        // blockheads nearby: the one with priority is asked, others are skipped
+        let near = bh_at(1, 30.5, 9.0);
+        let other = bh_at(2, 30.5, 9.0);
+        dw.blockheads.borrow_mut().extend([near.clone(), other.clone()]);
+        let f = mk(&w, &dw, 30, 9, 9, false);
+        f.update_accurate_dt_is_simulation(&f, 0.2, 0.2, false);
+        fb(&f).st.borrow_mut().priority_blockhead = Some(near.clone());
+        f.update_accurate_dt_is_simulation(&f, 0.2, 0.2, false);
+        // an object in the list that is no blockhead is skipped
+        let plain: ObjRef = crate::objects::base::testutil::TestObj::new();
+        dw.blockheads.borrow_mut().push(plain);
+        fb(&f).st.borrow_mut().priority_blockhead = None;
+        f.update_accurate_dt_is_simulation(&f, 0.2, 0.2, false);
+    }
+
+    /// A priority blockhead pulls the block in; one that is gone releases it.
+    #[test]
+    fn priority_magnet() {
+        let (w, dw, _r) = flat("fb_magnet", 5);
+        let who = bh_at(9, 20.5, 12.0);
+        let o = mk(&w, &dw, 10, 9, 9, false);
+        fb(&o).st.borrow_mut().priority_blockhead = Some(who.clone());
+        for _ in 0..30 {
+            o.update_accurate_dt_is_simulation(&o, 0.1, 0.1, false);
+        }
+        assert!(o.float_pos().x > 12.0);
+        // a long frame jumps straight to the goal
+        o.update_accurate_dt_is_simulation(&o, 1.0, 1.0, false);
+        assert_eq!(o.float_pos(), Vector2 { x: 20.5, y: 12.5 });
+        // the blockhead leaves
+        who.base().borrow_mut().needs_removed = true;
+        o.update_accurate_dt_is_simulation(&o, 0.1, 0.1, false);
+        assert!(fb(&o).priority_blockhead().is_none());
+    }
+
+    /// Saving the priority blockhead, remote updates, hovering poles being taken.
+    #[test]
+    fn save_priority_remote_update_and_poles() {
+        let (w, dw, _r) = flat("fb_misc", 5);
+        let who = bh_at(13, 10.0, 9.0);
+        let o = mk(&w, &dw, 10, 9, 9, true);
+        fb(&o).st.borrow_mut().priority_blockhead = Some(who);
+        let d = o.get_save_dict(&o);
+        assert_eq!(d.map.get(&"priorityBlockheadUinqueID".to_string()).unwrap().int_value(), 13);
+        // the net image says: nobody has priority any more
+        let mut upd = o.update_net_data_for_client(&o, None).unwrap();
+        upd[0x18..0x20].copy_from_slice(&0u64.to_le_bytes());
+        o.remote_update(&o, &upd);
+        assert!(fb(&o).priority_blockhead().is_none());
+        // a replica takes the motion fields
+        let c = o.creation_net_data_for_client(&o, None).unwrap();
+        let rep = FreeBlock::from_net_data(&w, &dw, None, &c).unwrap();
+        rep.base().borrow_mut().is_net = true;
+        let mut upd2 = FreeblockUpdateNetData::default();
+        upd2.fall_speed = 255;
+        upd2.hovers = 0;
+        rep.remote_update(&rep, &upd2.to_vec());
+        assert_eq!(fb(&rep).st.borrow().fall_speed, 1.0);
+        // taking a hovering pole item tells the dynamic world
+        let pole = mk(&w, &dw, 14, 9, 142, true);
+        pole.remove_from_macro_block(&pole);
+        let loose = mk(&w, &dw, 18, 9, 142, false);
+        loose.remove_from_macro_block(&loose);
+    }
+
+    /// Saved blocks that were not hovering stay as they are; updating a removed block does nothing; a block in a
+    /// column whose tiles are not loaded is looked up through the loader.
+    #[test]
+    fn saved_loose_blocks_removed_blocks_and_unloaded_tiles() {
+        let (w, dw, _r) = flat("fb_misc2", 5);
+        w.set_world_time(5000.0);
+        let loose = mk(&w, &dw, 10, 9, 9, false);
+        let d = loose.get_save_dict(&loose);
+        let again = FreeBlock::from_save_dict(&w, &dw, &d, None).unwrap();
+        assert!(!fb(&again).hovers() && again.pos().y == 9);
+        loose.base().borrow_mut().needs_removed = true;
+        loose.update_accurate_dt_is_simulation(&loose, 0.2, 0.2, false);
+        // a hovering block above the loaded rows: the hover check meets a missing tile
+        let far = mk(&w, &dw, 30, 400, 9, true);
+        far.update_accurate_dt_is_simulation(&far, 0.2, 0.2, false);
+        // a block in water with nothing to drift to
+        water(&w, 50, 7, 255);
+        let calm = mk(&w, &dw, 50, 7, 9, true);
+        fb(&calm).set_hovers(false);
+        calm.update_accurate_dt_is_simulation(&calm, 0.2, 0.2, false);
+        assert_eq!(fb(&calm).st.borrow().x_velocity_water, 0.0);
+        // just under the surface mark of a water cell with a roof: it is set to rest at the surface
+        water(&w, 60, 7, 255);
+        tile(&w, 60, 8).update(|t| t.type_index = 6);
+        let rest = mk(&w, &dw, 60, 7, 9, true);
+        fb(&rest).set_hovers(false);
+        rest.base().borrow_mut().float_pos = Vector2 { x: 60.5, y: 7.7495 };
+        fb(&rest).st.borrow_mut().fall_speed = -0.01;
+        rest.update_accurate_dt_is_simulation(&rest, 0.01, 0.01, false);
+        assert_eq!(rest.float_pos().y, 7.75);
     }
 }
