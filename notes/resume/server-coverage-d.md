@@ -70,3 +70,26 @@ Branch `test/coverage-d` (worktree `server-wt/coverage-d`), based on origin/dev 
 - Helper scripts added: `iterl.sh <filter> <file suffix>` (lib-only, own llvm-cov dir `llvm-cov-target-dw`),
   `showt.py <suffix> [ctx]`, `repl.py` / `fulll.sh` (full lib report), `genhooks.py` (generates calls of trait
   defaults).
+
+## Status (update 5, round 3 agent): group D at 0 missed lines (lib only)
+- Full lib-only run (`~/.cache/bhcov/fulll.sh`, now with `HOME=~/.cache/bhcov/d-home`, `CARGO_HOME`/`RUSTUP_HOME` pinned to
+  the real ones): **0 of 46 481 lines missed** in world, dynworld, worldgen, trees, building, plants, lighting
+  (353 before this round). `iterl.sh` / `fulll.sh` also run under the private HOME now.
+- Test aids added: `trees::tree::testenv::{scatter, wipe, gauntlet}` (obstacle fields, partly unloaded worlds, odd
+  heights per species), `trees::tree::edge_tests` (broken / shaded / unloaded tall trees, odd save dicts, leaf takeover,
+  apple rescue), `plants::plant::scenario_tests::{plants_over_odd_places_and_unloaded_blocks,
+  normal_plants_beside_unloaded_rows}`, `worldgen::tile_loader::sweep_tests::GenOps` (shared block-loading double),
+  `FakeHost::clobber` (throws a block's client light blocks away inside `fully_load_if_needed_around_pos`),
+  `lighting::artificial_light::testkit::Rec::peers_script` (peer count scripted per call).
+- Seams for the three "unreachable" spots of round 2: lifecycle (a plain record named `blocks` in the unnamed LMDB
+  database makes `Database::new(env, "blocks")` fail while `main` opens: `a_blocked_block_database_name_...`), sunlight
+  (`peers_script = [0, 1]`: the peer count changes between the two looks instead of a 1.5 s clock stall), bed (a real
+  `Blockhead` from `blockhead::blockhead::testutil` pushed into `dw.blockheads`).
+- Dead code removed this round (proofs in the commit messages): the `return None` arm of every species'/plant's
+  `from_save_dict` (the save-dict initialisers answered `true` on every path; they return `()` now), the
+  `if let Some(tile)` around the own tile in the tulip/kelp/vine at-position initialisers (`plant_init_at_position`
+  only succeeds on a loaded tile), `simple_plants::never` + its dummy const, block_io `DataSaveException` arm and
+  the `light_blob`/`server_block` None arms (`write_xml` cannot raise), terrain `t <= 0.0f` clamp, features
+  `island != 0` wrapper, light_archive `cfg!(faithful-crashes)` branch (now a `#[cfg]` statement).
+- Careful: tests that call `WorldTileLoader::init...` on a world with a server or with a save id write below
+  `paths::appsup()`; run them only with the private HOME.
