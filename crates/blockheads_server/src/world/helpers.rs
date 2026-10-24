@@ -57,7 +57,7 @@ pub fn tile_conducts_electricity(t: Option<TileRef>) -> bool {
 }
 /// `tileTypeIsGemBlock(type)`: {71..75}.
 pub fn tile_type_is_gem_block(type_index: i32) -> bool {
-    matches!(type_index, 71 | 72 | 73 | 74 | 75)
+    matches!(type_index, 71..=75)
 }
 /// `tileContainsGate`: `contents == 0x92`.
 pub fn tile_contains_gate(t: Option<TileRef>) -> bool {
@@ -687,7 +687,7 @@ mod tests {
             assert_eq!(tile_is_bush(s), crown.contains(&c) || dead_crown.contains(&c));
             assert_eq!(tile_contains_gate(s), c == 0x92);
             assert_eq!(tile_is_workbench(s), matches!(c, 0x2E | 0x2F));
-            assert_eq!(tile_is_interaction_object(s), matches!(c, 0x2E | 0x2F | 0x30));
+            assert_eq!(tile_is_interaction_object(s), matches!(c, 0x2E..=0x30));
         }
         t.set_contents(0);
         for c in 0..=255u8 {

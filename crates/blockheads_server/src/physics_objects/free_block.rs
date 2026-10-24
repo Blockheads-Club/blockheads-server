@@ -350,7 +350,7 @@ impl FreeBlock {
             st.bounce_timer = fv("bounceTimer");
             st.fall_speed = fv("fallSpeed");
             st.creation_time = get("creationTime").map_or(0.0f64, |v| v.double_value());
-            st.hovers = get("hovers").map_or(false, |v| v.bool_value());
+            st.hovers = get("hovers").is_some_and(|v| v.bool_value());
             st.item_type = get("itemType").map_or(0, |v| v.int_value());
             st.data_a = get("dataA").map_or(0, |v| v.int_value()) as u16;
             st.data_b = get("dataB").map_or(0, |v| v.int_value()) as u16;
@@ -529,7 +529,7 @@ impl FreeBlock {
         dict: Option<&PlistDict>,
         sub_items: Option<&[SubSlot]>,
     ) -> Vec<u8> {
-        let non_empty_subs = sub_items.map_or(false, |s| !s.is_empty());
+        let non_empty_subs = sub_items.is_some_and(|s| !s.is_empty());
         let has_extra = dict.is_some() || non_empty_subs;
         let nd = FreeblockCreationNetData {
             dynamic_object_net_data: dyn_nd,
@@ -768,14 +768,13 @@ impl FreeBlock {
 
         // ---- C. horizontal / unstuck logic, only when no priorityBlockhead ----
         if self.priority_blockhead().is_none() {
-            if !tile_is_solid(tile.clone()) || tile_contains_door(tile.clone()) || tile_contains_trap_door(tile.clone())
-            {
-                if !tile_is_water(tile.clone()) {
+            if !tile_is_solid(tile) || tile_contains_door(tile) || tile_contains_trap_door(tile) {
+                if !tile_is_water(tile) {
                     self.st.borrow_mut().x_velocity_water = 0.0;
                 } else {
                     let p = self.pos();
                     let right = tile_at_world_position_loaded(p.x + 1, p.y, &world);
-                    let right_is_water = tile_is_water(right.clone());
+                    let right_is_water = tile_is_water(right);
                     let xvw = self.st.borrow().x_velocity_water;
                     if right_is_water || xvw.abs() > 0.01f32 {
                         let slope = if right_is_water {
@@ -795,7 +794,7 @@ impl FreeBlock {
                                 if tile_is_solid(left) && self.fp().x <= 0.5f32 + p.x as f32 {
                                     xvw = 0.0;
                                 }
-                            } else if tile_is_solid(right.clone()) && 0.5f32 + p.x as f32 <= self.fp().x {
+                            } else if tile_is_solid(right) && 0.5f32 + p.x as f32 <= self.fp().x {
                                 xvw = 0.0;
                             }
                             self.st.borrow_mut().x_velocity_water = xvw;
@@ -806,10 +805,10 @@ impl FreeBlock {
                                 let nx = f32_to_i32(fp.x);
                                 if nx != p.x {
                                     let t2 = tile_at_world_position_loaded(nx, p.y, &world);
-                                    if !tile_is_solid(t2.clone()) {
+                                    if !tile_is_solid(t2) {
                                         me.update_position(me, IntPair { x: nx, y: p.y });
                                     } else {
-                                        if t2.as_ref().map_or(false, |t| t.type_index() == TILE_LAVA) {
+                                        if t2.as_ref().is_some_and(|t| t.type_index() == TILE_LAVA) {
                                             self.hit_lava(me);
                                             return;
                                         }
@@ -826,7 +825,7 @@ impl FreeBlock {
                 }
             } else {
                 // embedded in a solid tile
-                if tile.as_ref().map_or(false, |t| t.type_index() == TILE_LAVA) {
+                if tile.as_ref().is_some_and(|t| t.type_index() == TILE_LAVA) {
                     self.hit_lava(me);
                     return;
                 }
@@ -835,10 +834,7 @@ impl FreeBlock {
                 let p = self.pos();
                 let free = |x: i32, y: i32| -> bool {
                     let t = tile_at_world_position_loaded(x, y, &world);
-                    t.is_some()
-                        && !tile_is_solid(t.clone())
-                        && !tile_contains_door(t.clone())
-                        && !tile_contains_trap_door(t)
+                    t.is_some() && !tile_is_solid(t) && !tile_contains_door(t) && !tile_contains_trap_door(t)
                 };
                 if free(p.x, p.y + 1) {
                     let mut fp = self.fp();
@@ -897,7 +893,7 @@ impl FreeBlock {
                 st.x_velocity *= k as f32;
                 st.y_velocity *= k as f32;
             }
-            let is_water = tile_is_water(tile.clone());
+            let is_water = tile_is_water(tile);
             let mut falling = false;
             let mut air_below = false;
             let mut air_or_water_above = false;
@@ -905,11 +901,11 @@ impl FreeBlock {
             if !self.hovers() {
                 if !is_water {
                     let below = tile_at_world_position_loaded(p.x, p.y - 1, &world);
-                    air_below = tile_is_air_or_snow(below.clone());
+                    air_below = tile_is_air_or_snow(below);
                     if air_below || (0.25f32 + p.y as f32) < self.fp().y {
                         falling = true;
                     }
-                    if !air_below && below.as_ref().map_or(false, |t| t.type_index() == TILE_LAVA) {
+                    if !air_below && below.as_ref().is_some_and(|t| t.type_index() == TILE_LAVA) {
                         self.hit_lava(me);
                         return;
                     }
@@ -924,7 +920,7 @@ impl FreeBlock {
             if falling {
                 let c = min_d(0.5f64, dt as f64);
                 let mut fall_speed = ((self.st.borrow().fall_speed as f64) * (1.0f64 - c)) as f32;
-                let in_air_or_above_surface = !tile_is_water(tile.clone())
+                let in_air_or_above_surface = !tile_is_water(tile)
                     || ((tile.as_ref().map_or(0u8, |t| t.partial_content_left()) as f32) / 255.0f32
                         <= self.fp().y - p.y as f32);
                 if in_air_or_above_surface {
@@ -934,7 +930,7 @@ impl FreeBlock {
                     }
                 } else {
                     if 0.0f32 < fall_speed {
-                        fall_speed = 0.9f32 * fall_speed;
+                        fall_speed *= 0.9f32;
                     }
                     fall_speed = ((fall_speed as f64) - min_d(0.9f64, dt as f64) * 0.10000000149011612f64) as f32;
                     if fall_speed <= -0.05f32 {
@@ -949,10 +945,10 @@ impl FreeBlock {
                     if f32_to_i32(fp.y) != p.y {
                         let np = IntPair { x: p.x, y: f32_to_i32(fp.y) };
                         let t3 = tile_at_world_position_loaded(np.x, np.y, &world);
-                        if !tile_is_solid(t3.clone()) {
+                        if !tile_is_solid(t3) {
                             me.update_position(me, np);
                         } else {
-                            if t3.as_ref().map_or(false, |t| t.type_index() == TILE_LAVA) {
+                            if t3.as_ref().is_some_and(|t| t.type_index() == TILE_LAVA) {
                                 self.hit_lava(me);
                                 return;
                             }
@@ -1036,7 +1032,7 @@ impl FreeBlock {
             let dxw = self.wrap_delta(fp.x, bp.x);
             if dxw < r && (-r < self.wrap_delta(fp.x, bp.x)) && (bp.y - r) < fp.y && fp.y < ((1.5f32 + bp.y) + r) {
                 // sound (gem pitch, delay, maxSoundPlay) is client presentation only
-                let _ = host.pickup_freeblock_if_possible_in_tile_intentional(b, me, tile.clone(), false);
+                let _ = host.pickup_freeblock_if_possible_in_tile_intentional(b, me, tile, false);
             }
         }
     }
@@ -1261,7 +1257,7 @@ mod tests {
         assert_eq!(o.pos().y, 6);
         assert_eq!(o.float_pos().y, 6.25f32);
         assert_eq!(fb(&o).st.borrow().fall_speed, 0.0);
-        assert!(fb(&o).falling() == false);
+        assert!(!fb(&o).falling());
     }
 
     /// Bit-exact spot check (item 15): fall_speed = -0.049, dt = 0.2 in air above the surface.

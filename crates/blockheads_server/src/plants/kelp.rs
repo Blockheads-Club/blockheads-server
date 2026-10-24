@@ -283,7 +283,7 @@ impl KelpPlant {
                         break;
                     }
                     let a = tile_loaded(world, pos.x, pos.y.wrapping_add(n).wrapping_add(1));
-                    if !tile_is_water(a) || a.map_or(false, |t| t.foreground_contents() != 0) {
+                    if !tile_is_water(a) || a.is_some_and(|t| t.foreground_contents() != 0) {
                         me.kelp.borrow_mut().growth_timer = 0.0;
                         break;
                     }
@@ -597,9 +597,9 @@ impl DynamicObject for KelpPlant {
             }
         };
         if run_check {
-            let ice_root = tile.map_or(false, |t| t.type_index() == 4);
+            let ice_root = tile.is_some_and(|t| t.type_index() == 4);
             self.plant.borrow_mut().frozen = ice_root;
-            if !tile_is_water(tile) && tile.is_some() && tile.map_or(false, |t| t.type_index() != 4) {
+            if !tile_is_water(tile) && tile.is_some() && tile.is_some_and(|t| t.type_index() != 4) {
                 self.tile_harvested_remove_blockhead_correct_tool_multiplier(me, pos, None, 1);
                 return;
             }
@@ -607,10 +607,10 @@ impl DynamicObject for KelpPlant {
             while i < self.n() {
                 let y = pos.y.wrapping_add(i).wrapping_add(1);
                 let o = tile_loaded(&world, pos.x, y);
-                if !tile_is_water(o) && o.map_or(false, |t| t.type_index() != 4) {
+                if !tile_is_water(o) && o.is_some_and(|t| t.type_index() != 4) {
                     self.tile_harvested_remove_blockhead_correct_tool_multiplier(me, IntPair { x: pos.x, y }, None, 1);
                     break;
-                } else if o.map_or(false, |t| t.type_index() == 4) {
+                } else if o.is_some_and(|t| t.type_index() == 4) {
                     self.plant.borrow_mut().frozen = true;
                 }
                 i += 1;
@@ -630,7 +630,7 @@ impl DynamicObject for KelpPlant {
                     let y = pos.y.wrapping_add(n).wrapping_add(1);
                     let a = tile_loaded(&world, pos.x, y);
                     if tile_is_water(a)
-                        && a.map_or(false, |t| t.foreground_contents() == 0 || t.foreground_contents() == FG_KELP)
+                        && a.is_some_and(|t| t.foreground_contents() == 0 || t.foreground_contents() == FG_KELP)
                     {
                         dw.world_contents_changed_at_pos(IntPair { x: pos.x, y });
                         a.unwrap().set_foreground_contents(FG_KELP);
@@ -678,7 +678,7 @@ mod tests {
     /// : Kelp gene 193 -> maxAge 7899.019.
     #[test]
     fn golden_max_age() {
-        let m = (((193u16 as f32) / 255.0f32) * 0.5f32 + 0.75f32) * 7000.0f32;
+        let m = (((193_f32) / 255.0f32) * 0.5f32 + 0.75f32) * 7000.0f32;
         assert!((m - 7899.019).abs() < 0.01);
     }
 

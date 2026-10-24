@@ -21,7 +21,7 @@ use crate::plist::value::PlistValue;
 
 /// `objectAtIndex:` on a property-list value that must be an array (NSRangeException / unrecognized selector
 /// otherwise).
-fn object_at_index<'a>(v: &'a PlistValue, i: usize) -> &'a PlistValue {
+fn object_at_index(v: &PlistValue, i: usize) -> &PlistValue {
     match v {
         PlistValue::Array(a) => match a.items.get(i) {
             Some(x) => x,
@@ -317,7 +317,7 @@ impl DynamicWorld {
         let t = self.hooks().chest_type(chest);
         if t == 5 || t == 1 {
             let owner_ok = chest.owner_id().as_deref() == Some(cid.as_str());
-            let admin = self.server.borrow().as_ref().map_or(false, |s| s.player_is_admin_with_id(&cid));
+            let admin = self.server.borrow().as_ref().is_some_and(|s| s.player_is_admin_with_id(&cid));
             if !owner_ok && !admin {
                 return;
             }
@@ -402,7 +402,7 @@ mod tests {
         let r = catch_ns(|| {
             d.client_blockhead_inventory_recieved_for_player_id_blockhead_id_data("p1", 9, &gz_plist(&short))
         });
-        let e = r.err().expect("raises");
+        let e = r.expect_err("raises");
         assert_eq!(e.name, "NSRangeException");
         assert_eq!(e.reason.as_deref(), Some("Index 3 is out of range 3 (in 'objectAtIndex:')"));
     }

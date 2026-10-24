@@ -1139,7 +1139,7 @@ mod tests {
         h.m.clear();
         h.send(&a, &[0x0e]);
         assert!(h.srv.player_update().is_none());
-        assert_eq!(h.m.disconnected.borrow().as_slice(), &[a.clone()]);
+        assert_eq!(h.m.disconnected.borrow().as_slice(), std::slice::from_ref(&a));
         let t = h.srv.player_update_timer.get();
         assert!((10.0..=60.0).contains(&t));
     }

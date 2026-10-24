@@ -511,13 +511,11 @@ impl Blockhead {
             }
         }
         let pri = fbd.priority_blockhead.clone();
-        let pri_is_self = pri.as_ref().map_or(false, |p| ptr_eq(p, &me));
+        let pri_is_self = pri.as_ref().is_some_and(|p| ptr_eq(p, &me));
         if !intentional {
             let ignoring = self.bh.borrow().ignoring_freeblocks_due_to_drop;
-            if ignoring || self.meditating() {
-                if !pri_is_self {
-                    return false;
-                }
+            if (ignoring || self.meditating()) && !pri_is_self {
+                return false;
             }
         }
         if pri.is_some() && !pri_is_self {
@@ -561,12 +559,12 @@ impl Blockhead {
                 let mut blocked = false;
                 if let Some(owner) = &owner {
                     blocked = local_id.as_deref() != Some(owner.as_str());
-                    if blocked && !ih.dynamic_world_is_client() {
-                        if owner == "server" || local_id.as_deref() == Some("server") {
-                            if !ctl {
-                                blocked = false;
-                            }
-                        }
+                    if blocked
+                        && !ih.dynamic_world_is_client()
+                        && (owner == "server" || local_id.as_deref() == Some("server"))
+                        && !ctl
+                    {
+                        blocked = false;
                     }
                 }
                 if blocked {
@@ -653,7 +651,7 @@ impl Blockhead {
                 fb.set_needs_removed(fb, true);
                 // `if unconfirmedPickups[key] == nil`: a nil dictionary (always on the server) yields nil => true.
                 let mut f = self.bh.borrow_mut();
-                let present = f.unconfirmed_pickups.as_ref().map_or(false, |m| m.contains_key(&unique_id));
+                let present = f.unconfirmed_pickups.as_ref().is_some_and(|m| m.contains_key(&unique_id));
                 if !present {
                     if let Some(set) = f.this_frame_pickup_requests.as_mut() {
                         set.add_index(unique_id);
@@ -676,7 +674,7 @@ impl Blockhead {
                 fb.set_needs_removed(fb, true);
                 let mut f = self.bh.borrow_mut();
                 // `if unconfirmedPickups[key] == nil`: a nil dictionary yields nil => the branch is taken.
-                let present = f.unconfirmed_pickups.as_ref().map_or(false, |m| m.contains_key(&unique_id));
+                let present = f.unconfirmed_pickups.as_ref().is_some_and(|m| m.contains_key(&unique_id));
                 if !present {
                     if let Some(set) = f.this_frame_pickup_requests.as_mut() {
                         set.add_index(unique_id);

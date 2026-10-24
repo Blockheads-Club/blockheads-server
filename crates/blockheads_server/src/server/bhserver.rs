@@ -203,7 +203,7 @@ pub trait ServerDynamicWorld {
 /// A delayed callback: seconds and the call.
 type DelayedCall = (f64, Box<dyn FnOnce()>);
 
-/// Scheduler used for `performSelector:withObject:afterDelay:`. Default: `app::run_loop::perform_after_delay`.
+// Scheduler used for `performSelector:withObject:afterDelay:`. Default: `app::run_loop::perform_after_delay`.
 thread_local! {
     /// Delayed callbacks queued while no scheduler is installed; drained by the run loop.
     static PENDING_DELAYS: RefCell<Vec<DelayedCall>> = RefCell::new(Vec::new());

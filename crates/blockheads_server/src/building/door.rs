@@ -135,7 +135,7 @@ impl Door {
             let g = |k: &str| save_dict.map.get(&k.to_string());
             let mut st = me.st.borrow_mut();
             st.item_type = g("itemType").map_or(0, |v| v.int_value());
-            st.blocked = g("blocked").map_or(false, |v| v.bool_value());
+            st.blocked = g("blocked").is_some_and(|v| v.bool_value());
             st.iron_place_client_id = sd_string(save_dict, "ironPlaceClientID");
         }
         me.base.borrow_mut().owner_id = sd_string(save_dict, "ownerID");

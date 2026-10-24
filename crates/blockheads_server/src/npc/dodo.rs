@@ -405,7 +405,7 @@ fn dodo_of(me: &ObjRef) -> &Dodo {
 }
 
 fn dw_is_server(me: &ObjRef) -> bool {
-    me.dynamic_world().map_or(false, |d| d.is_server())
+    me.dynamic_world().is_some_and(|d| d.is_server())
 }
 
 fn dw_changed(me: &ObjRef) {
@@ -736,9 +736,9 @@ fn update_alive(me: &ObjRef, d: &Dodo, s: &mut DodoState, dt: f32, is_simulation
     let env = penv();
     let ns = npc_state(me);
     let rider = || ns.borrow().rider.clone();
-    let rider_is_net = || rider().map_or(false, |r| r.is_net());
+    let rider_is_net = || rider().is_some_and(|r| r.is_net());
     let w_tiles = world_width_tiles_of(me);
-    let b_ridden = rider().map_or(false, |r| !r.is_net());
+    let b_ridden = rider().is_some_and(|r| !r.is_net());
     let mut not_moving = s.movement_direction == 0;
 
     // Phase 1: cluck timer
@@ -768,7 +768,7 @@ fn update_alive(me: &ObjRef, d: &Dodo, s: &mut DodoState, dt: f32, is_simulation
     }
     if me.is_net() {
         let rd = rider();
-        if rd.is_none() || rd.as_ref().map_or(false, |x| x.is_net()) {
+        if rd.is_none() || rd.as_ref().is_some_and(|x| x.is_net()) {
             w = ((w as f64) * 0.75f64 + 0.25f64 * (s.remote_walk_speed as f64)) as f32;
         }
     }
@@ -917,7 +917,7 @@ fn update_alive(me: &ObjRef, d: &Dodo, s: &mut DodoState, dt: f32, is_simulation
                         reacted = true;
                     }
                     if reacted {
-                        s.random_cluck_noise_timer = 0.2f32 * s.random_cluck_noise_timer;
+                        s.random_cluck_noise_timer *= 0.2f32;
                         s.walk_speed = 2.0f32 + r("Dodo.update.reactSpeed");
                     }
                 }
@@ -969,7 +969,7 @@ fn update_alive(me: &ObjRef, d: &Dodo, s: &mut DodoState, dt: f32, is_simulation
         if lay_timer > 0.0f32 {
             let new_timer = lay_timer - dt;
             ns.borrow_mut().lay_timer = new_timer;
-            if new_timer <= 0.0f32 && tile.map_or(false, |t| t.foreground_contents == 0) {
+            if new_timer <= 0.0f32 && tile.is_some_and(|t| t.foreground_contents == 0) {
                 let breed = ns.borrow().breed;
                 let p = lay_likelyhood_for_breed(DodoBreed(breed));
                 if r("Dodo.update.lay") < p {
@@ -997,7 +997,7 @@ fn update_alive(me: &ObjRef, d: &Dodo, s: &mut DodoState, dt: f32, is_simulation
                 }
             }
         }
-        if t_water(&tile) && tile.map_or(false, |t| t.partial_content_left >= 0x80) {
+        if t_water(&tile) && tile.is_some_and(|t| t.partial_content_left >= 0x80) {
             s.drown_timer += dt;
             if s.drown_timer > 2.5f32 {
                 s.drown_timer = r("Dodo.update.drown") * 0.5f32;
@@ -1062,7 +1062,7 @@ fn update_alive(me: &ObjRef, d: &Dodo, s: &mut DodoState, dt: f32, is_simulation
                 }
             }
         }
-        if rider().map_or(false, |r| !r.is_net()) {
+        if rider().is_some_and(|r| !r.is_net()) {
             me.set_update_needs_to_be_sent(true);
         }
         s.from_square = s.to_square;
@@ -1082,7 +1082,7 @@ fn update_alive(me: &ObjRef, d: &Dodo, s: &mut DodoState, dt: f32, is_simulation
         if !skip_to_10 {
             // Phase 8: remote / net-controlled target
             let rd = rider();
-            if (me.is_net() && !b_ridden) || rd.as_ref().map_or(false, |r| r.is_net()) {
+            if (me.is_net() && !b_ridden) || rd.as_ref().is_some_and(|r| r.is_net()) {
                 let pos = me.pos();
                 let dx = wrap_dx(s.remote_goal_square.x.wrapping_sub(pos.x), w_tiles);
                 if dx.wrapping_abs() < 9 && s.remote_goal_square.y.wrapping_sub(pos.y).wrapping_abs() < 5 {
@@ -1116,7 +1116,7 @@ fn update_alive(me: &ObjRef, d: &Dodo, s: &mut DodoState, dt: f32, is_simulation
                 let dir = s.movement_direction;
                 let has_rider = rider().is_some();
                 let t = env.tile_loaded(pos.x, pos.y);
-                let in_water = t_water(&t) && t.map_or(false, |t| t.partial_content_left > 0x7f);
+                let in_water = t_water(&t) && t.is_some_and(|t| t.partial_content_left > 0x7f);
                 if in_water {
                     let ru = env.tile_cached(pos.x.wrapping_add(dir), pos.y.wrapping_add(1));
                     if !t_air_water_snow(&ru) || (!has_rider && t_gate(&ru)) {
@@ -1277,7 +1277,7 @@ impl DynamicObject for Dodo {
     }
 
     fn blockhead_unloaded(&self, me: &ObjRef, b: &ObjRef) {
-        let is_rider = npc_state(me).borrow().rider.as_ref().map_or(false, |r| ptr_eq(r, b));
+        let is_rider = npc_state(me).borrow().rider.as_ref().is_some_and(|r| ptr_eq(r, b));
         if is_rider {
             self.dodo.borrow_mut().rider_target_velocity = 0.0f32;
         }

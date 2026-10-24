@@ -174,6 +174,7 @@ pub fn yak_set_adult_creation_start_values(me: &ObjRef) {
 
 /// `-[Yak createItemDropsForDeath]`: exactly three `rand()` (leather, wheat, horn); drops in the order leather,
 /// horn, wheat. Wheat carries the sowable default genes 0x7f/0x7f.
+#[allow(clippy::needless_late_init)] // keeps the one-line branch (coverage regions) of the ported if/else
 pub fn yak_create_item_drops_for_death(me: &ObjRef) {
     let killer = npc_state(me).borrow().kill_blockhead.clone();
     let env = penv();

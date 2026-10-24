@@ -299,8 +299,8 @@ pub trait NpcEnv, stub NpcEnvStub {
         match self.world() {
             Some(w) => {
                 let t = crate::world::tiles::tile_at_world_position_loaded(x, y, &w);
-                crate::world::helpers::tile_contains_door(t.clone())
-                    || crate::world::helpers::tile_contains_trap_door(t.clone())
+                crate::world::helpers::tile_contains_door(t)
+                    || crate::world::helpers::tile_contains_trap_door(t)
                     || crate::world::helpers::tile_contains_gate(t)
             }
             None => false,
@@ -397,7 +397,7 @@ pub fn npc_env() -> Rc<dyn NpcEnv> {
 /// Registers the concrete NPC class `T` so [`as_npc`] can reach its [`Npc`] view. SHIM for the requested
 /// `DynamicObject::as_npc` (;. Idempotent.
 pub fn register_npc_downcast<T: Npc + 'static>() {
-    fn cast<'a, T: Npc + 'static>(a: &'a dyn Any) -> Option<&'a dyn Npc> {
+    fn cast<T: Npc + 'static>(a: &dyn Any) -> Option<&dyn Npc> {
         a.downcast_ref::<T>().map(|t| t as &dyn Npc)
     }
     DOWNCASTERS.with(|m| {
@@ -438,7 +438,7 @@ fn dw_changed(me: &ObjRef) {
 }
 
 fn is_server_dw(me: &ObjRef) -> bool {
-    me.dynamic_world().map_or(false, |d| d.is_server())
+    me.dynamic_world().is_some_and(|d| d.is_server())
 }
 
 fn world_time(me: &ObjRef) -> f64 {
@@ -451,7 +451,7 @@ fn blockhead_client_id(b: &ObjRef) -> Option<String> {
 }
 
 fn is_client_blockhead_controlled_by_server(b: &ObjRef) -> bool {
-    b.as_blockhead().map_or(false, |x| x.is_client_blockhead_being_controlled_by_server())
+    b.as_blockhead().is_some_and(|x| x.is_client_blockhead_being_controlled_by_server())
 }
 
 fn weak_is(w: &Option<ObjWeak>, b: &ObjRef) -> bool {
@@ -1092,8 +1092,8 @@ pub fn npc_load_values_from_save_dict(me: &ObjRef, d: &PlistDict) {
         s.lay_cooldown_timer = f("layCooldownTimer");
         s.tame_cooldown_timer = f("tameCooldownTimer");
         s.mate_cooldown_timer = f("mateCooldownTimer");
-        s.has_bred = get("hasBred").map_or(false, |v| v.bool_value());
-        s.has_been_fed_by_blockhead_or_chest = get("hasBeenFedByBlockheadOrChest").map_or(false, |v| v.bool_value());
+        s.has_bred = get("hasBred").is_some_and(|v| v.bool_value());
+        s.has_been_fed_by_blockhead_or_chest = get("hasBeenFedByBlockheadOrChest").is_some_and(|v| v.bool_value());
         s.mate_breed = get("mateBreed").map_or(0, |v| v.int_value()) as u16;
     }
     if let Some(v) = get("breed") {
@@ -1102,6 +1102,7 @@ pub fn npc_load_values_from_save_dict(me: &ObjRef, d: &PlistDict) {
     s.tamed_client_id = get("tamedClientID").and_then(|v| v.as_str()).map(|x| x.to_string());
     s.name = get("name").and_then(|v| v.as_str()).map(|x| x.to_string());
     s.tame_counts_by_client_id = None;
+    #[allow(clippy::collapsible_match)] // mirrors the original's nested type check
     if let Some(v) = get("tameCountsByClientID") {
         if let PlistValue::Dict(dd) = v {
             let mut m = BTreeMap::new();
@@ -1368,7 +1369,7 @@ pub fn npc_update_accurate_dt_is_simulation(me: &ObjRef, dt: f32, _accurate_dt: 
                     }
                 };
                 let below = env.tile_probe(pos.x, pos.y - 1);
-                let own_fire = tile.map_or(false, |t| t.on_fire != 0);
+                let own_fire = tile.is_some_and(|t| t.on_fire != 0);
                 if own_fire || matches!(&below, Some(b) if b.on_fire != 0 || b.type_index == TILE_LAVA) {
                     temp += 100.0f32;
                 }
@@ -1417,12 +1418,12 @@ pub fn npc_update_accurate_dt_is_simulation(me: &ObjRef, dt: f32, _accurate_dt: 
             }
             // rider bookkeeping (messages to a nil rider return 0/NO)
             let rider = npc.npc().borrow().rider.clone();
-            let paused = rider.as_ref().map_or(false, |r| env.blockhead_paused(r));
+            let paused = rider.as_ref().is_some_and(|r| env.blockhead_paused(r));
             if !paused {
                 let rider = npc.npc().borrow().rider.clone();
-                if rider.as_ref().map_or(false, |r| r.needs_removed()) {
+                if rider.as_ref().is_some_and(|r| r.needs_removed()) {
                     let mut s = npc.npc().borrow_mut();
-                    if !rider.as_ref().map_or(false, |r| r.is_net()) {
+                    if !rider.as_ref().is_some_and(|r| r.is_net()) {
                         drop(s);
                         me.set_creation_data_needs_to_be_sent(true);
                         s = npc.npc().borrow_mut();
@@ -1432,7 +1433,7 @@ pub fn npc_update_accurate_dt_is_simulation(me: &ObjRef, dt: f32, _accurate_dt: 
                 }
                 if npc.npc().borrow().being_controlled {
                     let rider = npc.npc().borrow().rider.clone();
-                    if !rider.as_ref().map_or(false, |r| r.is_net()) {
+                    if !rider.as_ref().is_some_and(|r| r.is_net()) {
                         let fire = {
                             let mut s = npc.npc().borrow_mut();
                             s.remote_send_control_event_timer += dt;
@@ -2014,7 +2015,7 @@ pub fn npc_add_rider(me: &ObjRef, r: &ObjRef) {
     npc.npc().borrow_mut().rider = incoming;
     dw_changed(me);
     let rider = npc.npc().borrow().rider.clone();
-    if !(env.is_client() && rider.as_ref().map_or(false, |x| x.is_net())) {
+    if !(env.is_client() && rider.as_ref().is_some_and(|x| x.is_net())) {
         me.set_creation_data_needs_to_be_sent(true);
     }
     let mut s = npc.npc().borrow_mut();
@@ -2039,7 +2040,7 @@ pub fn npc_remove_rider_opt(me: &ObjRef, r: Option<&ObjRef>) {
         return;
     }
     dw_changed(me);
-    if !(npc_env().is_client() && cur.as_ref().map_or(false, |x| x.is_net())) {
+    if !(npc_env().is_client() && cur.as_ref().is_some_and(|x| x.is_net())) {
         me.set_creation_data_needs_to_be_sent(true);
     }
     let mut s = npc.npc().borrow_mut();
@@ -2061,7 +2062,7 @@ pub fn npc_blockheads_loaded(me: &ObjRef) {
     }
     npc.npc().borrow_mut().saved_blockhead_index = -1;
     let rider = npc.npc().borrow().rider.clone();
-    let ctl = rider.as_ref().map_or(false, is_client_blockhead_controlled_by_server);
+    let ctl = rider.as_ref().is_some_and(is_client_blockhead_controlled_by_server);
     if !ctl {
         if let Some(r) = &rider {
             env.blockhead_set_riding_object(r, Some(me));
@@ -2078,7 +2079,7 @@ pub fn npc_blockheads_loaded(me: &ObjRef) {
 /// `-[NPC blockheadUnloaded:]`.
 pub fn npc_blockhead_unloaded(me: &ObjRef, b: &ObjRef) {
     let mut s = npc_state(me).borrow_mut();
-    if s.kill_blockhead.as_ref().map_or(false, |k| ptr_eq(k, b)) {
+    if s.kill_blockhead.as_ref().is_some_and(|k| ptr_eq(k, b)) {
         s.kill_blockhead = None;
     }
     if weak_is(&s.inspecting_blockhead, b) {
@@ -2087,7 +2088,7 @@ pub fn npc_blockhead_unloaded(me: &ObjRef, b: &ObjRef) {
     if weak_is(&s.coming_to_inspect_blockhead, b) {
         s.coming_to_inspect_blockhead = None;
     }
-    if s.rider.as_ref().map_or(false, |r| ptr_eq(r, b)) {
+    if s.rider.as_ref().is_some_and(|r| ptr_eq(r, b)) {
         s.rider = None;
         s.being_controlled = false;
     }
@@ -2099,7 +2100,7 @@ pub fn npc_update_position(me: &ObjRef, new_pos: IntPair) {
     let env = npc_env();
     let pos = me.pos();
     let rider = npc.npc().borrow().rider.clone();
-    let rider_net = rider.as_ref().map_or(false, |r| r.is_net());
+    let rider_net = rider.as_ref().is_some_and(|r| r.is_net());
     if rider.is_some() && !rider_net && new_pos.x != pos.x {
         env.mark_circum_navigate_x(new_pos.x);
     }

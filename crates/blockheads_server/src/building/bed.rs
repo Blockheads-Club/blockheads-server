@@ -343,7 +343,7 @@ impl InteractionObjectLike for Bed {
         if in_use {
             let cur = self.io.borrow().current_blockhead.clone();
             let remote = self.io.borrow().remote_blockhead_in_use_unique_id;
-            if cur.as_ref().map_or(false, |c| c.is_net()) || remote != 0 {
+            if cur.as_ref().is_some_and(|c| c.is_net()) || remote != 0 {
                 self.io.borrow_mut().needs_to_be_removed_when_interaction_ends = true;
                 return;
             }

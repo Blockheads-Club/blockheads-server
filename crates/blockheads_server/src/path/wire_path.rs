@@ -128,7 +128,7 @@ impl WirePathCreator {
             st.count = 0;
         }
         let pos = user.map_or(IntPair { x: 0, y: 0 }, |u| u.pos());
-        let consumer_is_storage_device = user.and_then(|u| u.as_power_user()).map_or(false, |p| p.is_storage_device());
+        let consumer_is_storage_device = user.and_then(|u| u.as_power_user()).is_some_and(|p| p.is_storage_device());
 
         let start_index = world_index_at_world_position(pos.x, pos.y, &world);
         self.st.borrow_mut().start_index = start_index;

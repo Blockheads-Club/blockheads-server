@@ -92,7 +92,7 @@ impl DynamicWorld {
                 let n = world.world_width_macro().wrapping_mul(32);
                 for (idx, &item_type) in POLE_ITEMS_PHASE_A.iter().enumerate() {
                     let key = format!("{}", item_type);
-                    let pending = self.pole_item_taken_times.borrow().as_ref().map_or(false, |d| d.get(&key).is_some());
+                    let pending = self.pole_item_taken_times.borrow().as_ref().is_some_and(|d| d.get(&key).is_some());
                     if !pending {
                         let x = (n / 4).wrapping_mul(idx as i32);
                         let pos = self.pole_item_pos(x);

@@ -92,7 +92,7 @@ pub fn radius_heat_for_item(item_type: i32) -> (i32, i32) {
         0x2f => (20, 1),
         0xb7 => (10, -4),
         0x96 | 0xfe | 0x102 => (25, 1),
-        0x94 | 0x93 | 0x92 | 0x91 | 0x95 => (25, 0),
+        0x91..=0x95 => (25, 0),
         0x57 | 0x56 | 0x4c | 0x4b | 0x58 => (4, 0),
         _ => (15, 1),
     }
@@ -100,7 +100,7 @@ pub fn radius_heat_for_item(item_type: i32) -> (i32, i32) {
 
 /// `(chandelier, animates, flatOnSideAndBottom)` of `initSubDerivedItems`.
 pub fn derived_flags_for_item(item_type: i32) -> (bool, bool, bool) {
-    let chandelier = matches!(item_type, 0x94 | 0x93 | 0x92 | 0x91 | 0x95);
+    let chandelier = matches!(item_type, 0x91..=0x95);
     let animates = !chandelier && !matches!(item_type, 0x4b | 0x4c | 0x56 | 0x57 | 0x58 | 0x9d | 0xfe | 0x102);
     let flat = !animates && item_type != 0xfe && item_type != 0x102;
     (chandelier, animates, flat)
@@ -478,7 +478,7 @@ impl DynamicObject for Torch {
                 let below = t(x, y - 1);
                 if below.is_some() && tile_is_solid(below) {
                     new_conn = Some(0);
-                } else if below.map_or(false, |b| b.foreground_contents() == 100) {
+                } else if below.is_some_and(|b| b.foreground_contents() == 100) {
                     new_conn = Some(3);
                 } else {
                     let this = t(x, y);
@@ -488,21 +488,21 @@ impl DynamicObject for Torch {
                         new_conn = Some(1);
                     } else if solid_non_door(t(x - 1, y)) {
                         new_conn = Some(-1);
-                    } else if this.map_or(false, |tt| tt.back_wall_type_index() != 2 && tt.contents() == 0) {
+                    } else if this.is_some_and(|tt| tt.back_wall_type_index() != 2 && tt.contents() == 0) {
                         new_conn = Some(-2);
                     }
                 }
             } else {
                 // Case B
                 let this = t(x, y);
-                if this.is_none() || this.map_or(false, |tt| tt.back_wall_type_index() == 2 || tt.contents() != 0) {
+                if this.is_none() || this.is_some_and(|tt| tt.back_wall_type_index() == 2 || tt.contents() != 0) {
                     if this.is_some() && tile_is_half_depth(this, &world, IntPair { x, y }) {
                         new_conn = Some(2);
                     } else {
                         let below = t(x, y - 1);
                         if below.is_some() && tile_is_solid(below) {
                             new_conn = Some(0);
-                        } else if below.map_or(false, |b| b.foreground_contents() == 100) {
+                        } else if below.is_some_and(|b| b.foreground_contents() == 100) {
                             new_conn = Some(3);
                         } else if solid_non_door(t(x + 1, y)) {
                             new_conn = Some(1);

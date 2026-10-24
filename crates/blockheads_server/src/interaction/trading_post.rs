@@ -567,7 +567,7 @@ impl TradingPost {
                 return false;
             }
         }
-        !bh.map_or(false, |x| x.is_client_blockhead_being_controlled_by_server())
+        !bh.is_some_and(|x| x.is_client_blockhead_being_controlled_by_server())
     }
 
     /// `-sellTitle` (never invoked by the server).
@@ -814,7 +814,7 @@ impl InteractionObjectLike for TradingPost {
             (io.is_in_use, io.current_blockhead.clone(), io.remote_blockhead_in_use_unique_id)
         };
         if in_use {
-            if cur.as_ref().map_or(false, |c| c.is_net()) || remote != 0 {
+            if cur.as_ref().is_some_and(|c| c.is_net()) || remote != 0 {
                 self.io.borrow_mut().needs_to_be_removed_when_interaction_ends = true;
                 return;
             }

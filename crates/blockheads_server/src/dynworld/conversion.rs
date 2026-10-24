@@ -63,7 +63,7 @@ impl DynamicWorld {
         }
         self.main_thread_remove_dir_from_conversion_list(&dir_name);
         self.conversion_next_due.set(self.conversion_next_due.get() + CONVERSION_STEP_SECONDS);
-        if self.conversion_snapshot.borrow().as_ref().map_or(false, |q| q.is_empty()) {
+        if self.conversion_snapshot.borrow().as_ref().is_some_and(|q| q.is_empty()) {
             *self.conversion_snapshot.borrow_mut() = None;
         }
     }

@@ -746,10 +746,10 @@ impl World {
             } else {
                 bail = true;
             }
-        } else if ty == ItemType::ITEM_TRADE_PORTAL || ty == ItemType::ITEM_MIRROR {
-            if must(self.tile_at(x, y + 1), SITE).contents() != 0 {
-                bail = true;
-            }
+        } else if (ty == ItemType::ITEM_TRADE_PORTAL || ty == ItemType::ITEM_MIRROR)
+            && must(self.tile_at(x, y + 1), SITE).contents() != 0
+        {
+            bail = true;
         }
         if interaction_object_item_type_occupies_foreground(ty) {
             if tile.foreground_contents() != 0 {
@@ -1197,16 +1197,16 @@ impl World {
                                 }
                             }
                         }
-                        if !found && bg == 2 {
-                            if back_wall_is_mutable(Some(t2))
-                                && !tile_type_is_portal_base_stone(t2.type_index() as i32)
-                                && t2.type_index() != 0x1f
-                                && t2.type_index() != 0x10
-                            {
-                                bg = t2.back_wall_type_index();
-                                if not_fluid(bg) {
-                                    found = true;
-                                }
+                        if !found
+                            && bg == 2
+                            && back_wall_is_mutable(Some(t2))
+                            && !tile_type_is_portal_base_stone(t2.type_index() as i32)
+                            && t2.type_index() != 0x1f
+                            && t2.type_index() != 0x10
+                        {
+                            bg = t2.back_wall_type_index();
+                            if not_fluid(bg) {
+                                found = true;
                             }
                         }
                     } else if let Some(t3) = t3 {
@@ -1248,17 +1248,15 @@ impl World {
             69 | 165 => {
                 let val: u8 = if ty == 165 { 0x38 } else { 9 };
                 tile.set_type_index(val);
-                for nb in [self.tile_at(x + 1, y), self.tile_at(x - 1, y)] {
-                    if let Some(n) = nb {
-                        if tile_is_solid(Some(n))
-                            && !tile_is_unplaced_block_minable_with_pickaxe(Some(n))
-                            && (ty != 165 || matches!(n.type_index(), 0x39 | 0x45 | 0x44))
-                            && !tile_type_is_portal_base_stone(n.type_index() as i32)
-                            && !matches!(n.type_index(), 0x1f | 0x30 | 0x31 | 0x32 | 0x10)
-                        {
-                            tile.set_type_index(n.type_index());
-                            break;
-                        }
+                for n in [self.tile_at(x + 1, y), self.tile_at(x - 1, y)].into_iter().flatten() {
+                    if tile_is_solid(Some(n))
+                        && !tile_is_unplaced_block_minable_with_pickaxe(Some(n))
+                        && (ty != 165 || matches!(n.type_index(), 0x39 | 0x45 | 0x44))
+                        && !tile_type_is_portal_base_stone(n.type_index() as i32)
+                        && !matches!(n.type_index(), 0x1f | 0x30 | 0x31 | 0x32 | 0x10)
+                    {
+                        tile.set_type_index(n.type_index());
+                        break;
                     }
                 }
                 d.add_door_at_pos_of_type_save_dict_placed_by_client(pos, item_type, save_dict, client_id);
@@ -1291,11 +1289,12 @@ impl World {
         if handled {
             tile.update(clear_paint);
             let mut fill_bw = false;
-            if back_wall_is_mutable(Some(tile)) && !matches!(ty, I_WATER | I_WATER_BUCKET | I_MELT_WATER) {
-                if matches!(tile.back_wall_type_index(), 3 | 5 | 2) {
-                    tile.update(|t| t.back_wall_type_index = t.type_index);
-                    fill_bw = true;
-                }
+            if back_wall_is_mutable(Some(tile))
+                && !matches!(ty, I_WATER | I_WATER_BUCKET | I_MELT_WATER)
+                && matches!(tile.back_wall_type_index(), 3 | 5 | 2)
+            {
+                tile.update(|t| t.back_wall_type_index = t.type_index);
+                fill_bw = true;
             }
             if ty != I_FREEZE_WATER && ty != I_MELT_WATER {
                 tile.update(|t| {

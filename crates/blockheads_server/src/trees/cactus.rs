@@ -258,7 +258,7 @@ impl TreeLike for CactusTree {
         let get = |k: &str| d.map.get(&k.to_string());
         self.split_height_a.set(get("splitHeightA").map_or(0, |v| v.int_value()));
         self.split_height_b.set(get("splitHeightB").map_or(0, |v| v.int_value()));
-        self.split_direction.set(get("splitDirection").map_or(false, |v| v.bool_value()));
+        self.split_direction.set(get("splitDirection").is_some_and(|v| v.bool_value()));
         self.available_food.set(get("availableFood").map_or(0.0, |v| v.float_value()));
     }
 

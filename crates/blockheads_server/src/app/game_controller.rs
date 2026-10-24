@@ -759,7 +759,7 @@ mod tests {
     fn t1_accumulator() {
         let mut acc = 0.0f32;
         let mut counts = vec![];
-        for dt in std::iter::once(1.0f32).chain(std::iter::repeat(0.2f32).take(10)) {
+        for dt in std::iter::once(1.0f32).chain(std::iter::repeat_n(0.2f32, 10)) {
             acc += dt;
             let mut n = 0;
             while accumulator_due(acc) {

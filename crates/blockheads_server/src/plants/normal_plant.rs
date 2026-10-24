@@ -177,8 +177,8 @@ impl NormalPlant {
         let gene = self.plant.borrow().max_age_gene;
         let mut max_age = ((gene as f32) / 255.0f32 + 0.5f32) * self.max_age_base() * (0.8f32 + vigor);
         if let Some(b) = tile_loaded(&world, pos.x, pos.y.wrapping_sub(1)) {
-            if matches!(b.type_index(), 48 | 49 | 50) {
-                max_age = 1.5f32 * max_age;
+            if matches!(b.type_index(), 48..=50) {
+                max_age *= 1.5f32;
             }
         }
         self.plant.borrow_mut().max_age = max_age;
@@ -721,11 +721,11 @@ mod tests {
     ///  U3: golden maxAge (Flax gene 191, vigor 1.0): `(191/255+0.5)*14400*(0.8+1)`.
     #[test]
     fn golden_max_age_formula() {
-        let m = ((191u16 as f32) / 255.0f32 + 0.5f32) * 14400.0f32 * (0.8f32 + 1.0f32);
+        let m = ((191_f32) / 255.0f32 + 0.5f32) * 14400.0f32 * (0.8f32 + 1.0f32);
         assert!((m - 32374.59).abs() < 0.1);
-        let m = ((180u16 as f32) / 255.0f32 + 0.5f32) * 7200.0f32 * (0.8f32 + 1.0f32);
+        let m = ((180_f32) / 255.0f32 + 0.5f32) * 7200.0f32 * (0.8f32 + 1.0f32);
         assert!((m - 15628.23).abs() < 0.1);
-        let m = ((249u16 as f32) / 255.0f32 + 0.5f32) * 7200.0f32 * (0.8f32 + 1.0f32);
+        let m = ((249_f32) / 255.0f32 + 0.5f32) * 7200.0f32 * (0.8f32 + 1.0f32);
         assert!((m - 19135.06).abs() < 0.1);
     }
 }

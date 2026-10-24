@@ -789,7 +789,7 @@ pub fn base_dynamic_object_net_data(me: &ObjRef) -> crate::types::netdata::Dynam
 /// `-[DynamicObject remoteUpdate:]`.
 pub fn base_remote_update(me: &ObjRef, _net_data: &[u8]) {
     let dw = me.dynamic_world();
-    if dw.as_ref().map_or(false, |d| d.is_server()) {
+    if dw.as_ref().is_some_and(|d| d.is_server()) {
         me.set_update_needs_to_be_sent(true);
     }
     dw_notify(&dw, me.pos(), me.object_type());
@@ -798,7 +798,7 @@ pub fn base_remote_update(me: &ObjRef, _net_data: &[u8]) {
 /// `-[DynamicObject remoteCreationDataUpdate:]`.
 pub fn base_remote_creation_data_update(me: &ObjRef, _net_data: &[u8]) {
     let dw = me.dynamic_world();
-    if dw.as_ref().map_or(false, |d| d.is_server()) {
+    if dw.as_ref().is_some_and(|d| d.is_server()) {
         me.set_creation_data_needs_to_be_sent(true);
     }
     dw_notify(&dw, me.pos(), me.object_type());
@@ -818,7 +818,7 @@ pub fn base_can_be_removed_by_blockhead(me: &ObjRef, b: &ObjRef) -> bool {
         return matches!((local, me.owner_id()), (Some(l), Some(o)) if l == o);
     };
     if world.is_admin() {
-        let controlled = bh.map_or(false, |x| x.is_client_blockhead_being_controlled_by_server());
+        let controlled = bh.is_some_and(|x| x.is_client_blockhead_being_controlled_by_server());
         let net = bh.is_some() && b.is_net();
         if !controlled && !net {
             return true;
@@ -852,6 +852,7 @@ pub(crate) mod testutil {
     pub struct MockTile {
         pub physical: Cell<bool>,
         pub objs: RefCell<Option<Vec<ObjRef>>>,
+        #[allow(dead_code)] // test fixture field
         pub id: usize,
     }
     impl MacroTileApi for MockTile {
@@ -1278,7 +1279,7 @@ mod tests {
         let r = crate::foundation::exception::catch_ns(|| {
             base_init_with_world_dynamic_world_save_dict_cache(&me, &wr(&w), &dr(&dw), &d, None)
         });
-        let e = r.err().expect("must raise");
+        let e = r.expect_err("must raise");
         assert_eq!(e.name, "NSRangeException");
     }
 

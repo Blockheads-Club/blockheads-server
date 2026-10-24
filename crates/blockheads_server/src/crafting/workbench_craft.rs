@@ -525,7 +525,7 @@ impl Workbench {
     /// `craftCompleted()`.
     pub fn craft_completed(&self, me: &ObjRef) {
         let user = self.user();
-        if user.as_ref().map_or(true, |u| u.needs_removed()) {
+        if user.as_ref().is_none_or(|u| u.needs_removed()) {
             self.abort_craft(me);
             return;
         }
@@ -784,8 +784,8 @@ impl Workbench {
         }
         let wb_host = host();
         let may_burn = self.in_use()
-            && user.as_ref().map_or(true, |u| self.user_is_working(u, t.simulation))
-            && user.as_ref().map_or(true, |u| wb_host.bh_unable_to_work_reason(u) == 0);
+            && user.as_ref().is_none_or(|u| self.user_is_working(u, t.simulation))
+            && user.as_ref().is_none_or(|u| wb_host.bh_unable_to_work_reason(u) == 0);
         if may_burn {
             let rate = if t.ty == WB_CAMPFIRE || t.ty == 0x1f { 6.0f32 } else { 1.0f32 };
             self.st.borrow_mut().fuel_counter += t.work * rate;
@@ -925,7 +925,7 @@ impl Workbench {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crafting::craftable_item_object::{CraftableItemObject, CraftableItemObjectLike};
+    use crate::crafting::craftable_item_object::CraftableItemObject;
     use crate::crafting::workbench::testkit::*;
     use crate::items::inventory_item::InventoryItem;
     use crate::plist::value::PlistValue;
@@ -1292,7 +1292,6 @@ mod tests {
     // Tests derived from the specification's decision table
     // ---------------------------------------------------------------------------------------------
 
-    use crate::objects::base::DynamicObject as _;
     use std::rc::Rc;
 
     /// Bench of `ty` with a running one-unit craft of `recipe()` (host reports "crafting at this bench").

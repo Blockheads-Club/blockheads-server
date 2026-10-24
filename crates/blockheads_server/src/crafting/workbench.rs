@@ -327,7 +327,7 @@ fn get_i32(d: &PlistDict, k: &str) -> i32 {
 }
 
 fn get_bool(d: &PlistDict, k: &str) -> bool {
-    get(d, k).map_or(false, |v| v.bool_value())
+    get(d, k).is_some_and(|v| v.bool_value())
 }
 
 /// `[NSString stringWithFormat:@"sourceItems_%d", i]`
@@ -377,11 +377,11 @@ impl Workbench {
     }
 
     fn expert_mode(&self) -> bool {
-        self.w().map_or(false, |w| w.expert_mode())
+        self.w().is_some_and(|w| w.expert_mode())
     }
 
     fn is_cloud_game(&self) -> bool {
-        self.w().map_or(false, |w| w.is_cloud_game())
+        self.w().is_some_and(|w| w.is_cloud_game())
     }
 
     /// `[world worldTime]` (0.0 for a nil world)
@@ -1007,7 +1007,7 @@ impl Workbench {
         let mut a =
             tile.artificial_light_r.wrapping_add(tile.artificial_light_g).wrapping_add(tile.artificial_light_b) as f32;
         let day = w.get_day_night_fraction_for_x_at_world_time(self.pos().x as f32, WorldApi::world_time(&*w));
-        s = (day - 0.23f32) * 6.0f32 * s;
+        s *= (day - 0.23f32) * 6.0f32;
         if s >= 1.0f32 {
             s = 1.0;
         }
@@ -1345,7 +1345,7 @@ impl Workbench {
         }
         let nd = <WorkbenchNetData as WireStruct>::read_le(&padded_bytes(net_data, 0x38));
         let dw = self.dw();
-        let is_server = dw.as_ref().map_or(false, |d| d.is_server());
+        let is_server = dw.as_ref().is_some_and(|d| d.is_server());
         let h = host();
         // ---- 4. in-use (crafting) state
         {
@@ -1437,14 +1437,14 @@ impl Workbench {
                         let io = self.io.borrow();
                         (io.is_in_use, io.current_blockhead.clone())
                     };
-                    if in_use && !cb.as_ref().map_or(false, |c| c.is_net()) && new_fuel < cur {
+                    if in_use && !cb.as_ref().is_some_and(|c| c.is_net()) && new_fuel < cur {
                         ignore = true;
                     }
                     let (in_use_fuel, cf) = {
                         let s = self.st.borrow();
                         (s.is_in_use_fuel, s.current_fuel_blockhead.clone())
                     };
-                    if !in_use && in_use_fuel && !cf.as_ref().map_or(false, |c| c.is_net()) {
+                    if !in_use && in_use_fuel && !cf.as_ref().is_some_and(|c| c.is_net()) {
                         ignore = true;
                     }
                 }
@@ -1576,7 +1576,7 @@ impl Workbench {
         if self.io.borrow().is_in_use {
             let cb = self.io.borrow().current_blockhead.clone();
             let remote = self.io.borrow().remote_blockhead_in_use_unique_id;
-            if cb.as_ref().map_or(false, |c| c.is_net()) || remote != 0 {
+            if cb.as_ref().is_some_and(|c| c.is_net()) || remote != 0 {
                 self.io.borrow_mut().needs_to_be_removed_when_interaction_ends = true;
                 return;
             }
@@ -2006,7 +2006,7 @@ pub(crate) mod testkit {
     use crate::lighting::artificial_light::testkit::world_with_blocks;
     use crate::objects::base::DynamicWorldApi;
     use crate::objects::interaction_object::testutil::TestBh;
-    use crate::world::misc::{install_deps, WorldOpsDeps};
+    use crate::world::misc::install_deps;
     use std::cell::Cell;
 
     /// `DynamicWorldApi` double with scriptable blockhead list.

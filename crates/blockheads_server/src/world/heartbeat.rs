@@ -82,7 +82,7 @@ impl World {
             d.map.insert("welcomeMessage".to_string(), PlistValue::string(m));
         }
         if let Some(s) = self.ownership_sign_positions.borrow().as_ref() {
-            if s.map.len() != 0 {
+            if !s.map.is_empty() {
                 d.map.insert("ownershipSignPositions".to_string(), PlistValue::Dict(s.clone()));
             }
         }
@@ -127,7 +127,6 @@ impl World {
         let n = self.server_clients.borrow().as_ref().map_or(0, |m| m.borrow().len());
         if self.server.borrow().is_some() && n != 0 {
             core_hooks().server_send_network_data_to_peers_reliable(&data, None, true);
-            return;
         }
         // client part: nil message; `foundItemsListNeedsToBeSentToServer` is never set on the server
     }

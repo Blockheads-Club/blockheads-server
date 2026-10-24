@@ -509,7 +509,7 @@ impl InteractionObjectLike for OwnershipSign {
     }
     /// `-canBeUsedByBlockhead:`.
     fn can_be_used_by_blockhead(&self, _me: &ObjRef, b: &ObjRef) -> bool {
-        let controlled = b.as_blockhead().map_or(false, |x| x.is_client_blockhead_being_controlled_by_server());
+        let controlled = b.as_blockhead().is_some_and(|x| x.is_client_blockhead_being_controlled_by_server());
         self.links.world().is_admin() && !controlled
     }
     fn remove(&self, me: &ObjRef, blockhead: Option<&ObjRef>) {

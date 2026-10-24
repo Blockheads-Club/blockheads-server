@@ -201,18 +201,20 @@ impl TreeLike for PineTree {
             let height = self.tree.borrow().height;
             let sp = IntPair { x: pos.x, y: pos.y + height - 2 };
             if let Some(t) = tile_at(&w, sp.x, sp.y) {
-                if t.get().back_wall_type_index == 2 && height > 7 && 0.8f64 < (r01t("PineTree.update.dropbear") as f64)
+                if t.get().back_wall_type_index == 2
+                    && height > 7
+                    && 0.8f64 < (r01t("PineTree.update.dropbear") as f64)
+                    && !dw.npc_exists_at_pos_ignore_npc(sp, None)
+                    && !w.tutorial_active()
                 {
-                    if !dw.npc_exists_at_pos_ignore_npc(sp, None) && !w.tutorial_active() {
-                        dw.load_npc_at_position_type_save_dict_is_adult_was_placed_placed_by_client(
-                            sp,
-                            NPC_DROPBEAR,
-                            None,
-                            false,
-                            false,
-                            None,
-                        );
-                    }
+                    dw.load_npc_at_position_type_save_dict_is_adult_was_placed_placed_by_client(
+                        sp,
+                        NPC_DROPBEAR,
+                        None,
+                        false,
+                        false,
+                        None,
+                    );
                 }
             }
         } else {

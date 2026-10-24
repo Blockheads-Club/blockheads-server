@@ -32,48 +32,48 @@ use crate::world::tiles::{
 use super::path_creator::{dw_has_lights_to_add, user_pos, wrap_dx, DerivedTileProperties};
 
 // Move kinds (TileTraverseType).
-const TT_NONE: u32 = TileTraverseType::TRAVERSE_NONE.0 as u32;
-const TT_WALK: u32 = TileTraverseType::TRAVERSE_WALK.0 as u32;
-const TT_SWIM: u32 = TileTraverseType::TRAVERSE_SWIM.0 as u32;
-const TT_CRAWL: u32 = TileTraverseType::TRAVERSE_CRAWL.0 as u32;
-const TT_CLIMB: u32 = TileTraverseType::TRAVERSE_CLIMB.0 as u32;
-const TT_STAND_TO_HANG_JUMP: u32 = TileTraverseType::TRAVERSE_STAND_TO_HANG_JUMP.0 as u32;
-const TT_HANG_TO_STAND_JUMP: u32 = TileTraverseType::TRAVERSE_HANG_TO_STAND_JUMP.0 as u32;
-const TT_HANG_TO_HANG_JUMP: u32 = TileTraverseType::TRAVERSE_HANG_TO_HANG_JUMP.0 as u32;
-const TT_STAND_TO_HANG_DOUBLE_JUMP: u32 = TileTraverseType::TRAVERSE_STAND_TO_HANG_DOUBLE_JUMP.0 as u32;
-const TT_STAND_TO_MONKEY_HANG_JUMP: u32 = TileTraverseType::TRAVERSE_STAND_TO_MONKEY_HANG_JUMP.0 as u32;
-const TT_MONKEY_HANG_TO_STAND_JUMP: u32 = TileTraverseType::TRAVERSE_MONKEY_HANG_TO_STAND_JUMP.0 as u32;
-const TT_CROUCH_UP: u32 = TileTraverseType::TRAVERSE_CROUCH_UP.0 as u32;
-const TT_CROUCH_DOWN: u32 = TileTraverseType::TRAVERSE_CROUCH_DOWN.0 as u32;
-const TT_CROUCH_CRAWL_UP: u32 = TileTraverseType::TRAVERSE_CROUCH_CRAWL_UP.0 as u32;
-const TT_CROUCH_CRAWL_DOWN: u32 = TileTraverseType::TRAVERSE_CROUCH_CRAWL_DOWN.0 as u32;
-const TT_FALL: u32 = TileTraverseType::TRAVERSE_FALL.0 as u32;
-const TT_MONKEY_SWING: u32 = TileTraverseType::TRAVERSE_MONKEY_SWING.0 as u32;
-const TT_CLIMB_DOWN_TO_MONKEY_SWING: u32 = TileTraverseType::TRAVERSE_CLIMB_DOWN_TO_MONKEY_SWING.0 as u32;
-const TT_MONKEY_SWING_UP_TO_CLIMB: u32 = TileTraverseType::TRAVERSE_MONKEY_SWING_UP_TO_CLIMB.0 as u32;
+const TT_NONE: u32 = TileTraverseType::TRAVERSE_NONE.0;
+const TT_WALK: u32 = TileTraverseType::TRAVERSE_WALK.0;
+const TT_SWIM: u32 = TileTraverseType::TRAVERSE_SWIM.0;
+const TT_CRAWL: u32 = TileTraverseType::TRAVERSE_CRAWL.0;
+const TT_CLIMB: u32 = TileTraverseType::TRAVERSE_CLIMB.0;
+const TT_STAND_TO_HANG_JUMP: u32 = TileTraverseType::TRAVERSE_STAND_TO_HANG_JUMP.0;
+const TT_HANG_TO_STAND_JUMP: u32 = TileTraverseType::TRAVERSE_HANG_TO_STAND_JUMP.0;
+const TT_HANG_TO_HANG_JUMP: u32 = TileTraverseType::TRAVERSE_HANG_TO_HANG_JUMP.0;
+const TT_STAND_TO_HANG_DOUBLE_JUMP: u32 = TileTraverseType::TRAVERSE_STAND_TO_HANG_DOUBLE_JUMP.0;
+const TT_STAND_TO_MONKEY_HANG_JUMP: u32 = TileTraverseType::TRAVERSE_STAND_TO_MONKEY_HANG_JUMP.0;
+const TT_MONKEY_HANG_TO_STAND_JUMP: u32 = TileTraverseType::TRAVERSE_MONKEY_HANG_TO_STAND_JUMP.0;
+const TT_CROUCH_UP: u32 = TileTraverseType::TRAVERSE_CROUCH_UP.0;
+const TT_CROUCH_DOWN: u32 = TileTraverseType::TRAVERSE_CROUCH_DOWN.0;
+const TT_CROUCH_CRAWL_UP: u32 = TileTraverseType::TRAVERSE_CROUCH_CRAWL_UP.0;
+const TT_CROUCH_CRAWL_DOWN: u32 = TileTraverseType::TRAVERSE_CROUCH_CRAWL_DOWN.0;
+const TT_FALL: u32 = TileTraverseType::TRAVERSE_FALL.0;
+const TT_MONKEY_SWING: u32 = TileTraverseType::TRAVERSE_MONKEY_SWING.0;
+const TT_CLIMB_DOWN_TO_MONKEY_SWING: u32 = TileTraverseType::TRAVERSE_CLIMB_DOWN_TO_MONKEY_SWING.0;
+const TT_MONKEY_SWING_UP_TO_CLIMB: u32 = TileTraverseType::TRAVERSE_MONKEY_SWING_UP_TO_CLIMB.0;
 const TT_HANG_TO_MONKEY_SWING_DIAGONAL_JUMP_UP: u32 =
-    TileTraverseType::TRAVERSE_HANG_TO_MONKEY_SWING_DIAGONAL_JUMP_UP.0 as u32;
+    TileTraverseType::TRAVERSE_HANG_TO_MONKEY_SWING_DIAGONAL_JUMP_UP.0;
 const TT_MONKEY_SWING_TO_HANG_DIAGONAL_JUMP_DOWN: u32 =
-    TileTraverseType::TRAVERSE_MONKEY_SWING_TO_HANG_DIAGONAL_JUMP_DOWN.0 as u32;
-const TT_JUMP_OVER_GAP: u32 = TileTraverseType::TRAVERSE_JUMP_OVER_GAP.0 as u32;
-const TT_INACCESSIBLE: u32 = TileTraverseType::TRAVERSE_INACCESSIBLE.0 as u32;
-const TT_STAIRS: u32 = TileTraverseType::TRAVERSE_STAIRS.0 as u32;
-const TT_ELEVATOR: u32 = TileTraverseType::TRAVERSE_ELEVATOR.0 as u32;
-const TT_FLY: u32 = TileTraverseType::TRAVERSE_FLY.0 as u32;
+    TileTraverseType::TRAVERSE_MONKEY_SWING_TO_HANG_DIAGONAL_JUMP_DOWN.0;
+const TT_JUMP_OVER_GAP: u32 = TileTraverseType::TRAVERSE_JUMP_OVER_GAP.0;
+const TT_INACCESSIBLE: u32 = TileTraverseType::TRAVERSE_INACCESSIBLE.0;
+const TT_STAIRS: u32 = TileTraverseType::TRAVERSE_STAIRS.0;
+const TT_ELEVATOR: u32 = TileTraverseType::TRAVERSE_ELEVATOR.0;
+const TT_FLY: u32 = TileTraverseType::TRAVERSE_FLY.0;
 
 // Poses (TileTraverseKeyFrameType).
-const KF_STAND: u32 = TileTraverseKeyFrameType::TRAVERSE_KF_STAND.0 as u32;
-const KF_BOB: u32 = TileTraverseKeyFrameType::TRAVERSE_KF_BOB.0 as u32;
-const KF_CRAWL: u32 = TileTraverseKeyFrameType::TRAVERSE_KF_CRAWL.0 as u32;
-const KF_HANG_BACK: u32 = TileTraverseKeyFrameType::TRAVERSE_KF_HANG_BACK.0 as u32;
-const KF_HANG_RIGHT: u32 = TileTraverseKeyFrameType::TRAVERSE_KF_HANG_RIGHT.0 as u32;
-const KF_HANG_LEFT: u32 = TileTraverseKeyFrameType::TRAVERSE_KF_HANG_LEFT.0 as u32;
-const KF_MONKEY_HANG: u32 = TileTraverseKeyFrameType::TRAVERSE_KF_MONKEY_HANG.0 as u32;
-const KF_FALLING: u32 = TileTraverseKeyFrameType::TRAVERSE_KF_FALLING.0 as u32;
-const KF_INACCESSIBLE: u32 = TileTraverseKeyFrameType::TRAVERSE_KF_INACCESSIBLE.0 as u32;
-const KF_STAIRS: u32 = TileTraverseKeyFrameType::TRAVERSE_KF_STAIRS.0 as u32;
-const KF_STAND_ELEVATOR: u32 = TileTraverseKeyFrameType::TRAVERSE_KF_STAND_ELEVATOR.0 as u32;
-const KF_FLY: u32 = TileTraverseKeyFrameType::TRAVERSE_KF_FLY.0 as u32;
+const KF_STAND: u32 = TileTraverseKeyFrameType::TRAVERSE_KF_STAND.0;
+const KF_BOB: u32 = TileTraverseKeyFrameType::TRAVERSE_KF_BOB.0;
+const KF_CRAWL: u32 = TileTraverseKeyFrameType::TRAVERSE_KF_CRAWL.0;
+const KF_HANG_BACK: u32 = TileTraverseKeyFrameType::TRAVERSE_KF_HANG_BACK.0;
+const KF_HANG_RIGHT: u32 = TileTraverseKeyFrameType::TRAVERSE_KF_HANG_RIGHT.0;
+const KF_HANG_LEFT: u32 = TileTraverseKeyFrameType::TRAVERSE_KF_HANG_LEFT.0;
+const KF_MONKEY_HANG: u32 = TileTraverseKeyFrameType::TRAVERSE_KF_MONKEY_HANG.0;
+const KF_FALLING: u32 = TileTraverseKeyFrameType::TRAVERSE_KF_FALLING.0;
+const KF_INACCESSIBLE: u32 = TileTraverseKeyFrameType::TRAVERSE_KF_INACCESSIBLE.0;
+const KF_STAIRS: u32 = TileTraverseKeyFrameType::TRAVERSE_KF_STAIRS.0;
+const KF_STAND_ELEVATOR: u32 = TileTraverseKeyFrameType::TRAVERSE_KF_STAND_ELEVATOR.0;
+const KF_FLY: u32 = TileTraverseKeyFrameType::TRAVERSE_KF_FLY.0;
 
 /// Contents codes.
 const C_STAIRS: u8 = 0x65;
@@ -1363,7 +1363,7 @@ mod tests {
         let (world, loader, _d) = new_world(32, 20);
         *loader.fill.borrow_mut() = Box::new(|x, y| {
             let mut t = flat_tile(20)(x, y);
-            if x == 201 && y <= 20 && y >= 10 {
+            if x == 201 && (10..=20).contains(&y) {
                 t.type_index = AIR;
             }
             t

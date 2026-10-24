@@ -409,7 +409,7 @@ mod tests {
         );
         for _ in 0..200 {
             rl.run_mode_default_before_distant_future();
-            if stalled.get() && log.borrow().len() > 0 {
+            if stalled.get() && !log.borrow().is_empty() {
                 let n = log.borrow().iter().filter(|e| e.1 > 1.2).count();
                 if n >= 4 {
                     break;

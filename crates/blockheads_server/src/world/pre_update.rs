@@ -20,7 +20,7 @@ pub(crate) fn core_start_bulk_database_update(w: &World) {
 /// nil environment gives NO.
 pub(crate) fn core_finish_bulk_database_update(w: &World) -> bool {
     let env = w.database_environment.borrow().clone();
-    env.map_or(false, |e| e.finish_bulk_transaction())
+    env.is_some_and(|e| e.finish_bulk_transaction())
 }
 
 impl World {
@@ -62,7 +62,7 @@ impl World {
         core_start_bulk_database_update(self);
         let has_server = self.server.borrow().is_some();
         let convertor = self.core_convertor();
-        if has_server && convertor.as_ref().map_or(false, |c| !c.server_migration_complete()) {
+        if has_server && convertor.as_ref().is_some_and(|c| !c.server_migration_complete()) {
             hooks.server_start_bulk_transaction();
         }
         self.decommission_old_blocks();
@@ -80,7 +80,7 @@ impl World {
                 c.convert_light_blocks();
             }
             self.set_lightblock_save_counter(self.lightblock_save_counter() + 1);
-            let limit = if convertor.as_ref().map_or(false, |c| c.light_block_migration_complete()) { 100 } else { 10 };
+            let limit = if convertor.as_ref().is_some_and(|c| c.light_block_migration_complete()) { 100 } else { 10 };
             if self.lightblock_save_counter() >= limit {
                 self.set_lightblock_save_counter(0);
                 if has_loader && hooks.loader_finish_bulk_light_block_transaction() {

@@ -161,7 +161,7 @@ impl BlockheadCraftableItemObject {
         let name = get("name").and_then(|v| v.as_str()).map(|s| s.to_string());
         let skin_options = match get("skinOptions") {
             None => {
-                let is_male = get("isMale").map_or(false, |v| v.bool_value());
+                let is_male = get("isMale").is_some_and(|v| v.bool_value());
                 let head = get("headIndex").map_or(0, |v| v.int_value());
                 let skin = get("skinIndex").map_or(0, |v| v.int_value());
                 let hair = get("hairStyleIndex").map_or(0, |v| v.int_value());

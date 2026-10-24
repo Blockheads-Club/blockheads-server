@@ -308,7 +308,7 @@ impl WorldHelper {
         let pb: PhysicalBlockRef = *pb;
         // [[world dynamicWorld] isClient] is NO on the server
         if let Some(b) = blockhead {
-            if b.as_blockhead().map_or(false, |x| x.is_client_blockhead_being_controlled_by_server()) {
+            if b.as_blockhead().is_some_and(|x| x.is_client_blockhead_being_controlled_by_server()) {
                 return;
             }
         }
@@ -489,7 +489,10 @@ impl WorldHelper {
                         return false;
                     }
                     // `minAge > 1.5 && [world mapVisible]` is never true on the server (R11, MAP_VISIBLE)
-                    debug_assert!(!MAP_VISIBLE);
+                    #[allow(clippy::assertions_on_constants)] // documents the ported constant
+                    {
+                        debug_assert!(!MAP_VISIBLE);
+                    }
                     let mut near = false;
                     for bh in sv.blockheads() {
                         let p = bh.pos();

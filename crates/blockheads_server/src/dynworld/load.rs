@@ -1680,7 +1680,7 @@ mod tests {
     // persistence / generation tests (fake hooks)
     // ---------------------------------------------------------------------------------------------------
     use crate::dynworld::state::testutil::*;
-    use crate::dynworld::state::{DwHooks, DwWorldGen, DynamicWorldInit, FreeBlockInit};
+    use crate::dynworld::state::{DwWorldGen, DynamicWorldInit, FreeBlockInit};
     use std::cell::RefCell;
     use std::rc::Rc;
 
@@ -1742,7 +1742,6 @@ mod tests {
             Some(o)
         }
     }
-    use crate::objects::base::DynamicObject;
 
     fn new_dw_on(
         name: &str,
@@ -1995,7 +1994,7 @@ mod tests {
 mod population_tests {
     use super::*;
     use crate::dynworld::state::testutil::*;
-    use crate::dynworld::state::{DwHooks, DwNoise, DynamicWorldInit, FreeBlockInit, ServerClientMap};
+    use crate::dynworld::state::{DwNoise, DynamicWorldInit, FreeBlockInit, ServerClientMap};
     use crate::foundation::gsdict::GsDict;
     use crate::rng::glibc_rand::{rand, srand};
     use std::cell::{Cell, RefCell};

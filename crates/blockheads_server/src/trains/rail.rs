@@ -61,7 +61,7 @@ pub struct RailProbe {
 /// Starts from `current` (it stays when the right neighbour is NULL). The left pass uses the STALE right
 /// neighbour fetched at the top (deliberate, note).
 pub fn compute_rail_configuration(current: i32, probe: &dyn Fn(i32, i32) -> Option<RailProbe>) -> i32 {
-    let is_rail = |t: Option<RailProbe>| t.map_or(false, |t| t.fg == CONTENTS_RAIL);
+    let is_rail = |t: Option<RailProbe>| t.is_some_and(|t| t.fg == CONTENTS_RAIL);
     // `s = tileIsSolid(t); if !s { u = T(dx, 1); s = (u is a rail) }`
     let up = |t: RailProbe, dx: i32| -> bool {
         let mut s = t.solid;
@@ -83,7 +83,7 @@ pub fn compute_rail_configuration(current: i32, probe: &dyn Fn(i32, i32) -> Opti
             }
         } else if up(r1t, 1) {
             let l = probe(-1, 0);
-            new = if l.map_or(true, |l| l.fg != CONTENTS_RAIL) {
+            new = if l.is_none_or(|l| l.fg != CONTENTS_RAIL) {
                 RAIL_DIAGONAL_UP_RIGHT
             } else {
                 RAIL_DIAGONAL_HALF_UP_RIGHT_TOP
@@ -118,7 +118,7 @@ pub fn compute_rail_configuration(current: i32, probe: &dyn Fn(i32, i32) -> Opti
                 }
             } else if up(l, -1) {
                 // `R1` is the stale right neighbour (may be NULL)
-                new = if r1.map_or(true, |r| r.fg != CONTENTS_RAIL) {
+                new = if r1.is_none_or(|r| r.fg != CONTENTS_RAIL) {
                     RAIL_DIAGONAL_UP_LEFT
                 } else {
                     RAIL_DIAGONAL_HALF_UP_LEFT_TOP
@@ -230,7 +230,7 @@ impl Rail {
         {
             let mut st = me.st.borrow_mut();
             st.item_type = get("itemType").map_or(0, |v| v.int_value());
-            st.owned_by_station = get("ownedByStation").map_or(false, |v| v.bool_value());
+            st.owned_by_station = get("ownedByStation").is_some_and(|v| v.bool_value());
             st.current_configuration = get("configuration").map_or(0, |v| v.int_value());
         }
         me.init_sub_derived_items();
@@ -378,7 +378,7 @@ impl DynamicObject for Rail {
                 let (needs_removed, owned) = (self.base.borrow().needs_removed, self.st.borrow().owned_by_station);
                 if !dw.is_client() && !needs_removed && !owned {
                     let b = tile_at_world_position_loaded(pos.x, pos.y.wrapping_sub(1), &world);
-                    let col = b.map_or(false, |t| t.foreground_contents() == CONTENTS_COLUMN);
+                    let col = b.is_some_and(|t| t.foreground_contents() == CONTENTS_COLUMN);
                     if !tile_is_solid(b) && !col {
                         let r = tile_at_world_position_loaded(pos.x.wrapping_add(1), pos.y, &world);
                         if !tile_is_solid(r) {

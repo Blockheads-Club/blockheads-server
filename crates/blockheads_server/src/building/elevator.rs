@@ -485,8 +485,7 @@ impl ElevatorMotor {
                 if st.available_electricity != 0 {
                     st.time_until_next_power_check = 0.0;
                 }
-                st.available_electricity =
-                    if st.available_electricity <= 10 { 0 } else { st.available_electricity - 10 };
+                st.available_electricity = st.available_electricity.saturating_sub(10);
             } else {
                 st.client_power_usage = st.client_power_usage.wrapping_add(10);
             }
@@ -753,7 +752,7 @@ mod tests {
         assert_eq!(&report[0x20..0x22], &20u16.to_le_bytes());
         // the server applies the report: 15 - 10 -> 5; more than available -> 0
         m(&a).st.borrow_mut().available_electricity = 15;
-        a.remote_update(&a, &report[..0x28].iter().copied().chain([0u8; 0].into_iter()).collect::<Vec<u8>>());
+        a.remote_update(&a, &report[..0x28].iter().copied().chain([0u8; 0]).collect::<Vec<u8>>());
         assert_eq!(m(&a).available_electricity(), 0);
         m(&a).st.borrow_mut().available_electricity = 25;
         a.remote_update(&a, &report);

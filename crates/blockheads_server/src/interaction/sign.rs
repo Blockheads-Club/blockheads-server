@@ -518,7 +518,7 @@ pub fn sign_remove(me: &ObjRef, remove_blockhead: Option<&ObjRef>) {
         (s.is_in_use, s.current_blockhead.clone(), s.remote_blockhead_in_use_unique_id)
     };
     if in_use {
-        if cur.as_ref().map_or(false, |c| c.is_net()) || remote != 0 {
+        if cur.as_ref().is_some_and(|c| c.is_net()) || remote != 0 {
             io(me).borrow_mut().needs_to_be_removed_when_interaction_ends = true;
             return;
         }
@@ -562,7 +562,7 @@ pub fn sign_set_needs_removed(me: &ObjRef, flag: bool) {
 
 /// `-[Sign canBeUsedByBlockhead:]`.
 pub fn sign_can_be_used_by_blockhead(me: &ObjRef, b: &ObjRef) -> bool {
-    let controlled = b.as_blockhead().map_or(false, |x| x.is_client_blockhead_being_controlled_by_server());
+    let controlled = b.as_blockhead().is_some_and(|x| x.is_client_blockhead_being_controlled_by_server());
     if sl(me).links().world().is_admin() && !controlled {
         return true;
     }

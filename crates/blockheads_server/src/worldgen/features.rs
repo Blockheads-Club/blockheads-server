@@ -213,7 +213,7 @@ impl Terrain {
                         fm = 0.4f32;
                     }
                     if p.expert {
-                        fm = 0.5f32 * fm;
+                        fm *= 0.5f32;
                     }
                     let mut tw = min_v - 0.03f32 * fm * (1.0f32 - y_mul);
                     let troll = tw;
@@ -275,9 +275,9 @@ impl Terrain {
                     0.21f32
                 };
                 if p.rules.gems == 1 {
-                    fq = 0.25f32 * fq;
+                    fq *= 0.25f32;
                 } else if p.rules.gems == 3 {
-                    fq = 4.0f32 * fq;
+                    fq *= 4.0f32;
                 }
                 if 0.0f32 < base {
                     let wy_n = (wy as f32) / 1024.0f32;
@@ -384,14 +384,14 @@ impl Terrain {
         if !(c_d + 64 < y_pos * 32) {
             return plan;
         }
-        let island: u32;
-        if random_island_gen <= gem_island_threshold {
+
+        let island: u32 = if random_island_gen <= gem_island_threshold {
             // TREE island
             let rn = (noise_xy(&self.flint, xd * 0.126 + 0.61, yd * 0.341 + 0.21, 2) * 0.5 + 0.5) as f32;
             let pos = IntPair { x: y_pos << 5, y: y_pos << 5 };
             let ok = |t: TreeType| -> bool { (growth_vigor_for_tree_type_at_pos(t, pos, world) as f64) > 0.2f64 };
             let rn = rn as f64;
-            island = if rn < 0.2 && ok(TreeType::TREE_COFFEE) {
+            if rn < 0.2 && ok(TreeType::TREE_COFFEE) {
                 IslandType::ISLAND_COFFEE.0
             } else if rn < 0.3 && ok(TreeType::TREE_MANGO) {
                 IslandType::ISLAND_COCONUT.0 // sic (R7)
@@ -411,7 +411,7 @@ impl Terrain {
                 IslandType::ISLAND_PINE.0
             } else {
                 IslandType::ISLAND_CACTUS.0
-            };
+            }
         } else {
             // GEM island
             let r = (noise_xy(&self.flint, xd * 12.13 + 0.03, yd * 3.688 + 0.42, 2).abs() * 2.5) as f32;
@@ -427,8 +427,8 @@ impl Terrain {
                     ISL_DIAMOND
                 };
             }
-            island = gi;
-        }
+            gi
+        };
         // every island kind assigned above is non-zero (ISLAND_NONE is the only 0)
         plan.island_type = island;
         let n1 = noise_xy(&self.flint, xd * 0.312 + 0.31, yd * 0.194 + 0.35, 2);
@@ -718,7 +718,7 @@ impl Terrain {
                         }
                         let mut v = (nz(x + off, *yc) + c01 + tree_add as f64) as f32;
                         if v > 0.0f32 {
-                            v = v * (vt(TreeType(*ty), pos_h) - 0.2f32);
+                            v *= vt(TreeType(*ty), pos_h) - 0.2f32;
                             if v > 0.0f32 {
                                 let r = r01("worldgen::spawn_tree") * 2.0f32;
                                 if r < v * v {
@@ -737,14 +737,14 @@ impl Terrain {
                         let mut pine_value = (nz(x + 0x5fff, 0.8754) + c01 + tree_add as f64) as f32;
                         if pine_value > 0.0f32 {
                             let mut ty = TreeType::TREE_PINE;
-                            let dist_t: f32;
-                            if p.rules.temperature == 2 {
+
+                            let dist_t: f32 = if p.rules.temperature == 2 {
                                 let f = fmodf(((x as f32) / 32.0f32) / (p.w as f32), 0.5f32);
-                                dist_t = fabsf(f - 0.25f32) / 0.25f32;
+                                fabsf(f - 0.25f32) / 0.25f32
                             } else {
                                 let temp = base_temperature_for_world_pos(pos_h, 0.25f32, 0.25f32, 0.0f32, world);
-                                dist_t = 1.0f32 - clamp((temp - 25.0f32) / 5.0f32, 0.0f32, 1.0f32);
-                            }
+                                1.0f32 - clamp((temp - 25.0f32) / 5.0f32, 0.0f32, 1.0f32)
+                            };
                             let vig;
                             if height > 0x20f || dist_t >= 0.25f32 {
                                 vig = vt(TreeType::TREE_PINE, pos_h);
@@ -752,7 +752,7 @@ impl Terrain {
                                 ty = TreeType::TREE_COCONUT;
                                 vig = vt(TreeType::TREE_COCONUT, pos_h);
                             }
-                            pine_value = pine_value * (vig - 0.2f32);
+                            pine_value *= vig - 0.2f32;
                             if pine_value > 0.0f32 && (ty == TreeType::TREE_COCONUT || !is_beach) {
                                 let r = r01("worldgen::spawn_pine");
                                 if r < pine_value * pine_value {
@@ -917,7 +917,7 @@ impl Terrain {
                 if land_npc {
                     let mut v = (nz(x, 0.34523) + c01) as f32;
                     if v > 0.0f32 {
-                        v = v * (vt(TreeType::TREE_APPLE, pos_h) - 0.2f32);
+                        v *= vt(TreeType::TREE_APPLE, pos_h) - 0.2f32;
                         if v > 0.0f32 && r01("worldgen::spawn_dodo") * 4.0f32 < v * v {
                             self.npc_positions[xi] = 1;
                             if dist < 1000 {
@@ -944,7 +944,7 @@ impl Terrain {
                 if land_npc {
                     let mut v = (nz(x * 3 + 0x1d4c, 0.189) + c01) as f32;
                     if v > 0.0f32 {
-                        v = v * (vp(PlantType::PLANT_CARROT, pos_h) - 0.2f32);
+                        v *= vp(PlantType::PLANT_CARROT, pos_h) - 0.2f32;
                         if v > 0.0f32 && r01("worldgen::spawn_donkey") * 4.0f32 < v * v {
                             self.npc_positions[xi] = 3;
                         }
@@ -954,7 +954,7 @@ impl Terrain {
                 if land_npc {
                     let mut v = (nz(x * 3 + 0xc23, 0.3829) + c01) as f32;
                     if v > 0.0f32 {
-                        v = v * (vp(PlantType::PLANT_WHEAT, pos_h) - 0.2f32);
+                        v *= vp(PlantType::PLANT_WHEAT, pos_h) - 0.2f32;
                         if v > 0.0f32 && r01("worldgen::spawn_yak") * 4.0f32 < v * v {
                             self.npc_positions[xi] = 8;
                         }

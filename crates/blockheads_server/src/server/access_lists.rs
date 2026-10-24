@@ -399,7 +399,7 @@ mod tests {
         assert!(h.m.packets_to(&pid).iter().any(|p| p == &[0x26, 0x0c]));
         // delayed disconnect after 2 s
         h.run_delayed();
-        assert_eq!(h.m.disconnected.borrow().as_slice(), &[pid.clone()]);
+        assert_eq!(h.m.disconnected.borrow().as_slice(), std::slice::from_ref(&pid));
         // blacklisted now
         let info = h.srv.player_info_dict_for_peer_id(&pid).unwrap();
         assert!(h.srv.player_is_black_listed_with_info(&info));
