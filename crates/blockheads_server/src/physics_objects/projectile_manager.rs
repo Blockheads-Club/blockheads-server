@@ -281,4 +281,53 @@ mod tests {
         m.update(0.05);
         assert_eq!(m.len(), 0);
     }
+
+    /// A target that cannot be harmed absorbs the arrow; `dealloc` drops what is still flying; the target double
+    /// answers its harmable questions.
+    #[test]
+    fn unharmable_targets_dealloc_and_the_double() {
+        let (w, m) = mgr(false);
+        let plain: ObjRef = crate::objects::base::testutil::TestObj::new();
+        plain.base().borrow_mut().float_pos = Vector2 { x: 1.0, y: 0.0 };
+        m.fire_projectile_from_to_at_fire_item_type_firer(
+            Vector2 { x: 0.0, y: 0.0 },
+            Vector2 { x: 1.0, y: 0.0 },
+            Some(&plain),
+            0x50,
+            Some(&plain),
+        );
+        m.update(1.0);
+        assert_eq!(m.len(), 0);
+        // a projectile without a target lands near the origin and hits nothing
+        m.fire_projectile_from_to_at_fire_item_type_firer(
+            Vector2 { x: 1.0, y: 0.0 },
+            Vector2 { x: 0.0, y: 0.0 },
+            None,
+            0x50,
+            None,
+        );
+        m.update(1.0);
+        assert_eq!(m.len(), 0);
+        m.fire_projectile_from_to_at_fire_item_type_firer(
+            Vector2 { x: 0.0, y: 0.0 },
+            Vector2 { x: 50.0, y: 0.0 },
+            None,
+            0x50,
+            None,
+        );
+        assert_eq!(m.len(), 1);
+        m.dealloc();
+        assert_eq!(m.len(), 0);
+        // the public constructor starts empty and sees its world
+        assert_eq!(ProjectileManager::init_with_world_cache(&w, None).len(), 0);
+        // the harmable double
+        let t = target(2.0, 3.0);
+        let to: ObjRef = t.clone();
+        assert_eq!(to.class_info().name, "Target");
+        assert!(to.as_any().is::<Target>());
+        assert!(!t.tap_is_within_body_radius(Vector2 { x: 0.0, y: 0.0 }));
+        assert!(!t.will_die_if_hit_by_force(5));
+        assert!(t.is_visible());
+        assert_eq!(t.center(), Vector2 { x: 0.0, y: 0.0 });
+    }
 }

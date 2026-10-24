@@ -199,9 +199,9 @@ impl Rail {
         let me = Self::alloc(world, dw);
         let me_obj: ObjRef = me.clone();
         let (wref, dref): (WorldRef, DynamicWorldRef) = (world.clone(), dw.clone());
-        if !base_init_with_world_dynamic_world_at_position_cache(&me_obj, &wref, &dref, pos, cache) {
-            return None;
-        }
+        // the base initialiser always succeeds when the position is given
+        let inited = base_init_with_world_dynamic_world_at_position_cache(&me_obj, &wref, &dref, pos, cache);
+        debug_assert!(inited);
         {
             let mut st = me.st.borrow_mut();
             st.item_type = item_type;
@@ -224,9 +224,8 @@ impl Rail {
         let me = Self::alloc(world, dw);
         let me_obj: ObjRef = me.clone();
         let (wref, dref): (WorldRef, DynamicWorldRef) = (world.clone(), dw.clone());
-        if !base_init_with_world_dynamic_world_save_dict_cache(&me_obj, &wref, &dref, save_dict, cache) {
-            return None;
-        }
+        let inited = base_init_with_world_dynamic_world_save_dict_cache(&me_obj, &wref, &dref, save_dict, cache);
+        debug_assert!(inited);
         let get = |k: &str| save_dict.map.get(&k.to_string());
         {
             let mut st = me.st.borrow_mut();
@@ -468,6 +467,9 @@ mod tests {
         assert_eq!(run(1, &[((1, 0), R), ((2, 0), R), ((-1, 0), AIR), ((-1, 1), R)]), 4);
         // L NULL: nothing
         assert_eq!(run(1, &[((1, 0), R), ((2, 0), R)]), 1);
+        // L rail, LL NULL: a flat piece stays flat (and the half slope keeps its shape)
+        assert_eq!(run(1, &[((1, 0), R), ((2, 0), R), ((-1, 0), R)]), 1);
+        assert_eq!(run(1, &[((1, 0), R), ((2, 0), SOLID), ((-1, 0), R)]), 6);
         // the second pass is skipped for configurations other than 1 / 6
         assert_eq!(run(3, &[((-1, 0), SOLID)]), 3);
         assert_eq!(run(5, &[((1, 0), SOLID), ((-1, 0), SOLID)]), 5);
@@ -499,5 +501,118 @@ mod tests {
         assert_eq!(&b[0x18..0x1a], &199u16.to_le_bytes());
         assert_eq!(b[0x1a], 6);
         assert!(b[0x1b..].iter().all(|&x| x == 0));
+    }
+}
+
+#[cfg(test)]
+mod world_tests {
+    use super::*;
+    use crate::trains::train_car::world_tests::{lay_rails, setup, setup_wide};
+    use crate::trains::train_car::ITEM_RAIL;
+
+    fn rail_of(o: &ObjRef) -> &Rail {
+        handle::downcast::<Rail>(o).unwrap()
+    }
+
+    /// Save dict and net image round trips, the free-block face and the class descriptor.
+    #[test]
+    fn round_trips_and_faces() {
+        let (world, dw) = setup("rail_rt");
+        lay_rails(&world, &dw, 5, 14);
+        let r = dw.get_rail_at_pos(IntPair { x: 8, y: 10 }).unwrap();
+        assert_eq!(r.class_info().name, RAIL_CLASS.name);
+        assert!(r.occupies_foreground_contents());
+        assert_eq!(r.freeblock_creation_item_type(), ITEM_RAIL);
+        assert!(r.free_block_creation_save_dict(&r).is_none());
+        assert_eq!((r.free_block_creation_data_a(), r.free_block_creation_data_b()), (0, 0));
+        assert_eq!(rail_of(&r).item_type(), ITEM_RAIL);
+        assert!(!rail_of(&r).owned_by_station());
+        let owned = Rail::new(&world, &dw, IntPair { x: 30, y: 10 }, None, ITEM_RAIL, true).unwrap();
+        assert!(rail_of(&owned).owned_by_station());
+        // save dict
+        let sd = owned.get_save_dict(&owned);
+        let again = Rail::from_save_dict(&world, &dw, &sd, None).unwrap();
+        assert_eq!(rail_of(&again).item_type(), ITEM_RAIL);
+        assert!(rail_of(&again).owned_by_station());
+        assert_eq!(rail_current_configuration(&again), rail_current_configuration(&owned));
+        // net image
+        let nd = r.creation_net_data_for_client(&r, None).unwrap();
+        assert_eq!(nd, r.update_net_data_for_client(&r, None).unwrap());
+        let rep = Rail::from_net_data(&world, &dw, None, &nd).unwrap();
+        assert!(rep.is_net());
+        assert_eq!(rail_of(&rep).item_type(), ITEM_RAIL);
+        // an image at an unloaded tile is refused
+        let (w2, d2) = setup_wide("rail_far", 4);
+        lay_rails(&w2, &d2, 5, 14);
+        let src = d2.get_rail_at_pos(IntPair { x: 8, y: 10 }).unwrap();
+        src.base().borrow_mut().pos = IntPair { x: 70, y: 10 };
+        let nd = src.creation_net_data_for_client(&src, None).unwrap();
+        assert!(Rail::from_net_data(&w2, &d2, None, &nd).is_none());
+    }
+
+    /// `remoteUpdate:` adopts a changed configuration (and marks an authoritative rail for sending).
+    #[test]
+    fn remote_update_changes_configuration() {
+        let (world, dw) = setup("rail_remote");
+        lay_rails(&world, &dw, 5, 14);
+        let r = dw.get_rail_at_pos(IntPair { x: 8, y: 10 }).unwrap();
+        let mut img =
+            RailCreationNetData { configuration: RAIL_DIAGONAL_UP_RIGHT as u8, ..RailCreationNetData::default() };
+        r.set_update_needs_to_be_sent(false);
+        r.remote_update(&r, &img.to_vec());
+        assert_eq!(rail_current_configuration(&r), RAIL_DIAGONAL_UP_RIGHT);
+        assert!(r.update_needs_to_be_sent());
+        assert!(rail_of(&r).st.borrow().draw_poles);
+        // the same configuration again changes nothing
+        r.set_update_needs_to_be_sent(false);
+        r.remote_update(&r, &img.to_vec());
+        assert!(!r.update_needs_to_be_sent());
+        // a replica takes the value without announcing it
+        let nd = r.creation_net_data_for_client(&r, None).unwrap();
+        let rep = Rail::from_net_data(&world, &dw, None, &nd).unwrap();
+        img.configuration = RAIL_FLAT as u8;
+        rep.remote_update(&rep, &img.to_vec());
+        assert_eq!(rail_current_configuration(&rep), RAIL_FLAT);
+        assert!(!rep.update_needs_to_be_sent());
+    }
+
+    /// A rail that lost its support (nothing solid below or beside it) drops as an item; one with a neighbour or
+    /// ground stays; a rail owned by a station never drops.
+    #[test]
+    fn unsupported_rail_drops() {
+        let (world, dw) = setup("rail_drop");
+        lay_rails(&world, &dw, 5, 14);
+        let rail_at = |x: i32| dw.get_rail_at_pos(IntPair { x, y: 10 }).unwrap();
+        let tile = |x: i32, y: i32| crate::world::tiles::tile_at_world_position_loaded(x, y, &world).unwrap();
+        // ground below: stays and recomputes its shape
+        let r = rail_at(8);
+        r.world_changed(&r, &mut vec![IntPair { x: 8, y: 9 }]);
+        assert!(!r.needs_removed());
+        // a position far away is ignored
+        r.world_changed(&r, &mut vec![IntPair { x: 30, y: 9 }, IntPair { x: 8, y: 20 }]);
+        // support below gone, but solid to the right: stays
+        tile(8, 9).set_type_index(2);
+        tile(9, 10).set_type_index(1);
+        r.world_changed(&r, &mut vec![IntPair { x: 8, y: 9 }]);
+        assert!(!r.needs_removed());
+        // solid to the left instead
+        tile(9, 10).set_type_index(2);
+        tile(7, 10).set_type_index(1);
+        r.world_changed(&r, &mut vec![IntPair { x: 8, y: 9 }]);
+        assert!(!r.needs_removed());
+        // a column below counts as support
+        tile(7, 10).set_type_index(2);
+        tile(8, 9).set_foreground_contents(CONTENTS_COLUMN);
+        r.world_changed(&r, &mut vec![IntPair { x: 8, y: 9 }]);
+        assert!(!r.needs_removed());
+        // nothing around: the rail drops and is removed
+        tile(8, 9).set_foreground_contents(0);
+        r.world_changed(&r, &mut vec![IntPair { x: 8, y: 9 }]);
+        assert!(r.needs_removed());
+        // a rail owned by a station and an already removed rail never drop
+        let owned = Rail::new(&world, &dw, IntPair { x: 12, y: 10 }, None, ITEM_RAIL, true).unwrap();
+        tile(12, 9).set_type_index(2);
+        owned.world_changed(&owned, &mut vec![IntPair { x: 12, y: 9 }]);
+        assert!(!owned.needs_removed());
     }
 }

@@ -73,6 +73,11 @@ pub fn run_pnginfo_check(command_line: &str) -> bool {
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .output();
+    pnginfo_verdict(out)
+}
+
+/// The verdict on the result of running the checker (see [`run_pnginfo_check`]).
+fn pnginfo_verdict(out: std::io::Result<std::process::Output>) -> bool {
     match out {
         Err(_) => {
             let mut so = std::io::stdout();
@@ -134,9 +139,8 @@ impl Painting {
         let me = Self::alloc(world, dw);
         let me_obj: ObjRef = me.clone();
         let (w, d) = me.links.refs();
-        if !base_init_with_world_dynamic_world_at_position_cache(&me_obj, &w, &d, pos, cache) {
-            return None;
-        }
+        // the base initialiser always succeeds here, `None` is only the ObjC `self = nil` shape
+        base_init_with_world_dynamic_world_at_position_cache(&me_obj, &w, &d, pos, cache).then_some(())?;
         let image = save_dict.and_then(|d| data_value(d, "outputImageData"));
         {
             let mut st = me.st.borrow_mut();
@@ -177,9 +181,8 @@ impl Painting {
         let me = Self::alloc(world, dw);
         let me_obj: ObjRef = me.clone();
         let (w, d) = me.links.refs();
-        if !base_init_with_world_dynamic_world_save_dict_cache(&me_obj, &w, &d, save_dict, cache) {
-            return None;
-        }
+        // the base initialiser always succeeds here, `None` is only the ObjC `self = nil` shape
+        base_init_with_world_dynamic_world_save_dict_cache(&me_obj, &w, &d, save_dict, cache).then_some(())?;
         let image = data_value(save_dict, "outputImageData");
         {
             let mut st = me.st.borrow_mut();
@@ -364,20 +367,18 @@ impl DynamicObject for Painting {
         let st = self.st.borrow();
         hdr.item_type = st.item_type as u16;
         let mut out = hdr.to_vec();
-        let mut dict = PlistValue::mutable_dict();
-        if let PlistValue::Dict(dd) = &mut dict {
-            if let Some(o) = me.owner_id() {
-                dd.map.insert("ownerID".to_string(), PlistValue::string(o));
-            }
-            if let Some(n) = &st.owner_name {
-                dd.map.insert("ownerName".to_string(), PlistValue::string(n.clone()));
-            }
-            let visible = !st.hidden_due_to_server_ban && st.image_data.as_ref().map_or(false, |i| !i.is_empty());
-            if !visible {
-                dd.map.insert("hiddenDueToServerBan".to_string(), PlistValue::boolean(true));
-            }
+        let mut dd = new_mutable_dict();
+        if let Some(o) = me.owner_id() {
+            dd.map.insert("ownerID".to_string(), PlistValue::string(o));
         }
-        out.extend_from_slice(&gz_plist_bytes(&dict));
+        if let Some(n) = &st.owner_name {
+            dd.map.insert("ownerName".to_string(), PlistValue::string(n.clone()));
+        }
+        let visible = !st.hidden_due_to_server_ban && st.image_data.as_ref().is_some_and(|i| !i.is_empty());
+        if !visible {
+            dd.map.insert("hiddenDueToServerBan".to_string(), PlistValue::boolean(true));
+        }
+        out.extend_from_slice(&gz_plist_bytes(&PlistValue::Dict(dd)));
         Some(out)
     }
     /// `-remoteUpdate:`.
@@ -400,10 +401,8 @@ impl DynamicObject for Painting {
                 if t.back_wall_type_index() != 2 {
                     return;
                 }
-                // `[dynamicWorld isClient]` is NO on the server
-                if self.base.borrow().needs_removed {
-                    return;
-                }
+                // (`[dynamicWorld isClient]` is NO on the server; `needsRemoved` was tested by the loop condition
+                // and nothing since could change it)
                 let dw = self.links.dw();
                 let dict = self.get_save_dict(me);
                 dw.create_free_block_at_position_of_type_data_a_data_b_sub_items_dynamic_object_save_dict_hovers_play_sound_priority_blockhead(
@@ -661,10 +660,8 @@ mod tests {
         );
         let d = o.get_save_dict();
         assert_eq!(d.map.get(&"craftableObjectType".to_string()).unwrap().int_value(), 2);
-        match d.map.get(&"craftableItem".to_string()).unwrap() {
-            PlistValue::Data(b) => assert_eq!(b.bytes.len(), 124),
-            _ => panic!(),
-        }
+        let Some(PlistValue::Data(b)) = d.map.get(&"craftableItem".to_string()) else { unreachable!("craftableItem") };
+        assert_eq!(b.bytes.len(), 124);
         let back = PaintingCraftableItemObject::from_save_dict(&d);
         assert_eq!(back.item.borrow().crafted_item_type, 5);
         assert_eq!(back.image_data(), Some(vec![9]));
@@ -676,5 +673,152 @@ mod tests {
         o.set_image_data(None);
         let r = crate::foundation::exception::catch_ns(|| o.get_save_dict());
         assert_eq!(r.err().unwrap().name, "NSInvalidArgumentException");
+    }
+
+    /// A save id that makes the checker command print the failure text, whatever `pnginfo` is installed.
+    const FAILING_SAVE_ID: &str = "x; echo not a valid PNG file; echo y";
+
+    fn with_image(extra: &[(&str, PlistValue)]) -> PlistDict {
+        let mut sd = new_mutable_dict();
+        sd.map.insert("outputImageData".to_string(), PlistValue::data(vec![1u8, 2, 3]));
+        for (k, v) in extra {
+            sd.map.insert(k.to_string(), v.clone());
+        }
+        sd
+    }
+
+    #[test]
+    fn helpers_and_verdicts() {
+        assert_eq!(data_value(&with_image(&[]), "outputImageData"), Some(vec![1, 2, 3]));
+        assert_eq!(data_value(&with_image(&[("x", PlistValue::int(1))]), "x"), None);
+        assert!(pnginfo_verdict(Err(std::io::Error::other("no shell"))));
+        // an existing directory cannot be replaced by the atomic write: the temp file is cleaned up
+        let dir = std::env::temp_dir().join(format!("bh_paint_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("target")).unwrap();
+        std::fs::write(dir.join("target/keep"), b"k").unwrap();
+        write_atomically(dir.join("target").to_str().unwrap(), b"data");
+        let left: Vec<_> = std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()).collect();
+        assert_eq!(left.len(), 1, "only the directory is left");
+        write_atomically(dir.join("fresh.png").to_str().unwrap(), b"data");
+        assert_eq!(std::fs::read(dir.join("fresh.png")).unwrap(), b"data");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn placement_owner_rules_and_failed_verification() {
+        let (w, d, _pb) = world_with_block("paint_e");
+        // owner and name come from the save dict when nobody places it
+        let sd = with_image(&[("ownerID", PlistValue::string("sid")), ("ownerName", PlistValue::string("Sam"))]);
+        let p = Painting::new(&w, &d, IntPair { x: 10, y: 10 }, None, 5, Some(&sd), None, None).unwrap();
+        assert_eq!((p.clone() as ObjRef).owner_id().as_deref(), Some("sid"));
+        assert_eq!(p.owner_name().as_deref(), Some("Sam"));
+        // no save dict at all
+        let bare = Painting::new(&w, &d, IntPair { x: 12, y: 10 }, None, 5, None, None, None).unwrap();
+        assert_eq!((bare.clone() as ObjRef).owner_id(), None);
+        assert_eq!(bare.owner_name(), None);
+        // an image the checker rejects is dropped and the painting is hidden
+        *w.save_id.borrow_mut() = Some(FAILING_SAVE_ID.to_string());
+        let bad = Painting::new(&w, &d, IntPair { x: 14, y: 10 }, None, 5, Some(&sd), Some("c"), Some("C")).unwrap();
+        assert!(bad.hidden_due_to_server_ban());
+        assert_eq!(bad.image_data(), None);
+        // loading one hides it too and asks for a save; a verified one is not checked again
+        let me: ObjRef = bad.clone();
+        bad.set_item_type(9);
+        assert_eq!(bad.item_type(), 9);
+        let sdict = me.get_save_dict(&me);
+        let loaded = Painting::from_save_dict(&w, &d, &sdict, None).unwrap();
+        assert_eq!(loaded.image_data(), None);
+        let mut verified = with_image(&[("hasVerifiedImageData", PlistValue::boolean(true))]);
+        verified.map.insert("ownerID".to_string(), PlistValue::string("sid"));
+        let ok = Painting::from_save_dict(&w, &d, &verified, None).unwrap();
+        assert_eq!(ok.image_data(), Some(vec![1, 2, 3]));
+        assert!(ok.verify_image_server_side(None));
+        // without a save id the path has "(null)" in it
+        *w.save_id.borrow_mut() = None;
+        assert!(Painting::new(&w, &d, IntPair { x: 16, y: 10 }, None, 5, None, None, None).is_some());
+    }
+
+    #[test]
+    fn loading_on_a_server_resolves_owners_and_bans() {
+        let (w, d, _pb) = world_with_block("paint_f");
+        install_server(&d);
+        let mut sd = with_image(&[("hasVerifiedImageData", PlistValue::boolean(true))]);
+        sd.map.insert("ownerID".to_string(), PlistValue::string("owner1"));
+        let p = Painting::from_save_dict(&w, &d, &sd, None).unwrap();
+        // (the unit-test server hooks know no player names, so the lookup finds none)
+        assert_eq!(p.owner_name(), None);
+        assert!(!p.hidden_due_to_server_ban());
+        // an unverified one is verified now (the checker accepts) and marked for saving
+        let mut fresh = with_image(&[]);
+        fresh.map.insert("ownerName".to_string(), PlistValue::string("Named"));
+        let q = Painting::from_save_dict(&w, &d, &fresh, None).unwrap();
+        assert!(q.st.borrow().has_verified_image_data);
+        assert_eq!(q.owner_name().as_deref(), Some("Named"));
+        // ownerless paintings are never banned
+        assert!(!q.hidden_due_to_server_ban());
+    }
+
+    #[test]
+    fn replicas_and_object_hooks() {
+        let (w, d, _pb) = world_with_block("paint_g");
+        let p = painting(&w, &d, Some("cid"));
+        let me: ObjRef = p.clone();
+        let bytes = me.creation_net_data_for_client(&me, None).unwrap();
+        // a replica asks the server for the picture it does not have
+        let rep = Painting::from_net_data(&w, &d, None, &bytes).unwrap();
+        assert_eq!(rep.item_type(), 77);
+        assert_eq!(rep.owner_name().as_deref(), Some("Bob"));
+        assert!(!rep.hidden_due_to_server_ban());
+        let mut hidden = bytes.clone();
+        hidden.truncate(0x20);
+        let mut dict = PlistValue::mutable_dict();
+        if let PlistValue::Dict(dd) = &mut dict {
+            dd.map.insert("hiddenDueToServerBan".to_string(), PlistValue::boolean(true));
+        }
+        hidden.extend_from_slice(&gz_plist_bytes(&dict));
+        assert!(Painting::from_net_data(&w, &d, None, &hidden).unwrap().hidden_due_to_server_ban());
+        let mut far = bytes.clone();
+        far[8..12].copy_from_slice(&900u32.to_le_bytes());
+        far[12..16].copy_from_slice(&900u32.to_le_bytes());
+        assert!(Painting::from_net_data(&w, &d, None, &far).is_none());
+        // remote updates can hide it
+        me.remote_update(&me, &hidden);
+        assert!(p.hidden_due_to_server_ban());
+        // views
+        assert_eq!(me.class_info().name, "Painting");
+        assert!(me.as_any().downcast_ref::<Painting>().is_some());
+        let tap = me.as_tap_choice().unwrap();
+        assert_eq!(tap.action_title(), "");
+        assert!(!tap.is_double_height());
+        assert!(me.occupies_foreground_contents());
+        assert!(me.free_block_creation_save_dict(&me).is_some());
+        me.dealloc(&me);
+        assert_eq!(p.image_data(), None);
+    }
+
+    #[test]
+    fn world_changes_drop_paintings_without_a_back_wall() {
+        let (w, d, pb) = world_with_block("paint_h");
+        let p = painting(&w, &d, Some("cid"));
+        let me: ObjRef = p.clone();
+        tile(pb, 10, 10).set_back_wall_type_index(2);
+        me.world_changed(&me, &mut vec![IntPair { x: 10, y: 11 }]);
+        assert!(me.needs_removed());
+        // a painting whose own tile is gone does nothing
+        let q = painting(&w, &d, Some("cid"));
+        let qm: ObjRef = q.clone();
+        *w.macro_tiles().get(0).unwrap().physical_block.borrow_mut() = None;
+        qm.world_changed(&qm, &mut vec![IntPair { x: 10, y: 11 }]);
+        assert!(!qm.needs_removed());
+    }
+
+    #[test]
+    fn craftable_painting_edge_cases() {
+        let d = new_mutable_dict();
+        let o = PaintingCraftableItemObject::init_with_save_dict(&d);
+        assert_eq!(o.item.borrow().crafted_item_type, 0);
+        assert_eq!(o.image_data(), None);
+        assert_eq!(o.cio_item().borrow().crafted_item_count, 0);
     }
 }

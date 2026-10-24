@@ -394,10 +394,10 @@ mod tests {
                                     pca,
                                     expert,
                                 );
+                                let len = slice.len();
                                 assert!(
-                                    n as usize <= slice.len(),
-                                    "t={t} level={level} cur={cur} cloud={cloud} expert={expert} n={n} len={}",
-                                    slice.len()
+                                    n as usize <= len,
+                                    "t={t} level={level} cur={cur} cloud={cloud} expert={expert} n={n} len={len}"
                                 );
                                 for r in slice.iter().take(n as usize) {
                                     if r.crafted_item_type == 132 {
@@ -512,5 +512,189 @@ mod tests {
             format!("0 {}", plural_ns_string_from_item_type(ItemType(4)))
         );
         assert_eq!(title_for_item_type_and_count(ItemType(4), 3).starts_with("3 "), true);
+    }
+
+    #[test]
+    fn level_counts_by_mode() {
+        let l = number_of_levels_for_workbench_type;
+        for (t, plain, expert) in [
+            (1, 6, 6),
+            (13, 6, 6),
+            (2, 4, 29),
+            (3, 1, 2),
+            (4, 2, 2),
+            (5, 1, 1),
+            (6, 7, 7),
+            (7, 3, 7),
+            (8, 1, 2),
+            (9, 3, 3),
+            (10, 4, 7),
+            (11, 3, 3),
+            (12, 3, 3),
+            (14, 2, 6),
+            (22, 3, 3),
+            (23, 1, 1),
+            (24, 3, 3),
+            (25, 2, 2),
+            (26, 1, 1),
+        ] {
+            assert_eq!(l(w(t), false), plain, "t={t}");
+            assert_eq!(l(w(t), true), expert, "t={t}");
+        }
+    }
+
+    /// Every recipe-count branch: per type, level and mode, summed over the upgrade and flag combinations.
+    #[test]
+    fn craftable_counts_sweep() {
+        let c = number_of_craftable_items_for_workbench_type_and_level;
+        // (type, level, current level, expert) -> count, picking the interesting rows of each jump table
+        for (t, level, cur, expert, n) in [
+            (1, 1, 0, false, 2),
+            (1, 1, 5, false, 1),
+            (1, 6, 0, false, 0),
+            (2, 3, 0, false, 11),
+            (2, 1, 0, false, 9),
+            (2, 2, 0, false, 8),
+            (2, 5, 0, true, 2),
+            (3, 0, 0, true, 3),
+            (3, 1, 0, true, 4),
+            (3, 0, 0, false, 6),
+            (4, 0, 0, false, 7),
+            (4, 1, 0, false, 6),
+            (5, 0, 0, false, 12),
+            (6, 0, 0, false, 6),
+            (6, 1, 0, false, 5),
+            (6, 1, 0, true, 4),
+            (6, 2, 0, false, 5),
+            (6, 2, 0, true, 6),
+            (6, 3, 0, false, 5),
+            (6, 4, 0, false, 4),
+            (6, 5, 0, false, 4),
+            (6, 6, 0, false, 2),
+            (6, 7, 0, false, 0),
+            (7, 0, 0, true, 8),
+            (7, 1, 0, true, 11),
+            (7, 3, 0, true, 3),
+            (7, 6, 0, true, 4),
+            (7, 7, 0, true, 0),
+            (7, 0, 0, false, 8),
+            (7, 2, 0, false, 12),
+            (8, 0, 0, true, 3),
+            (8, 1, 0, true, 6),
+            (8, 0, 0, false, 8),
+            (9, 0, 0, false, 4),
+            (9, 2, 0, false, 5),
+            (9, 3, 0, false, 0),
+            (10, 0, 0, true, 2),
+            (10, 1, 0, true, 10),
+            (10, 3, 0, true, 2),
+            (10, 6, 0, true, 4),
+            (10, 7, 0, true, 0),
+            (10, 0, 0, false, 2),
+            (10, 1, 0, false, 9),
+            (10, 2, 0, false, 6),
+            (10, 3, 0, false, 4),
+            (10, 4, 0, false, 0),
+            (11, 0, 0, false, 3),
+            (11, 1, 0, false, 1),
+            (11, 2, 0, false, 0),
+            (12, 0, 0, false, 5),
+            (12, 2, 0, false, 3),
+            (12, 3, 0, false, 0),
+            (14, 0, 0, true, 4),
+            (14, 1, 0, true, 6),
+            (14, 2, 0, true, 4),
+            (14, 3, 0, true, 9),
+            (14, 4, 0, true, 5),
+            (14, 5, 0, true, 3),
+            (14, 6, 0, true, 0),
+            (14, 0, 0, false, 12),
+            (14, 1, 0, false, 16),
+            (14, 2, 0, false, 0),
+            (22, 0, 0, false, 5),
+            (22, 2, 0, false, 8),
+            (22, 3, 0, false, 0),
+            (24, 0, 0, false, 4),
+            (24, 2, 0, false, 3),
+            (25, 0, 0, false, 28),
+            (25, 1, 0, false, 28),
+            (25, 2, 0, false, 0),
+        ] {
+            assert_eq!(c(w(t), level, cur, false, false, expert), n, "t={t} level={level} expert={expert}");
+        }
+        for (t, n) in [
+            (15, 0),
+            (20, 0),
+            (21, 0),
+            (16, 8),
+            (17, 19),
+            (18, 27),
+            (19, 8),
+            (23, 8),
+            (26, 5),
+            (27, 31),
+            (29, 1),
+            (31, 2),
+            (32, 0),
+        ] {
+            assert_eq!(c(w(t), 0, 0, false, false, false), n, "t={t}");
+        }
+    }
+
+    #[test]
+    fn every_name() {
+        let n = name_for_workbench_type_and_level;
+        for (level, name) in [
+            (1, "AMETHYST PORTAL"),
+            (2, "SAPPHIRE PORTAL"),
+            (3, "EMERALD PORTAL"),
+            (4, "RUBY PORTAL"),
+            (5, "DIAMOND PORTAL"),
+        ] {
+            assert_eq!(n(w(1), level, false), name);
+        }
+        assert_eq!(n(w(4), 0, false), "TAILOR'S BENCH LEVEL 1");
+        assert_eq!(n(w(6), 1, false), "TOOL BENCH LEVEL 2");
+        assert_eq!(n(w(7), 2, false), "PRESS LEVEL 3");
+        assert_eq!(n(w(8), 1, true), "KILN LEVEL 2");
+        assert_eq!(n(w(8), 1, false), "KILN");
+        assert_eq!(n(w(9), 0, false), "FURNACE LEVEL 1");
+        assert_eq!(n(w(10), 0, false), "CRAFT BENCH LEVEL 1");
+        assert_eq!(n(w(11), 0, false), "MIXING BENCH LEVEL 1");
+        assert_eq!(n(w(12), 0, false), "DYE BENCH LEVEL 1");
+        assert_eq!(n(w(14), 0, false), "METALWORK BENCH LEVEL 1");
+        assert_eq!(n(w(22), 0, false), "ARMOR BENCH LEVEL 1");
+        for (t, name) in [
+            (15, "STEAM GENERATOR"),
+            (16, "ELECTRIC KILN"),
+            (17, "ELECTRIC FURNACE"),
+            (18, "ELECTRIC METALWORK BENCH"),
+            (19, "ELECTRIC STOVE"),
+            (20, "SOLAR PANEL"),
+            (21, "FLYWHEEL"),
+            (23, "TRAIN YARD"),
+            (24, "EASEL"),
+            (26, "REFINERY"),
+            (27, "ELECTRIC PRESS"),
+            (28, "COMPOST BIN"),
+            (29, "ELECTRIC SLUICE"),
+            (30, "EGG EXTRACTOR"),
+            (31, "PIZZA OVEN"),
+        ] {
+            assert_eq!(n(w(t), 0, false), name);
+        }
+        for (level, name) in [(1, "SAPPHIRE UPGRADE"), (2, "EMERALD UPGRADE"), (3, "RUBY UPGRADE")] {
+            assert_eq!(upgrade_name_for_workbench_type_and_level(w(1), level), name);
+        }
+    }
+
+    #[test]
+    fn fuel_for_non_fuel_items() {
+        let f = fuel_to_add_for_item_and_workbench_and_level;
+        assert_eq!(f(ItemType(5), w(3), 0), 1);
+        assert_eq!(f(ItemType(27), w(8), 0), 1);
+        assert_eq!(f(ItemType(5), w(8), 0), 1);
+        assert_eq!(f(ItemType(1049), w(9), 0), 1);
+        assert_eq!(f(ItemType(5), w(9), 0), 1);
     }
 }

@@ -407,20 +407,7 @@ impl BlockheadAI {
                 return true;
             }
         }
-        // 11 EXPLORE_UNEXPLORED_AREAS
-        if !found(11)
-            && !ctl
-            && !lit(&t)
-            && tile_is_air_or_snow(Some(tref))
-            && t.contents == 0
-            && t.foreground_contents == 0
-            && t.background_contents == 0
-            && sun_or_art(&t, 0x40)
-            && solid_neighbour(pos)
-        {
-            set_found(11);
-            return true;
-        }
+        // 11 EXPLORE_UNEXPLORED_AREAS needs `!ctl && !lit`, which the early return on top already refused
         // 6 / 15 MINE_RESOURCE
         if !found(6) || !found(15) {
             let mut check = false;
@@ -437,8 +424,9 @@ impl BlockheadAI {
                 let mut air = tile_is_air_or_snow(a);
                 if !air {
                     air = tile_is_air_or_snow(tat(pos.x - 1, pos.y));
-                } else if let Some(a) = a {
-                    let at = a.get();
+                } else {
+                    // (`air` is only true for an existing tile)
+                    let at = a.expect("an air tile exists").get();
                     if at.contents != 0 || at.foreground_contents != 0 {
                         return false;
                     }
@@ -1059,4 +1047,411 @@ mod tests {
         ai.update_is_simulation(0.1, false);
         ai.with_state(|s| assert!(s.found_tile[9] && s.previous_action_count == 1));
     }
+
+    use crate::plants::plant::new_plant_for_type;
+
+    fn set(w: &World, x: i32, y: i32, f: impl FnOnce(&mut Tile)) {
+        tile(w, x, y).update(f);
+    }
+
+    /// A time of day in `[lo, hi)` at column `x`.
+    fn time_with_tod(w: &World, x: i32, lo: f32, hi: f32) -> f64 {
+        (0..4000)
+            .map(|i| i as f64 * 10.0)
+            .find(|t| (lo..hi).contains(&w.get_day_night_fraction_for_x_at_world_time(x as f32, *t)))
+            .expect("a time of day in range")
+    }
+
+    #[test]
+    fn construction_for_something_that_is_not_a_blockhead() {
+        let (w, _o, _h) = mk();
+        let ai = BlockheadAI::init_with_blockhead_world(&stub(1, true), &w);
+        ai.with_state(|s| assert_eq!((s.placable_item, s.sowable_item), (ItemType(0), ItemType(0))));
+        // without a blockhead there is nothing to test
+        assert!(!ai.test_tile_at_pos(IntPair { x: 8, y: 8 }));
+    }
+
+    #[test]
+    fn controlled_blockheads_need_explored_tiles() {
+        let (w, o, _h, ai) = new_ai();
+        let b = bh_of(&o);
+        let pos = IntPair { x: 8, y: 8 };
+        b.bh.borrow_mut().is_client_blockhead_being_controlled_by_server = true;
+        set(&w, 8, 8, |t| {
+            t.light = 0;
+            t.explored_fraction = 0;
+        });
+        assert!(!ai.test_tile_at_pos(pos));
+        set(&w, 8, 8, |t| t.explored_fraction = 1);
+        ai.with_state(|s| s.goal_dig_tile = pos);
+        assert!(ai.test_tile_at_pos(pos), "an explored tile is as good as a lit one");
+    }
+
+    #[test]
+    fn sleeping_rules_follow_energy_and_daylight() {
+        let (w, o, h, ai) = new_ai();
+        let b = bh_of(&o);
+        let pos = IntPair { x: 8, y: 8 };
+        let raw = |energy: f32| energy * 0.75 + 0.25;
+        let reset = |ai: &BlockheadAI| ai.with_state(|s| s.found_tile = [false; 16]);
+        // tired, in the dark of night: sleeping on the spot needs air with ground below
+        w.set_world_time(time_with_tod(&w, 8, 0.0, 0.2));
+        b.bh.borrow_mut().state.energy = raw(0.45);
+        assert!(ai.test_tile_at_pos(pos));
+        ai.with_state(|s| assert!(s.found_tile[1]));
+        // early morning: only the very tired sleep
+        reset(&ai);
+        w.set_world_time(time_with_tod(&w, 8, 0.2, 0.25));
+        b.bh.borrow_mut().state.energy = raw(0.45);
+        assert!(!ai.test_tile_at_pos(pos));
+        b.bh.borrow_mut().state.energy = raw(0.3);
+        assert!(ai.test_tile_at_pos(pos));
+        // daylight: only exhaustion sends one to sleep
+        reset(&ai);
+        w.set_world_time(time_with_tod(&w, 8, 0.25, 1.0));
+        b.bh.borrow_mut().state.energy = raw(0.2);
+        assert!(ai.test_tile_at_pos(pos), "energy below a quarter");
+        reset(&ai);
+        b.bh.borrow_mut().state.energy = raw(0.45);
+        assert!(!ai.test_tile_at_pos(pos));
+        // exhausted with the sleep timer run down: it lies down right away
+        reset(&ai);
+        b.bh.borrow_mut().state.energy = raw(0.1);
+        ai.with_state(|s| s.must_sleep_timer = -1.0);
+        let before = h.take();
+        let _ = before;
+        let found = ai.test_tile_at_pos(pos);
+        ai.with_state(|s| {
+            assert!(found && s.found_tile[1]);
+            assert_eq!(s.must_sleep_timer, 10.0);
+        });
+        // a sleeper does not look for a place to sleep
+        reset(&ai);
+        b.bh.borrow_mut().state.sub_animation_type = 5;
+        b.bh.borrow_mut().state.energy = raw(0.3);
+        assert!(!ai.test_tile_at_pos(pos));
+    }
+
+    #[test]
+    fn torch_placement_by_item_and_surroundings() {
+        let (w, o, _h, ai) = new_ai();
+        let _ = &o;
+        let pos = IntPair { x: 12, y: 12 };
+        let accepted = |ai: &BlockheadAI| -> Vec<u32> {
+            let mut v = vec![];
+            for item in 1..1110u32 {
+                ai.with_state(|s| {
+                    s.placable_item = ItemType(item);
+                    s.found_tile = [false; 16];
+                });
+                if ai.test_tile_at_pos(pos) && ai.with_state(|s| s.found_tile[5]) {
+                    v.push(item);
+                }
+            }
+            v
+        };
+        let base = |t: &mut Tile| {
+            t.type_index = 2;
+            t.back_wall_type_index = 2;
+            t.contents = 0;
+            t.foreground_contents = 0;
+            t.background_contents = 0;
+            t.sun_light = 0x10;
+            t.artificial_light_r = 0;
+            t.artificial_light_g = 0;
+            t.artificial_light_b = 0;
+        };
+        for (x, y) in [(11, 12), (13, 12), (12, 11), (12, 13)] {
+            set(&w, x, y, |t| t.type_index = 2);
+        }
+        // nothing around: only items that need no support
+        set(&w, 12, 12, base);
+        let open_air = accepted(&ai);
+        // a back wall behind it (also over rock, with and without items that may sit on rock)
+        set(&w, 12, 12, |t| {
+            base(t);
+            t.back_wall_type_index = 7;
+        });
+        let on_wall = accepted(&ai);
+        assert!(on_wall.len() > open_air.len());
+        set(&w, 12, 12, |t| {
+            base(t);
+            t.back_wall_type_index = 1;
+        });
+        let on_rock_wall = accepted(&ai);
+        assert!(!on_rock_wall.is_empty() && on_rock_wall.len() <= on_wall.len());
+        // water with a full tile of content is not a place
+        set(&w, 12, 12, |t| {
+            base(t);
+            t.back_wall_type_index = 7;
+            t.type_index = 3;
+            t.partial_content_left = 0xff;
+        });
+        let in_water = accepted(&ai);
+        assert!(in_water.len() <= on_wall.len());
+        // a tree
+        set(&w, 12, 12, |t| {
+            base(t);
+            t.contents = 0x03;
+        });
+        assert!(!accepted(&ai).is_empty());
+        // a wall to one side, a door to the other, ground below
+        set(&w, 12, 12, base);
+        set(&w, 13, 12, |t| t.type_index = 6);
+        let beside_right = accepted(&ai);
+        set(&w, 13, 12, |t| t.background_contents = 70);
+        let beside_door = accepted(&ai);
+        assert!(beside_door.len() <= beside_right.len());
+        assert!(!beside_right.is_empty());
+        set(&w, 13, 12, |t| {
+            t.type_index = 2;
+            t.background_contents = 0;
+        });
+        set(&w, 11, 12, |t| t.type_index = 6);
+        assert!(!accepted(&ai).is_empty());
+        set(&w, 11, 12, |t| t.type_index = 2);
+        set(&w, 12, 11, |t| t.type_index = 6);
+        assert!(!accepted(&ai).is_empty());
+        set(&w, 12, 11, |t| t.type_index = 2);
+        // too bright for a torch
+        set(&w, 12, 12, |t| {
+            base(t);
+            t.artificial_light_r = 0x80;
+        });
+        assert!(accepted(&ai).is_empty());
+    }
+
+    #[test]
+    fn gathering_planting_and_mining_rules() {
+        let (w, o, h, ai) = new_ai();
+        let b = bh_of(&o);
+        let rdw = real_dw(&w, "ai_rules");
+        let pos = IntPair { x: 14, y: 12 };
+        let reset = |ai: &BlockheadAI| ai.with_state(|s| s.found_tile = [false; 16]);
+        set(&w, 14, 12, |t| {
+            t.type_index = 2;
+            t.contents = 0;
+            t.foreground_contents = 0;
+            t.sun_light = 200;
+        });
+        // food lying under a bush
+        set(&w, 14, 12, |t| t.contents = 0x03);
+        *h.fbs.borrow_mut() = vec![stub(1, true), mk_fb(&w, &rdw, pos, 21, 5)];
+        assert!(ai.test_tile_at_pos(pos));
+        ai.with_state(|s| assert!(s.found_tile[7]));
+        // ... that is not food does not count; a full stack of it neither
+        reset(&ai);
+        *h.fbs.borrow_mut() = vec![mk_fb(&w, &rdw, pos, 4, 6)];
+        assert!(!ai.test_tile_at_pos(pos));
+        // a harvestable bush (logs): without a tool the plain rule, with a machete the tool rule
+        set(&w, 14, 12, |t| t.contents = 6);
+        assert!(ai.test_tile_at_pos(pos));
+        ai.with_state(|s| assert!(s.found_tile[14]));
+        reset(&ai);
+        give(b, 25, 0);
+        assert!(ai.test_tile_at_pos(pos));
+        ai.with_state(|s| assert!(s.found_tile[13]));
+        assert!(ai.test_tile_at_pos(pos), "slot 13 is taken: slot 14 follows");
+        ai.with_state(|s| assert!(s.found_tile[14]));
+        assert!(!ai.test_tile_at_pos(pos));
+        // a flowering plant
+        reset(&ai);
+        set(&w, 14, 12, |t| {
+            t.contents = 0;
+            t.foreground_contents = 0x43;
+        });
+        let plant = new_plant_for_type(1, &w, &rdw, pos, None, 5, 5, None, None, true).unwrap();
+        crate::plants::plant::as_plant(&plant).unwrap().set_flowering(&plant, true);
+        *h.plant.borrow_mut() = Some(plant.clone());
+        give(b, 25, 0);
+        let drop_type = crate::plants::plant::as_plant(&plant).unwrap().dropped_item_type();
+        let _ = drop_type;
+        assert!(ai.test_tile_at_pos(pos));
+        ai.with_state(|s| assert!(s.found_tile[8]));
+        // gems behind the back wall
+        reset(&ai);
+        set(&w, 15, 12, |t| {
+            t.type_index = 2;
+            t.back_wall_type_index = 1;
+            t.foreground_contents = 0x39;
+            t.sun_light = 200;
+        });
+        let _ = ai.test_tile_at_pos(IntPair { x: 15, y: 12 });
+        // planting
+        reset(&ai);
+        set(&w, 16, 12, |t| {
+            t.type_index = 6;
+            t.sun_light = 200;
+        });
+        set(&w, 16, 13, |t| {
+            t.type_index = 2;
+            t.back_wall_type_index = 2;
+            t.contents = 0;
+            t.foreground_contents = 0;
+        });
+        ai.with_state(|s| s.sowable_item = ItemType(21));
+        assert!(ai.test_tile_at_pos(IntPair { x: 16, y: 12 }));
+        ai.with_state(|s| assert!(s.found_tile[10]));
+        reset(&ai);
+        ai.with_state(|s| s.sowable_item = ItemType(144));
+        assert!(!ai.test_tile_at_pos(IntPair { x: 16, y: 12 }));
+        ai.with_state(|s| s.sowable_item = ItemType(0));
+        // mining: an ore tile with air above, with and without the right tool; air beside; blocked by contents above
+        reset(&ai);
+        give(b, 8, 0);
+        set(&w, 20, 7, |t| {
+            t.type_index = 1;
+            t.contents = 0x05;
+            t.sun_light = 200;
+        });
+        let ore = IntPair { x: 20, y: 7 };
+        assert!(ai.test_tile_at_pos(ore));
+        ai.with_state(|s| assert!(s.found_tile[6]));
+        assert!(ai.test_tile_at_pos(ore));
+        ai.with_state(|s| assert!(s.found_tile[15]));
+        assert!(!ai.test_tile_at_pos(ore));
+        reset(&ai);
+        give(b, 20, 0);
+        assert!(ai.test_tile_at_pos(ore));
+        ai.with_state(|s| assert!(s.found_tile[15] && !s.found_tile[6]));
+        reset(&ai);
+        set(&w, 20, 8, |t| t.contents = 0x04);
+        assert!(!ai.test_tile_at_pos(ore));
+        set(&w, 20, 8, |t| t.contents = 0);
+        // ore enclosed in rock reaches air from the side, from the other side, or from below
+        for (ox, oy) in [(21, 6), (23, 6), (25, 6), (27, 6)] {
+            reset(&ai);
+            let _ = (ox, oy);
+        }
+        set(&w, 22, 5, |t| {
+            t.type_index = 1;
+            t.contents = 0x05;
+            t.sun_light = 200;
+        });
+        set(&w, 22, 6, |t| t.type_index = 1);
+        set(&w, 21, 5, |t| t.type_index = 2);
+        assert!(ai.test_tile_at_pos(IntPair { x: 22, y: 5 }));
+        reset(&ai);
+        set(&w, 21, 5, |t| t.type_index = 1);
+        set(&w, 23, 5, |t| t.type_index = 2);
+        assert!(ai.test_tile_at_pos(IntPair { x: 22, y: 5 }));
+        reset(&ai);
+        set(&w, 23, 5, |t| t.type_index = 1);
+        set(&w, 22, 4, |t| t.type_index = 2);
+        assert!(ai.test_tile_at_pos(IntPair { x: 22, y: 5 }));
+        reset(&ai);
+        set(&w, 22, 4, |t| t.type_index = 1);
+        assert!(!ai.test_tile_at_pos(IntPair { x: 22, y: 5 }));
+    }
+
+    #[test]
+    fn idle_updates_with_other_players_and_food() {
+        let (w, o, h, ai) = new_ai();
+        let b = bh_of(&o);
+        // simulating: another blockhead that sleeps keeps the world alive for the AI
+        let rdw = real_dw(&w, "ai_upd");
+        let _ = rdw;
+        let (w2, dw2, dwref2) = setup();
+        let other = new_bh(&w2, &dwref2, 1);
+        std::mem::forget((dw2, dwref2));
+        *h.others.borrow_mut() = vec![o.clone(), other.clone()];
+        ai.update_is_simulation(0.5, true);
+        ai.with_state(|s| assert_eq!(s.time_elapsed, 0.0));
+        bh_of(&other).bh.borrow_mut().state.sub_animation_type = 5;
+        ai.update_is_simulation(0.5, true);
+        ai.with_state(|s| assert_eq!(s.time_elapsed, 0.5));
+        // or one that has something to do
+        bh_of(&other).bh.borrow_mut().state.sub_animation_type = 0;
+        bh_of(&other).bh.borrow_mut().action_queue.push(Rc::new(()));
+        ai.update_is_simulation(0.5, true);
+        ai.with_state(|s| assert_eq!(s.time_elapsed, 1.0));
+        // blockheads that are run by an AI themselves do not count
+        // (none exists here); on a server the other player's controlled blockheads are ignored
+        b.bh.borrow_mut().is_client_blockhead_being_controlled_by_server = true;
+        b.bh.borrow_mut().client_id = Some("a".into());
+        bh_of(&other).bh.borrow_mut().client_id = Some("b".into());
+        ai.update_is_simulation(0.5, true);
+        // hungry with food: eat after waiting
+        b.bh.borrow_mut().is_client_blockhead_being_controlled_by_server = false;
+        b.bh.borrow_mut().state.fullness = 0.1;
+        give(b, 21, 0);
+        ai.with_state(|s| {
+            s.inactivity_timer = 100.0;
+            s.random_inactivity_timer = 1.0;
+            s.last_frame_had_actions = false;
+        });
+        ai.update_is_simulation(0.1, false);
+        ai.with_state(|s| assert_eq!(s.inactivity_timer, 0.0));
+    }
+
+    #[test]
+    fn act_phase_for_every_kind_of_goal() {
+        let (w, o, h, ai) = new_ai();
+        let b = bh_of(&o);
+        let _ = h;
+        let go = |ai: &BlockheadAI, idx: usize, pos: IntPair| {
+            ai.with_state(|s| {
+                s.found_tile = [false; 16];
+                s.found_tile[idx] = true;
+                s.found_tile_pos[idx] = pos;
+                s.current_search_level = 17;
+                s.inactivity_timer = 100.0;
+                s.random_inactivity_timer = 1.0;
+            });
+            ai.update_is_simulation(0.1, false);
+        };
+        let rock = IntPair { x: 20, y: 7 };
+        // tool goals without a tool bail out, with one they select it
+        give(b, 20, 0);
+        go(&ai, 6, rock);
+        ai.with_state(|s| assert!(s.found_tile[6]));
+        go(&ai, 8, rock);
+        go(&ai, 13, rock);
+        give(b, 8, 0);
+        go(&ai, 6, rock);
+        ai.with_state(|s| assert!(!s.found_tile[6]));
+        // dig goals walk down the column
+        ai.with_state(|s| s.goal_dig_tile = IntPair { x: 20, y: 7 });
+        go(&ai, 3, IntPair { x: 20, y: 7 });
+        ai.with_state(|s| assert_eq!(s.goal_dig_tile, IntPair { x: 20, y: 6 }));
+        give(b, 20, 0);
+        set(&w, 20, 5, |t| t.type_index = 0x10);
+        go(&ai, 3, IntPair { x: 20, y: 7 });
+        ai.with_state(|s| assert_eq!(s.goal_dig_tile, IntPair { x: -1, y: -1 }));
+        // torches and seeds need the right item
+        ai.with_state(|s| {
+            s.placable_item = ItemType(6);
+            s.sowable_item = ItemType(21);
+        });
+        give(b, 20, 0);
+        go(&ai, 5, rock);
+        go(&ai, 10, rock);
+        // other goals: sleeping on the spot lies down, the rest just selects the first item
+        b.bh.borrow_mut().state.energy = 0.3;
+        ai.with_state(|s| s.must_sleep_timer = -1.0);
+        go(&ai, 1, rock);
+        ai.with_state(|s| assert_eq!(s.must_sleep_timer, 10.0));
+        b.bh.borrow_mut().state.sub_animation_type = 0;
+        go(&ai, 9, rock);
+        // a goal tile that vanished
+        ai.with_state(|s| {
+            s.found_tile = [false; 16];
+            s.found_tile[9] = true;
+            s.found_tile_pos[9] = IntPair { x: 900, y: 900 };
+            s.current_search_level = 17;
+            s.inactivity_timer = 100.0;
+            s.random_inactivity_timer = 1.0;
+        });
+        ai.update_is_simulation(0.1, false);
+        // waiting for something to do while still drowning-safe
+        ai.with_state(|s| {
+            s.found_tile = [false; 16];
+            s.inactivity_timer = 0.0;
+            s.random_inactivity_timer = 100.0;
+        });
+        ai.update_is_simulation(0.1, false);
+    }
 }
+
+#[cfg(test)]
+mod cov_tests;

@@ -6,8 +6,9 @@
 //! ## Chest seam
 //! `Chest` belongs to the later `interaction_objects` module. The car only needs the chest as a generic
 //! `ObjRef` (every call is an `InteractionObject` / `DynamicObject` selector), so the three constructors are
-//! reached through [`FreightChestFactory`], installed once at startup with [`set_chest_factory`]. Without a
-//! factory the car simply has no chest (every chest call is a message to nil).
+//! reached through [`FreightChestFactory`]. [`ChestChildFactory`] (the real `Chest`) is used unless another factory
+//! was installed with [`set_chest_factory`]; a factory that returns nothing leaves the car without a chest (every
+//! chest call is a message to nil).
 
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
@@ -16,6 +17,7 @@ use crate::dynworld::state::DynamicWorld;
 use crate::fmath::libm::{cosf, sinf};
 use crate::foundation::exception::range_exception_beyond_size;
 use crate::foundation::gzip::{gzip_deflate, gzip_inflate};
+use crate::interaction::chest::Chest;
 use crate::items::inventory_item::{InventoryItem, ItemRef};
 use crate::objects::base::{new_mutable_dict, DynamicObject, DynamicObjectBase};
 use crate::objects::class_info::ClassInfo;
@@ -75,8 +77,49 @@ pub fn set_chest_factory(f: Rc<dyn FreightChestFactory>) {
     CHEST_FACTORY.with(|c| *c.borrow_mut() = Some(f));
 }
 
-fn chest_factory() -> Option<Rc<dyn FreightChestFactory>> {
-    CHEST_FACTORY.with(|c| c.borrow().clone())
+/// The installed factory, else the real `Chest` constructors.
+fn chest_factory() -> Rc<dyn FreightChestFactory> {
+    CHEST_FACTORY.with(|c| c.borrow().clone()).unwrap_or_else(|| Rc::new(ChestChildFactory))
+}
+
+/// The real `Chest` constructors. A nil dictionary or `NSData` reads as an empty one (every lookup in it comes back
+/// nil / zero), which is what the empty values stand for.
+pub struct ChestChildFactory;
+
+impl FreightChestFactory for ChestChildFactory {
+    fn new_chest(
+        &self,
+        world: &Rc<World>,
+        dw: &Rc<DynamicWorld>,
+        pos: IntPair,
+        cache: CacheRef,
+        item: &ItemRef,
+        save_dict: Option<&PlistDict>,
+    ) -> Option<ObjRef> {
+        let chest = Chest::new(world, dw, pos, cache, Some(&item.borrow()), false, save_dict, None, None)?;
+        Some(chest)
+    }
+    fn chest_from_save_dict(
+        &self,
+        world: &Rc<World>,
+        dw: &Rc<DynamicWorld>,
+        save_dict: Option<&PlistDict>,
+        cache: CacheRef,
+    ) -> Option<ObjRef> {
+        let empty = new_mutable_dict();
+        let chest = Chest::from_save_dict(world, dw, save_dict.unwrap_or(&empty), cache)?;
+        Some(chest)
+    }
+    fn chest_from_net_data(
+        &self,
+        world: &Rc<World>,
+        dw: &Rc<DynamicWorld>,
+        cache: CacheRef,
+        net_data: Option<&[u8]>,
+    ) -> Option<ObjRef> {
+        let chest = Chest::from_net_data(world, dw, cache, net_data.unwrap_or(&[0u8; 0x40]))?;
+        Some(chest)
+    }
 }
 
 /// `[o isKindOfClass:[FreightCar class]]` downcast for the `DynamicWorld` seams (`freight_needs_chest_save`,
@@ -133,7 +176,8 @@ impl FreightCar {
     ) -> Option<ObjRef> {
         let me = Self::alloc(world, dw);
         let o: ObjRef = me.clone();
-        if !train_car_init_with_world_dynamic_world_at_position_cache_save_dict_placed_by_client(
+        // the TrainCar initialiser cannot fail on the placement path (the base init always succeeds)
+        let inited = train_car_init_with_world_dynamic_world_at_position_cache_save_dict_placed_by_client(
             &o,
             world,
             dw,
@@ -141,9 +185,8 @@ impl FreightCar {
             cache.clone(),
             save_dict,
             client_id,
-        ) {
-            return None;
-        }
+        );
+        debug_assert!(inited);
         couple_rolling_car_at_placement(&o);
         let chest_dict: Option<PlistDict> = match save_dict.and_then(|d| d.map.get(&"chest".to_string())) {
             Some(PlistValue::Dict(d)) => Some(d.clone()),
@@ -152,7 +195,7 @@ impl FreightCar {
         let item =
             InventoryItem::new(ItemType(ITEM_CHEST as u32), 0, 0, None, chest_dict.clone().map(PlistValue::Dict));
         let cur_pos = o.pos();
-        let chest = chest_factory().and_then(|f| f.new_chest(world, dw, cur_pos, cache, &item, chest_dict.as_ref()));
+        let chest = chest_factory().new_chest(world, dw, cur_pos, cache, &item, chest_dict.as_ref());
         me.attach_chest(&o, chest);
         me.needs_chest_save.set(true);
         Some(o)
@@ -169,10 +212,9 @@ impl FreightCar {
     ) -> Option<ObjRef> {
         let me = Self::alloc(world, dw);
         let o: ObjRef = me.clone();
-        if !train_car_init_with_world_dynamic_world_save_dict_cache(&o, world, dw, save_dict, cache.clone()) {
-            return None;
-        }
-        let chest = chest_factory().and_then(|f| f.chest_from_save_dict(world, dw, chest_save_dict, cache));
+        let inited = train_car_init_with_world_dynamic_world_save_dict_cache(&o, world, dw, save_dict, cache.clone());
+        debug_assert!(inited);
+        let chest = chest_factory().chest_from_save_dict(world, dw, chest_save_dict, cache);
         me.attach_chest(&o, chest);
         Some(o)
     }
@@ -201,7 +243,7 @@ impl FreightCar {
             Some(PlistValue::Data(d)) => Some(d.bytes.clone()),
             _ => None,
         };
-        let chest = chest_factory().and_then(|f| f.chest_from_net_data(world, dw, cache, chest_data.as_deref()));
+        let chest = chest_factory().chest_from_net_data(world, dw, cache, chest_data.as_deref());
         me.attach_chest(&o, chest);
         Some(o)
     }
@@ -416,3 +458,209 @@ impl DynamicObject for FreightCar {
 }
 
 impl_train_car_protocols!(FreightCar);
+
+#[cfg(test)]
+mod world_tests {
+    use super::*;
+    use crate::trains::train_car::world_tests::{find_car, lay_rails, setup};
+
+    fn place_freight(dw: &Rc<DynamicWorld>, x: i32) -> ObjRef {
+        dw.place_train_car_at_pos_of_type_save_dict_placed_by_client(IntPair { x, y: 10 }, 206, None, None);
+        let c = find_car(dw, 43);
+        dw.do_set(43, c.unique_id(), c.clone());
+        c
+    }
+
+    fn freight_of(o: &ObjRef) -> &FreightCar {
+        freight_car_of(o).unwrap()
+    }
+
+    /// A factory that never builds a chest: the car runs without one.
+    struct NoChests;
+    impl FreightChestFactory for NoChests {
+        fn new_chest(
+            &self,
+            _: &Rc<World>,
+            _: &Rc<DynamicWorld>,
+            _: IntPair,
+            _: CacheRef,
+            _: &ItemRef,
+            _: Option<&PlistDict>,
+        ) -> Option<ObjRef> {
+            None
+        }
+        fn chest_from_save_dict(
+            &self,
+            _: &Rc<World>,
+            _: &Rc<DynamicWorld>,
+            _: Option<&PlistDict>,
+            _: CacheRef,
+        ) -> Option<ObjRef> {
+            None
+        }
+        fn chest_from_net_data(
+            &self,
+            _: &Rc<World>,
+            _: &Rc<DynamicWorld>,
+            _: CacheRef,
+            _: Option<&[u8]>,
+        ) -> Option<ObjRef> {
+            None
+        }
+    }
+
+    /// The freight car carries a real chest child: it is created, saved and sent with the car.
+    #[test]
+    fn the_car_carries_a_chest() {
+        let (world, dw) = setup("freight_chest");
+        lay_rails(&world, &dw, 3, 40);
+        let car = place_freight(&dw, 20);
+        let f = freight_of(&car);
+        let chest = f.chest().expect("a freight car has a chest");
+        assert_eq!(chest.object_type(), crate::interaction::chest::DYNAMIC_OBJECT_TYPE_CHEST);
+        assert!(f.needs_chest_save());
+        f.set_needs_chest_save(false);
+        assert!(!f.needs_chest_save());
+        // the chest rides with the car and its saves reach the car
+        assert!(f.get_chest_save_dict().map.contains_key(&"chestType".to_string()));
+        let sd = car.free_block_creation_save_dict(&car).unwrap();
+        assert!(matches!(sd.map.get(&"chest".to_string()), Some(PlistValue::Dict(_))));
+        f.child_needs_saving(&car, &chest);
+        assert!(f.needs_chest_save() && car.update_needs_to_be_sent());
+        car.child_needs_saving(&car, &chest);
+        // the virtual "needs to be sent" pair
+        f.set_update_needs_to_be_sent_virtual(true);
+        assert!(f.update_needs_to_be_sent_virtual());
+        f.set_update_needs_to_be_sent_virtual(false);
+        assert!(!f.update_needs_to_be_sent_virtual());
+        chest.set_update_needs_to_be_sent(true);
+        assert!(f.update_needs_to_be_sent_virtual());
+        f.set_update_needs_to_be_sent_virtual(false);
+        assert!(!chest.update_needs_to_be_sent());
+        // the car stands in for its chest as the interaction object
+        assert!(crate::objects::protocols::RidableDynamicObject::acts_as_interaction_object(f).is_some());
+        assert_eq!(f.action_title(), "FREIGHT CAR");
+        assert!(!TrainCarLike::blockhead_can_ride_using_item(f, &car, &car, 0));
+        assert_eq!(car.freeblock_creation_item_type(), ITEM_FREIGHT_CAR);
+        assert_eq!(car.class_info().name, "FreightCar");
+        let _ = car.render_pos();
+        assert!(f.tap_is_within_body_radius(Vector2 { x: 20.5, y: 11.0 }));
+        assert!(!f.tap_is_within_body_radius(Vector2 { x: 30.5, y: 11.0 }));
+    }
+
+    /// Save, net image and remote update round trips including the chest data.
+    #[test]
+    fn save_and_net_round_trips() {
+        let (world, dw) = setup("freight_rt");
+        lay_rails(&world, &dw, 3, 40);
+        let car = place_freight(&dw, 20);
+        car.set_owner_id(Some("owner".to_string()));
+        let f = freight_of(&car);
+        // reload from the car's save dict and the chest's separate one
+        let sd = car.get_save_dict(&car);
+        let chest_sd = f.get_chest_save_dict();
+        let again = FreightCar::from_save_dict_chest_save_dict(&world, &dw, &sd, Some(&chest_sd), None).unwrap();
+        assert!(freight_of(&again).chest().is_some());
+        assert!(!freight_of(&again).needs_chest_save());
+        let bare = FreightCar::from_save_dict_chest_save_dict(&world, &dw, &sd, None, None).unwrap();
+        assert!(freight_of(&bare).chest().is_some());
+        // creation image: head, then gzip({ownerID, chestData})
+        let nd = car.creation_net_data_for_client(&car, None).unwrap();
+        assert!(nd.len() > 0x68);
+        let rep = FreightCar::from_net_data(&world, &dw, None, &nd).unwrap();
+        assert!(rep.is_net() && freight_of(&rep).chest().is_some());
+        assert_eq!(rep.owner_id().as_deref(), Some("owner"));
+        // updates only carry the chest when it changed
+        let plain = car.update_net_data_for_client(&car, None).unwrap();
+        assert!(plain.len() <= nd.len());
+        f.chest().unwrap().set_update_needs_to_be_sent(true);
+        let with_chest = car.update_net_data_for_client(&car, None).unwrap();
+        assert_eq!(with_chest.len(), nd.len());
+        // remote update: the chest data is applied and the car is marked for saving
+        f.set_needs_chest_save(false);
+        car.set_update_needs_to_be_sent(false);
+        car.remote_update(&car, &nd);
+        assert!(f.needs_chest_save() && car.update_needs_to_be_sent());
+        // a replica does not mark itself
+        rep.remote_update(&rep, &nd);
+        // a head-only image has no tail
+        car.remote_update(&car, &nd[..0x68]);
+        // a replica image without a tail is refused only when shorter than the head
+        let head = FreightCar::from_net_data(&world, &dw, None, &nd[..0x68]);
+        assert!(head.is_some());
+    }
+
+    #[test]
+    #[should_panic]
+    fn short_net_data_raises() {
+        let (world, dw) = setup("freight_short");
+        lay_rails(&world, &dw, 3, 40);
+        let car = place_freight(&dw, 20);
+        let nd = car.creation_net_data_for_client(&car, None).unwrap();
+        let _ = FreightCar::from_net_data(&world, &dw, None, &nd[..0x60]);
+    }
+
+    /// Without a chest every chest call is a message to nil.
+    #[test]
+    fn a_car_without_a_chest() {
+        set_chest_factory(Rc::new(NoChests));
+        let (world, dw) = setup("freight_nochest");
+        lay_rails(&world, &dw, 3, 40);
+        let car = place_freight(&dw, 20);
+        let f = freight_of(&car);
+        assert!(f.chest().is_none());
+        assert!(f.get_chest_save_dict().map.is_empty());
+        assert!(!f.update_needs_to_be_sent_virtual());
+        f.set_update_needs_to_be_sent_virtual(false);
+        assert!(car.free_block_creation_save_dict(&car).unwrap().map.get(&"chest".to_string()).is_none());
+        let nd = car.creation_net_data_for_client(&car, None).unwrap();
+        let rep = FreightCar::from_net_data(&world, &dw, None, &nd).unwrap();
+        assert!(freight_of(&rep).chest().is_none());
+        let sd = car.get_save_dict(&car);
+        let again = FreightCar::from_save_dict_chest_save_dict(&world, &dw, &sd, None, None).unwrap();
+        assert!(freight_of(&again).chest().is_none());
+        assert!(crate::objects::protocols::RidableDynamicObject::acts_as_interaction_object(f).is_none());
+        set_chest_factory(Rc::new(ChestChildFactory));
+    }
+
+    /// Ticks move the chest with the car; removing the car removes the chest; dealloc lets go of it.
+    #[test]
+    fn chest_follows_and_leaves_with_the_car() {
+        let (world, dw) = setup("freight_follow");
+        lay_rails(&world, &dw, 3, 40);
+        let car = place_freight(&dw, 20);
+        let f = freight_of(&car);
+        let chest = f.chest().unwrap();
+        // a long frame is clamped; the car slides to rest
+        car.update_accurate_dt_is_simulation(&car, 0.2, 0.2, false);
+        for _ in 0..60 {
+            car.update_accurate_dt_is_simulation(&car, 0.016, 0.016, false);
+        }
+        car.blockheads_loaded(&car);
+        car.update_position(&car, IntPair { x: 21, y: 10 });
+        assert_eq!(chest.pos().x, f.chest().unwrap().pos().x);
+        car.set_needs_removed(&car, true);
+        assert!(chest.needs_removed());
+        car.set_needs_removed(&car, true);
+        car.dealloc(&car);
+        assert!(f.chest().is_none());
+        car.dealloc(&car);
+        assert_eq!(TrainCarLike::item_type(f), ITEM_FREIGHT_CAR);
+    }
+
+    /// A save dict may hand the chest its own dictionary; a replica image at an unloaded tile is refused.
+    #[test]
+    fn chest_dict_in_the_save_dict_and_unloaded_replica() {
+        let (world, dw) = crate::trains::train_car::world_tests::setup_wide("freight_dict", 4);
+        lay_rails(&world, &dw, 3, 40);
+        let src = place_freight(&dw, 20);
+        let mut sd = new_mutable_dict();
+        sd.map.insert("chest".to_string(), PlistValue::Dict(freight_of(&src).get_chest_save_dict()));
+        dw.place_train_car_at_pos_of_type_save_dict_placed_by_client(IntPair { x: 24, y: 10 }, 206, Some(&sd), None);
+        let nd = src.creation_net_data_for_client(&src, None).unwrap();
+        src.base().borrow_mut().pos = IntPair { x: 70, y: 10 };
+        let far = src.creation_net_data_for_client(&src, None).unwrap();
+        assert!(FreightCar::from_net_data(&world, &dw, None, &far).is_none());
+        assert!(FreightCar::from_net_data(&world, &dw, None, &nd).is_some());
+    }
+}

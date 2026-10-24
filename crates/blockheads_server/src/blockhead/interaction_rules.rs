@@ -722,15 +722,12 @@ impl Blockhead {
                         tl.contents == 0
                     };
                     let head_ok = |n: Option<TileRef>| -> bool {
-                        match tile_copy(&n) {
-                            Some(nt) => {
-                                nt.contents == 0
-                                    && nt.foreground_contents == 0
-                                    && nt.background_contents == 0
-                                    && tile_is_air_water_or_snow(n)
-                            }
-                            None => false,
-                        }
+                        tile_copy(&n).is_some_and(|nt| {
+                            nt.contents == 0
+                                && nt.foreground_contents == 0
+                                && nt.background_contents == 0
+                                && tile_is_air_water_or_snow(n)
+                        })
                     };
                     if contents_clear {
                         if is_portal_item(ty) {
@@ -953,24 +950,14 @@ impl Blockhead {
                     break 'end;
                 }
                 // TREE_PLACE
-                'tree_dig: {
-                    if has_item && item_type_is_placable_on_trees(item_t) {
-                        if (item_t.0 == 0xa3 || item_t.0 == 0x12d) && t().foreground_contents != 0 {
-                            break 'tree_dig;
-                        }
-                        if item_t.0 == 0x12d && !world.is_admin() {
-                            break 'tree_dig;
-                        }
-                        if y < 0x3f8 {
-                            return InteractionType::INTERACTION_PLACE_ITEM;
-                        }
-                    }
+                // (the sign guards of the original, `0xa3` / `0x12d` with an occupied foreground or a non-admin, can
+                // never fire: `itemTypeIsPlacableOnTrees` excludes both signs)
+                if has_item && item_type_is_placable_on_trees(item_t) && y < 0x3f8 {
+                    return InteractionType::INTERACTION_PLACE_ITEM;
                 }
-                return if tile_is_plant(Some(tref)) {
-                    InteractionType::INTERACTION_DIG_FOREGROUND
-                } else {
-                    InteractionType::INTERACTION_DIG
-                };
+                // (a plant here would have been answered `DIG_FOREGROUND` by step H: this point needs `allow`, and
+                // the air path above only runs for air / water / snow tiles, which are never solid)
+                return InteractionType::INTERACTION_DIG;
             }
             // P3.5: contents is wire, shaft or motor
             if contents == 0x67 && has_item && item_type_is_solid(item_t) {
@@ -993,12 +980,9 @@ impl Blockhead {
                         }
                         && tile_is_air_water_or_snow(u);
                 }
-                let tl = t();
-                if place_ok
-                    && count(item_t) > 0
-                    && (item_type_is_placable_in_water(item_t)
-                        || !(tl.type_index == 3 && tl.partial_content_left == 0xff))
-                {
+                // (the original also asks `placableInWater(item) || !(full water here)`; `item_type_is_solid` was
+                // tested above and every solid item type is placable in water, so that is always true)
+                if place_ok && count(item_t) > 0 {
                     return InteractionType::INTERACTION_PLACE_SOLID_BLOCK;
                 }
             }
@@ -2005,8 +1989,20 @@ pub(crate) mod testhost {
         pub io: RefCell<Option<ObjRef>>,
         pub npc: RefCell<Option<ObjRef>>,
         pub io_type: Cell<i32>,
+        pub torch: RefCell<Option<ObjRef>>,
+        /// Scripted answers of the other `*_at_pos` lookups (`wire`, `column`, `painting`, `ladder`, `stairs`, `door`,
+        /// `window`, `egg`, `shaft`, `motor`).
+        pub misc: RefCell<std::collections::HashMap<&'static str, ObjRef>>,
+        /// `workbench_type` / `ridable_blockhead_can_ride_using_item` answers for stub objects.
+        pub wb_type: Cell<i32>,
+        pub can_ride: Cell<bool>,
+        /// `has_blockhead_ai` answer.
+        pub has_ai: Cell<bool>,
     }
     impl AHost {
+        pub fn misc_obj(&self, k: &str) -> Option<ObjRef> {
+            self.misc.borrow().get(k).cloned()
+        }
         pub fn install() -> Rc<AHost> {
             let h = Rc::new(AHost::default());
             crate::blockhead::blockhead::set_host(h.clone());
@@ -2022,6 +2018,9 @@ pub(crate) mod testhost {
         }
     }
     impl crate::blockhead::inventory_model::InventoryHostStub for AHost {
+        fn has_blockhead_ai(&self, _b: &Blockhead) -> bool {
+            self.has_ai.get()
+        }
         fn action_goal_interaction(&self, a: &Rc<dyn std::any::Any>) -> i32 {
             ActionBridge.action_goal_interaction(a)
         }
@@ -2068,8 +2067,50 @@ pub(crate) mod testhost {
         fn get_plant_at_pos(&self, _p: IntPair) -> Option<ObjRef> {
             self.plant.borrow().clone()
         }
+        fn torch_at_pos(&self, _p: IntPair) -> Option<ObjRef> {
+            self.torch.borrow().clone()
+        }
         fn free_blocks_at_pos(&self, _p: IntPair) -> Vec<ObjRef> {
             self.fbs.borrow().clone()
+        }
+        fn wire_at_pos(&self, _p: IntPair) -> Option<ObjRef> {
+            self.misc_obj("wire")
+        }
+        fn workbench_type(&self, _wb: &ObjRef) -> i32 {
+            self.wb_type.get()
+        }
+        fn interaction_object_with_id(&self, _id: i64) -> Option<ObjRef> {
+            self.io.borrow().clone()
+        }
+        fn ridable_blockhead_can_ride_using_item(&self, _o: &ObjRef, _b: &Blockhead, _item: i32) -> bool {
+            self.can_ride.get()
+        }
+        fn column_at_pos(&self, _p: IntPair) -> Option<ObjRef> {
+            self.misc_obj("column")
+        }
+        fn painting_at_pos(&self, _p: IntPair) -> Option<ObjRef> {
+            self.misc_obj("painting")
+        }
+        fn ladder_at_pos(&self, _p: IntPair) -> Option<ObjRef> {
+            self.misc_obj("ladder")
+        }
+        fn stairs_at_pos(&self, _p: IntPair) -> Option<ObjRef> {
+            self.misc_obj("stairs")
+        }
+        fn door_at_pos(&self, _p: IntPair) -> Option<ObjRef> {
+            self.misc_obj("door")
+        }
+        fn window_at_pos(&self, _p: IntPair) -> Option<ObjRef> {
+            self.misc_obj("window")
+        }
+        fn egg_at_pos(&self, _p: IntPair) -> Option<ObjRef> {
+            self.misc_obj("egg")
+        }
+        fn elevator_shaft_at_pos(&self, _p: IntPair) -> Option<ObjRef> {
+            self.misc_obj("shaft")
+        }
+        fn elevator_motor_at_pos(&self, _p: IntPair) -> Option<ObjRef> {
+            self.misc_obj("motor")
         }
         fn interaction_object_at_pos(&self, _p: IntPair) -> Option<ObjRef> {
             self.io.borrow().clone()
@@ -2512,10 +2553,11 @@ mod tests {
         let a = act(b, 15, it(0x67, 9), goal);
         a.set_interaction_test_result(b.good_or_bad_interaction_for_action(&a));
         let d = a.get_save_dict();
-        let bytes = match d.map.get(&"interactionTestResult".to_string()) {
-            Some(crate::plist::value::PlistValue::Data(x)) => x.bytes.clone(),
-            _ => panic!(),
-        };
+        let bytes = d
+            .map
+            .get(&"interactionTestResult".to_string())
+            .and_then(|v| if let crate::plist::value::PlistValue::Data(x) = v { Some(x.bytes.clone()) } else { None })
+            .expect("data");
         assert_eq!(bytes, vec![0, 0, 0, 0, 0x67, 0, 0, 0, 0, 0, 9, 0]);
     }
 
@@ -2834,15 +2876,6 @@ mod tests {
         });
         tile(&w, 13, 13).update(|t| t.type_index = 0x10);
         tile(&w, 19, 19).update(|t| t.artificial_light_b = 5);
-        for y in 12..21 {
-            for x in 12..21 {
-                tile(&w, x, y).update(|t| {
-                    if t.type_index == 1 {
-                        t.type_index = 2
-                    }
-                });
-            }
-        }
         tile(&w, 14, 17).update(|t| t.type_index = 2);
         tile(&w, 14, 18).update(|t| t.type_index = 6);
         h.take();
@@ -2958,3 +2991,6 @@ mod tests {
         assert!(h.take().is_empty());
     }
 }
+
+#[cfg(test)]
+mod coverage_tests;

@@ -13,7 +13,6 @@ use std::any::Any;
 use std::cell::RefCell;
 use std::rc::{Rc, Weak};
 
-use crate::fmath::cconv::f32_to_i32;
 use crate::items::inventory_item::{InventoryItem, ItemRef, SubSlot};
 use crate::objects::base::{base_update_position, BlockheadApi, DynamicObject, DynamicObjectBase, DynamicWorldRef};
 use crate::objects::class_info::{ClassInfo, DYNAMIC_OBJECT_CLASS};
@@ -1928,10 +1927,6 @@ pub fn host() -> Rc<dyn BlockheadHost> {
 // silence unused-import warnings for items re-exported to the sibling files of this module
 #[allow(dead_code)]
 type _Unused = (FreeBlockCreationCount, Vector, InventoryItem, f32);
-#[allow(dead_code)]
-fn _f(x: f32) -> i32 {
-    f32_to_i32(x)
-}
 
 // ====================================================================================================
 // test fixtures
@@ -1950,6 +1945,7 @@ pub(crate) mod testutil {
         pub next_id: Cell<u64>,
         pub server: Cell<bool>,
         pub changed: RefCell<Vec<(IntPair, i32)>>,
+        pub bhs: RefCell<Vec<ObjRef>>,
     }
     impl DynamicWorldApi for MockDw {
         fn get_next_dynamic_object_id(&self) -> u64 {
@@ -1964,7 +1960,7 @@ pub(crate) mod testutil {
             self.server.get()
         }
         fn blockheads(&self) -> Vec<ObjRef> {
-            Vec::new()
+            self.bhs.borrow().clone()
         }
         fn get_owner_name_for_object_owner_id(&self, _owner_id: &str) -> Option<String> {
             None
@@ -1986,8 +1982,12 @@ pub(crate) mod testutil {
         *mt.dynamic_objects.borrow_mut() = Some(Vec::new());
         world.set_is_admin(true);
         *world.distance_ordered_food_types.borrow_mut() = (0..31).collect();
-        let dw =
-            Rc::new(MockDw { next_id: Cell::new(100), server: Cell::new(true), changed: RefCell::new(Vec::new()) });
+        let dw = Rc::new(MockDw {
+            next_id: Cell::new(100),
+            server: Cell::new(true),
+            changed: RefCell::new(Vec::new()),
+            bhs: RefCell::new(Vec::new()),
+        });
         let dwref: DynamicWorldRef = dw.clone();
         (world, dw, dwref)
     }
@@ -2056,7 +2056,8 @@ pub(crate) mod testutil {
         pub belongs: Cell<bool>,
         pub torch: RefCell<Option<ObjRef>>,
         pub can_pick: Cell<bool>,
-        pub plant: RefCell<Option<ObjRef>>,
+        pub io_by_id: RefCell<Option<ObjRef>>,
+        pub adding_fuel: Cell<bool>,
     }
     impl TestHost {
         pub fn install() -> Rc<TestHost> {
@@ -2082,30 +2083,6 @@ pub(crate) mod testutil {
         }
         fn report_achievement_with_identifier(&self, id: &str) {
             self.rec(format!("ach:{}", id));
-        }
-        fn create_free_block_at_position_of_type_data_a_data_b_sub_items_dynamic_object_save_dict_hovers_play_sound_priority_blockhead(
-            &self,
-            pos: IntPair,
-            item_type: ItemType,
-            data_a: u16,
-            data_b: u16,
-            _s: Option<&[Vec<ItemRef>]>,
-            _d: Option<&PlistValue>,
-            hovers: bool,
-            play_sound: i32,
-            priority: Option<&ObjRef>,
-        ) {
-            self.rec(format!(
-                "fb:{},{}:{}:{}:{}:{}:{}:{}",
-                pos.x,
-                pos.y,
-                item_type.0,
-                data_a,
-                data_b,
-                hovers,
-                play_sound,
-                priority.is_some()
-            ));
         }
         fn drop_inventory_items_at_index_sub_index_count_ignore_freeblocks(
             &self,
@@ -2136,9 +2113,6 @@ pub(crate) mod testutil {
         fn send_gather_notification_for_tile_at_pos(&self, _t: Option<TileRef>, pos: IntPair) {
             self.rec(format!("gather:{},{}", pos.x, pos.y));
         }
-        fn load_gather_block_at_pos(&self, pos: IntPair) {
-            self.rec(format!("gatherblock:{},{}", pos.x, pos.y));
-        }
         fn remove_tile_at_world_x_world_y_create_contents_freeblock_count_create_foreground_contents_freeblock_count_remove_blockhead_only_remove_c_ontents_only_remove_foreground_contents(
             &self,
             x: i32,
@@ -2159,9 +2133,6 @@ pub(crate) mod testutil {
         }
         fn set_door_at_pos_to_open_direction(&self, pos: IntPair, open: bool, dir: i32) {
             self.rec(format!("door:{},{}:{}:{}", pos.x, pos.y, open, dir));
-        }
-        fn fill_tile_at_pos_with_type(&self, _t: Option<TileRef>, pos: IntPair, ty: i32) {
-            self.rec(format!("fill:{},{}:{}", pos.x, pos.y, ty));
         }
         fn stop_riding(&self, _b: &Blockhead) {
             self.rec("stopriding".to_string());
@@ -2201,8 +2172,15 @@ pub(crate) mod testutil {
             self.rec(format!("additem:{}:{}", item.borrow().item_type.0, flash));
             let _ = b;
         }
-        fn get_plant_at_pos(&self, _p: IntPair) -> Option<ObjRef> {
-            self.plant.borrow().clone()
+        fn interaction_object_with_id(&self, id: i64) -> Option<ObjRef> {
+            self.rec(format!("ioid:{id}"));
+            self.io_by_id.borrow().clone()
+        }
+        fn blockhead_would_like_to_take_ownership_with_save_dict(&self, _o: &ObjRef, _b: &Blockhead, _d: &PlistValue) {
+            self.rec("takeownership".to_string());
+        }
+        fn is_adding_fuel_to_any_workbench(&self, _b: &Blockhead) -> bool {
+            self.adding_fuel.get()
         }
         fn inventory_was_changed_sub_index_was_usage(&self, _b: &Blockhead, i: i32, s: i32, u: bool) {
             self.rec(format!("invchanged:{}:{}:{}", i, s, u));
@@ -2393,5 +2371,459 @@ mod tests {
         assert!(crate::objects::handle::ptr_eq(&e.object_for_key("workbench").unwrap(), &o));
         assert!(e.any_for_key("workbench").is_none());
         let _ = srand;
+    }
+
+    /// A host that keeps every default of the seam.
+    struct Bare;
+    impl BlockheadHostStub for Bare {}
+
+    /// Every default body of the host seam runs once; the ones with real behaviour are checked.
+    #[test]
+    fn host_defaults_run_and_are_inert() {
+        let (world, _dw, dwref) = setup();
+        let o = new_bh(&world, &dwref, 0);
+        let b = bh_of(&o);
+        let ob = stub(1, true);
+        let item = InventoryItem::new(ItemType(5), 0, 0, None, None);
+        let act: ActionRef = Rc::new(());
+        let any: Rc<dyn Any> = Rc::new(());
+        let pv = PlistValue::int(1);
+        let mut flag = false;
+        let h = Bare;
+        BlockheadHostStub::update_position(&h, b, IntPair { x: 1, y: 2 });
+        BlockheadHostStub::stop_riding(&h, b);
+        BlockheadHostStub::pickup_dynamic_object(&h, b, &ob);
+        let _ = BlockheadHostStub::interaction_type_for_tile_at_pos_item_pickup_rejected_due_to_inventory_full_include_actions_face_index_allow_protected_actions(&h, b, None, IntPair { x: 1, y: 2 }, None, &mut flag, true, 3, true);
+        let _ = BlockheadHostStub::good_or_bad_interaction_for_action(&h, b, None);
+        BlockheadHostStub::update_gather_speed_and_animation_for_current_interation_and_item(&h, b);
+        let _ = BlockheadHostStub::is_adding_fuel_to_any_workbench(&h, b);
+        let _ = BlockheadHostStub::current_traverse_to_key_frame(&h, b);
+        let _ = BlockheadHostStub::next_pos(&h, b);
+        let _ = BlockheadHostStub::info_for_path_recalculation(&h, b);
+        BlockheadHostStub::set_path_type_goal_interaction_extra_data(&h, b, None, 3, 3, None);
+        BlockheadHostStub::set_waiting_for_path_to_pos(&h, b, IntPair { x: 1, y: 2 });
+        BlockheadHostStub::set_no_longer_waiting_for_path(&h, b);
+        let _ = BlockheadHostStub::can_crawl(&h, b);
+        let _ = BlockheadHostStub::can_fly(&h, b);
+        let _ = BlockheadHostStub::tap_is_within_body_radius(&h, b, Vector2 { x: 0.5, y: 1.5 });
+        BlockheadHostStub::hit_with_force_blockhead(&h, b, 3, None);
+        let _ = BlockheadHostStub::will_die_if_hit_by_force(&h, b, 3);
+        let _ = BlockheadHostStub::center(&h, b);
+        let _ = BlockheadHostStub::is_interacting_with_any_interaction_object(&h, b);
+        BlockheadHostStub::set_interaction_object(&h, b, None);
+        BlockheadHostStub::set_interaction_workbench(&h, b, None);
+        let _ = BlockheadHostStub::can_pick_up_item_of_type_sub_items(&h, b, ItemType(5), None);
+        let _ = BlockheadHostStub::can_pick_up_item_of_type_sub_items_data_a_data_b(&h, b, ItemType(5), None, 3, 3);
+        BlockheadHostStub::add_item_to_inventory_flash_disable_warp_check_force_slot_index(&h, b, &item, true, true, 3);
+        BlockheadHostStub::add_item_to_inventory_flash(&h, b, &item, true);
+        let _ = BlockheadHostStub::pickup_freeblock_if_possible_in_tile_intentional(&h, b, &ob, None, true);
+        BlockheadHostStub::increment_usage_of_interaction_item(&h, b, true);
+        BlockheadHostStub::increment_usage_of_clothing(&h, b);
+        BlockheadHostStub::increment_usage_of_ice_clothing(&h, b);
+        BlockheadHostStub::increment_fuel_usage(&h, b);
+        BlockheadHostStub::increment_passive_item_usage(&h, b);
+        BlockheadHostStub::increment_damage_of_armor_clothing(&h, b, 0.5);
+        BlockheadHostStub::inventory_was_changed_sub_index_was_usage(&h, b, 3, 3, true);
+        BlockheadHostStub::drop_inventory_items_at_index_sub_index_count_ignore_freeblocks(&h, b, 3, 3, 3, true);
+        BlockheadHostStub::remove_interaction_item(&h, b, true);
+        let _ = BlockheadHostStub::has_interaction_inventory_item_available(&h, b);
+        let _ = BlockheadHostStub::can_use_dynamic_object(&h, b, &ob);
+        BlockheadHostStub::stop_all_actions(&h, b);
+        BlockheadHostStub::stop_fishing(&h, b);
+        BlockheadHostStub::die_for_good(&h, b);
+        let _ = BlockheadHostStub::unable_to_work_reason(&h, b);
+        let _ = BlockheadHostStub::jetpack_fuel_count(&h, b);
+        BlockheadHostStub::update_jet_motion(&h, b, 0.5);
+        let _ = BlockheadHostStub::free_block_pickup_radius(&h, b);
+        let _ = BlockheadHostStub::dpad_should_be_displayed(&h, b);
+        let _ = BlockheadHostStub::current_item(&h, b);
+        let _ = BlockheadHostStub::current_interaction_requires_human_input(&h, b);
+        let _ = BlockheadHostStub::action_in_progress(&h, &act);
+        BlockheadHostStub::action_set_in_progress(&h, &act, true);
+        let _ = BlockheadHostStub::action_goal_tile_pos(&h, &act);
+        let _ = BlockheadHostStub::action_get_save_dict(&h, &act);
+        let _ = BlockheadHostStub::action_init_with_save_dict_inventory_items(&h, &pv, &[]);
+        let _ = BlockheadHostStub::action_interaction_test_result(&h, &act);
+        let _ = BlockheadHostStub::action_interaction_object_id(&h, &act);
+        let _ = BlockheadHostStub::action_inventory_change_int_for_key(&h, &act, "k");
+        BlockheadHostStub::action_set_inventory_change_int_for_key(&h, &act, "k", 3);
+        BlockheadHostStub::add_simulation_event_of_type_for_blockhead_extra_data(
+            &h,
+            3,
+            &ob,
+            SimulationEventExtra::None,
+        );
+        BlockheadHostStub::report_achievement_with_identifier(&h, "k");
+        BlockheadHostStub::abort_in_progress_path_if_for_blockhead(&h, &ob);
+        BlockheadHostStub::send_damage_for_net_blockhead_recoil(&h, 0.5, &ob, true);
+        BlockheadHostStub::fire_projectile_from_to_at_fire_item_type_firer(
+            &h,
+            Vector2 { x: 0.5, y: 1.5 },
+            Vector2 { x: 0.5, y: 1.5 },
+            None,
+            3,
+            None,
+        );
+        let _ = BlockheadHostStub::tile_is_lit_for_client_at_pos_tile(&h, None, IntPair { x: 1, y: 2 }, None, None);
+        BlockheadHostStub::fully_load_if_needed_around_pos_client_light_block_index_for_blockhead(
+            &h,
+            IntPair { x: 1, y: 2 },
+            3,
+            None,
+        );
+        BlockheadHostStub::place_workbench_of_type_at_pos_save_dict_placed_by_client_placed_by_blockhead_placed_by_client_name(&h, 3, IntPair { x: 1, y: 2 }, None, None, &ob, None);
+        let _ = BlockheadHostStub::place_interaction_object_with_item_at_pos_save_dict_placed_by_client_placed_by_blockhead_placed_by_client_name(&h, &item, IntPair { x: 1, y: 2 }, None, None, &ob, None);
+        BlockheadHostStub::fill_tile_at_pos_with_type(&h, None, IntPair { x: 1, y: 2 }, 3);
+        BlockheadHostStub::fill_tile_at_pos_with_type_data_a_data_b_placed_by_client_save_dict_placed_by_blockhead_placed_by_client_name(&h, None, IntPair { x: 1, y: 2 }, 3, 3, 3, None, None, None, None);
+        BlockheadHostStub::remove_tile_at_world_x_world_y_create_contents_freeblock_count_create_foreground_contents_freeblock_count_remove_blockhead_only_remove_c_ontents_only_remove_foreground_contents(&h, 3, 3, 3, 3, &ob, true, true);
+        BlockheadHostStub::remove_back_wall_at_pos_remove_blockhead(&h, IntPair { x: 1, y: 2 }, &ob);
+        BlockheadHostStub::remove_water_tile_at_pos(&h, IntPair { x: 1, y: 2 });
+        BlockheadHostStub::paint_tile_at_pos_color_index_face_index_paint_blockhead(
+            &h,
+            None,
+            IntPair { x: 1, y: 2 },
+            3,
+            3,
+            &ob,
+        );
+        BlockheadHostStub::remove_paint_at_tile_at_pos_face_index_paint_blockhead(
+            &h,
+            None,
+            IntPair { x: 1, y: 2 },
+            3,
+            &ob,
+        );
+        BlockheadHostStub::send_gather_notification_for_tile_at_pos(&h, None, IntPair { x: 1, y: 2 });
+        BlockheadHostStub::display_ownership_areas(&h);
+        BlockheadHostStub::blockhead_reached_interaction_object_destination_path_extra_data(&h, &ob, None);
+        let _ = BlockheadHostStub::remove_curse_words_from_blockhead_name(&h, None);
+        let _ = BlockheadHostStub::player_is_admin_with_id(&h, None);
+        BlockheadHostStub::update_player(&h, None);
+        let _ = BlockheadHostStub::player_name_for_player_with_id_including_old_players(&h, None);
+        let _ = BlockheadHostStub::server_client_light_block_index_for_net_id(&h, None);
+        let _ = BlockheadHostStub::dynamic_world_local_net_id(&h);
+        let _ = BlockheadHostStub::interaction_object_with_id(&h, 3);
+        let _ = BlockheadHostStub::interaction_object_at_pos(&h, IntPair { x: 1, y: 2 });
+        let _ = BlockheadHostStub::workbench_at_pos(&h, IntPair { x: 1, y: 2 });
+        let _ = BlockheadHostStub::ridable_object_with_id(&h, 3);
+        let _ = BlockheadHostStub::npc_with_id(&h, 3);
+        let _ = BlockheadHostStub::get_plant_at_pos(&h, IntPair { x: 1, y: 2 });
+        let _ = BlockheadHostStub::free_blocks_at_pos(&h, IntPair { x: 1, y: 2 });
+        let _ = BlockheadHostStub::door_at_pos(&h, IntPair { x: 1, y: 2 });
+        let _ = BlockheadHostStub::window_at_pos(&h, IntPair { x: 1, y: 2 });
+        let _ = BlockheadHostStub::egg_at_pos(&h, IntPair { x: 1, y: 2 });
+        let _ = BlockheadHostStub::torch_at_pos(&h, IntPair { x: 1, y: 2 });
+        let _ = BlockheadHostStub::painting_at_pos(&h, IntPair { x: 1, y: 2 });
+        let _ = BlockheadHostStub::column_at_pos(&h, IntPair { x: 1, y: 2 });
+        let _ = BlockheadHostStub::ladder_at_pos(&h, IntPair { x: 1, y: 2 });
+        let _ = BlockheadHostStub::wire_at_pos(&h, IntPair { x: 1, y: 2 });
+        let _ = BlockheadHostStub::stairs_at_pos(&h, IntPair { x: 1, y: 2 });
+        let _ = BlockheadHostStub::elevator_shaft_at_pos(&h, IntPair { x: 1, y: 2 });
+        let _ = BlockheadHostStub::elevator_motor_at_pos(&h, IntPair { x: 1, y: 2 });
+        let _ = BlockheadHostStub::remove_object_at_pos(&h, Remover::Torch, IntPair { x: 1, y: 2 });
+        BlockheadHostStub::remove_interaction_object_at_pos_remove_blockhead(&h, IntPair { x: 1, y: 2 }, &ob);
+        BlockheadHostStub::remove_workbench_at_pos_remove_blockhead(&h, IntPair { x: 1, y: 2 }, &ob);
+        BlockheadHostStub::load_gather_block_at_pos(&h, IntPair { x: 1, y: 2 });
+        let _ = BlockheadHostStub::pos_of_doors_other_block_at_pos(&h, IntPair { x: 1, y: 2 });
+        BlockheadHostStub::set_door_at_pos_to_open_direction(&h, IntPair { x: 1, y: 2 }, true, 3);
+        BlockheadHostStub::open_elevator_at_pos(&h, IntPair { x: 1, y: 2 });
+        BlockheadHostStub::elevator_motor_for_shaft_at_pos_use_power(&h, IntPair { x: 1, y: 2 });
+        let _ = BlockheadHostStub::check_for_harmable_dynamic_object_under_tap_ignore_local_blockheads_ignore_all_blockheads(&h, Vector2 { x: 0.5, y: 1.5 }, true, true);
+        BlockheadHostStub::create_free_block_at_position_of_type_data_a_data_b_sub_items_dynamic_object_save_dict_hovers_play_sound_priority_blockhead(&h, IntPair { x: 1, y: 2 }, ItemType(5), 3, 3, None, None, true, 3, None);
+        let _ = BlockheadHostStub::is_npc(&h, &ob);
+        let _ = BlockheadHostStub::is_donkey(&h, &ob);
+        let _ = BlockheadHostStub::is_bed(&h, &ob);
+        let _ = BlockheadHostStub::npc_food_item_type(&h, &ob);
+        let _ = BlockheadHostStub::npc_can_be_captured_by_blockhead(&h, &ob, b, ItemType(5));
+        let _ = BlockheadHostStub::npc_can_be_milked_by_blockhead(&h, &ob, b);
+        let _ = BlockheadHostStub::npc_can_be_shaved_by_blockhead(&h, &ob, b);
+        let _ = BlockheadHostStub::npc_belongs_to_player_with_blockhead(&h, &ob, b);
+        let _ = BlockheadHostStub::npc_can_be_fed_by_blockhead(&h, &ob, b);
+        BlockheadHostStub::npc_feed_by_blockhead(&h, &ob, b);
+        BlockheadHostStub::npc_set_free_by_blockhead(&h, &ob, b);
+        let _ = BlockheadHostStub::npc_capture_by_blockhead_with_item_type(&h, &ob, b, 3);
+        let _ = BlockheadHostStub::npc_shave_by_blockhead(&h, &ob, b);
+        let _ = BlockheadHostStub::npc_milk_by_blockhead(&h, &ob, b);
+        BlockheadHostStub::npc_begin_blockhead_inspection(&h, &ob, b);
+        BlockheadHostStub::npc_inspection_stopped(&h, &ob);
+        BlockheadHostStub::npc_remote_blockhead_hooked_you(&h, &ob, b);
+        let _ = BlockheadHostStub::donkey_breed(&h, &ob);
+        let _ = BlockheadHostStub::egg_breed(&h, &ob);
+        let _ = BlockheadHostStub::torch_data_a_b(&h, &ob);
+        let _ = BlockheadHostStub::object_item_type(&h, &ob);
+        let _ = BlockheadHostStub::sign_text_length(&h, &ob);
+        let _ = BlockheadHostStub::ridable_blockhead_can_ride_using_item(&h, &ob, b, 3);
+        let _ = BlockheadHostStub::ride_object_animation_type(&h, &ob);
+        let _ = BlockheadHostStub::ride_object_rider_rides_with_arms_down(&h, &ob);
+        let _ = BlockheadHostStub::workbench_type(&h, &ob);
+        let _ = BlockheadHostStub::workbench_level(&h, &ob);
+        let _ = BlockheadHostStub::workbench_has_required_fuel(&h, &ob);
+        let _ = BlockheadHostStub::workbench_uses_stores_conducts_or_produces_electricity(&h, &ob);
+        BlockheadHostStub::workbench_abort_immediately_and_restore_blockhead_items(&h, &ob);
+        let _ = BlockheadHostStub::workbench_is_in_use(&h, &ob);
+        let _ = BlockheadHostStub::workbench_current_blockhead(&h, &ob);
+        let _ = BlockheadHostStub::workbench_craft_item_with_blockhead_count(&h, &ob, &any, b, 3);
+        BlockheadHostStub::workbench_start_managing_fuel_with_blockhead(&h, &ob, b);
+        BlockheadHostStub::set_workbench_choice_ui_option(&h, &ob, 3);
+        let _ = BlockheadHostStub::interaction_object_type(&h, &ob);
+        let _ = BlockheadHostStub::interaction_object_is_in_use(&h, &ob);
+        BlockheadHostStub::interaction_object_remove(&h, &ob, b);
+        BlockheadHostStub::blockhead_would_like_to_take_ownership_with_save_dict(&h, &ob, b, &pv);
+        let _ = BlockheadHostStub::plant_gather_progress_for_tile(&h, &ob, IntPair { x: 1, y: 2 });
+        BlockheadHostStub::plant_set_gather_progress_for_tile(&h, &ob, 3, IntPair { x: 1, y: 2 });
+        let _ = BlockheadHostStub::plant_tile_harvested_remove_blockhead_correct_tool_multiplier(
+            &h,
+            &ob,
+            IntPair { x: 1, y: 2 },
+            b,
+            3,
+        );
+        let _ = BlockheadHostStub::fishing_rod_valid(&h, &any);
+        let _ = BlockheadHostStub::fishing_rod_hooked_fish_unique_id(&h, &any);
+        let _ = BlockheadHostStub::fishing_rod_new_with_swipe(&h, b, Vector2 { x: 0.5, y: 1.5 });
+        BlockheadHostStub::fishing_rod_update(&h, &any, 0.5, 0.5, true);
+        // defaults with behaviour
+        assert_eq!(BlockheadHostStub::next_pos(&h, b), b.bh.borrow().to_square);
+        assert_eq!(BlockheadHostStub::center(&h, b), Vector2 { x: b.float_pos().x, y: b.float_pos().y + 1.0 });
+        assert_eq!(BlockheadHostStub::free_block_pickup_radius(&h, b), 0.5);
+        assert_eq!(BlockheadHostStub::jetpack_fuel_count(&h, b), 0);
+        assert!(BlockheadHostStub::can_use_dynamic_object(&h, b, &ob));
+        assert!(!b.bh.borrow().waiting_for_path, "set_no_longer_waiting_for_path ran after it");
+        assert_eq!(BlockheadHostStub::dynamic_world_local_net_id(&h), "cf1e8c14e54505f60aa10ceb8d5d8ab3");
+        assert_eq!(BlockheadHostStub::remove_curse_words_from_blockhead_name(&h, Some("n")).as_deref(), Some("n"));
+        assert_eq!(
+            BlockheadHostStub::pos_of_doors_other_block_at_pos(&h, IntPair { x: 1, y: 2 }),
+            IntPair { x: -1, y: -1 }
+        );
+        assert_eq!(BlockheadHostStub::can_pick_up_item_of_type_sub_items(&h, b, ItemType(5), None), 1);
+        // the net variant of the fuel count and pickup radius
+        b.base.borrow_mut().is_net = true;
+        assert_eq!(BlockheadHostStub::jetpack_fuel_count(&h, b), 10);
+        b.bh.borrow_mut().shirt_item_type = 278;
+        assert_eq!(BlockheadHostStub::free_block_pickup_radius(&h, b), 0.5);
+        b.base.borrow_mut().is_net = false;
+        assert_eq!(BlockheadHostStub::free_block_pickup_radius(&h, b), 0.5);
+        b.bh.borrow_mut().ride_object = Some(ob.clone());
+        assert_eq!(BlockheadHostStub::free_block_pickup_radius(&h, b), 1.0);
+    }
+
+    use crate::items::inventory_item::InventoryItem;
+    use crate::mods::{ChatVerdict, LoaderKey, ModHooks, Optional};
+
+    /// Records the moves of players' blockheads.
+    #[derive(Default)]
+    struct MoveRecorder {
+        moves: RefCell<Vec<(String, IntPair, IntPair)>>,
+    }
+    impl ModHooks for MoveRecorder {
+        fn player_join(&self, _p: &str) {}
+        fn player_quit(&self, _p: &str, _kick: bool) {}
+        fn chat(&self, _p: &str, _t: &str) -> ChatVerdict {
+            ChatVerdict::Keep
+        }
+        fn owns_command(&self, _l: &str) -> bool {
+            false
+        }
+        fn command(&self, _i: Option<&str>, _l: &str) -> bool {
+            false
+        }
+        fn tick(&self, _dt: f32) {}
+        fn poll(&self) {}
+        fn world_loaded(&self, _n: &str, _i: &str) {}
+        fn world_save(&self, _post: bool) {}
+        fn server_stop(&self) {}
+        fn wants(&self, what: Optional) -> bool {
+            what == Optional::PlayerMove
+        }
+        fn mod_packet(&self, _p: &str, _d: &[u8]) {}
+        fn pre_login(&self, _p: &str, _i: &str, _a: &str, _l: Option<&LoaderKey>) -> Option<u8> {
+            None
+        }
+        fn limbo_join(&self, _p: &str, _i: &str, _l: Option<&LoaderKey>) -> bool {
+            false
+        }
+        fn limbo_packet(&self, _p: &str) -> bool {
+            false
+        }
+        fn limbo_gone(&self, _p: &str) {}
+        fn block_place(&self, _p: &str, _pos: IntPair, _i: u32, _a: u16, _b: u16) -> bool {
+            false
+        }
+        fn block_break(&self, _p: &str, _pos: IntPair, _bw: bool, _t: u32) -> bool {
+            false
+        }
+        fn block_changed(&self, _pos: IntPair, _t: u32, _p: Option<&str>) {}
+        fn object_place(&self, _p: &str, _pos: IntPair, _w: bool, _i: u32) -> bool {
+            false
+        }
+        fn damage(&self, _p: Option<&str>, _b: u64, a: f32, _at: Option<&str>) -> Option<f32> {
+            Some(a)
+        }
+        fn death(&self, _p: Option<&str>, _b: u64) {}
+        fn player_move(&self, p: &str, from: IntPair, to: IntPair) {
+            self.moves.borrow_mut().push((p.to_string(), from, to));
+        }
+    }
+
+    #[test]
+    fn trait_views_and_getters() {
+        let _h = TestHost::install();
+        let (world, dw, dwref) = setup();
+        let o = new_bh(&world, &dwref, 0);
+        let b = bh_of(&o);
+        {
+            let mut f = b.bh.borrow_mut();
+            f.state.happiness = 0.1;
+            f.state.meditation_progress = 0.2;
+            f.state.environment = 0.3;
+            f.state.environment_temperature = 0.4;
+            f.state.environment_exposure = 0.5;
+            f.state.environment_light = 0.6;
+            f.state.regeneration_progress = 0.7;
+            f.state.animation_type = 5;
+            f.client_name = Some("Pat".into());
+            f.visible = true;
+        }
+        assert_eq!(
+            (b.happiness(), b.meditation_progress(), b.environment(), b.environment_temperature()),
+            (0.1, 0.2, 0.3, 0.4)
+        );
+        assert_eq!((b.environment_exposure(), b.environment_light(), b.regeneration_progress()), (0.5, 0.6, 0.7));
+        assert_eq!((b.current_animation_type(), b.client_name().as_deref()), (5, Some("Pat")));
+        assert_eq!(BlockheadFields::default().state.to_save_blob(), vec![0u8; 0x6c]);
+        // DynamicObject
+        assert!(o.requires_physical_block());
+        let mut v = vec![];
+        o.world_changed(&o, &mut v);
+        o.world_contents_changed(&o, &mut v);
+        assert!(o.get_save_dict(&o).map.contains_key(&"state".to_string()));
+        let created = o.creation_net_data_for_client(&o, Some("x")).unwrap();
+        let updated = o.update_net_data_for_client(&o, Some("x")).unwrap();
+        assert_eq!(updated.len(), 0x70);
+        o.remote_update(&o, &updated);
+        o.remote_creation_data_update(&o, &created);
+        assert_eq!(o.render_pos(), b.bh.borrow().render_pos);
+        // BlockheadApi
+        let api = o.as_blockhead().unwrap();
+        assert!(!api.is_interacting_with_any_interaction_object());
+        api.set_interaction_object(None);
+        api.stop_interacting();
+        // PathUser
+        let pu = o.as_path_user().unwrap();
+        assert!(
+            pu.tile_is_lit_for_self_at_pos(&tile(&world, 5, 8).get(), IntPair { x: 5, y: 8 })
+                == (tile(&world, 5, 8).get().light != 0)
+        );
+        assert_eq!(pu.current_traverse_to_key_frame(), b.bh.borrow().traverse_to_key_frame);
+        assert_eq!(pu.next_pos(), b.bh.borrow().to_square);
+        assert!(pu.info_for_path_recalculation().is_none());
+        let mut extra = crate::objects::base::new_mutable_dict();
+        extra.map.insert("count".to_string(), PlistValue::int(3));
+        pu.set_path_type_goal_interaction_extra_data(&o, Some(vec![]), 2, 1, Some(PlistValue::Dict(extra)));
+        assert_eq!(b.bh.borrow().path_extra_data.as_ref().unwrap().int_for_key("count"), 3);
+        assert!(PathExtraData::from_plist(Some(&PlistValue::int(1))).is_none());
+        assert!(PathExtraData::from_plist(None).is_none());
+        pu.set_waiting_for_path_to_pos(IntPair { x: 3, y: 4 });
+        assert!(pu.waiting_for_path());
+        pu.set_no_longer_waiting_for_path();
+        assert!(!pu.waiting_for_path());
+        assert!(!pu.can_crawl() && !pu.can_fly());
+        pu.set_path_needs_recalculated(true);
+        assert!(pu.path_needs_recalculated());
+        // Harmable
+        let hm = o.as_harmable().unwrap();
+        assert!(!hm.tap_is_within_body_radius(Vector2 { x: 0.0, y: 0.0 }));
+        hm.hit_with_force_blockhead(&o, 0, None);
+        assert!(!hm.will_die_if_hit_by_force(5));
+        assert!(hm.is_visible());
+        assert_eq!(hm.center(), Vector2 { x: b.float_pos().x, y: b.float_pos().y + 1.0 });
+        // the per-client light query of a controlled blockhead goes to the host
+        b.bh.borrow_mut().is_client_blockhead_being_controlled_by_server = true;
+        assert!(!b.tile_is_lit_for_self_at_pos_impl(&tile(&world, 5, 8).get(), IntPair { x: 5, y: 8 }));
+        // a replica needs the dynamic world to be a server
+        b.base.borrow_mut().is_net = true;
+        assert!(o.requires_physical_block());
+        dw.server.set(false);
+        assert!(!o.requires_physical_block());
+        b.base.borrow_mut().is_net = false;
+        // mods hear about a player's blockhead moving one tile
+        let rec = Rc::new(MoveRecorder::default());
+        crate::mods::install(Some(rec.clone()));
+        b.set_client_id("player-1");
+        o.update_position(&o, IntPair { x: 6, y: 8 });
+        o.update_position(&o, IntPair { x: 6, y: 8 });
+        assert_eq!(rec.moves.borrow().len(), 1);
+        assert_eq!(rec.moves.borrow()[0].0, "player-1");
+        b.bh.borrow_mut().client_id = None;
+        o.update_position(&o, IntPair { x: 7, y: 8 });
+        assert_eq!(rec.moves.borrow().len(), 1);
+        crate::mods::install(None);
+    }
+
+    #[test]
+    fn the_mod_recorder_only_records_moves() {
+        let r = MoveRecorder::default();
+        r.player_join("p");
+        r.player_quit("p", false);
+        assert!(matches!(r.chat("p", "t"), ChatVerdict::Keep));
+        assert!(!r.owns_command("l") && !r.command(None, "l"));
+        r.tick(0.2);
+        r.poll();
+        r.world_loaded("n", "i");
+        r.world_save(true);
+        r.server_stop();
+        assert!(r.wants(Optional::PlayerMove) && !r.wants(Optional::BlockChanged));
+        r.mod_packet("p", &[]);
+        assert!(r.pre_login("p", "i", "a", None).is_none());
+        assert!(!r.limbo_join("p", "i", None) && !r.limbo_packet("p"));
+        r.limbo_gone("p");
+        let at = IntPair { x: 1, y: 2 };
+        assert!(!r.block_place("p", at, 1, 2, 3) && !r.block_break("p", at, false, 1));
+        r.block_changed(at, 1, None);
+        assert!(!r.object_place("p", at, true, 1));
+        assert_eq!(r.damage(None, 1, 0.5, None), Some(0.5));
+        r.death(None, 1);
+        r.player_move("p", at, at);
+        assert_eq!(r.moves.borrow().len(), 1);
+    }
+
+    /// The ride-animation lookup knows the three train classes; the mock dynamic world answers owner names.
+    #[test]
+    fn ride_object_animation_types_by_class() {
+        struct ClassStub {
+            base: RefCell<DynamicObjectBase>,
+            class: &'static ClassInfo,
+        }
+        impl DynamicObject for ClassStub {
+            fn base(&self) -> &RefCell<DynamicObjectBase> {
+                &self.base
+            }
+            fn class_info(&self) -> &'static ClassInfo {
+                self.class
+            }
+            fn as_any(&self) -> &dyn Any {
+                self
+            }
+        }
+        let mk = |class: &'static ClassInfo| -> ObjRef {
+            crate::objects::handle::alloc_obj(|w| ClassStub {
+                base: RefCell::new(DynamicObjectBase::alloc_zeroed_with(w)),
+                class,
+            })
+        };
+        let h = NullHost;
+        for (class, expect) in [
+            (&crate::trains::hand_car::HAND_CAR_CLASS, 28),
+            (&crate::trains::steam_train::STEAM_TRAIN_CLASS, 29),
+            (&crate::trains::passenger_car::PASSENGER_CAR_CLASS, 30),
+            (&DYNAMIC_OBJECT_CLASS, 0),
+        ] {
+            let o = mk(class);
+            assert_eq!(BlockheadHostStub::ride_object_animation_type(&h, &o), expect);
+            assert_eq!(o.base().borrow().pos, IntPair { x: 0, y: 0 });
+            assert!(o.as_any().is::<ClassStub>());
+        }
+        let (_world, dw, _dwref) = setup();
+        assert_eq!(crate::objects::base::DynamicWorldApi::get_owner_name_for_object_owner_id(&*dw, "x"), None);
     }
 }

@@ -617,9 +617,9 @@ pub fn train_car_init_with_world_dynamic_world_at_position_cache_save_dict_place
     client_id: Option<&str>,
 ) -> bool {
     let (wref, dref): (WorldRef, DynamicWorldRef) = (world.clone(), dw.clone());
-    if !base_init_with_world_dynamic_world_at_position_cache(me, &wref, &dref, pos, cache) {
-        return false;
-    }
+    // the base initialiser always succeeds when the position is given
+    let inited = base_init_with_world_dynamic_world_at_position_cache(me, &wref, &dref, pos, cache);
+    debug_assert!(inited);
     {
         let mut b = me.base().borrow_mut();
         b.float_pos.y = b.pos.y as f32;
@@ -646,18 +646,15 @@ pub fn train_car_init_with_world_dynamic_world_save_dict_cache(
     cache: CacheRef,
 ) -> bool {
     let (wref, dref): (WorldRef, DynamicWorldRef) = (world.clone(), dw.clone());
-    if !base_init_with_world_dynamic_world_save_dict_cache(me, &wref, &dref, save_dict, cache) {
-        return false;
-    }
+    let inited = base_init_with_world_dynamic_world_save_dict_cache(me, &wref, &dref, save_dict, cache);
+    debug_assert!(inited);
     let t = tcl(me);
     let get = |k: &str| save_dict.map.get(&k.to_string());
     let max = t.max_number_of_riders();
+    // `maxNumberOfRiders` is 0, 1 or 2 for every car class, so the index always fits the two-element array
     for i in 0..max {
         let mut s = t.tc().borrow_mut();
         let idx = i as usize;
-        if idx >= 2 {
-            break;
-        }
         s.saved_blockhead_index[idx] = -1;
         if let Some(n) = get(&format!("currentBlockheadIndex_{}", i)) {
             s.saved_blockhead_index[idx] = n.unsigned_long_value() as i32;
@@ -1380,41 +1377,22 @@ pub fn rolling_car_update_after_super(me: &ObjRef, dtc: f32) {
         }
     } else {
         // replica: resolve pending ids, order right, left, engine
+        // `train_car_update_accurate_dt_is_simulation` (the caller's `[super update:]`) already resolved and cleared
+        // every id the dynamic world knows, so an id left here names an absent car: the lookup can only come back
+        // empty and the original's clear-on-found step has nothing to clear. The same update leaves a non-zero id
+        // only while the matching link is still empty (a held link clears its id), so the lookup below never
+        // replaces a car that already carries that id.
         let rid = t.tc().borrow().remote_right_car_id;
         if rid != 0 {
-            let ok = t.tc().borrow().right_car.as_ref().map_or(false, |c| c.unique_id() == rid);
-            if !ok {
-                let c = dw.train_car_with_id(rid);
-                let f = c.is_some();
-                t.tc().borrow_mut().right_car = c;
-                if f {
-                    t.tc().borrow_mut().remote_right_car_id = 0;
-                }
-            }
+            t.tc().borrow_mut().right_car = dw.train_car_with_id(rid);
         }
         let lid = t.tc().borrow().remote_left_car_id;
         if lid != 0 {
-            let ok = t.tc().borrow().left_car.as_ref().map_or(false, |c| c.unique_id() == lid);
-            if !ok {
-                let c = dw.train_car_with_id(lid);
-                let f = c.is_some();
-                t.tc().borrow_mut().left_car = c;
-                if f {
-                    t.tc().borrow_mut().remote_left_car_id = 0;
-                }
-            }
+            t.tc().borrow_mut().left_car = dw.train_car_with_id(lid);
         }
         let eid = t.tc().borrow().remote_engine_car_id;
         if eid != 0 {
-            let ok = t.tc().borrow().engine_car.as_ref().map_or(false, |c| c.unique_id() == eid);
-            if !ok {
-                let c = dw.train_car_with_id(eid);
-                let f = c.is_some();
-                t.tc().borrow_mut().engine_car = c;
-                if f {
-                    t.tc().borrow_mut().remote_engine_car_id = 0;
-                }
-            }
+            t.tc().borrow_mut().engine_car = dw.train_car_with_id(eid);
         }
     }
 
@@ -1651,9 +1629,7 @@ pub fn couple_rolling_car_at_placement(me: &ObjRef) {
             let e = ct.engine_car(&car);
             t.set_engine_car(me, e.as_ref());
         }
-        if t.tc().borrow().engine_car.is_none() && ct.is_engine() {
-            t.set_engine_car(me, Some(&car));
-        }
+        // (an engine neighbour is already its own `engineCar`, so the adoption above has set it)
     }
 }
 
@@ -1764,7 +1740,7 @@ fn _use_traits(_: &dyn RidableDynamicObject, _: &dyn TapChoiceDynamicObject) {}
 // ------------------------------------------------------------------------------------------------ tests
 
 #[cfg(test)]
-mod world_tests {
+pub(crate) mod world_tests {
     //! World-backed tests: a flat rail line on solid ground, cars placed through the
     //! real `DynamicWorld` placement path with the constructors installed as `DwOpsHooks`.
     use super::*;
@@ -1851,8 +1827,18 @@ mod world_tests {
         }
     }
 
-    fn setup(name: &str) -> (Rc<World>, Rc<DynamicWorld>) {
-        let dw = test_dw(name, 2);
+    pub(crate) fn setup(name: &str) -> (Rc<World>, Rc<DynamicWorld>) {
+        setup_wide(name, 2)
+    }
+
+    /// `Loader::tile_is_protected_at_pos_against_blockhead` for any tile.
+    pub(super) fn protected_nowhere(world: &World, b: &ObjRef) -> bool {
+        Loader.tile_is_protected_at_pos_against_blockhead(world, IntPair { x: 0, y: 0 }, b)
+    }
+
+    /// Like [`setup`] with a world `macro_width` macro tiles wide.
+    pub(crate) fn setup_wide(name: &str, macro_width: i32) -> (Rc<World>, Rc<DynamicWorld>) {
+        let dw = test_dw(name, macro_width);
         let world = dw.world.upgrade().unwrap();
         world.set_ops_hooks(Some(Rc::new(Loader)));
         set_ops_hooks(Rc::new(Ops));
@@ -1860,7 +1846,7 @@ mod world_tests {
     }
 
     /// Rails on `x0..=x1` at y = 10 (the rail tile holds foreground contents 98 and a Rail object).
-    fn lay_rails(world: &Rc<World>, dw: &Rc<DynamicWorld>, x0: i32, x1: i32) {
+    pub(crate) fn lay_rails(world: &Rc<World>, dw: &Rc<DynamicWorld>, x0: i32, x1: i32) {
         for x in x0..=x1 {
             tile_at_world_position_loaded(x, 10, world).unwrap().set_foreground_contents(CONTENTS_RAIL);
         }
@@ -1869,8 +1855,8 @@ mod world_tests {
         }
     }
 
-    fn find_car(dw: &Rc<DynamicWorld>, ty: i32) -> ObjRef {
-        for id in 0..64u64 {
+    pub(crate) fn find_car(dw: &Rc<DynamicWorld>, ty: i32) -> ObjRef {
+        for id in 0..1024u64 {
             if let Some(c) = dw.train_car_with_id(id) {
                 if c.object_type() == ty {
                     return c;
@@ -2099,6 +2085,596 @@ mod world_tests {
             car.update_accurate_dt_is_simulation(&car, 0.016, 0.016, false);
         }
         assert!(t.left_wheel_pos().y < 10.0);
+    }
+}
+
+#[cfg(test)]
+mod car_tests {
+    //! The shared TrainCar machinery through real cars: riders and their persistence, remote updates, links,
+    //! placement probing and the protocol faces.
+    use super::world_tests::{find_car, lay_rails, setup};
+    use super::*;
+    use crate::blockhead::blockhead::testutil::{bh_of, new_bh, TestHost};
+    use crate::objects::base::DynamicObjectBase;
+    use crate::objects::base::DynamicWorldRef;
+    use crate::objects::class_info::DYNAMIC_OBJECT_CLASS;
+    use crate::trains::freight_car::FreightCar;
+    use crate::trains::hand_car::HandCar;
+    use crate::trains::passenger_car::PassengerCar;
+    use crate::trains::steam_train::SteamTrain;
+    use std::rc::Weak;
+
+    /// A car class that overrides nothing, to run the trait's default methods.
+    struct BareCar {
+        base: RefCell<DynamicObjectBase>,
+        tc: RefCell<TrainCarState>,
+        world: Weak<World>,
+        dw: Weak<DynamicWorld>,
+        engine: std::cell::Cell<bool>,
+    }
+    impl DynamicObject for BareCar {
+        fn base(&self) -> &RefCell<DynamicObjectBase> {
+            &self.base
+        }
+        fn class_info(&self) -> &'static ClassInfo {
+            &DYNAMIC_OBJECT_CLASS
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+        fn object_type(&self) -> i32 {
+            DOT_TRAIN_CAR_HANDCAR
+        }
+    }
+    impl TrainCarLike for BareCar {
+        // the one override: lets a single class run both branches of the defaults that read it
+        fn is_engine(&self) -> bool {
+            self.engine.get()
+        }
+        fn tc(&self) -> &RefCell<TrainCarState> {
+            &self.tc
+        }
+        fn tc_world(&self) -> Rc<World> {
+            self.world.upgrade().unwrap()
+        }
+        fn tc_dw(&self) -> Rc<DynamicWorld> {
+            self.dw.upgrade().unwrap()
+        }
+    }
+
+    fn place(dw: &Rc<DynamicWorld>, x: i32, item: i32, ty: usize) -> ObjRef {
+        dw.place_train_car_at_pos_of_type_save_dict_placed_by_client(IntPair { x, y: 10 }, item, None, None);
+        let c = find_car(dw, ty as i32);
+        dw.do_set(ty, c.unique_id(), c.clone());
+        c
+    }
+
+    fn bh(world: &Rc<World>, dw: &Rc<DynamicWorld>) -> ObjRef {
+        *world.distance_ordered_food_types.borrow_mut() = (0..31).collect();
+        new_bh(world, &(dw.clone() as DynamicWorldRef), 0)
+    }
+
+    fn tc_of(o: &ObjRef) -> &RefCell<TrainCarState> {
+        train_car_of(o).unwrap().tc()
+    }
+
+    /// The defaults of the trait (what a class gets that overrides nothing).
+    #[test]
+    fn trait_defaults() {
+        let _h = TestHost::install();
+        let (world, dw) = setup("tc_defaults");
+        lay_rails(&world, &dw, 3, 40);
+        let hand = place(&dw, 20, 204, 41);
+        let me = hand.clone();
+        let bare = crate::objects::handle::alloc_obj(|w| BareCar {
+            base: RefCell::new(DynamicObjectBase::alloc_zeroed_with(w)),
+            tc: RefCell::new(TrainCarState::alloc_zeroed()),
+            world: Rc::downgrade(&world),
+            dw: Rc::downgrade(&dw),
+            engine: std::cell::Cell::new(false),
+        });
+        assert!(!bare.requires_fuel());
+        // the stand-in's own accessors
+        let bare_obj: ObjRef = bare.clone();
+        assert_eq!(bare_obj.class_info().name, "DynamicObject");
+        assert!(bare_obj.as_any().is::<BareCar>());
+        assert_eq!(bare_obj.object_type(), DOT_TRAIN_CAR_HANDCAR);
+        assert!(bare.tc().borrow().riders[0].is_none());
+        // engineCar: itself when it is the engine, else the ivar
+        assert!(bare.engine_car(&bare_obj).is_none());
+        bare.engine.set(true);
+        assert!(bare.engine_car(&bare_obj).is_some());
+        bare.engine.set(false);
+        assert_eq!(bare_obj.pos(), bare_obj.base().borrow().pos);
+        let _ = (bare.tc_world(), bare.tc_dw());
+        assert_eq!(bare.item_type(), 0);
+        assert_eq!(bare.action_title(), "RIDE");
+        assert_eq!(bare.rider_pos_for_blockhead(&me), [1.0; 4]);
+        bare.set_target_velocity(Vector2 { x: 1.0, y: 1.0 });
+        bare.rail_or_station_name_changed();
+        // load_derived_stuff / addRider: / removeRider: act on the car they are given
+        bare.load_derived_stuff(&me);
+        let b = bh(&world, &dw);
+        bare.add_rider(&me, &b);
+        assert!(tc_of(&me).borrow().riders[0].is_some());
+        bare.remove_rider(&me, &b);
+        assert!(tc_of(&me).borrow().riders[0].is_none());
+        // the creation image names a second rider and every link that is set
+        {
+            let mut st = tc_of(&me).borrow_mut();
+            st.riders[1] = Some(b.clone());
+            st.left_car = Some(bare_obj.clone());
+            st.engine_car = Some(bare_obj.clone());
+        }
+        let cd = train_car_train_car_creation_net_data(&me);
+        assert_eq!(cd.rider1_id, b.unique_id());
+        assert_eq!(cd.left_car_id, bare_obj.unique_id());
+        assert_eq!(cd.engine_car_id, bare_obj.unique_id());
+        {
+            let mut st = tc_of(&me).borrow_mut();
+            st.riders[1] = None;
+            st.left_car = None;
+            st.engine_car = None;
+        }
+    }
+
+    /// The Ridable / TapChoice faces of every car class.
+    #[test]
+    fn protocol_faces() {
+        let _h = TestHost::install();
+        let (world, dw) = setup("tc_faces");
+        lay_rails(&world, &dw, 3, 60);
+        let cars = [place(&dw, 10, 204, 41), place(&dw, 20, 205, 42), place(&dw, 30, 206, 43), place(&dw, 40, 208, 44)];
+        let b = bh(&world, &dw);
+        for c in &cars {
+            let r = c.as_ridable().unwrap();
+            let _ = r.rider_pos_for_blockhead(&b);
+            let _ = r.camera_pos_for_blockhead(&b);
+            assert_eq!(r.rider_body_y_rotation_for_blockhead(&b), 0.0);
+            r.set_target_velocity(Vector2 { x: 0.0, y: 0.0 });
+            assert_eq!(r.ride_direction(), 0);
+            r.add_rider(c, &b);
+            r.remove_rider(c, &b);
+            r.swipe_up_gesture(c);
+            let _ = r.blockhead_can_ride_using_item(&b, 0);
+            assert!(!r.jumps_on_swipe());
+            let _ = r.requires_fuel();
+            let _ = r.acts_as_interaction_object();
+            assert!(!r.rider_d_pad_should_allow_up_down());
+            assert!(!r.rider_d_pad_should_give_discrete_values());
+            let t = c.as_tap_choice().unwrap();
+            assert!(!t.action_title().is_empty());
+            assert!(!t.is_double_height());
+            let _ = train_car_render_pos(c);
+            let t = train_car_of(c).unwrap();
+            assert!(t.engine_car(c).is_some() == t.is_engine());
+        }
+        assert!(cars[1].as_ridable().unwrap().requires_fuel());
+        assert!(!cars[0].as_ridable().unwrap().requires_fuel());
+    }
+
+    /// Owner ids: from the placing client, from the save dict, or none.
+    #[test]
+    fn owner_of_a_placed_car() {
+        let (world, dw) = setup("tc_owner");
+        lay_rails(&world, &dw, 3, 40);
+        let mut sd = new_mutable_dict();
+        sd.map.insert("ownerID".to_string(), PlistValue::string("fromdict"));
+        let a = HandCar::new(&world, &dw, IntPair { x: 10, y: 10 }, None, Some(&sd), None).unwrap();
+        assert_eq!(a.owner_id().as_deref(), Some("fromdict"));
+        let b = HandCar::new(&world, &dw, IntPair { x: 12, y: 10 }, None, Some(&sd), Some("client")).unwrap();
+        assert_eq!(b.owner_id().as_deref(), Some("client"));
+        let c = HandCar::new(&world, &dw, IntPair { x: 14, y: 10 }, None, None, None).unwrap();
+        assert_eq!(c.owner_id(), None);
+    }
+
+    /// Riders survive a save: the dict stores their index in the blockhead list, the loaded car takes them back
+    /// in `blockheadsLoaded` (and lets go of ones the server controls).
+    #[test]
+    fn riders_persist_through_a_save() {
+        let _h = TestHost::install();
+        let (world, dw) = setup("tc_riders");
+        lay_rails(&world, &dw, 3, 40);
+        let car = place(&dw, 20, 208, 44);
+        let (a, b, other) = (bh(&world, &dw), bh(&world, &dw), bh(&world, &dw));
+        // `other` comes first in the list so the saved indices are 1 and 2; a vanished one is not recorded
+        dw.blockheads.borrow_mut().extend([other.clone(), a.clone(), b.clone()]);
+        train_car_add_rider(&car, &a);
+        train_car_add_rider(&car, &b);
+        let sd = car.get_save_dict(&car);
+        assert_eq!(sd.map.get(&"currentBlockheadIndex_0".to_string()).unwrap().int_value(), 1);
+        assert_eq!(sd.map.get(&"currentBlockheadIndex_1".to_string()).unwrap().int_value(), 2);
+        b.base().borrow_mut().needs_removed = true;
+        assert!(!car.get_save_dict(&car).map.contains_key(&"currentBlockheadIndex_1".to_string()));
+        b.base().borrow_mut().needs_removed = false;
+        // a car loaded from that dict takes the riders back once the blockheads exist
+        let loaded = PassengerCar::from_save_dict(&world, &dw, &sd, None).unwrap();
+        assert_eq!(tc_of(&loaded).borrow().saved_blockhead_index, [1, 2]);
+        loaded.blockheads_loaded(&loaded);
+        assert!(tc_of(&loaded).borrow().riders[0].as_ref().is_some_and(|r| ptr_eq(r, &a)));
+        assert!(bh_of(&a).bh.borrow().ride_object.is_some());
+        assert_eq!(tc_of(&loaded).borrow().saved_blockhead_index, [-1, -1]);
+        // an index past the list is ignored
+        let mut far = sd.clone();
+        far.map.insert("currentBlockheadIndex_0".to_string(), PlistValue::int(9));
+        let nobody = PassengerCar::from_save_dict(&world, &dw, &far, None).unwrap();
+        nobody.blockheads_loaded(&nobody);
+        assert!(tc_of(&nobody).borrow().riders[0].is_none());
+        // a rider controlled by the server is let go again
+        bh_of(&a).bh.borrow_mut().is_client_blockhead_being_controlled_by_server = true;
+        let again = PassengerCar::from_save_dict(&world, &dw, &sd, None).unwrap();
+        again.blockheads_loaded(&again);
+        assert!(tc_of(&again).borrow().riders[0].is_none());
+    }
+
+    /// `addRider:` guards: a server-controlled blockhead is turned away (and leaves a seat it held), a seated
+    /// blockhead is not seated twice, a full car takes nobody.
+    #[test]
+    fn add_rider_guards() {
+        let _h = TestHost::install();
+        let (world, dw) = setup("tc_addrider");
+        lay_rails(&world, &dw, 3, 40);
+        let car = place(&dw, 20, 204, 41);
+        let (a, b) = (bh(&world, &dw), bh(&world, &dw));
+        train_car_add_rider(&car, &a);
+        train_car_add_rider(&car, &a);
+        assert!(tc_of(&car).borrow().riders[0].is_some());
+        // full: the hand car has one seat
+        train_car_add_rider(&car, &b);
+        assert!(tc_of(&car).borrow().riders[0].as_ref().is_some_and(|r| ptr_eq(r, &a)));
+        // the seated one becomes server-controlled: adding it again vacates the seat
+        bh_of(&a).bh.borrow_mut().is_client_blockhead_being_controlled_by_server = true;
+        car.set_update_needs_to_be_sent(false);
+        train_car_add_rider(&car, &a);
+        assert!(tc_of(&car).borrow().riders[0].is_none());
+        assert!(car.update_needs_to_be_sent());
+        // another controlled blockhead just bounces
+        bh_of(&b).bh.borrow_mut().is_client_blockhead_being_controlled_by_server = true;
+        train_car_add_rider(&car, &b);
+        assert!(tc_of(&car).borrow().riders[0].is_none());
+        // a rider that is not on the car is a no-op for removal; a loaded rider list leaves with the blockhead
+        train_car_remove_rider(&car, &b);
+        let c = bh(&world, &dw);
+        train_car_add_rider(&car, &c);
+        train_car_blockhead_unloaded(&car, &b);
+        assert!(tc_of(&car).borrow().riders[0].is_some());
+        train_car_blockhead_unloaded(&car, &c);
+        assert!(tc_of(&car).borrow().riders[0].is_none());
+        // a ridden car does not fall off its rail
+        train_car_add_rider(&car, &c);
+        tile_at_world_position_loaded(20, 10, &world).unwrap().set_foreground_contents(0);
+        car.world_changed(&car, &mut vec![IntPair { x: 20, y: 10 }]);
+        assert!(!car.needs_removed());
+    }
+
+    /// `remoteUpdate:` hands seats to the right riders and rejects strangers.
+    #[test]
+    fn remote_update_seats() {
+        let _h = TestHost::install();
+        let (world, dw) = setup("tc_remote");
+        lay_rails(&world, &dw, 3, 40);
+        let car = place(&dw, 20, 208, 44);
+        let img = |car: &ObjRef, r0: u64, r1: u64| {
+            let mut d = train_car_train_car_creation_net_data(car);
+            d.rider0_id = r0;
+            d.rider1_id = r1;
+            d.to_vec()
+        };
+        // a local rider stays unless the update names someone else
+        let local = bh(&world, &dw);
+        train_car_add_rider(&car, &local);
+        car.remote_update(&car, &img(&car, local.unique_id(), 0));
+        assert!(tc_of(&car).borrow().riders[0].is_some());
+        car.remote_update(&car, &img(&car, 12345, 0));
+        assert!(tc_of(&car).borrow().riders[0].is_none());
+        // a remote rider joins when it is a known net blockhead, leaves on id 0
+        let net = bh(&world, &dw);
+        net.base().borrow_mut().is_net = true;
+        dw.net_blockheads.borrow_mut().push(net.clone());
+        car.remote_update(&car, &img(&car, net.unique_id(), 0));
+        assert!(tc_of(&car).borrow().riders[0].as_ref().is_some_and(|r| ptr_eq(r, &net)));
+        car.remote_update(&car, &img(&car, net.unique_id(), 0));
+        car.remote_update(&car, &img(&car, 0, 0));
+        assert!(tc_of(&car).borrow().riders[0].is_none());
+        // an unknown remote id seats nobody; an update for a removed car does nothing
+        car.remote_update(&car, &img(&car, 999_999, 0));
+        assert!(tc_of(&car).borrow().riders[0].is_none());
+        car.base().borrow_mut().needs_removed = true;
+        car.remote_update(&car, &img(&car, net.unique_id(), 0));
+        assert!(tc_of(&car).borrow().riders[0].is_none());
+    }
+
+    /// A replica follows the link ids of the image.
+    #[test]
+    fn replica_follows_link_ids() {
+        let (world, dw) = setup("tc_links");
+        lay_rails(&world, &dw, 3, 60);
+        let a = place(&dw, 10, 208, 44);
+        let b = place(&dw, 30, 206, 43);
+        let eng = place(&dw, 45, 205, 42);
+        let rep =
+            PassengerCar::from_net_data(&world, &dw, None, &a.creation_net_data_for_client(&a, None).unwrap()).unwrap();
+        let img = |right: u64, left: u64, engine: u64| {
+            let mut d = train_car_train_car_creation_net_data(&a);
+            d.right_car_id = right;
+            d.left_car_id = left;
+            d.engine_car_id = engine;
+            d.engine_is_right = 1;
+            d.to_vec()
+        };
+        // known cars are linked at once
+        rep.remote_update(&rep, &img(b.unique_id(), eng.unique_id(), eng.unique_id()));
+        assert!(tc_of(&rep).borrow().right_car.as_ref().is_some_and(|c| ptr_eq(c, &b)));
+        assert!(tc_of(&rep).borrow().engine_is_right);
+        // the same ids again keep the links
+        rep.remote_update(&rep, &img(b.unique_id(), eng.unique_id(), eng.unique_id()));
+        // unknown ids are remembered for later
+        rep.remote_update(&rep, &img(777, 778, 779));
+        {
+            let s = tc_of(&rep).borrow();
+            assert_eq!((s.remote_right_car_id, s.remote_left_car_id, s.remote_engine_car_id), (777, 778, 779));
+            assert!(s.right_car.is_none() && s.left_car.is_none() && s.engine_car.is_none());
+        }
+        // id 0 clears
+        rep.remote_update(&rep, &img(0, 0, 0));
+        assert_eq!(tc_of(&rep).borrow().remote_right_car_id, 0);
+        // the pending ids resolve (or are dropped) on the next update of a car that has no link yet
+        {
+            let mut s = tc_of(&rep).borrow_mut();
+            s.remote_left_car_id = b.unique_id();
+            s.remote_right_car_id = b.unique_id();
+            s.remote_engine_car_id = eng.unique_id();
+        }
+        rep.update_accurate_dt_is_simulation(&rep, 0.016, 0.016, false);
+        assert_eq!(tc_of(&rep).borrow().remote_left_car_id, 0);
+        // pending ids with links already in place are simply cleared
+        {
+            let mut s = tc_of(&rep).borrow_mut();
+            s.remote_left_car_id = 5;
+            s.remote_right_car_id = 5;
+            s.remote_engine_car_id = 5;
+        }
+        rep.update_accurate_dt_is_simulation(&rep, 0.016, 0.016, false);
+        // an engine resolves nothing for itself
+        let steam = SteamTrain::new(&world, &dw, IntPair { x: 50, y: 10 }, None, None, None).unwrap();
+        tc_of(&steam).borrow_mut().remote_engine_car_id = 5;
+        train_car_update_accurate_dt_is_simulation(&steam, 0.016, 0.016, false);
+        assert_eq!(tc_of(&steam).borrow().remote_engine_car_id, 0);
+    }
+
+    /// Chains of cars: which side the engine is found on decides who loses it when a car goes.
+    #[test]
+    fn engine_search_walks_the_chain() {
+        let (world, dw) = setup("tc_chain");
+        lay_rails(&world, &dw, 3, 90);
+        let mk = |x: i32, item: i32| -> ObjRef {
+            let pos = IntPair { x, y: 10 };
+            let c = match item {
+                205 => SteamTrain::new(&world, &dw, pos, None, None, None),
+                206 => FreightCar::new(&world, &dw, pos, None, None, None),
+                _ => PassengerCar::new(&world, &dw, pos, None, None, None),
+            }
+            .unwrap();
+            dw.do_set(c.object_type() as usize, c.unique_id(), c.clone());
+            c
+        };
+        let link = |a: &ObjRef, b: &ObjRef| {
+            tc_of(a).borrow_mut().right_car = Some(b.clone());
+            tc_of(b).borrow_mut().left_car = Some(a.clone());
+        };
+        // [engine][a][b][c][d]: c's left neighbour b goes; the engine is two cars further left, so d loses it
+        let e = mk(10, 205);
+        let (a, b, c, d) = (mk(20, 208), mk(30, 206), mk(40, 208), mk(50, 208));
+        link(&e, &a);
+        link(&a, &b);
+        link(&b, &c);
+        link(&c, &d);
+        train_car_of(&a).unwrap().set_engine_car(&a, Some(&e));
+        assert!(!engine_none(&d));
+        b.base().borrow_mut().needs_removed = true;
+        c.update_accurate_dt_is_simulation(&c, 0.016, 0.016, false);
+        assert!(tc_of(&c).borrow().left_car.is_none());
+        assert!(engine_none(&d));
+        // no engine anywhere: the walk just ends
+        let (x, y, z) = (mk(60, 208), mk(70, 206), mk(80, 208));
+        link(&x, &y);
+        link(&y, &z);
+        y.base().borrow_mut().needs_removed = true;
+        z.update_accurate_dt_is_simulation(&z, 0.016, 0.016, false);
+        assert!(tc_of(&z).borrow().left_car.is_none());
+        // the mirror image on the right: [z2][a2][b2][c2][engine], b2 goes, a2 looks right and z2 loses the engine
+        let (z2, a2, b2, c2) = (mk(12, 208), mk(22, 208), mk(32, 206), mk(42, 208));
+        let e2 = mk(52, 205);
+        link(&z2, &a2);
+        link(&a2, &b2);
+        link(&b2, &c2);
+        link(&c2, &e2);
+        train_car_of(&c2).unwrap().set_engine_car(&c2, Some(&e2));
+        assert!(!engine_none(&z2));
+        b2.base().borrow_mut().needs_removed = true;
+        a2.update_accurate_dt_is_simulation(&a2, 0.016, 0.016, false);
+        assert!(tc_of(&a2).borrow().right_car.is_none());
+        assert!(engine_none(&z2));
+        let (p, q, r) = (mk(62, 208), mk(72, 206), mk(82, 208));
+        link(&p, &q);
+        link(&q, &r);
+        q.base().borrow_mut().needs_removed = true;
+        p.update_accurate_dt_is_simulation(&p, 0.016, 0.016, false);
+        assert!(tc_of(&p).borrow().right_car.is_none());
+    }
+
+    fn engine_none(c: &ObjRef) -> bool {
+        train_car_of(c).unwrap().engine_car(c).is_none()
+    }
+
+    /// A wheel with the rail one tile above it, and an engine-side car off to one side pulling at an angle.
+    #[test]
+    fn rail_above_and_steep_coupling() {
+        let (world, dw) = setup("tc_above");
+        lay_rails(&world, &dw, 3, 60);
+        let car = place(&dw, 20, 208, 44);
+        // the rail under the left wheel moves up one tile: the wheel's tile position follows
+        let t = tile_at_world_position_loaded(19, 10, &world).unwrap();
+        t.set_foreground_contents(0);
+        t.set_type_index(2);
+        tile_at_world_position_loaded(19, 11, &world).unwrap().set_foreground_contents(CONTENTS_RAIL);
+        car.update_accurate_dt_is_simulation(&car, 0.016, 0.016, false);
+        assert_eq!(tc_of(&car).borrow().left_wheel_tile_pos, IntPair { x: 19, y: 11 });
+        // engine on the right, its car high above: the pull is clamped to 0.5 in x
+        let other = place(&dw, 40, 206, 43);
+        let eng = place(&dw, 50, 205, 42);
+        {
+            let mut s = tc_of(&car).borrow_mut();
+            s.right_car = Some(other.clone());
+            s.engine_car = Some(eng.clone());
+            s.engine_is_right = true;
+        }
+        tc_of(&other).borrow_mut().left_wheel_pos = Vector2 { x: 20.0, y: 30.0 };
+        car.update_accurate_dt_is_simulation(&car, 0.016, 0.016, false);
+        // and on the left
+        {
+            let mut s = tc_of(&car).borrow_mut();
+            s.left_car = Some(other.clone());
+            s.right_car = None;
+            s.engine_is_right = false;
+        }
+        tc_of(&other).borrow_mut().right_wheel_pos = Vector2 { x: 20.0, y: 30.0 };
+        car.update_accurate_dt_is_simulation(&car, 0.016, 0.016, false);
+    }
+
+    /// The probing of the tiles beside a new car on slopes and gaps.
+    #[test]
+    fn placement_probe_on_slopes_and_gaps() {
+        let (world, dw) = setup("tc_probe");
+        lay_rails(&world, &dw, 3, 60);
+        let car = place(&dw, 30, 208, 44);
+        let tile = |x: i32, y: i32| tile_at_world_position_loaded(x, y, &world).unwrap();
+        let set = |x: i32, y: i32, fg: u8, ty: u8| {
+            tile(x, y).set_foreground_contents(fg);
+            tile(x, y).set_type_index(ty);
+        };
+        for offset in [-1i32, 1] {
+            let n = 30 + offset;
+            let nn = 30 + 2 * offset;
+            // neighbour tile is air and the rail is one lower
+            set(n, 10, 0, 2);
+            set(n, 9, CONTENTS_RAIL, 2);
+            set(nn, 10, 0, 2);
+            set(nn, 9, CONTENTS_RAIL, 2);
+            let _ = neighbour_car_for_placement(&car, offset);
+            // ... and the second tile is solid: the rail would be one higher
+            set(nn, 10, 0, 1);
+            set(nn, 11, CONTENTS_RAIL, 2);
+            let _ = neighbour_car_for_placement(&car, offset);
+            // ... which is not there: no rail at all
+            set(nn, 11, 0, 2);
+            assert!(neighbour_car_for_placement(&car, offset).is_none());
+            // neighbour tile solid, rail one higher, second tile missing the rail
+            set(n, 10, 0, 1);
+            set(n, 11, CONTENTS_RAIL, 2);
+            set(nn, 10, 0, 2);
+            set(nn, 9, 0, 2);
+            assert!(neighbour_car_for_placement(&car, offset).is_none());
+            // neighbour tile solid and no rail above it
+            set(n, 11, 0, 2);
+            assert!(neighbour_car_for_placement(&car, offset).is_none());
+            // a rail beside the car, then a solid tile whose upper neighbour carries the rail
+            set(n, 10, CONTENTS_RAIL, 2);
+            set(nn, 10, 0, 1);
+            set(nn, 11, CONTENTS_RAIL, 2);
+            let _ = neighbour_car_for_placement(&car, offset);
+            // ... and an open tile whose lower neighbour does
+            set(nn, 10, 0, 2);
+            set(nn, 11, 0, 2);
+            set(nn, 9, CONTENTS_RAIL, 2);
+            let _ = neighbour_car_for_placement(&car, offset);
+        }
+    }
+
+    /// Cached wheel rails that were removed are forgotten; a rail tile without a rail object leaves the wheels flat.
+    #[test]
+    fn wheel_rails_and_bare_rail_tiles() {
+        let (world, dw) = setup("tc_wheelrails");
+        lay_rails(&world, &dw, 3, 38);
+        let car = place(&dw, 20, 208, 44);
+        car.update_accurate_dt_is_simulation(&car, 0.016, 0.016, false);
+        assert!(tc_of(&car).borrow().left_wheel_rail.is_some());
+        for x in 18..=23 {
+            dw.get_rail_at_pos(IntPair { x, y: 10 }).unwrap().base().borrow_mut().needs_removed = true;
+        }
+        car.update_accurate_dt_is_simulation(&car, 0.016, 0.016, false);
+        assert!(tc_of(&car).borrow().left_wheel_rail.is_none() && tc_of(&car).borrow().right_wheel_rail.is_none());
+        // a rail tile no rail object stands on
+        tile_at_world_position_loaded(50, 10, &world).unwrap().set_foreground_contents(CONTENTS_RAIL);
+        let bare = HandCar::new(&world, &dw, IntPair { x: 50, y: 10 }, None, None, None).unwrap();
+        assert_eq!(bare.float_pos(), Vector2 { x: 50.5, y: 10.0 });
+    }
+
+    /// Seat availability, the mirror of `worldChanged:` for replicas and removed cars, `blockheadUnloaded:` and
+    /// `removeFromMacroBlock` through the object, and the owner tail of a bare image.
+    #[test]
+    fn seat_availability_and_object_hooks() {
+        let _h = TestHost::install();
+        let (world, dw) = setup("tc_hooks");
+        lay_rails(&world, &dw, 3, 60);
+        let car = place(&dw, 20, 204, 41);
+        let b = bh(&world, &dw);
+        let t = train_car_of(&car).unwrap();
+        assert!(t.blockhead_can_ride_using_item(&car, &b, 0));
+        train_car_add_rider(&car, &b);
+        assert!(!t.blockhead_can_ride_using_item(&car, &b, 0));
+        car.blockhead_unloaded(&car, &b);
+        assert!(tc_of(&car).borrow().riders[0].is_none());
+        // a replica never drops itself
+        let nd = car.creation_net_data_for_client(&car, None).unwrap();
+        let rep = HandCar::from_net_data(&world, &dw, None, &nd).unwrap();
+        tile_at_world_position_loaded(20, 10, &world).unwrap().set_foreground_contents(0);
+        rep.world_changed(&rep, &mut vec![IntPair { x: 20, y: 10 }]);
+        assert!(!rep.needs_removed());
+        // a head-only image has no owner tail
+        let bare = PassengerCar::from_net_data(&world, &dw, None, &train_car_creation_net_data_for_client(&car));
+        assert_eq!(bare.unwrap().owner_id(), None);
+        // removing the car from its macro tile lets go of its links
+        let other = place(&dw, 30, 208, 44);
+        tc_of(&other).borrow_mut().left_car = Some(car.clone());
+        other.remove_from_macro_block(&other);
+        assert!(tc_of(&other).borrow().left_car.is_none());
+        tc_of(&other).borrow_mut().right_car = Some(car.clone());
+        train_car_of(&other).unwrap().cleanup(&other);
+        assert!(tc_of(&other).borrow().right_car.is_none());
+        let removed = place(&dw, 40, 208, 44);
+        removed.base().borrow_mut().needs_removed = true;
+        assert!(!train_car_of(&removed).unwrap().blockhead_can_ride_using_item(&removed, &b, 0));
+        _use_traits(removed.as_ridable().unwrap(), removed.as_tap_choice().unwrap());
+    }
+
+    /// Placement does not couple to a hand car, and an existing neighbour with an engine hands it over.
+    #[test]
+    fn placement_coupling_skips_hand_cars() {
+        let (world, dw) = setup("tc_couple");
+        lay_rails(&world, &dw, 3, 60);
+        let hand = place(&dw, 21, 204, 41);
+        let pass = place(&dw, 20, 208, 44);
+        assert!(tc_of(&pass).borrow().right_car.is_none());
+        assert!(tc_of(&hand).borrow().left_car.is_none());
+    }
+
+    /// The scaffolding itself: an unknown item type builds nothing, a missing car is an error, nothing is protected.
+    #[test]
+    fn scaffolding_edges() {
+        let (world, dw) = setup("tc_scaffold");
+        lay_rails(&world, &dw, 3, 40);
+        dw.place_train_car_at_pos_of_type_save_dict_placed_by_client(IntPair { x: 20, y: 10 }, 999, None, None);
+        assert!(dw.train_car_with_id(2000).is_none());
+        let b = bh(&world, &dw);
+        assert!(!world_tests::protected_nowhere(&world, &b));
+    }
+
+    #[test]
+    #[should_panic(expected = "car of type 41 not found")]
+    fn find_car_panics_without_a_car() {
+        let (_world, dw) = setup("tc_nofind");
+        find_car(&dw, 41);
     }
 }
 

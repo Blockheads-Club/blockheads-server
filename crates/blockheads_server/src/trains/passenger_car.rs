@@ -55,11 +55,11 @@ impl PassengerCar {
     ) -> Option<ObjRef> {
         let me = Self::alloc(world, dw);
         let o: ObjRef = me;
-        if !train_car_init_with_world_dynamic_world_at_position_cache_save_dict_placed_by_client(
+        // the TrainCar initialiser cannot fail on the placement path (the base init always succeeds)
+        let inited = train_car_init_with_world_dynamic_world_at_position_cache_save_dict_placed_by_client(
             &o, world, dw, pos, cache, save_dict, client_id,
-        ) {
-            return None;
-        }
+        );
+        debug_assert!(inited);
         couple_rolling_car_at_placement(&o);
         Some(o)
     }
@@ -73,9 +73,8 @@ impl PassengerCar {
     ) -> Option<ObjRef> {
         let me = Self::alloc(world, dw);
         let o: ObjRef = me;
-        if !train_car_init_with_world_dynamic_world_save_dict_cache(&o, world, dw, save_dict, cache) {
-            return None;
-        }
+        let inited = train_car_init_with_world_dynamic_world_save_dict_cache(&o, world, dw, save_dict, cache);
+        debug_assert!(inited);
         Some(o)
     }
 
@@ -220,5 +219,287 @@ mod tests {
         let fp2 = Vector2 { x: 0.5, y: 4.0 };
         let (lw2, rw2) = (Vector2 { x: -0.5, y: 4.0 }, Vector2 { x: 1.5, y: 4.0 });
         assert!(rotated_body_tap_test(fp2, lw2, rw2, Vector2 { x: 127.9, y: 5.0 }, 4, 2.0));
+    }
+}
+
+#[cfg(test)]
+mod world_tests {
+    use super::*;
+    use crate::blockhead::blockhead::testutil::{new_bh, TestHost};
+    use crate::objects::base::DynamicWorldRef;
+    use crate::trains::train_car::world_tests::{find_car, lay_rails, setup, setup_wide};
+    use crate::world::tiles::tile_at_world_position_loaded;
+
+    fn place(dw: &Rc<DynamicWorld>, x: i32, item: i32, ty: usize) -> ObjRef {
+        dw.place_train_car_at_pos_of_type_save_dict_placed_by_client(IntPair { x, y: 10 }, item, None, None);
+        let c = find_car(dw, ty as i32);
+        dw.do_set(ty, c.unique_id(), c.clone());
+        c
+    }
+
+    fn tick(o: &ObjRef, n: usize) {
+        for _ in 0..n {
+            o.update_accurate_dt_is_simulation(o, 0.016, 0.016, false);
+        }
+    }
+
+    fn rider(world: &Rc<World>, dw: &Rc<DynamicWorld>) -> ObjRef {
+        *world.distance_ordered_food_types.borrow_mut() = (0..31).collect();
+        new_bh(world, &(dw.clone() as DynamicWorldRef), 0)
+    }
+
+    fn pass_of(o: &ObjRef) -> &PassengerCar {
+        handle::downcast::<PassengerCar>(o).unwrap()
+    }
+
+    /// Constants, riders (two seats), seat positions and the tap window.
+    #[test]
+    fn seats_and_constants() {
+        let _h = TestHost::install();
+        let (world, dw) = setup("pass_seats");
+        lay_rails(&world, &dw, 3, 40);
+        let car = place(&dw, 20, 208, 44);
+        let p = pass_of(&car);
+        assert_eq!(p.max_number_of_riders(), 2);
+        assert_eq!(p.item_type(), ITEM_PASSENGER_CAR);
+        assert_eq!(p.action_title(), "PASSENGER CAR");
+        assert_eq!(car.freeblock_creation_item_type(), ITEM_PASSENGER_CAR);
+        assert_eq!(car.class_info().name, "PassengerCar");
+        assert!(p.acts_as_interaction_object_impl().is_none());
+        assert!(p.tap_is_within_body_radius(Vector2 { x: 20.5, y: 11.0 }));
+        let (a, b) = (rider(&world, &dw), rider(&world, &dw));
+        TrainCarLike::add_rider(p, &car, &a);
+        TrainCarLike::add_rider(p, &car, &b);
+        let (pa, pb) = (p.rider_pos_for_blockhead(&a), p.rider_pos_for_blockhead(&b));
+        assert!(pa[0] < pb[0]);
+        assert!(!TrainCarLike::blockhead_can_ride_using_item(p, &car, &a, 0));
+        let _ = car.render_pos();
+        // both seats ride along a few ticks (one of them a long frame, clamped to 50 ms), then leave
+        car.update_accurate_dt_is_simulation(&car, 0.2, 0.2, false);
+        tick(&car, 20);
+        for r in [&a, &b] {
+            r.base().borrow_mut().needs_removed = true;
+        }
+        tick(&car, 1);
+        assert!(p.tc.borrow().riders.iter().all(|r| r.is_none()));
+        assert!(car.update_needs_to_be_sent());
+    }
+
+    /// Save dict and net images round trip; the replica reads the owner.
+    #[test]
+    fn save_and_net_round_trips() {
+        let (world, dw) = setup("pass_rt");
+        lay_rails(&world, &dw, 3, 40);
+        let car = place(&dw, 20, 208, 44);
+        car.set_owner_id(Some("own".to_string()));
+        let sd = car.get_save_dict(&car);
+        assert!(car.free_block_creation_save_dict(&car).is_some());
+        let again = PassengerCar::from_save_dict(&world, &dw, &sd, None).unwrap();
+        assert_eq!(again.pos(), car.pos());
+        let nd = car.creation_net_data_for_client(&car, None).unwrap();
+        assert_eq!(nd, car.update_net_data_for_client(&car, None).unwrap());
+        let rep = PassengerCar::from_net_data(&world, &dw, None, &nd).unwrap();
+        assert_eq!(rep.owner_id().as_deref(), Some("own"));
+        car.remote_update(&car, &nd);
+        car.set_needs_removed(&car, false);
+        car.blockheads_loaded(&car);
+        car.update_position(&car, IntPair { x: 21, y: 10 });
+        // a replica image at an unloaded tile is refused
+        let (w2, d2) = setup_wide("pass_far", 4);
+        lay_rails(&w2, &d2, 3, 40);
+        let far = place(&d2, 20, 208, 44);
+        far.base().borrow_mut().pos = IntPair { x: 70, y: 10 };
+        let nd = far.creation_net_data_for_client(&far, None).unwrap();
+        assert!(PassengerCar::from_net_data(&w2, &d2, None, &nd).is_none());
+    }
+
+    /// Cars are dropped when a wheel is buried; a replica never drops; the flipped axis derails.
+    #[test]
+    fn crash_and_derail() {
+        let (world, dw) = setup("pass_crash");
+        lay_rails(&world, &dw, 3, 40);
+        let car = place(&dw, 20, 208, 44);
+        tile_at_world_position_loaded(19, 10, &world).unwrap().set_foreground_contents(0);
+        tile_at_world_position_loaded(19, 10, &world).unwrap().set_type_index(1);
+        let nd = car.creation_net_data_for_client(&car, None).unwrap();
+        let rep = PassengerCar::from_net_data(&world, &dw, None, &nd).unwrap();
+        tick(&rep, 2);
+        assert!(!rep.needs_removed());
+        tick(&car, 2);
+        assert!(car.needs_removed());
+        tick(&car, 2);
+
+        let (world, dw) = setup("pass_flip");
+        lay_rails(&world, &dw, 3, 40);
+        let car = place(&dw, 20, 208, 44);
+        {
+            let mut tc = pass_of(&car).tc.borrow_mut();
+            let (l, r) = (tc.left_wheel_pos, tc.right_wheel_pos);
+            tc.left_wheel_pos = r;
+            tc.right_wheel_pos = l;
+        }
+        tick(&car, 2);
+        assert!(car.needs_removed());
+    }
+
+    /// A car at `x` that is not adjacent to anything (no placement coupling).
+    fn lone(world: &Rc<World>, dw: &Rc<DynamicWorld>, x: i32, item: i32) -> ObjRef {
+        let pos = IntPair { x, y: 10 };
+        let c = match item {
+            205 => crate::trains::steam_train::SteamTrain::new(world, dw, pos, None, None, None),
+            206 => crate::trains::freight_car::FreightCar::new(world, dw, pos, None, None, None),
+            _ => PassengerCar::new(world, dw, pos, None, None, None),
+        }
+        .unwrap();
+        dw.do_set(c.object_type() as usize, c.unique_id(), c.clone());
+        c
+    }
+
+    /// `a` left of `b`, linked both ways.
+    fn link(a: &ObjRef, b: &ObjRef) {
+        train_car_of(a).unwrap().tc().borrow_mut().right_car = Some(b.clone());
+        train_car_of(b).unwrap().tc().borrow_mut().left_car = Some(a.clone());
+    }
+
+    fn engine_of(c: &ObjRef) -> Option<ObjRef> {
+        train_car_of(c).unwrap().engine_car(c)
+    }
+
+    /// A removed neighbour is dropped from the links of the cars next to it and the cars beyond lose the engine.
+    #[test]
+    fn removed_neighbours_are_forgotten() {
+        let (world, dw) = setup("pass_consist");
+        lay_rails(&world, &dw, 3, 60);
+        // engine - mid - tail - last
+        let eng = lone(&world, &dw, 10, 205);
+        let mid = lone(&world, &dw, 20, 208);
+        let tail = lone(&world, &dw, 30, 206);
+        let last = lone(&world, &dw, 40, 208);
+        link(&eng, &mid);
+        link(&mid, &tail);
+        link(&tail, &last);
+        train_car_of(&mid).unwrap().set_engine_car(&mid, Some(&eng));
+        assert!(engine_of(&last).is_some());
+        // the middle car goes: the tail forgets its left link, and the cars behind lose the engine
+        mid.base().borrow_mut().needs_removed = true;
+        tick(&tail, 1);
+        assert!(train_car_of(&tail).unwrap().left_car().is_none());
+        assert!(engine_of(&tail).is_none() && engine_of(&last).is_none());
+        assert!(tail.update_needs_to_be_sent());
+    }
+
+    #[test]
+    fn a_removed_engine_next_door() {
+        let (world, dw) = setup("pass_consist2");
+        lay_rails(&world, &dw, 3, 60);
+        let eng = lone(&world, &dw, 10, 205);
+        let first = lone(&world, &dw, 20, 208);
+        let second = lone(&world, &dw, 30, 208);
+        link(&eng, &first);
+        link(&first, &second);
+        train_car_of(&first).unwrap().set_engine_car(&first, Some(&eng));
+        eng.base().borrow_mut().needs_removed = true;
+        tick(&first, 1);
+        assert!(train_car_of(&first).unwrap().left_car().is_none());
+        assert!(engine_of(&second).is_none());
+    }
+
+    /// The same on the right-hand side of a car with its engine on the right.
+    #[test]
+    fn removed_right_neighbours() {
+        let (world, dw) = setup("pass_consist3");
+        lay_rails(&world, &dw, 3, 60);
+        // first - mid - tail - engine
+        let first = lone(&world, &dw, 10, 208);
+        let mid = lone(&world, &dw, 20, 208);
+        let tail = lone(&world, &dw, 30, 206);
+        let eng = lone(&world, &dw, 40, 205);
+        link(&first, &mid);
+        link(&mid, &tail);
+        link(&tail, &eng);
+        train_car_of(&mid).unwrap().set_engine_car(&mid, Some(&eng));
+        assert!(pass_of(&mid).tc.borrow().engine_is_right);
+        // the car beyond the removed one is dropped from the links
+        tail.base().borrow_mut().needs_removed = true;
+        tick(&mid, 1);
+        assert!(train_car_of(&mid).unwrap().right_car().is_none());
+        assert!(engine_of(&first).is_none() && engine_of(&mid).is_none());
+        // the engine itself right next to the car
+        let (world, dw) = setup("pass_consist3b");
+        lay_rails(&world, &dw, 3, 60);
+        let car = lone(&world, &dw, 20, 208);
+        let eng = lone(&world, &dw, 30, 205);
+        link(&car, &eng);
+        train_car_of(&car).unwrap().set_engine_car(&car, Some(&eng));
+        tick(&car, 30);
+        eng.base().borrow_mut().needs_removed = true;
+        tick(&car, 1);
+        assert!(train_car_of(&car).unwrap().right_car().is_none());
+        assert!(engine_of(&car).is_none());
+        // a stale engine entry alone
+        let (world, dw) = setup("pass_consist3c");
+        lay_rails(&world, &dw, 3, 60);
+        let q = lone(&world, &dw, 20, 208);
+        let e = lone(&world, &dw, 30, 205);
+        pass_of(&q).tc.borrow_mut().engine_car = Some(e.clone());
+        e.base().borrow_mut().needs_removed = true;
+        tick(&q, 1);
+        assert!(pass_of(&q).tc.borrow().engine_car.is_none());
+    }
+
+    /// Replica: pending ids resolve; a car in the air falls; water slows the wheels.
+    #[test]
+    fn replica_links_and_falling() {
+        let (world, dw) = setup("pass_replica");
+        lay_rails(&world, &dw, 3, 50);
+        let other = place(&dw, 40, 205, 42);
+        let car = place(&dw, 20, 208, 44);
+        let nd = car.creation_net_data_for_client(&car, None).unwrap();
+        let rep = PassengerCar::from_net_data(&world, &dw, None, &nd).unwrap();
+        {
+            let mut tc = pass_of(&rep).tc.borrow_mut();
+            tc.remote_right_car_id = other.unique_id();
+            tc.remote_left_car_id = other.unique_id();
+            tc.remote_engine_car_id = other.unique_id();
+        }
+        tick(&rep, 2);
+        {
+            let mut tc = pass_of(&rep).tc.borrow_mut();
+            tc.remote_right_car_id = 9999;
+            tc.remote_left_car_id = 9998;
+            tc.remote_engine_car_id = 9997;
+            tc.right_car = None;
+            tc.left_car = None;
+            tc.engine_car = None;
+        }
+        tick(&rep, 2);
+        assert!(pass_of(&rep).tc.borrow().right_car.is_none());
+        // both wheels over empty air with a full tile of water in between: the car falls slowly
+        for x in 18..=23 {
+            let t = tile_at_world_position_loaded(x, 10, &world).unwrap();
+            t.set_foreground_contents(0);
+            t.set_type_index(2);
+        }
+        tick(&car, 40);
+        assert!(car.float_pos().y < 10.0);
+    }
+
+    /// A car crossing the seam of the world.
+    #[test]
+    fn folds_back_over_the_seam() {
+        for (name, l, r, fx) in [("pass_fold_hi", 64.2f32, 66.2f32, 65.2f32), ("pass_fold_lo", -1.8, 0.2, -0.8)] {
+            let (world, dw) = setup(name);
+            lay_rails(&world, &dw, 0, 63);
+            let car = place(&dw, 30, 208, 44);
+            {
+                let mut tc = pass_of(&car).tc.borrow_mut();
+                tc.left_wheel_pos = Vector2 { x: l, y: 10.0 };
+                tc.right_wheel_pos = Vector2 { x: r, y: 10.0 };
+            }
+            car.base().borrow_mut().float_pos = Vector2 { x: fx, y: 10.0 };
+            tick(&car, 1);
+            let x = car.float_pos().x;
+            assert!((0.0..64.0).contains(&x) || car.needs_removed(), "x={x}");
+        }
     }
 }

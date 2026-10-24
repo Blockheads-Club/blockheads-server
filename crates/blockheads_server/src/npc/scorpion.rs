@@ -199,7 +199,7 @@ impl Scorpion {
     ) -> Option<Rc<Scorpion>> {
         let o = Scorpion::alloc();
         let me: ObjRef = o.clone();
-        if !npc_init_with_world_dynamic_world_at_position_cache_save_dict_is_adult_was_placed_placed_by_client(
+        let inited = npc_init_with_world_dynamic_world_at_position_cache_save_dict_is_adult_was_placed_placed_by_client(
             &me,
             world,
             dw,
@@ -209,9 +209,8 @@ impl Scorpion {
             is_adult,
             was_placed,
             placed_by_client,
-        ) {
-            return None;
-        }
+        );
+        debug_assert!(inited); // the base initialisers cannot fail on this path
         o.load_derived_stuff();
         Some(o)
     }
@@ -225,9 +224,8 @@ impl Scorpion {
     ) -> Option<Rc<Scorpion>> {
         let o = Scorpion::alloc();
         let me: ObjRef = o.clone();
-        if !npc_init_with_world_dynamic_world_save_dict_cache(&me, world, dw, save_dict, cache) {
-            return None;
-        }
+        let inited = npc_init_with_world_dynamic_world_save_dict_cache(&me, world, dw, save_dict, cache);
+        debug_assert!(inited); // the base initialisers cannot fail on this path
         o.load_derived_stuff();
         Some(o)
     }
@@ -635,13 +633,12 @@ impl Scorpion {
         }
         let t = r01("Scorpion.update.wander.timer") * 2.0f32 + 1.0f32;
         self.s(|s| s.random_time_between_direction_changes = t);
-        if !is_net {
-            let r = r01("Scorpion.update.wander.speed");
-            self.s(|s| s.walk_speed = ((s.walk_speed as f64) * 0.5f64 + (r as f64) + 0.25f64) as f32);
-            me.set_update_needs_to_be_sent(true);
-        }
+        // the guard above returned for a replica: from here on `is_net` is false
+        let r = r01("Scorpion.update.wander.speed");
+        self.s(|s| s.walk_speed = ((s.walk_speed as f64) * 0.5f64 + (r as f64) + 0.25f64) as f32);
+        me.set_update_needs_to_be_sent(true);
         let ws = self.g(|s| s.walk_speed);
-        if (ws < 1.5f32 || not_moving) && !is_net {
+        if ws < 1.5f32 || not_moving {
             let r = r01("Scorpion.update.wander.direction");
             let new_dir = direction_from_roll(r);
             if new_dir == 0 {
@@ -1589,33 +1586,35 @@ mod tests {
     /// Test 10: wander draws (#1 timer, #2 speed, #3 direction) when the direction timer expires.
     #[test]
     fn wander_draw_order() {
-        let f = fixture(10);
-        let (s, me) = mk(&f, ip(20, 11));
-        {
-            let mut d = s.data_mut();
-            d.random_time_between_direction_changes = 0.0;
-            d.attack_delay = 100.0;
-            d.walk_speed = 1.0;
-            d.movement_direction = 0;
-        }
-        glibc_rand::srand(12);
-        let st = rand_stream(12, 4);
-        glibc_rand::srand(12);
-        me.update_accurate_dt_is_simulation(&me, 0.01, 0.01, false);
-        let r = |i: usize| st[i] as f32 / 2147483648.0f32;
-        let timer = r(0) * 2.0f32 + 1.0f32;
-        assert_eq!(s.data().random_time_between_direction_changes, timer);
-        let speed = ((1.0f32 as f64) * 0.5f64 + (r(1) as f64) + 0.25f64) as f32;
-        assert_eq!(s.data().walk_speed, speed);
-        let n = draws_since(12);
-        // #3 always (standing still); #4 only when the new direction is 0 and the tile is free
-        let new_dir = direction_from_roll(r(2));
-        assert_eq!(n, if new_dir == 0 { 4 } else { 3 });
-        if new_dir == 0 {
-            let want = ((r(3) as f64) * PI_D * 2.0f64 - PI_D) as f32;
-            assert_eq!(s.data().random_goal_rotation, want);
-        } else {
-            assert_eq!(s.data().movement_direction, new_dir);
+        for seed in 1..40u32 {
+            let f = fixture(10);
+            let (s, me) = mk(&f, ip(20, 11));
+            {
+                let mut d = s.data_mut();
+                d.random_time_between_direction_changes = 0.0;
+                d.attack_delay = 100.0;
+                d.walk_speed = 1.0;
+                d.movement_direction = 0;
+            }
+            glibc_rand::srand(seed);
+            let st = rand_stream(seed, 4);
+            glibc_rand::srand(seed);
+            me.update_accurate_dt_is_simulation(&me, 0.01, 0.01, false);
+            let r = |i: usize| st[i] as f32 / 2147483648.0f32;
+            let timer = r(0) * 2.0f32 + 1.0f32;
+            assert_eq!(s.data().random_time_between_direction_changes, timer);
+            let speed = ((1.0f32 as f64) * 0.5f64 + (r(1) as f64) + 0.25f64) as f32;
+            assert_eq!(s.data().walk_speed, speed);
+            let n = draws_since(seed);
+            // #3 always (standing still); #4 only when the new direction is 0 and the tile is free
+            let new_dir = direction_from_roll(r(2));
+            assert_eq!(n, if new_dir == 0 { 4 } else { 3 });
+            if new_dir == 0 {
+                let want = ((r(3) as f64) * PI_D * 2.0f64 - PI_D) as f32;
+                assert_eq!(s.data().random_goal_rotation, want);
+            } else {
+                assert_eq!(s.data().movement_direction, new_dir);
+            }
         }
     }
 
@@ -1828,5 +1827,398 @@ mod tests {
         assert_eq!(u64::from_le_bytes(c[0x70..0x78].try_into().unwrap()), 0x1122);
         assert_eq!(c[0x78], 1);
         assert!(c[0x79..0x80].iter().all(|x| *x == 0));
+    }
+
+    /// Tiny deterministic generator for the scenarios (the game's `rand()` stays the scorpion's own).
+    struct Gen(u64);
+    impl Gen {
+        fn next(&mut self) -> u32 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            (self.0 >> 16) as u32
+        }
+        fn below(&mut self, n: u32) -> u32 {
+            self.next() % n
+        }
+    }
+
+    /// Uneven desert ground around x 14..=40 with gates, water, cacti and ledges.
+    fn dunes(f: &Fx, g: &mut Gen) {
+        for x in 12..=42 {
+            let h = 10 + g.below(3) as i32;
+            for y in 7..=16 {
+                edit(&f.world, x, y, |t| {
+                    t.type_index = if y <= h { 1 } else { 2 };
+                    t.contents = 0;
+                    t.foreground_contents = 0;
+                    t.partial_content_left = 0;
+                });
+            }
+        }
+        for _ in 0..16 {
+            let x = 12 + g.below(31) as i32;
+            let y = 8 + g.below(7) as i32;
+            let k = g.below(8);
+            edit(&f.world, x, y, |t| match k {
+                0 => t.contents = 0x92,
+                1 => {
+                    t.type_index = 3;
+                    t.partial_content_left = 0x80 + g.below(0x7f) as u8
+                }
+                2 => t.contents = 0x2b,
+                3 => t.type_index = 1,
+                4 => t.type_index = 5,
+                5 => t.foreground_contents = 0x42,
+                6 => t.type_index = 3,
+                _ => {}
+            });
+        }
+    }
+
+    #[test]
+    fn seeded_dunes_cover_the_state_machine() {
+        for seed in 1..=600u64 {
+            let f = fixture(10);
+            let mut g = Gen(seed.wrapping_mul(0x9E3779B97F4A7C15) | 1);
+            dunes(&f, &mut g);
+            glibc_rand::srand(seed as u32);
+            let pos = ip(18 + g.below(17) as i32, 10 + g.below(4) as i32);
+            let (s, me) = mk(&f, pos);
+            if g.below(6) == 0 {
+                me.base().borrow_mut().is_net = true;
+            }
+            if g.below(3) == 0 {
+                me.base().borrow_mut().dynamic_world = None;
+            }
+            let mut rider: Option<ObjRef> = None;
+            match g.below(8) {
+                0 => rider = Some(TestBh::alloc(900, ip(0, 0))),
+                1 => {
+                    let r = TestBh::alloc(901, ip(0, 0));
+                    r.base().borrow_mut().is_net = true;
+                    rider = Some(r)
+                }
+                _ => {}
+            }
+            {
+                let mut n = s.npc.borrow_mut();
+                n.rider = rider.clone();
+                n.fullness = [100.0, 2000.0, 5000.0, 7000.0][g.below(4) as usize];
+                n.lay_cooldown_timer = [0.0, 0.0, 30.0][g.below(3) as usize];
+                n.lay_timer = [0.0, 0.0, 0.05][g.below(3) as usize];
+                if g.below(5) == 0 {
+                    n.tamed_client_id = Some("server".into());
+                }
+            }
+            {
+                let mut d = s.data_mut();
+                d.movement_direction = g.below(3) as i32 - 1;
+                d.walk_speed = [0.0, 1.0, 1.4, 2.0, 3.5][g.below(5) as usize];
+                d.provoked = g.below(3) == 0;
+                d.attack_delay = [0.0, 0.0, 2.0][g.below(3) as usize];
+                d.drown_timer = if g.below(5) == 0 { 3.9 } else { 0.0 };
+                d.rider_target_velocity = [0.0, 0.5, -0.5, 0.05, -0.05][g.below(5) as usize];
+                d.remote_goal_square = ip(14 + g.below(25) as i32, 9 + g.below(7) as i32);
+                d.remote_walk_speed = [0.0, 0.5, 2.0][g.below(3) as usize];
+                d.remote_movement_direction = g.below(3) as i32 - 1;
+                if g.below(5) == 0 {
+                    d.from_square = pos;
+                    d.to_square = ip(pos.x + g.below(3) as i32 - 1, pos.y + g.below(3) as i32 - 1);
+                }
+                d.random_time_between_direction_changes = [0.0, 0.0, 5.0][g.below(3) as usize];
+            }
+            let mut bhs = vec![];
+            for i in 0..g.below(4) {
+                let v = TestBh::alloc(500 + i as u64, ip(pos.x + g.below(21) as i32 - 10, 10 + g.below(5) as i32));
+                if g.below(5) == 0 {
+                    v.base().borrow_mut().is_net = true;
+                }
+                bhs.push(v);
+            }
+            *f.env.bhs.borrow_mut() = bhs.clone();
+            if g.below(6) == 0 {
+                f.host.paused.set(Some(500));
+            }
+            if g.below(6) == 0 {
+                f.host.nosim.set(Some(501));
+            }
+            if g.below(7) == 0 {
+                f.host.regen.set(Some(500));
+            }
+            if g.below(7) == 0 {
+                f.host.trade.set(Some(501));
+            }
+            if g.below(2) == 0 {
+                f.host.cactus.set(Some(2000.0));
+            }
+            f.host.npc_at.set(g.below(3) == 0);
+            f.host.day.set(if g.below(2) == 0 { 0.1 } else { 0.6 });
+            match g.below(7) {
+                0 => set_difficulty(&f, 0),
+                1 => set_difficulty(&f, 2),
+                2 => set_difficulty(&f, 3),
+                3 => set_difficulty(&f, 1),
+                _ => {}
+            }
+            if g.below(8) == 0 {
+                if let Some(v) = bhs.first() {
+                    Npc::begin_blockhead_inspection(&*s, v);
+                }
+            }
+            if g.below(8) == 0 {
+                if let Some(v) = bhs.first() {
+                    Npc::blockhead_is_coming_to_inspect(&*s, v);
+                }
+            }
+            if g.below(6) == 0 {
+                let v = bhs.first().cloned();
+                let mut d = s.data_mut();
+                d.biting = g.below(2) == 0;
+                d.spitting = !d.biting;
+                d.attack_blockhead = v;
+                d.bite_timer = 0.3;
+                d.spit_timer = 0.3;
+            }
+            let dts = [0.05f32, 0.2, 0.6, 1.5];
+            let dt = dts[g.below(4) as usize];
+            for _ in 0..150 {
+                if me.needs_removed() {
+                    break;
+                }
+                if g.below(80) == 0 {
+                    s.npc.borrow_mut().dead = true;
+                }
+                if g.below(30) == 0 {
+                    Npc::set_target_velocity(&*s, Vector2 { x: [0.0, 0.5, -0.5][g.below(3) as usize], y: 0.0 });
+                }
+                me.update_accurate_dt_is_simulation(&me, dt, dt, g.below(2) == 0);
+            }
+            me.update_accurate_dt_is_simulation(&me, dt, dt, false);
+        }
+    }
+
+    fn creation_bytes(me: &ObjRef, target: u64, spitting: u8) -> Vec<u8> {
+        let mut nd = me.creation_net_data_for_client(me, None).unwrap();
+        nd[0x70..0x78].copy_from_slice(&target.to_le_bytes());
+        nd[0x78] = spitting;
+        nd
+    }
+
+    #[test]
+    fn replica_creation_data_names_the_attack_target() {
+        let f = fixture(10);
+        let (s, me) = mk(&f, ip(20, 11));
+        let t1 = TestBh::alloc(600, ip(21, 11));
+        let t2 = TestBh::alloc(601, ip(22, 11));
+        *f.env.bhs.borrow_mut() = vec![t1.clone(), t2.clone()];
+        // a fresh replica from the creation data
+        let nd = creation_bytes(&me, 600, 0);
+        let rep = Scorpion::init_with_world_dynamic_world_cache_net_data(&f.wref, &f.dwr, None, &nd).expect("replica");
+        assert!(rep.base.borrow().is_net);
+        assert_eq!(rep.data().remote_goal_square, ip(20, 11));
+        assert!(rep.data().biting);
+        assert!(rep.data().walk_speed >= 3.0);
+        // an unloaded position is refused
+        let mut bad = nd.clone();
+        bad[12..16].copy_from_slice(&100000u32.to_le_bytes());
+        assert!(Scorpion::init_with_world_dynamic_world_cache_net_data(&f.wref, &f.dwr, None, &bad).is_none());
+        // the same target again changes nothing; another target switches, spitting this time
+        let rme: ObjRef = rep.clone();
+        rme.remote_creation_data_update(&rme, &nd);
+        assert!(rep.data().biting);
+        rme.remote_creation_data_update(&rme, &creation_bytes(&me, 601, 1));
+        assert!(rep.data().spitting);
+        assert_eq!(rep.data().attack_blockhead.as_ref().unwrap().unique_id(), 601);
+        // an id nobody has: untouched; id 0: cleared
+        rme.remote_creation_data_update(&rme, &creation_bytes(&me, 999, 0));
+        assert_eq!(rep.data().attack_blockhead.as_ref().unwrap().unique_id(), 601);
+        rme.remote_creation_data_update(&rme, &creation_bytes(&me, 0, 0));
+        assert!(rep.data().attack_blockhead.is_none());
+        // a server-side scorpion that was told about a target also asks for an update
+        s.npc.borrow_mut().rider = Some(TestBh::alloc(900, ip(0, 0)).clone());
+        me.base().borrow_mut().is_net = true;
+        s.npc.borrow_mut().rider = None;
+        me.remote_creation_data_update(&me, &creation_bytes(&me, 600, 0));
+        // under local control (a local, non-replica scorpion): ignored
+        let (s2, me2) = mk(&f, ip(24, 11));
+        me2.remote_creation_data_update(&me2, &creation_bytes(&me2, 600, 0));
+        assert!(s2.data().attack_blockhead.is_none());
+        // dead: ignored
+        rep.npc.borrow_mut().dead = true;
+        rme.remote_creation_data_update(&rme, &creation_bytes(&me, 600, 0));
+        assert!(rep.data().attack_blockhead.is_none());
+        rme.remote_update(&rme, &me.update_net_data_for_client(&me, None).unwrap());
+    }
+
+    #[test]
+    fn remote_updates_follow_the_controlling_side() {
+        let f = fixture(10);
+        let (s, me) = mk(&f, ip(20, 11));
+        let mut u = ScorpionUpdateNetData {
+            to_square_x: 25,
+            to_square_y: 11,
+            walk_speed: 102,
+            movement_direction: 1,
+            ..ScorpionUpdateNetData::default()
+        };
+        // server: no remote rider, nothing happens
+        s.do_remote_update(&me, &u);
+        assert_eq!(s.data().remote_goal_square, ip(0, 0));
+        // server with a remote rider: accepted
+        let rider = TestBh::alloc(901, ip(0, 0));
+        rider.base().borrow_mut().is_net = true;
+        s.npc.borrow_mut().rider = Some(rider.clone());
+        s.do_remote_update(&me, &u);
+        assert_eq!(s.data().remote_goal_square, ip(25, 11));
+        assert_eq!(s.data().movement_direction, 1);
+        assert_eq!(s.data().walk_speed, 0.4);
+        // client with a remote rider: accepted as the goal only
+        f.env.client.set(true);
+        u.to_square_x = 27;
+        s.do_remote_update(&me, &u);
+        assert_eq!(s.data().remote_goal_square, ip(27, 11));
+        // client, but the attack target is a local blockhead: ignored
+        let local = TestBh::alloc(602, ip(21, 11));
+        s.data_mut().attack_blockhead = Some(local);
+        u.to_square_x = 29;
+        s.do_remote_update(&me, &u);
+        assert_eq!(s.data().remote_goal_square, ip(27, 11));
+        // client with a local rider: ignored
+        s.npc.borrow_mut().rider = Some(TestBh::alloc(903, ip(0, 0)));
+        s.data_mut().attack_blockhead = None;
+        s.do_remote_update(&me, &u);
+        assert_eq!(s.data().remote_goal_square, ip(27, 11));
+    }
+
+    #[test]
+    fn tap_hit_test_faces_and_riders() {
+        let f = fixture(10);
+        let (s, me) = mk(&f, ip(2, 11));
+        let fp = me.float_pos();
+        assert!(s.tap_is_within_body_radius_impl(Vector2 { x: fp.x + 128.0, y: fp.y + 0.5 }));
+        assert!(s.tap_is_within_body_radius_impl(Vector2 { x: fp.x - 128.0, y: fp.y + 0.5 }));
+        assert!(Npc::tap_is_within_body_radius(&*s, Vector2 { x: fp.x, y: fp.y + 0.5 }));
+        assert!(!s.tap_is_within_body_radius_impl(Vector2 { x: fp.x, y: fp.y + 1.5 }));
+        assert!(!s.tap_is_within_body_radius_impl(Vector2 { x: fp.x + 3.0, y: fp.y + 0.5 }));
+        let bh: ObjRef = TestBh::alloc(77, ip(3, 11));
+        crate::npc::npc::faces::exercise_faces(&me, &bh);
+        // riders
+        let r1: ObjRef = TestBh::alloc(80, ip(2, 11));
+        let r2: ObjRef = TestBh::alloc(81, ip(2, 11));
+        // a client blockhead the server controls cannot ride: no rider, steering reset
+        let ctl: ObjRef = CtlBh::alloc(82);
+        s.data_mut().rider_target_velocity = 0.7;
+        Npc::add_rider(&*s, &me, &ctl);
+        assert!(s.npc.borrow().rider.is_none());
+        assert_eq!(s.data().rider_target_velocity, 0.0);
+        s.data_mut().rider_target_velocity = 0.7;
+        Npc::add_rider(&*s, &me, &r1);
+        assert_eq!(s.data().rider_target_velocity, 0.7);
+        // removing someone else keeps the rider; removing the rider clears the steering
+        Npc::remove_rider(&*s, &me, &r2);
+        assert_eq!(s.data().rider_target_velocity, 0.7);
+        Npc::remove_rider(&*s, &me, &r1);
+        assert_eq!(s.data().rider_target_velocity, 0.0);
+        assert!(s.npc.borrow().rider.is_none());
+        // no rider and no argument: the same (nothing)
+        s.remove_rider_opt(&me, None);
+        // an unloading rider stops steering
+        s.npc.borrow_mut().rider = Some(r1.clone());
+        s.data_mut().rider_target_velocity = 0.9;
+        me.blockhead_unloaded(&me, &r1);
+        assert_eq!(s.data().rider_target_velocity, 0.0);
+    }
+
+    #[test]
+    fn far_inspector_is_ignored_and_dead_scorpion_is_not_hit_tested() {
+        let f = fixture(10);
+        let (s, me) = mk(&f, ip(20, 11));
+        let far = TestBh::alloc(70, ip(60, 11));
+        s.npc.borrow_mut().coming_to_inspect_blockhead = Some(std::rc::Rc::downgrade(&far));
+        me.update_accurate_dt_is_simulation(&me, 0.01, 0.01, false);
+        assert!(!s.tap_is_within_body_radius_impl(Vector2 { x: 1000.0, y: 1000.0 }));
+        s.npc.borrow_mut().dead = true;
+        assert!(!s.tap_is_within_body_radius_impl(me.float_pos()));
+        // dying twice is harmless
+        Npc::die(&*s, &me, None);
+        Npc::die(&*s, &me, None);
+    }
+
+    #[test]
+    fn creation_data_reaches_a_non_replica_with_a_remote_rider() {
+        let f = fixture(10);
+        let (s, me) = mk(&f, ip(20, 11));
+        let t1 = TestBh::alloc(600, ip(21, 11));
+        *f.env.bhs.borrow_mut() = vec![t1];
+        let rider = TestBh::alloc(901, ip(0, 0));
+        rider.base().borrow_mut().is_net = true;
+        s.npc.borrow_mut().rider = Some(rider);
+        me.remote_creation_data_update(&me, &creation_bytes(&me, 600, 0));
+        assert_eq!(s.data().attack_blockhead.as_ref().unwrap().unique_id(), 600);
+        assert!(me.update_needs_to_be_sent());
+        // removing "nobody" while somebody rides keeps the rider
+        s.remove_rider_opt(&me, None);
+        assert!(s.npc.borrow().rider.is_some());
+    }
+
+    #[test]
+    fn spit_target_needs_a_world_for_the_line_of_sight() {
+        let f = fixture(10);
+        let (s, me) = mk(&f, ip(20, 11));
+        *f.env.bhs.borrow_mut() = vec![TestBh::alloc(600, ip(26, 11))];
+        s.data_mut().attack_delay = 0.0;
+        f.host.no_world.set(true);
+        let host = hostile_host();
+        s.attacks(&me, 0.1, false, true, false, &host);
+        assert!(!s.data().spitting);
+        f.host.no_world.set(false);
+        s.data_mut().attack_delay = 0.0;
+        s.attacks(&me, 0.1, false, true, false, &host);
+        assert!(s.data().spitting);
+    }
+
+    #[test]
+    fn tamed_scorpion_capture_tips() {
+        let f = fixture(10);
+        let (s, _me) = mk(&f, ip(20, 11));
+        let b: ObjRef = TestBh::alloc(7, ip(21, 11));
+        s.npc.borrow_mut().tamed_client_id = Some("server".into());
+        assert!(Npc::can_be_captured_by_blockhead_with_item_type(&*s, &b, 302));
+        assert!(Npc::cant_be_captured_tip_string_for_blockhead_with_item_type(&*s, &b, 302).is_none());
+        s.npc.borrow_mut().tamed_client_id = Some("other".into());
+        assert!(Npc::cant_be_captured_tip_string_for_blockhead_with_item_type(&*s, &b, 302)
+            .unwrap()
+            .contains("SOMEONE ELSE"));
+    }
+
+    #[test]
+    fn laying_and_scheduling_need_loaded_tiles() {
+        let f = fixture(10);
+        let (s, me) = mk(&f, ip(20, 11));
+        me.base().borrow_mut().pos = ip(20, 100000);
+        s.npc.borrow_mut().lay_timer = 0.01;
+        s.npc.borrow_mut().fullness = 6000.0;
+        me.update_accurate_dt_is_simulation(&me, 0.1, 0.1, false);
+        assert!(f.host.babies.borrow().is_empty());
+        // a finished step onto an unloaded tile schedules nothing
+        let (s, me) = mk(&f, ip(24, 11));
+        {
+            let mut n = s.npc.borrow_mut();
+            n.fullness = 7000.0;
+            n.lay_cooldown_timer = 0.0;
+            n.lay_timer = 0.0;
+        }
+        {
+            let mut d = s.data_mut();
+            d.from_square = ip(24, 11);
+            d.to_square = ip(25, 100000);
+            d.travel_fraction = 0.99;
+            d.walk_speed = 1.0;
+            d.movement_direction = 1;
+            d.random_time_between_direction_changes = 50.0;
+        }
+        me.update_accurate_dt_is_simulation(&me, 0.1, 0.1, false);
+        assert_eq!(s.npc.borrow().lay_timer, 0.0);
     }
 }

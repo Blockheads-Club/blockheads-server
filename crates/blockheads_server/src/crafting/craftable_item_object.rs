@@ -288,10 +288,8 @@ mod tests {
         let o = CraftableItemObject::init_with_craftable_item(sample());
         let d = o.get_save_dict();
         assert_eq!(d.map.len(), 1);
-        match d.map.get(&"craftableItem".to_string()) {
-            Some(PlistValue::Data(b)) => assert_eq!(b.bytes.len(), 124),
-            _ => panic!("no data"),
-        }
+        let Some(PlistValue::Data(b)) = d.map.get(&"craftableItem".to_string()) else { unreachable!("no data") };
+        assert_eq!(b.bytes.len(), 124);
         let back = CraftableItemObject::init_with_save_dict(&d);
         assert_eq!(back.craftable_item(), sample());
     }
@@ -314,10 +312,8 @@ mod tests {
         let d = o.get_save_dict();
         assert_eq!(d.map.len(), 4);
         assert_eq!(d.map.get(&"craftableObjectType".to_string()).unwrap().int_value(), 1);
-        match d.map.get(&"skinOptions".to_string()) {
-            Some(PlistValue::Data(b)) => assert_eq!(b.bytes.len(), 20),
-            _ => panic!(),
-        }
+        let Some(PlistValue::Data(b)) = d.map.get(&"skinOptions".to_string()) else { unreachable!("no skin options") };
+        assert_eq!(b.bytes.len(), 20);
         let back = BlockheadCraftableItemObject::init_with_save_dict(&d);
         assert_eq!(back.name().as_deref(), Some("Bob"));
         assert_eq!(back.craftable_item(), sample());
@@ -344,6 +340,54 @@ mod tests {
         d.map.insert("hairStyleIndex".to_string(), PlistValue::int(3));
         let o = BlockheadCraftableItemObject::init_with_save_dict(&d);
         assert_eq!(o.skin_options(), get_new_options_from_old(true, 1, 2, 3));
+    }
+
+    #[test]
+    fn non_data_values_load_as_zero() {
+        let mut d = crate::objects::base::new_mutable_dict();
+        d.map.insert("craftableItem".to_string(), PlistValue::string("not data"));
+        d.map.insert("skinOptions".to_string(), PlistValue::string("not data"));
+        d.map.insert("craftableObjectType".to_string(), PlistValue::int(1));
+        let o = craftable_item_object_from_save_dict(&d);
+        assert_eq!(o.craftable_item(), zero_craftable_item());
+        let b = o.as_any().downcast_ref::<BlockheadCraftableItemObject>().unwrap();
+        assert_eq!(b.skin_options(), zero_skin_options());
+        assert_eq!(b.name(), None);
+    }
+
+    #[test]
+    fn blockhead_setters_and_plain_downcast() {
+        let o = BlockheadCraftableItemObject::init_with_craftable_item_name_skin_options(
+            sample(),
+            None,
+            zero_skin_options(),
+        );
+        o.set_name(Some("Cy".into()));
+        assert_eq!(o.name().as_deref(), Some("Cy"));
+        let mut so = zero_skin_options();
+        so.hair_style_index = 4;
+        o.set_skin_options(so);
+        assert_eq!(o.skin_options(), so);
+        let plain = CraftableItemObject::init_with_craftable_item(sample());
+        let any = plain.clone().into_any_rc();
+        assert!(any.downcast::<CraftableItemObject>().is_ok());
+        assert_eq!(plain.free_block_creation_item_save_dict().map(|d| d.map.len()), None);
+        let mut ci = sample();
+        ci.seconds_required = 99;
+        plain.set_craftable_item(ci);
+        assert_eq!(plain.craftable_item().seconds_required, 99);
+    }
+
+    #[test]
+    fn registered_painting_factory_is_used() {
+        fn fake(d: &PlistDict) -> CraftableItemObjectRef {
+            CraftableItemObject::init_with_save_dict(d)
+        }
+        let mut d = crate::objects::base::new_mutable_dict();
+        d.map.insert("craftableObjectType".to_string(), PlistValue::int(2));
+        register_painting_factory(fake);
+        let o = craftable_item_object_from_save_dict(&d);
+        assert!(o.as_any().downcast_ref::<CraftableItemObject>().is_some());
     }
 
     #[test]
@@ -405,5 +449,19 @@ mod painting_tests {
         let back = craftable_item_object_from_save_dict(&d);
         assert!(back.as_any().downcast_ref::<PaintingCraftableItemObject>().is_some());
         assert!(back.free_block_creation_item_save_dict().is_some());
+        // trait view of the painting object
+        let rc: CraftableItemObjectRef = p;
+        assert_eq!(rc.cio_item().borrow().crafted_item_type, 0);
+        assert!(rc.into_any_rc().downcast::<PaintingCraftableItemObject>().is_ok());
+    }
+
+    #[test]
+    fn painting_without_free_block_dict() {
+        let p = PaintingCraftableItemObject::new_with_craftable_item_image_data_output_image_data(
+            zero_craftable_item(),
+            None,
+            None,
+        );
+        assert!(CraftableItemObjectLike::free_block_creation_item_save_dict(&*p).is_none());
     }
 }

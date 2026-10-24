@@ -225,11 +225,11 @@ impl TradePortal {
         let me = Self::alloc(world, dw);
         let me_obj: ObjRef = me.clone();
         let (w, d) = me.links.refs();
-        if !interaction_object_init_with_world_dynamic_world_at_position_cache_item_flipped_save_dict_placed_by_client_client_name(
+        // the base initialiser always succeeds here, `None` is only the ObjC `self = nil` shape
+        interaction_object_init_with_world_dynamic_world_at_position_cache_item_flipped_save_dict_placed_by_client_client_name(
             &me_obj, &w, &d, pos, cache, item, flipped, save_dict, client_id, client_name,
-        ) {
-            return None;
-        }
+        )
+            .then_some(())?;
         me.st.borrow_mut().local_price_offsets = Some(crate::objects::base::new_mutable_dict());
         if let Some(sd) = save_dict {
             if let Some(PlistValue::Dict(saved)) = sd.map.get(&"localPriceOffsets".to_string()) {
@@ -265,10 +265,9 @@ impl TradePortal {
         let me = Self::alloc(world, dw);
         let me_obj: ObjRef = me.clone();
         let (w, d) = me.links.refs();
-        if !interaction_object_init_with_world_dynamic_world_save_dict_cache(&me_obj, &w, &d, save_dict, cache.clone())
-        {
-            return None;
-        }
+        // the base initialiser always succeeds here, `None` is only the ObjC `self = nil` shape
+        interaction_object_init_with_world_dynamic_world_save_dict_cache(&me_obj, &w, &d, save_dict, cache.clone())
+            .then_some(())?;
         me.st.borrow_mut().local_price_offsets = Some(crate::objects::base::new_mutable_dict());
         if let Some(PlistValue::Dict(saved)) = save_dict.map.get(&"localPriceOffsets".to_string()) {
             me.load_price_offsets(saved);
@@ -806,19 +805,17 @@ impl DynamicObject for TradePortal {
         s.interaction_object_creation_net_data = interaction_object_interaction_object_creation_net_data(me);
         s.level = self.level() as u8;
         let mut out = s.to_vec();
-        let mut dict = PlistValue::mutable_dict();
-        if let PlistValue::Dict(dd) = &mut dict {
-            if let Some(o) = me.owner_id() {
-                dd.map.insert("ownerID".to_string(), PlistValue::string(o));
-            }
-            if let Some(n) = self.io.borrow().owner_name.clone() {
-                dd.map.insert("ownerName".to_string(), PlistValue::string(n));
-            }
-            if let Some(o) = self.local_price_offsets() {
-                dd.map.insert("localPriceOffsets".to_string(), PlistValue::Dict(o));
-            }
+        let mut dd = crate::objects::base::new_mutable_dict();
+        if let Some(o) = me.owner_id() {
+            dd.map.insert("ownerID".to_string(), PlistValue::string(o));
         }
-        out.extend_from_slice(&gz_plist_bytes(&dict));
+        if let Some(n) = self.io.borrow().owner_name.clone() {
+            dd.map.insert("ownerName".to_string(), PlistValue::string(n));
+        }
+        if let Some(o) = self.local_price_offsets() {
+            dd.map.insert("localPriceOffsets".to_string(), PlistValue::Dict(o));
+        }
+        out.extend_from_slice(&gz_plist_bytes(&PlistValue::Dict(dd)));
         Some(out)
     }
     /// `-remoteUpdate:` (T5: the level-up branch is unguarded, 56 draws; the owner / offsets block always runs).
@@ -1112,13 +1109,10 @@ mod tests {
         assert_eq!(offs.map.len(), 308);
         // the first item of the table (ITEM_DIRT 1048) consumed the first draw
         let want = powf(0.8f32, (r01_from(reference[0]) - 0.5f32) * 10.0f32);
-        match offs.map.get(&"1048".to_string()).unwrap() {
-            PlistValue::Real { value, is_float } => {
-                assert!(*is_float);
-                assert_eq!(*value as f32, want);
-            }
-            o => panic!("{o:?}"),
-        }
+        let entry = offs.map.get(&"1048".to_string());
+        let Some(PlistValue::Real { value, is_float }) = entry else { unreachable!() };
+        assert!(*is_float);
+        assert_eq!(*value as f32, want);
         assert!(me.update_needs_to_be_sent());
     }
 
@@ -1283,5 +1277,369 @@ mod tests {
         }
         assert_eq!(p.level(), 5);
         assert_eq!(p.title(), "TRADE PORTAL LEVEL 6");
+    }
+
+    use crate::crafting::workbench_craft::{crystal_amount, set_crystal_wallet};
+    use crate::interaction::trading_post::{set_blockhead_inventory_api, BlockheadInventoryApi};
+    use crate::objects::base::{BlockheadApi, DynamicObjectBase};
+    use crate::objects::class_info::DYNAMIC_OBJECT_CLASS;
+    use crate::objects::interaction_object::testutil::TestBh;
+    use std::cell::Cell;
+    use std::collections::HashMap;
+
+    /// A blockhead that may be controlled by the server.
+    struct CtlBh {
+        base: RefCell<DynamicObjectBase>,
+        controlled: bool,
+    }
+    impl DynamicObject for CtlBh {
+        fn base(&self) -> &RefCell<DynamicObjectBase> {
+            &self.base
+        }
+        fn class_info(&self) -> &'static ClassInfo {
+            &DYNAMIC_OBJECT_CLASS
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+        fn as_blockhead(&self) -> Option<&dyn BlockheadApi> {
+            Some(self)
+        }
+    }
+    impl BlockheadApi for CtlBh {
+        fn client_id(&self) -> Option<String> {
+            None
+        }
+        fn local_net_id(&self) -> Option<String> {
+            None
+        }
+        fn is_client_blockhead_being_controlled_by_server(&self) -> bool {
+            self.controlled
+        }
+        fn is_interacting_with_any_interaction_object(&self) -> bool {
+            true
+        }
+        fn set_interaction_object(&self, _o: Option<&ObjRef>) {}
+        fn stop_interacting(&self) {}
+    }
+    #[test]
+    fn controlled_blockhead_double() {
+        let b = ctl_bh(true);
+        let api = b.as_blockhead().unwrap();
+        assert_eq!(b.class_info().name, "DynamicObject");
+        assert_eq!(b.base().borrow().unique_id, 0);
+        assert!(b.as_any().downcast_ref::<CtlBh>().is_some());
+        assert!(api.client_id().is_none() && api.local_net_id().is_none());
+        assert!(api.is_client_blockhead_being_controlled_by_server());
+        assert!(api.is_interacting_with_any_interaction_object());
+        api.set_interaction_object(None);
+        api.stop_interacting();
+    }
+
+    fn ctl_bh(controlled: bool) -> ObjRef {
+        handle::alloc_obj(|w| CtlBh { base: RefCell::new(DynamicObjectBase::alloc_zeroed_with(w)), controlled })
+    }
+
+    /// Stock and cash double; removing gives back `min(stock, count)` unless `short` is set.
+    struct Stock {
+        cash: Cell<i32>,
+        spent: Cell<i32>,
+        have: RefCell<HashMap<i32, i32>>,
+        short: Cell<bool>,
+        mult: Cell<f32>,
+    }
+    impl BlockheadInventoryApi for Stock {
+        fn total_cash(&self, _b: &ObjRef) -> i32 {
+            self.cash.get()
+        }
+        fn subtract_cash(&self, _b: &ObjRef, amount: i32) {
+            self.spent.set(self.spent.get() + amount);
+        }
+        fn count_of_inventory_items_of_type_include_actions(&self, _b: &ObjRef, t: i32, _a: bool) -> i32 {
+            self.have.borrow().get(&t).copied().unwrap_or(0)
+        }
+        fn count_of_inventory_items_with_specific_data_b_of_type_data_b_include_actions(
+            &self,
+            _b: &ObjRef,
+            t: i32,
+            data_b: u16,
+            _a: bool,
+        ) -> i32 {
+            self.have.borrow().get(&t).copied().unwrap_or(0) + data_b as i32 + 1000
+        }
+        fn usage_multiplier_for_first_item_of_type(&self, _b: &ObjRef, _t: i32) -> f32 {
+            self.mult.get()
+        }
+        fn subtract_items_from_inventory_of_type_count_data_b(&self, _b: &ObjRef, t: i32, count: i32, _d: i32) -> i32 {
+            if self.short.get() {
+                return count - 1;
+            }
+            let mut h = self.have.borrow_mut();
+            let e = h.entry(t).or_insert(0);
+            let n = (*e).min(count);
+            *e -= n;
+            n
+        }
+    }
+    fn stock() -> Rc<Stock> {
+        let s = Rc::new(Stock {
+            cash: Cell::new(0),
+            spent: Cell::new(0),
+            have: RefCell::new(HashMap::new()),
+            short: Cell::new(false),
+            mult: Cell::new(1.0),
+        });
+        set_blockhead_inventory_api(s.clone());
+        s
+    }
+
+    #[test]
+    fn selling_to_the_portal() {
+        let (_w, _d, p) = mk("tpo_sell", None);
+        let me: ObjRef = p.clone();
+        let st = stock();
+        // nobody is there
+        p.sell_item_at_total_price_count_usage_multiplier(&me, 5, 100, 2, 1.0);
+        assert!(p.local_price_offsets().unwrap().map.get(&"5".to_string()).is_none());
+        p.io.borrow_mut().current_blockhead = Some(TestBh::new(3, false));
+        // coins cannot be sold; a short stock aborts
+        p.sell_item_at_total_price_count_usage_multiplier(&me, 166, 100, 2, 1.0);
+        st.have.borrow_mut().insert(5, 3);
+        st.short.set(true);
+        p.sell_item_at_total_price_count_usage_multiplier(&me, 5, 100, 2, 1.0);
+        assert!(p.local_price_offsets().unwrap().map.get(&"5".to_string()).is_none());
+        st.short.set(false);
+        // a proper sale lowers the item's price a little and pays platinum + copper
+        p.sell_item_at_total_price_count_usage_multiplier(&me, 5, 25_007, 2, 0.5);
+        let k = p.local_price_offsets().unwrap().map.get(&"5".to_string()).unwrap().double_value();
+        assert!((k - 0.997).abs() < 1e-12);
+        assert_eq!(st.have.borrow()[&5], 1);
+        assert!(me.update_needs_to_be_sent());
+        // dodo eggs only sell their plain kind; replicas and controlled blockheads earn no achievement
+        st.have.borrow_mut().insert(91, 2);
+        p.io.borrow_mut().current_blockhead = Some(ctl_bh(true));
+        p.sell_item_at_total_price_count_usage_multiplier(&me, 91, 10, 1, 1.0);
+        p.base.borrow_mut().is_net = true;
+        p.io.borrow_mut().current_blockhead = Some(ctl_bh(false));
+        p.sell_item_at_total_price_count_usage_multiplier(&me, 91, 10, 1, 1.0);
+        assert_eq!(st.have.borrow()[&91], 0);
+    }
+
+    #[test]
+    fn buying_from_the_portal() {
+        let (_w, _d, p) = mk("tpo_buy", None);
+        let me: ObjRef = p.clone();
+        let st = stock();
+        p.buy_item_at_total_price_count(&me, 5, 100, 1);
+        p.io.borrow_mut().current_blockhead = Some(TestBh::new(3, false));
+        // too expensive
+        p.buy_item_at_total_price_count(&me, 5, 100, 1);
+        assert_eq!(st.spent.get(), 0);
+        st.cash.set(1000);
+        p.buy_item_at_total_price_count(&me, 5, 100, 2);
+        assert_eq!(st.spent.get(), 100);
+        let k = p.local_price_offsets().unwrap().map.get(&"5".to_string()).unwrap().double_value();
+        assert!((k - 1.0 / 0.997).abs() < 1e-12);
+        // sowable goods come with a full growth value; crystals are never handed out
+        p.buy_item_at_total_price_count(&me, 22, 10, 1);
+        p.buy_item_at_total_price_count(&me, 11, 10, 3);
+        // controlled blockheads and replicas earn no achievement
+        p.io.borrow_mut().current_blockhead = Some(ctl_bh(true));
+        p.buy_item_at_total_price_count(&me, 5, 1, 1);
+        p.base.borrow_mut().is_net = true;
+        p.io.borrow_mut().current_blockhead = Some(ctl_bh(false));
+        p.buy_item_at_total_price_count(&me, 5, 1, 1);
+        // coin changing, all four directions: enough stock, short stock, a failing removal
+        p.base.borrow_mut().is_net = false;
+        p.io.borrow_mut().current_blockhead = Some(TestBh::new(4, false));
+        for (coin, give, stock_n) in [(166, 167, 5), (260, 167, 500), (1092, 166, 500), (167, 260, 5)] {
+            st.have.borrow_mut().insert(give, stock_n);
+            p.buy_item_at_total_price_count(&me, coin, 0, 1);
+            assert!(st.have.borrow()[&give] < stock_n, "coin {coin}");
+            st.have.borrow_mut().insert(give, 0);
+            p.buy_item_at_total_price_count(&me, coin, 0, 1);
+        }
+        st.have.borrow_mut().insert(167, 5);
+        st.short.set(true);
+        p.buy_item_at_total_price_count(&me, 166, 0, 1);
+        assert_eq!(st.have.borrow()[&167], 5);
+    }
+
+    #[test]
+    fn paying_for_a_level_upgrade() {
+        let (w, _d, p) = mk("tpo_upg", None);
+        let me: ObjRef = p.clone();
+        let st = stock();
+        // levels have their own recipes, in normal and expert mode
+        for level in 0..=5 {
+            for expert in [false, true] {
+                w.set_expert_mode(expert);
+                p.st.borrow_mut().level = level;
+                let c = p.upgrade_craftable_item();
+                assert_eq!(c.crafted_item_type, 132);
+                assert_eq!(c.required_item_counts[0], if expert { 10 } else { 1 });
+            }
+        }
+        w.set_expert_mode(false);
+        p.st.borrow_mut().level = 0;
+        // nobody present
+        assert!(!p.take_items_from_blockhead_for_upgrade_to_next_level(&me));
+        p.io.borrow_mut().current_blockhead = Some(TestBh::new(3, false));
+        // an untouched wallet carries no signature and counts as empty
+        assert!(!p.take_items_from_blockhead_for_upgrade_to_next_level(&me));
+        // not enough crystals
+        set_crystal_wallet(5);
+        assert!(!p.take_items_from_blockhead_for_upgrade_to_next_level(&me));
+        // enough crystals but no items
+        set_crystal_wallet(100);
+        assert!(!p.take_items_from_blockhead_for_upgrade_to_next_level(&me));
+        assert_eq!(crystal_amount(), 90);
+        // everything there
+        st.have.borrow_mut().extend([(87, 1), (167, 10)]);
+        assert!(p.take_items_from_blockhead_for_upgrade_to_next_level(&me));
+        assert_eq!(crystal_amount(), 80);
+        // controlled blockheads pay no crystals
+        p.io.borrow_mut().current_blockhead = Some(ctl_bh(true));
+        st.have.borrow_mut().extend([(87, 1), (167, 10)]);
+        assert!(p.take_items_from_blockhead_for_upgrade_to_next_level(&me));
+        assert_eq!(crystal_amount(), 80);
+    }
+
+    #[test]
+    fn blockhead_queries_and_object_views() {
+        let (w, d, pb) = world_with_block("tpo_views");
+        tile(pb, 10, 9).set_back_wall_type_index(2);
+        let it = InventoryItem::new(ItemType(210), 0, 0, None, None);
+        let p =
+            TradePortal::new(&w, &d, IntPair { x: 10, y: 10 }, None, Some(&it.borrow()), false, None, Some("c"), None)
+                .unwrap();
+        let me: ObjRef = p.clone();
+        let st = stock();
+        assert_eq!(p.current_blockhead_cash(&me), 0);
+        assert_eq!(p.current_blockhead_count_of_inventory_items_of_type(&me, 5), 0);
+        assert_eq!(p.current_blockhead_usage_multiplier_for_first_item_of_type(&me, 5), 1.0);
+        p.io.borrow_mut().current_blockhead = Some(TestBh::new(3, false));
+        st.cash.set(42);
+        st.mult.set(0.5);
+        st.have.borrow_mut().insert(5, 7);
+        assert_eq!(p.current_blockhead_cash(&me), 42);
+        assert_eq!(p.current_blockhead_count_of_inventory_items_of_type(&me, 5), 7);
+        assert_eq!(p.current_blockhead_count_of_inventory_items_of_type(&me, 91), 1000);
+        assert_eq!(p.current_blockhead_usage_multiplier_for_first_item_of_type(&me, 5), 0.5);
+        // object hooks
+        assert_eq!(me.class_info().name, "TradePortal");
+        assert!(me.as_any().downcast_ref::<TradePortal>().is_some());
+        assert_eq!(me.get_light_rgb(), [255.0, 246.0, 64.0]);
+        assert!(me.occupies_normal_contents() && me.should_add_to_macro_block());
+        assert_eq!(me.freeblock_creation_item_type(), 210);
+        assert!(me.free_block_creation_save_dict(&me).is_some());
+        assert_eq!(InteractionObjectLike::action_title(&*p), "BUY");
+        assert!(p.requires_human_interaction() && p.can_be_used_in_expert_mode_when_not_owned());
+        p.set_paused(&me, true);
+        assert!(p.st.borrow().paused);
+        assert!(p.io_state().borrow().current_blockhead.is_some());
+        me.update_accurate_dt_is_simulation(&me, 0.1, 0.1, false);
+        me.world_contents_changed(&me, &mut vec![]);
+        me.add_artificial_light_contribution_for_physical_block_loaded_at_x_pos_y_pos(&me, 0, 0);
+        me.blockheads_loaded(&me);
+        let other: ObjRef = TestBh::new(9, false);
+        me.blockhead_unloaded(&me, &other);
+        // a replica keeps its place, a light-less one tolerates the hooks
+        let nd = me.update_net_data_for_client(&me, None).unwrap();
+        let (bw, _bd, bdw) = crate::blockhead::blockhead::testutil::setup();
+        d.blockheads.borrow_mut().push(crate::blockhead::blockhead::testutil::new_bh(&bw, &bdw, 0));
+        let rep = TradePortal::from_net_data(&w, &d, None, &nd).unwrap();
+        d.blockheads.borrow_mut().clear();
+        let rme: ObjRef = rep.clone();
+        assert!(rep.st.borrow().light.is_none());
+        rme.add_artificial_light_contribution_for_physical_block_loaded_at_x_pos_y_pos(&rme, 0, 0);
+        rme.world_changed(&rme, &mut vec![IntPair { x: 10, y: 9 }]);
+        rep.remove(&rme, None);
+        let mut far = nd.clone();
+        far[8..12].copy_from_slice(&900u32.to_le_bytes());
+        far[12..16].copy_from_slice(&900u32.to_le_bytes());
+        assert!(TradePortal::from_net_data(&w, &d, None, &far).is_none());
+        // remote updates with the user present keep the owner; dealloc releases the light
+        p.remote_update(&me, &nd);
+        me.dealloc(&me);
+        assert!(p.st.borrow().light.is_none() && p.local_price_offsets().is_none());
+    }
+
+    #[test]
+    fn support_and_removal() {
+        let (w, d, pb) = world_with_block("tpo_rm");
+        tile(pb, 10, 9).set_back_wall_type_index(2);
+        let it = InventoryItem::new(ItemType(210), 0, 0, None, None);
+        let p =
+            TradePortal::new(&w, &d, IntPair { x: 10, y: 10 }, None, Some(&it.borrow()), false, None, Some("c"), None)
+                .unwrap();
+        let me: ObjRef = p.clone();
+        // a user from another machine postpones the removal
+        p.io.borrow_mut().is_in_use = true;
+        p.io.borrow_mut().current_blockhead = Some(TestBh::new(2, true));
+        p.remove(&me, None);
+        assert!(!me.needs_removed());
+        p.io.borrow_mut().current_blockhead = None;
+        p.io.borrow_mut().remote_blockhead_in_use_unique_id = 8;
+        p.remove(&me, None);
+        assert!(!me.needs_removed());
+        p.io.borrow_mut().remote_blockhead_in_use_unique_id = 0;
+        // a local user is stopped; the portal's light goes with it
+        let local = TestBh::new(3, false);
+        p.io.borrow_mut().current_blockhead = Some(local.clone());
+        p.remove(&me, None);
+        assert!(me.needs_removed());
+        assert!(local.log.borrow().iter().any(|l| l == "stop"));
+        p.remove(&me, None);
+        // support lost through the world
+        let q =
+            TradePortal::new(&w, &d, IntPair { x: 20, y: 10 }, None, Some(&it.borrow()), false, None, Some("c"), None)
+                .unwrap();
+        let qm: ObjRef = q.clone();
+        // the portal built its own base stone: take it away again
+        tile(pb, 20, 9).set_type_index(2);
+        tile(pb, 20, 9).set_back_wall_type_index(2);
+        tile(pb, 20, 10).set_back_wall_type_index(2);
+        qm.world_changed(&qm, &mut vec![IntPair { x: 20, y: 9 }]);
+        assert!(qm.needs_removed());
+        // a portal without a stone tile below (unloaded) still works
+        let edge =
+            TradePortal::new(&w, &d, IntPair { x: 24, y: 0 }, None, Some(&it.borrow()), false, None, Some("c"), None)
+                .unwrap();
+        let em: ObjRef = edge.clone();
+        edge.upgrade_to_next_level(&em);
+        assert_eq!(edge.level(), 1);
+        em.set_needs_removed(&em, false);
+        assert!(!em.needs_removed());
+    }
+
+    #[test]
+    fn levels_outside_the_stone_table_and_relighting() {
+        let (w, d, pb) = world_with_block("tpo_lvl");
+        tile(pb, 10, 9).set_back_wall_type_index(2);
+        let mut sd = crate::objects::base::new_mutable_dict();
+        sd.map.insert("level".to_string(), PlistValue::int(9));
+        let it = InventoryItem::new(ItemType(210), 0, 0, None, None);
+        let p = TradePortal::new(
+            &w,
+            &d,
+            IntPair { x: 10, y: 10 },
+            None,
+            Some(&it.borrow()),
+            false,
+            Some(&sd),
+            Some("c"),
+            None,
+        )
+        .unwrap();
+        // the base stone keeps its type
+        assert_eq!(tile(pb, 10, 9).type_index(), 2);
+        let me: ObjRef = p.clone();
+        assert!(p.st.borrow().light.is_some());
+        p.update_portal_light(&me);
+        assert!(p.st.borrow().light.is_some());
+        assert_eq!(base_stone_for_level(9), None);
+        assert_eq!(base_stone_for_level(-1), None);
+        assert_eq!(base_stone_for_level(0), Some(0x3c));
     }
 }

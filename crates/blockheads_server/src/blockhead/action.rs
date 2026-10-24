@@ -623,16 +623,12 @@ mod tests {
         assert_eq!(g("interactionItemType").int_value(), 0);
         assert_eq!(g("interactionObjectID").unsigned_long_value(), 0xdead_beef_0000_0001);
         assert!(d.map.get(&"craftableItemObject".to_string()).is_none());
-        match g("interactionTestResult") {
-            PlistValue::Data(b) => {
-                assert_eq!(b.bytes.len(), 12);
-                assert_eq!(&b.bytes[..4], &(-1i32).to_le_bytes());
-                assert_eq!(&b.bytes[4..8], &0x66u32.to_le_bytes());
-                assert_eq!(&b.bytes[8..10], &[0, 0]);
-                assert_eq!(&b.bytes[10..12], &7u16.to_le_bytes());
-            }
-            _ => panic!("data expected"),
-        }
+        let PlistValue::Data(b) = g("interactionTestResult") else { unreachable!("data expected") };
+        assert_eq!(b.bytes.len(), 12);
+        assert_eq!(&b.bytes[..4], &(-1i32).to_le_bytes());
+        assert_eq!(&b.bytes[4..8], &0x66u32.to_le_bytes());
+        assert_eq!(&b.bytes[8..10], &[0, 0]);
+        assert_eq!(&b.bytes[10..12], &7u16.to_le_bytes());
         let b = Action::init_with_save_dict_inventory_items(&d, &[]);
         assert_eq!(b.craft_count_or_extra_data(), -1);
         assert_eq!(b.animation_timer(), 1.0);
@@ -716,4 +712,178 @@ mod tests {
         let back = BlockheadHostStub::action_init_with_save_dict_inventory_items(&br, &saved, &[]);
         assert_eq!(action_of(&back).unwrap().goal_tile_pos(), IntPair { x: 12, y: -3 });
     }
+
+    fn basket_with(items: &[(usize, ItemRef)]) -> ItemRef {
+        let mut input: Vec<Vec<ItemRef>> = vec![Vec::new(); 4];
+        for (i, it) in items {
+            input[*i].push(it.clone());
+        }
+        InventoryItem::new(ItemType::ITEM_BASKET, 0, 0, Some(&input), None)
+    }
+
+    fn resolve_dict(idx: i64, sub: i64, ty: i64) -> PlistDict {
+        let mut d = new_mutable_dict();
+        d.map.insert("interactionItemIndex".into(), PlistValue::Int(idx));
+        d.map.insert("interactionItemSubIndex".into(), PlistValue::Int(sub));
+        d.map.insert("interactionItemType".into(), PlistValue::Int(ty));
+        d
+    }
+
+    /// Items inside containers are found through the sub index, and only when their type still matches.
+    #[test]
+    fn sub_item_resolution() {
+        let inner = InventoryItem::new(ItemType(8), 0, 0, None, None);
+        let basket = basket_with(&[(1, inner.clone())]);
+        let empty_basket = basket_with(&[]);
+        let items: Vec<SubSlot> = vec![
+            Rc::new(RefCell::new(vec![])),
+            Rc::new(RefCell::new(vec![basket.clone()])),
+            Rc::new(RefCell::new(vec![empty_basket])),
+        ];
+        // the inner item is found and keeps both indices
+        let a = Action::init_with_save_dict_inventory_items(&resolve_dict(1, 1, 8), &items);
+        assert!(Rc::ptr_eq(&a.interaction_item().unwrap(), &inner));
+        assert_eq!((a.interaction_item_index(), a.interaction_item_sub_index()), (1, 1));
+        // another type in the sub slot: nothing is interacted with and the indices reset
+        let a = Action::init_with_save_dict_inventory_items(&resolve_dict(1, 1, 9), &items);
+        assert!(a.interaction_item().is_none());
+        assert_eq!((a.interaction_item_index(), a.interaction_item_sub_index()), (-1, -1));
+        // an empty sub slot keeps the container as the interaction item
+        let a = Action::init_with_save_dict_inventory_items(&resolve_dict(1, 0, 8), &items);
+        assert!(Rc::ptr_eq(&a.interaction_item().unwrap(), &basket));
+        // sub index -1 means the container itself; an empty outer slot gives nothing
+        let a = Action::init_with_save_dict_inventory_items(&resolve_dict(1, -1, 8), &items);
+        assert!(Rc::ptr_eq(&a.interaction_item().unwrap(), &basket));
+        let a = Action::init_with_save_dict_inventory_items(&resolve_dict(2, -1, 8), &items);
+        assert_eq!(a.interaction_item().unwrap().borrow().item_type, ItemType::ITEM_BASKET);
+        let a = Action::init_with_save_dict_inventory_items(&resolve_dict(0, 3, 8), &items);
+        assert!(a.interaction_item().is_none());
+        // a sub index past the slots raises
+        let r = crate::foundation::exception::catch_ns(|| {
+            Action::init_with_save_dict_inventory_items(&resolve_dict(1, 9, 8), &items).goal_tile_pos()
+        });
+        assert_eq!(r.unwrap_err().name, "NSRangeException");
+    }
+
+    #[test]
+    fn craftable_objects_and_every_setter() {
+        use crate::crafting::craftable_item_object::{zero_craftable_item, CraftableItemObject};
+        let a = sample(2);
+        // a craftable object survives the save dictionary
+        let mut ci = zero_craftable_item();
+        ci.crafted_item_type = 12;
+        a.set_craftable_item_object(Some(CraftableItemObject::init_with_craftable_item(ci)));
+        let d = a.get_save_dict();
+        assert!(d.map.get(&"craftableItemObject".to_string()).is_some());
+        let back = Action::init_with_save_dict_inventory_items(&d, &[]);
+        assert_eq!(back.craftable_item_object().unwrap().craftable_item().crafted_item_type, 12);
+        // plain accessors
+        a.set_complete(true);
+        a.set_goal_tile_pos(IntPair { x: 1, y: 2 });
+        a.set_interaction_object_id(7);
+        a.set_goal_interaction(InteractionType::INTERACTION_FILL_BUCKET);
+        a.set_path_type(PathType(3));
+        a.set_is_ai(false);
+        a.set_animation_timer(0.5);
+        a.set_craft_count_or_extra_data(9);
+        let s = a.state();
+        assert!(s.complete && !s.is_ai);
+        assert_eq!((s.goal_tile_pos, s.interaction_object_id, s.path_type), (IntPair { x: 1, y: 2 }, 7, PathType(3)));
+        assert_eq!((s.animation_timer, s.craft_count_or_extra_data), (0.5, 9));
+        a.dealloc();
+    }
+
+    /// The bridge answers inertly for entries that are not actions and forwards the rest to the blockhead.
+    #[test]
+    fn bridge_edge_cases_and_blockhead_forwards() {
+        use crate::blockhead::blockhead::testutil::*;
+        let _h = TestHost::install();
+        let (world, dw, dwref) = setup();
+        let o = new_bh(&world, &dwref, 0);
+        let b = bh_of(&o);
+        let br = ActionBridge;
+        let not_action: Rc<dyn Any> = Rc::new(());
+        assert!(!BlockheadHostStub::action_in_progress(&br, &not_action));
+        BlockheadHostStub::action_set_in_progress(&br, &not_action, true);
+        assert_eq!(BlockheadHostStub::action_goal_tile_pos(&br, &not_action), IntPair { x: 0, y: 0 });
+        assert_eq!(BlockheadHostStub::action_interaction_test_result(&br, &not_action), zero_result());
+        assert_eq!(BlockheadHostStub::action_interaction_object_id(&br, &not_action), 0);
+        assert_eq!(BlockheadHostStub::action_inventory_change_int_for_key(&br, &not_action, "1"), None);
+        BlockheadHostStub::action_set_inventory_change_int_for_key(&br, &not_action, "1", 2);
+        assert_eq!(BlockheadHostStub::good_or_bad_interaction_for_action(&br, b, Some(&not_action)), zero_result());
+        assert_eq!(BlockheadHostStub::good_or_bad_interaction_for_action(&br, b, None), zero_result());
+        assert!(matches!(BlockheadHostStub::action_get_save_dict(&br, &not_action), PlistValue::Dict(_)));
+        let from_junk = BlockheadHostStub::action_init_with_save_dict_inventory_items(&br, &PlistValue::int(1), &[]);
+        assert_eq!(action_of(&from_junk).unwrap().goal_tile_pos(), IntPair { x: 0, y: 0 });
+        assert_eq!(InventoryHostStub::action_goal_interaction(&br, &not_action), 0);
+        assert!(InventoryHostStub::action_interaction_item(&br, &not_action).is_none());
+        assert_eq!(InventoryHostStub::action_interaction_item_index(&br, &not_action), 0);
+        assert_eq!(InventoryHostStub::action_interaction_item_sub_index(&br, &not_action), 0);
+        InventoryHostStub::action_set_interaction_item(&br, &not_action, None);
+        InventoryHostStub::action_set_interaction_item_index(&br, &not_action, 1);
+        InventoryHostStub::action_set_interaction_item_sub_index(&br, &not_action, 1);
+        assert_eq!(InventoryHostStub::action_craft_count_or_extra_data(&br, &not_action), 0);
+        assert_eq!(InventoryHostStub::action_path_type(&br, &not_action), 0);
+        assert!(InventoryHostStub::action_craftable_item_object(&br, &not_action).is_none());
+        // the setters reach a real action
+        let a = sample(1);
+        let any: Rc<dyn Any> = a.clone();
+        let item = InventoryItem::new(ItemType(8), 0, 0, None, None);
+        InventoryHostStub::action_set_interaction_item(&br, &any, Some(&item));
+        InventoryHostStub::action_set_interaction_item_index(&br, &any, 3);
+        InventoryHostStub::action_set_interaction_item_sub_index(&br, &any, 2);
+        assert_eq!((a.interaction_item_index(), a.interaction_item_sub_index()), (3, 2));
+        assert_eq!(InventoryHostStub::action_interaction_item_index(&br, &any), 3);
+        assert_eq!(InventoryHostStub::action_interaction_item_sub_index(&br, &any), 2);
+        assert!(Rc::ptr_eq(&InventoryHostStub::action_interaction_item(&br, &any).unwrap(), &item));
+        assert_eq!(InventoryHostStub::action_path_type(&br, &any), 2);
+        assert!(InventoryHostStub::action_craftable_item_object(&br, &any).is_none());
+        a.set_craftable_item_object(Some(
+            crate::crafting::craftable_item_object::CraftableItemObject::init_with_craftable_item(
+                crate::crafting::craftable_item_object::zero_craftable_item(),
+            ),
+        ));
+        assert!(InventoryHostStub::action_craftable_item_object(&br, &any).is_some());
+        // the blockhead methods of the module
+        BlockheadHostStub::update_position(&br, b, IntPair { x: 6, y: 8 });
+        assert_eq!(b.pos(), IntPair { x: 6, y: 8 });
+        BlockheadHostStub::stop_riding(&br, b);
+        let stub_obj = stub(5, true);
+        BlockheadHostStub::pickup_dynamic_object(&br, b, &stub_obj);
+        let mut rejected = false;
+        let _ = BlockheadHostStub::interaction_type_for_tile_at_pos_item_pickup_rejected_due_to_inventory_full_include_actions_face_index_allow_protected_actions(
+            &br,
+            b,
+            Some(tile(&world, 5, 3)),
+            IntPair { x: 5, y: 3 },
+            None,
+            &mut rejected,
+            false,
+            0,
+            false,
+        );
+        BlockheadHostStub::update_gather_speed_and_animation_for_current_interation_and_item(&br, b);
+        assert!(!BlockheadHostStub::is_adding_fuel_to_any_workbench(&br, b));
+        assert_eq!(BlockheadHostStub::current_traverse_to_key_frame(&br, b), b.current_traverse_to_key_frame());
+        assert_eq!(BlockheadHostStub::next_pos(&br, b), b.next_pos());
+        assert_eq!(BlockheadHostStub::can_fly(&br, b), b.can_fly());
+        assert_eq!(BlockheadHostStub::center(&br, b), b.center());
+        let tap = b.center();
+        assert!(BlockheadHostStub::tap_is_within_body_radius(&br, b, tap));
+        assert_eq!(BlockheadHostStub::will_die_if_hit_by_force(&br, b, 1), b.will_die_if_hit_by_force(1));
+        BlockheadHostStub::hit_with_force_blockhead(&br, b, 0, None);
+        assert!(!BlockheadHostStub::is_interacting_with_any_interaction_object(&br, b));
+        BlockheadHostStub::set_interaction_object(&br, b, None);
+        BlockheadHostStub::set_interaction_workbench(&br, b, None);
+        BlockheadHostStub::stop_all_actions(&br, b);
+        BlockheadHostStub::stop_fishing(&br, b);
+        BlockheadHostStub::update_jet_motion(&br, b, 0.1);
+        let _ = BlockheadHostStub::dpad_should_be_displayed(&br, b);
+        let _ = BlockheadHostStub::current_interaction_requires_human_input(&br, b);
+        BlockheadHostStub::die_for_good(&br, b);
+        std::mem::forget((dw, dwref));
+    }
 }
+
+#[cfg(test)]
+mod cov_tests;

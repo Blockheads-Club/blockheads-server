@@ -155,18 +155,18 @@ impl Sign {
     ) -> Option<Rc<Sign>> {
         let me = Self::alloc(world, dw);
         let me_obj: ObjRef = me.clone();
-        if !sign_init_with_world_dynamic_world_at_position_cache_item_flipped_save_dict_placed_by_client_client_name(
-            &me_obj,
-            pos,
-            cache,
-            item,
-            flipped,
-            save_dict,
-            client_id,
-            client_name,
-        ) {
-            return None;
-        }
+        let init =
+            sign_init_with_world_dynamic_world_at_position_cache_item_flipped_save_dict_placed_by_client_client_name(
+                &me_obj,
+                pos,
+                cache,
+                item,
+                flipped,
+                save_dict,
+                client_id,
+                client_name,
+            );
+        init?;
         Some(me)
     }
 
@@ -179,9 +179,7 @@ impl Sign {
     ) -> Option<Rc<Sign>> {
         let me = Self::alloc(world, dw);
         let me_obj: ObjRef = me.clone();
-        if !sign_init_with_world_dynamic_world_save_dict_cache(&me_obj, save_dict, cache) {
-            return None;
-        }
+        sign_init_with_world_dynamic_world_save_dict_cache(&me_obj, save_dict, cache)?;
         Some(me)
     }
 
@@ -194,9 +192,7 @@ impl Sign {
     ) -> Option<Rc<Sign>> {
         let me = Self::alloc(world, dw);
         let me_obj: ObjRef = me.clone();
-        if !sign_init_with_world_dynamic_world_cache_net_data(&me_obj, cache, net_data) {
-            return None;
-        }
+        sign_init_with_world_dynamic_world_cache_net_data(&me_obj, cache, net_data)?;
         Some(me)
     }
 
@@ -292,14 +288,14 @@ pub fn sign_init_with_world_dynamic_world_at_position_cache_item_flipped_save_di
     save_dict: Option<&PlistDict>,
     client_id: Option<&str>,
     client_name: Option<&str>,
-) -> bool {
+) -> Option<()> {
     let links = sl(me).links().clone();
     let (w, d) = links.refs();
-    if !interaction_object_init_with_world_dynamic_world_at_position_cache_item_flipped_save_dict_placed_by_client_client_name(
+    // the base initialiser always succeeds for a position
+    interaction_object_init_with_world_dynamic_world_at_position_cache_item_flipped_save_dict_placed_by_client_client_name(
         me, &w, &d, pos, cache, item, flipped, save_dict, client_id, client_name,
-    ) {
-        return false;
-    }
+    )
+    .then_some(())?;
     let text = save_dict.and_then(|d| d.map.get(&"text".to_string())).and_then(|v| v.as_str()).map(|s| s.to_string());
     sl(me).sign_state().borrow_mut().text = text;
     // no borrow of SignState may be live across the call (it reads our own connection / offset type back)
@@ -313,25 +309,27 @@ pub fn sign_init_with_world_dynamic_world_at_position_cache_item_flipped_save_di
         s.offset_type = offset.0;
     }
     // reserve the neighbour tile WITHOUT notifying (trap 8)
-    if let Some(np) = neighbour_pos(me.pos(), offset.0) {
-        if let Some(t) = tile_at(me, np) {
-            if t.foreground_contents() == 0 {
-                t.set_foreground_contents(CONTENTS_INTERACTION_OBJECT);
-            }
+    // (a non-zero offset was only chosen because both neighbours are loaded)
+    if let Some(t) = neighbour_pos(me.pos(), offset.0).and_then(|np| tile_at(me, np)) {
+        if t.foreground_contents() == 0 {
+            t.set_foreground_contents(CONTENTS_INTERACTION_OBJECT);
         }
     }
     io(me).borrow_mut().flipped = offset.0 == 2;
     sign_init_sub_derived_items(me);
-    true
+    Some(())
 }
 
 /// `-[Sign initWithWorld:dynamicWorld:saveDict:cache:]` (load).
-pub fn sign_init_with_world_dynamic_world_save_dict_cache(me: &ObjRef, save_dict: &PlistDict, cache: CacheRef) -> bool {
+pub fn sign_init_with_world_dynamic_world_save_dict_cache(
+    me: &ObjRef,
+    save_dict: &PlistDict,
+    cache: CacheRef,
+) -> Option<()> {
     let links = sl(me).links().clone();
     let (w, d) = links.refs();
-    if !interaction_object_init_with_world_dynamic_world_save_dict_cache(me, &w, &d, save_dict, cache) {
-        return false;
-    }
+    // the base initialiser always succeeds here
+    interaction_object_init_with_world_dynamic_world_save_dict_cache(me, &w, &d, save_dict, cache).then_some(())?;
     {
         let mut s = sl(me).sign_state().borrow_mut();
         s.text = save_dict.map.get(&"text".to_string()).and_then(|v| v.as_str()).map(|x| x.to_string());
@@ -339,17 +337,15 @@ pub fn sign_init_with_world_dynamic_world_save_dict_cache(me: &ObjRef, save_dict
         s.offset_type = dict_int(save_dict, "offsetType") as i64;
     }
     sign_init_sub_derived_items(me);
-    true
+    Some(())
 }
 
 /// `-[Sign initWithWorld:dynamicWorld:cache:netData:]`. A record shorter than 0x30 bytes raises `NSRangeException`
 /// (`subdataWithRange:`). The blockhead notification loop runs only for non-subclasses.
-pub fn sign_init_with_world_dynamic_world_cache_net_data(me: &ObjRef, cache: CacheRef, net_data: &[u8]) -> bool {
+pub fn sign_init_with_world_dynamic_world_cache_net_data(me: &ObjRef, cache: CacheRef, net_data: &[u8]) -> Option<()> {
     let links = sl(me).links().clone();
     let (w, d) = links.refs();
-    if !interaction_object_init_with_world_dynamic_world_cache_net_data(me, &w, &d, cache, net_data) {
-        return false;
-    }
+    interaction_object_init_with_world_dynamic_world_cache_net_data(me, &w, &d, cache, net_data).then_some(())?;
     let hdr = SignCreationNetData::read_le(&padded_bytes(net_data, 0x30));
     let dict = gunzip_plist(subdata_from(net_data, 0x30));
     {
@@ -368,7 +364,7 @@ pub fn sign_init_with_world_dynamic_world_cache_net_data(me: &ObjRef, cache: Cac
             }
         }
     }
-    true
+    Some(())
 }
 
 /// `-[Sign getSaveDict]`.
@@ -758,6 +754,31 @@ pub(crate) mod testkit {
     pub fn tile(pb: PhysicalBlockRef, x: i32, y: i32) -> TileRef {
         TileRef::new(pb, (y * 32 + x) as usize)
     }
+
+    /// A `BHServer` that knows one alias, for the dynamic world's `server`.
+    pub struct TestServer;
+    impl crate::dynworld::state::DwServer for TestServer {
+        fn player_info_for_peer_id(&self, peer_id: &str) -> Option<PlistValue> {
+            if peer_id != "owner1" {
+                return None;
+            }
+            let mut d = crate::objects::base::new_mutable_dict();
+            d.map.insert("alias".to_string(), PlistValue::string("Ally"));
+            Some(PlistValue::Dict(d))
+        }
+        fn player_is_admin_with_id(&self, _client_id: &str) -> bool {
+            false
+        }
+        fn player_update(&self) -> Option<String> {
+            None
+        }
+        fn notify_players_changed(&self) {}
+    }
+
+    /// Makes `d` a server's dynamic world.
+    pub fn install_server(d: &Rc<DynamicWorld>) {
+        *d.server.borrow_mut() = Some(Rc::new(TestServer));
+    }
 }
 
 #[cfg(test)]
@@ -787,14 +808,10 @@ mod tests {
         assert_ne!(s.connection_type(), 0, "ground connection expected");
         // anchor tile claimed
         assert_eq!(tile(pb, 10, 10).foreground_contents(), 48);
-        let off = s.offset_type();
-        assert_eq!(s.io.borrow().flipped, off == 2);
-        if off == 1 {
-            assert_eq!(tile(pb, 11, 10).foreground_contents(), 48);
-        } else if off == 2 {
-            assert_eq!(tile(pb, 9, 10).foreground_contents(), 48);
-        }
-        assert_eq!(s.two_blocks_wide(), off != 0);
+        // a sign on open ground takes one tile only
+        assert_eq!(s.offset_type(), 0);
+        assert!(!s.io.borrow().flipped);
+        assert!(!s.two_blocks_wide());
     }
 
     #[test]
@@ -907,5 +924,254 @@ mod tests {
         let me: ObjRef = s.clone();
         assert!(sign_like(&me).is_some());
         assert!(me.as_sign_text().is_some());
+    }
+
+    use crate::dynworld::state::DwServer;
+    use crate::objects::interaction_object::testutil::TestBh;
+
+    fn ground(pb: crate::world::state::PhysicalBlockRef) {
+        for x in 0..32 {
+            tile(pb, x, 9).set_type_index(6);
+        }
+    }
+
+    #[test]
+    fn downcasts_and_object_views() {
+        let (w, d, pb) = world_with_block("sign_h");
+        ground(pb);
+        let s = sign_at(&w, &d, 10, 10, Some("t"));
+        let me: ObjRef = s.clone();
+        assert!(sign_like(&me).is_some());
+        assert_eq!(SignTextDynamicObject::text(&*s).as_deref(), Some("t"));
+        SignTextDynamicObject::set_text(&*s, &me, Some("u"));
+        assert_eq!(s.text().as_deref(), Some("u"));
+        assert_eq!(InteractionObjectLike::two_blocks_wide(&*s), s.two_blocks_wide());
+        // the test server
+        let ts = TestServer;
+        assert!(ts.player_info_for_peer_id("nobody").is_none());
+        assert!(!ts.player_is_admin_with_id("x") && ts.player_update().is_none());
+        ts.notify_players_changed();
+        // an ownership sign is a sign too, anything else is not
+        let it = InventoryItem::new(ItemType(301), 0, 0, None, None);
+        let os =
+            OwnershipSign::new(&w, &d, IntPair { x: 14, y: 10 }, None, Some(&it.borrow()), false, None, None, None)
+                .unwrap();
+        let ome: ObjRef = os.clone();
+        assert!(sign_like(&ome).is_some());
+        assert!(sign_like(&crate::blockhead::blockhead::testutil::stub(1, true)).is_none());
+        // object hooks
+        assert_eq!(me.class_info().name, "Sign");
+        assert!(me.as_any().downcast_ref::<Sign>().is_some());
+        assert!(me.as_interaction_object().is_some());
+        assert!(me.should_add_to_macro_block());
+        assert_eq!(me.freeblock_creation_item_type(), 163);
+        assert!(me.free_block_creation_save_dict(&me).is_some());
+        me.update_accurate_dt_is_simulation(&me, 0.1, 0.1, false);
+        me.blockheads_loaded(&me);
+        let bh: ObjRef = TestBh::new(1, false);
+        me.blockhead_unloaded(&me, &bh);
+        assert!(s.io_state().borrow().current_blockhead.is_none());
+        assert!(s.sign_placement_info().is_some());
+        me.dealloc(&me);
+        assert_eq!(s.text(), None);
+        me.set_needs_removed(&me, true);
+        me.update_accurate_dt_is_simulation(&me, 0.1, 0.1, false);
+    }
+
+    #[test]
+    fn net_replicas_of_signs() {
+        let (w, d, pb) = world_with_block("sign_i");
+        ground(pb);
+        let s = sign_at(&w, &d, 10, 10, Some("net"));
+        let me: ObjRef = s.clone();
+        let bytes = me.creation_net_data_for_client(&me, None).unwrap();
+        let (bw, _bd, bdw) = crate::blockhead::blockhead::testutil::setup();
+        d.blockheads.borrow_mut().push(crate::blockhead::blockhead::testutil::new_bh(&bw, &bdw, 0));
+        let rep = Sign::from_net_data(&w, &d, None, &bytes).unwrap();
+        d.blockheads.borrow_mut().clear();
+        assert_eq!(rep.text().as_deref(), Some("net"));
+        assert_eq!((rep.connection_type(), rep.offset_type()), (s.connection_type(), s.offset_type()));
+        assert_eq!((rep.clone() as ObjRef).owner_id().as_deref(), Some("cid"));
+        // short records raise, unloaded positions refuse
+        let e = crate::foundation::exception::catch_ns(|| Sign::from_net_data(&w, &d, None, &bytes[..0x2c]).is_some())
+            .unwrap_err();
+        assert_eq!(e.name, "NSRangeException");
+        let mut far = bytes.clone();
+        far[8..12].copy_from_slice(&900u32.to_le_bytes());
+        far[12..16].copy_from_slice(&900u32.to_le_bytes());
+        assert!(Sign::from_net_data(&w, &d, None, &far).is_none());
+        // a remote update while someone is using the sign leaves text and owner alone
+        let rme: ObjRef = rep.clone();
+        rep.io.borrow_mut().current_blockhead = Some(TestBh::new(2, false));
+        let mut upd = bytes.clone();
+        upd.truncate(0x30);
+        let mut dict = PlistValue::mutable_dict();
+        if let PlistValue::Dict(dd) = &mut dict {
+            dd.map.insert("text".to_string(), PlistValue::string("changed"));
+        }
+        upd.extend_from_slice(&gz_plist_bytes(&dict));
+        rme.remote_update(&rme, &upd);
+        assert_eq!(rep.text().as_deref(), Some("net"));
+        // and a tail that is not a dictionary changes nothing
+        rep.io.borrow_mut().current_blockhead = None;
+        let mut junk = bytes[..0x30].to_vec();
+        junk.extend_from_slice(&[9, 9, 9]);
+        rme.remote_update(&rme, &junk);
+        assert_eq!(rep.text(), None);
+    }
+
+    #[test]
+    fn support_changes_move_or_remove_signs() {
+        let (w, d, pb) = world_with_block("sign_j");
+        ground(pb);
+        let s = sign_at(&w, &d, 10, 10, None);
+        let me: ObjRef = s.clone();
+        assert_eq!((s.connection_type(), s.offset_type()), (1, 0));
+        // the ground goes and a wall appears to the right: the sign turns into a side-wall sign and claims a tile
+        tile(pb, 10, 9).set_type_index(2);
+        tile(pb, 11, 10).set_type_index(6);
+        me.world_changed(&me, &mut vec![IntPair { x: 10, y: 9 }]);
+        assert_eq!((s.connection_type(), s.offset_type()), (4, 2));
+        assert!(me.update_needs_to_be_sent());
+        assert_eq!(tile(pb, 9, 10).foreground_contents(), 48);
+        assert!(s.io.borrow().flipped);
+        assert!(!me.needs_removed());
+        // the wall goes too and the ground corners are gone: nothing holds it any more and it drops
+        tile(pb, 11, 10).set_type_index(2);
+        tile(pb, 9, 9).set_type_index(2);
+        tile(pb, 11, 9).set_type_index(2);
+        me.world_changed(&me, &mut vec![IntPair { x: 11, y: 10 }]);
+        assert!(me.needs_removed());
+        assert_eq!(tile(pb, 9, 10).foreground_contents(), 0);
+        assert_eq!(tile(pb, 10, 10).foreground_contents(), 0);
+    }
+
+    #[test]
+    fn neighbour_tiles_that_are_not_loaded_or_not_free() {
+        let (w, d, pb) = world_with_block("sign_k");
+        ground(pb);
+        // a two-wide sign next to the loaded edge: its neighbour tile is outside the loaded area
+        let s = sign_at(&w, &d, 31, 10, None);
+        let me: ObjRef = s.clone();
+        s.st.borrow_mut().offset_type = 1;
+        me.set_needs_removed(&me, false);
+        // a neighbour that is taken is left alone
+        let t = sign_at(&w, &d, 20, 10, None);
+        let tm: ObjRef = t.clone();
+        t.st.borrow_mut().offset_type = 1;
+        tile(pb, 21, 10).set_foreground_contents(7);
+        tm.set_needs_removed(&tm, false);
+        assert_eq!(tile(pb, 21, 10).foreground_contents(), 7);
+        // unchanged support keeps it as it is
+        tm.world_changed(&tm, &mut vec![IntPair { x: 20, y: 10 }]);
+        assert!(!tm.needs_removed());
+    }
+
+    #[test]
+    fn using_and_removing_signs() {
+        let (w, d, pb) = world_with_block("sign_l");
+        ground(pb);
+        let s = sign_at(&w, &d, 10, 10, Some("x"));
+        let me: ObjRef = s.clone();
+        let owner_bh = TestBh::new(7, false);
+        let ob: ObjRef = owner_bh.clone();
+        let other: ObjRef = TestBh::new(8, false);
+        // admins use anything, owners their own signs
+        w.set_is_admin(true);
+        assert!(s.can_be_used_by_blockhead(&me, &other));
+        w.set_is_admin(false);
+        assert!(s.can_be_used_by_blockhead(&me, &ob) == (me.owner_id().as_deref() == Some("c7")));
+        me.set_owner_id(Some("c7".into()));
+        assert!(s.can_be_used_by_blockhead(&me, &ob));
+        assert!(!s.can_be_used_by_blockhead(&me, &other));
+        me.set_owner_id(None);
+        assert!(s.can_be_used_by_blockhead(&me, &other));
+        // a sign in use by a remote or foreign machine user is only marked
+        s.io.borrow_mut().is_in_use = true;
+        s.io.borrow_mut().remote_blockhead_in_use_unique_id = 5;
+        s.remove(&me, None);
+        assert!(!me.needs_removed() && s.io.borrow().needs_to_be_removed_when_interaction_ends);
+        s.io.borrow_mut().remote_blockhead_in_use_unique_id = 0;
+        s.io.borrow_mut().current_blockhead = Some(TestBh::new(9, true));
+        s.remove(&me, None);
+        assert!(!me.needs_removed());
+        // a local user is stopped; the sign drops as an item
+        s.io.borrow_mut().current_blockhead = Some(ob.clone());
+        s.remove(&me, None);
+        assert!(me.needs_removed());
+        assert!(owner_bh.log.borrow().iter().any(|l| l == "stop"));
+        assert_eq!(tile(pb, 10, 10).foreground_contents(), 0);
+        s.remove(&me, None);
+        // painting
+        let p = sign_at(&w, &d, 14, 10, None);
+        let pm: ObjRef = p.clone();
+        p.paint(&pm, 9);
+        assert_eq!(p.io.borrow().paint_color, 9);
+        assert!(pm.update_needs_to_be_sent());
+        pm.set_update_needs_to_be_sent(false);
+        p.base.borrow_mut().is_net = true;
+        p.paint(&pm, 10);
+        assert!(!pm.update_needs_to_be_sent());
+        p.remove(&pm, None);
+        assert!(!pm.needs_removed());
+    }
+
+    #[test]
+    fn side_wall_signs_claim_their_second_tile() {
+        let (w, d, pb) = world_with_block("sign_m");
+        // open air with a wall to the right: the sign hangs on the wall and also takes the tile to its left
+        tile(pb, 11, 10).set_type_index(6);
+        let s = sign_at(&w, &d, 10, 10, None);
+        let me: ObjRef = s.clone();
+        assert_eq!((s.connection_type(), s.offset_type()), (4, 2));
+        assert_eq!(tile(pb, 9, 10).foreground_contents(), 48);
+        assert!(s.io.borrow().flipped && s.two_blocks_wide());
+        // the claim leaves a taken tile alone and tolerates an unloaded one
+        tile(pb, 9, 10).set_foreground_contents(7);
+        claim_neighbour(&me, true);
+        claim_neighbour(&me, false);
+        assert_eq!(tile(pb, 9, 10).foreground_contents(), 7);
+        free_neighbour(&me);
+        assert_eq!(tile(pb, 9, 10).foreground_contents(), 7, "only reserved tiles are freed");
+        // placing next to a reserved tile does not take it, at the edge of the world nothing is loaded
+        tile(pb, 21, 10).set_type_index(6);
+        tile(pb, 19, 10).set_foreground_contents(48);
+        let t = sign_at(&w, &d, 20, 10, None);
+        assert_eq!((t.connection_type(), t.offset_type()), (4, 2));
+        assert_eq!(tile(pb, 19, 10).foreground_contents(), 48);
+        // at the edge of the loaded area no placement is possible; a hand-set offset points at an unloaded tile
+        tile(pb, 1, 10).set_type_index(6);
+        let edge = sign_at(&w, &d, 0, 10, None);
+        assert_eq!((edge.connection_type(), edge.offset_type()), (0, 0));
+        edge.st.borrow_mut().offset_type = 2;
+        let em: ObjRef = edge.clone();
+        claim_neighbour(&em, true);
+        free_neighbour(&em);
+        // reloading over an already reserved tile, and over an unloaded one
+        let dict = me.get_save_dict(&me);
+        assert!(Sign::from_save_dict(&w, &d, &dict, None).is_some());
+        let mut far = dict.clone();
+        far.map.insert("pos_x".to_string(), PlistValue::int(900));
+        far.map.insert("pos_y".to_string(), PlistValue::int(900));
+        assert!(Sign::from_save_dict(&w, &d, &far, None).is_some());
+    }
+
+    #[test]
+    fn unchanged_text_support_and_busy_signs() {
+        let (w, d, pb) = world_with_block("sign_n");
+        ground(pb);
+        let s = sign_at(&w, &d, 10, 10, Some("same"));
+        let me: ObjRef = s.clone();
+        // nothing changes: no event, no flag
+        s.set_text(&me, Some("same"));
+        me.world_changed(&me, &mut vec![IntPair { x: 10, y: 9 }]);
+        assert!(!me.update_needs_to_be_sent() && !me.needs_removed());
+        // a busy sign belongs to its user
+        let user: ObjRef = TestBh::new(7, false);
+        let other: ObjRef = TestBh::new(8, false);
+        me.set_owner_id(None);
+        interaction_object_start_interaction_with_blockhead(&me, &user);
+        assert!(!s.can_be_used_by_blockhead(&me, &other));
+        assert!(s.can_be_used_by_blockhead(&me, &user));
     }
 }

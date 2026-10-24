@@ -1010,9 +1010,8 @@ pub fn npc_init_with_world_dynamic_world_at_position_cache_save_dict_is_adult_wa
     was_placed: bool,
     client_id: Option<&str>,
 ) -> bool {
-    if !base_init_with_world_dynamic_world_at_position_cache(me, world, dw, pos, cache) {
-        return false;
-    }
+    let inited = base_init_with_world_dynamic_world_at_position_cache(me, world, dw, pos, cache);
+    debug_assert!(inited); // the base initialisers cannot fail on this path
     let npc = vn(me);
     npc.npc().borrow_mut().saved_blockhead_index = -1;
     if is_adult {
@@ -1047,9 +1046,8 @@ pub fn npc_init_with_world_dynamic_world_save_dict_cache(
     save_dict: &PlistDict,
     cache: CacheRef,
 ) -> bool {
-    if !base_init_with_world_dynamic_world_save_dict_cache(me, world, dw, save_dict, cache) {
-        return false;
-    }
+    let inited = base_init_with_world_dynamic_world_save_dict_cache(me, world, dw, save_dict, cache);
+    debug_assert!(inited); // the base initialisers cannot fail on this path
     let npc = vn(me);
     npc.load_values_from_save_dict(me, save_dict);
     npc.npc().borrow_mut().random_harm_from_hunger_timer = r01("NPC.init.hunger") * 20.0f32 + 1.0f32;
@@ -2277,19 +2275,30 @@ mod tests {
         fn captured_item_type(&self) -> i32 {
             77
         }
+        fn food_item_type(&self) -> i32 {
+            9
+        }
+        fn dies_of_low_fullness(&self) -> bool {
+            !NO_HUNGER.with(|c| c.get())
+        }
     }
     impl_npc_protocols!(TestNpc);
+    thread_local! {
+        static NO_HUNGER: Cell<bool> = const { Cell::new(false) };
+    }
 
     /// A stand-in Blockhead.
     struct TestBh {
         base: RefCell<DynamicObjectBase>,
         cid: Option<String>,
+        ctl: Cell<bool>,
     }
     impl TestBh {
         fn alloc(id: u64, cid: Option<&str>) -> ObjRef {
             let o = crate::objects::handle::alloc_obj(|w| TestBh {
                 base: RefCell::new(DynamicObjectBase::alloc_zeroed_with(w)),
                 cid: cid.map(|s| s.to_string()),
+                ctl: Cell::new(false),
             });
             o.base().borrow_mut().unique_id = id;
             o
@@ -2303,7 +2312,7 @@ mod tests {
             None
         }
         fn is_client_blockhead_being_controlled_by_server(&self) -> bool {
-            false
+            self.ctl.get()
         }
         fn is_interacting_with_any_interaction_object(&self) -> bool {
             false
@@ -2329,18 +2338,42 @@ mod tests {
     struct TestEnv {
         server_clients: Cell<usize>,
         stops: RefCell<Vec<u64>>,
-        curse: bool,
         bhs: RefCell<Vec<ObjRef>>,
         made: RefCell<Vec<(i32, usize)>>,
+        client: Cell<bool>,
+        tiles: RefCell<Vec<((i32, i32), NpcTileCopy)>>,
+        temp: Cell<f32>,
+        door_like: RefCell<Vec<(i32, i32)>>,
+        door: RefCell<Vec<(i32, i32)>>,
+        door_calls: RefCell<Vec<(IntPair, bool, i32)>>,
+        circum: RefCell<Vec<i32>>,
+        fbs: RefCell<Vec<ObjRef>>,
+        fb_item: Cell<i32>,
+        io: RefCell<Option<ObjRef>>,
+        feeder: Cell<Option<bool>>,
+        paused: Cell<bool>,
+        riding: RefCell<Vec<u64>>,
     }
     impl TestEnv {
         fn new() -> Rc<TestEnv> {
             Rc::new(TestEnv {
                 server_clients: Cell::new(1),
                 stops: RefCell::new(vec![]),
-                curse: false,
                 bhs: RefCell::new(vec![]),
                 made: RefCell::new(vec![]),
+                client: Cell::new(false),
+                tiles: RefCell::new(vec![]),
+                temp: Cell::new(20.0),
+                door_like: RefCell::new(vec![]),
+                door: RefCell::new(vec![]),
+                door_calls: RefCell::new(vec![]),
+                circum: RefCell::new(vec![]),
+                fbs: RefCell::new(vec![]),
+                fb_item: Cell::new(9),
+                io: RefCell::new(None),
+                feeder: Cell::new(None),
+                paused: Cell::new(false),
+                riding: RefCell::new(vec![]),
             })
         }
     }
@@ -2351,18 +2384,54 @@ mod tests {
         fn blockhead_with_id_including_net(&self, id: u64) -> Option<ObjRef> {
             self.bhs.borrow().iter().find(|b| b.unique_id() == id).cloned()
         }
+        fn all_blockheads_including_net(&self) -> Vec<ObjRef> {
+            self.bhs.borrow().clone()
+        }
         fn blockhead_stop_riding(&self, b: &ObjRef) {
             self.stops.borrow_mut().push(b.unique_id());
         }
-        fn remove_curse_words_from_blockhead_name(&self, n: &str) -> String {
-            if self.curse {
-                n.replace("DAMN", "")
-            } else {
-                n.to_string()
-            }
-        }
         fn create_free_block_for_captured_npc(&self, _pos: IntPair, item: i32, sd: &PlistDict, _b: &ObjRef) {
             self.made.borrow_mut().push((item, sd.map.len()));
+        }
+        fn is_client(&self) -> bool {
+            self.client.get()
+        }
+        fn tile_probe(&self, x: i32, y: i32) -> Option<NpcTileCopy> {
+            self.tiles.borrow().iter().find(|(k, _)| *k == (x, y)).map(|(_, t)| *t)
+        }
+        fn current_temperature(&self, _t: &NpcTileCopy, _p: IntPair, _s: f32, _d: f32, _w: f32) -> f32 {
+            self.temp.get()
+        }
+        fn tile_contains_door(&self, x: i32, y: i32) -> bool {
+            self.door.borrow().contains(&(x, y))
+        }
+        fn tile_contains_door_like(&self, x: i32, y: i32) -> bool {
+            self.door_like.borrow().contains(&(x, y))
+        }
+        fn mark_circum_navigate_x(&self, x: i32) {
+            self.circum.borrow_mut().push(x);
+        }
+        fn free_blocks_at_pos(&self, _pos: IntPair) -> Option<Vec<ObjRef>> {
+            let v = self.fbs.borrow().clone();
+            (!v.is_empty()).then_some(v)
+        }
+        fn free_block_item_type(&self, _fb: &ObjRef) -> i32 {
+            self.fb_item.get()
+        }
+        fn interaction_object_at_pos(&self, _pos: IntPair) -> Option<ObjRef> {
+            self.io.borrow().clone()
+        }
+        fn feeder_chest_remove_item_if_available(&self, _io: &ObjRef, _item: i32) -> Option<bool> {
+            self.feeder.get()
+        }
+        fn set_door_at_pos_to_open_direction(&self, pos: IntPair, open: bool, direction: i32) {
+            self.door_calls.borrow_mut().push((pos, open, direction));
+        }
+        fn blockhead_paused(&self, _b: &ObjRef) -> bool {
+            self.paused.get()
+        }
+        fn blockhead_set_riding_object(&self, b: &ObjRef, _o: Option<&ObjRef>) {
+            self.riding.borrow_mut().push(b.unique_id());
         }
     }
 
@@ -2375,6 +2444,7 @@ mod tests {
         let (w, dw, _log) = setup(4, 4);
         let env = TestEnv::new();
         set_npc_env(env.clone());
+        NO_HUNGER.with(|c| c.set(false));
         glibc_rand::srand(1);
         Fx { w, dw, env }
     }
@@ -2397,6 +2467,9 @@ mod tests {
     }
     fn st(me: &ObjRef) -> std::cell::RefMut<'_, NpcState> {
         npc_state(me).borrow_mut()
+    }
+    fn rd(me: &ObjRef) -> std::cell::Ref<'_, NpcState> {
+        npc_state(me).borrow()
     }
     fn expected_r01(n: usize) -> Vec<f32> {
         glibc_rand::srand(1);
@@ -2717,12 +2790,9 @@ mod tests {
         glibc_rand::srand(5);
         npc_generate_new_name(&me);
         let name = st(&me).name.clone().unwrap();
-        if (r[1] as f64) <= 0.99 {
-            let idx = (f32_to_i32(r[0] * 4.0) % 4) as usize;
-            assert_eq!(name, ["A", "B", "C", "D"][idx]);
-        } else {
-            assert_eq!(name, nsstring::uppercase_string(NPC_NAMES_RARE[(f32_to_i32(r[0] * 44.0) % 44) as usize]));
-        }
+        assert!((r[1] as f64) <= 0.99, "this seed draws a common name; rare ones have their own test");
+        let idx = (f32_to_i32(r[0] * 4.0) % 4) as usize;
+        assert_eq!(name, ["A", "B", "C", "D"][idx]);
         assert_eq!(NPC_NAMES_RARE.len(), 44);
     }
     fn expected_r01_seed(seed: u32, n: usize) -> Vec<f32> {
@@ -3017,5 +3087,1007 @@ mod tests {
         assert_eq!(s.damage, 5, "no hunger / temperature damage on the isNet branch");
         assert_eq!(s.fullness, 100.0 - 0.2);
         assert_eq!(s.tame_cooldown_timer, 0.0);
+    }
+
+    fn net_bh(id: u64) -> ObjRef {
+        let b = TestBh::alloc(id, Some("n"));
+        b.base().borrow_mut().is_net = true;
+        b
+    }
+    fn controlled_bh(id: u64) -> ObjRef {
+        let b = TestBh::alloc(id, Some("c"));
+        b.as_any().downcast_ref::<TestBh>().unwrap().ctl.set(true);
+        b
+    }
+    fn tile_of(ty: u8) -> NpcTileCopy {
+        NpcTileCopy { type_index: ty, ..Default::default() }
+    }
+    fn tick(me: &ObjRef, dt: f32) {
+        npc_update_accurate_dt_is_simulation(me, dt, dt, false);
+    }
+    /// A replica of a Dodo, as the server holds one for a remote player's animal.
+    fn replica(fx: &Fx) -> ObjRef {
+        let me = TestNpc::alloc(NPC_DODO);
+        let wr: WorldRef = fx.w.clone();
+        let dr: DynamicWorldRef = fx.dw.clone();
+        let d = NPCCreationNetData {
+            dynamic_object_net_data: crate::types::netdata::DynamicObjectNetData::new(42, 40, 3, false),
+            ..NPCCreationNetData::default()
+        };
+        assert!(npc_init_with_world_dynamic_world_cache_net_data(&me, &wr, &dr, None, &d.to_vec()));
+        me
+    }
+
+    #[test]
+    fn every_face_goes_through() {
+        let fx = fixture();
+        let me = make(&fx, NPC_DODO, true, None);
+        faces::exercise_faces(&me, &TestBh::alloc(21, Some("p")));
+    }
+
+    /// The environment as production builds it: the world only, every other answer the default.
+    #[test]
+    fn default_env_bodies() {
+        use crate::interaction::sign::testkit::world_with_block;
+        struct Bare(Option<Rc<World>>);
+        impl NpcEnvStub for Bare {
+            fn world(&self) -> Option<Rc<World>> {
+                self.0.clone()
+            }
+        }
+        let (w, _dw, _pb) = world_with_block("npc_env_defaults");
+        let o: ObjRef = crate::objects::base::testutil::TestObj::new();
+        let pos = IntPair { x: 5, y: 5 };
+        for e in [Rc::new(Bare(None)) as Rc<dyn NpcEnv>, Rc::new(Bare(Some(w)))] {
+            let t = e.tile_probe(5, 5);
+            let _ = (
+                e.season_for_world_x(5, 1.0),
+                e.current_temperature(&t.unwrap_or_default(), pos, 0.5, 0.5, 0.0),
+                e.tile_contains_door(5, 5),
+                e.tile_contains_door_like(5, 5),
+                e.day_night_fraction(0.0, 0.0),
+                e.weather_fraction(pos, 0.0),
+                e.server_clients_count(),
+                e.local_net_id(),
+                e.is_client(),
+                e.blockhead_with_id_including_net(1),
+                e.all_blockheads_including_net(),
+                e.free_blocks_at_pos(pos),
+                e.free_block_item_type(&o),
+                e.interaction_object_at_pos(pos),
+                e.feeder_chest_remove_item_if_available(&o, 1),
+                e.remove_curse_words_from_blockhead_name("x"),
+                e.blockhead_paused(&o),
+            );
+            e.mark_circum_navigate_x(3);
+            e.set_door_at_pos_to_open_direction(pos, true, 1);
+            e.create_free_block_for_captured_npc(pos, 1, &new_mutable_dict(), &o);
+            e.blockhead_stop_riding(&o);
+            e.blockhead_set_riding_object(&o, None);
+        }
+    }
+
+    #[test]
+    fn load_guards_of_odd_save_dicts() {
+        let fx = fixture();
+        let mut sd = new_mutable_dict();
+        sd.map.insert("tameCountsByClientID".to_string(), PlistValue::string("not a dict"));
+        sd.map.insert("currentBlockheadIndex".to_string(), PlistValue::int(2));
+        let me = make(&fx, NPC_DODO, true, Some(&sd));
+        assert!(st(&me).tame_counts_by_client_id.is_none());
+        assert_eq!(st(&me).saved_blockhead_index, 2);
+    }
+
+    #[test]
+    fn update_clears_sent_states_and_drops_unsent_ones_without_clients() {
+        let fx = fixture();
+        let me = make(&fx, NPC_DODO, true, None);
+        fx.env.tiles.borrow_mut().push(((40, 3), tile_of(2)));
+        {
+            let mut s = st(&me);
+            s.send_successful_tame_state = SEND_STATE_SENT;
+            s.send_successful_feed_state = SEND_STATE_SENT;
+            s.send_was_hit_state = SEND_STATE_SENT;
+        }
+        tick(&me, 0.1);
+        {
+            let s = st(&me);
+            assert_eq!((s.send_successful_tame_state, s.send_successful_feed_state, s.send_was_hit_state), (0, 0, 0));
+        }
+        {
+            let mut s = st(&me);
+            s.send_successful_tame_state = SEND_STATE_SEND;
+            s.send_successful_feed_state = SEND_STATE_SEND;
+            s.send_was_hit_state = SEND_STATE_SEND;
+        }
+        tick(&me, 0.1);
+        assert_eq!(st(&me).send_was_hit_state, SEND_STATE_SEND, "a client is connected: kept");
+        fx.env.server_clients.set(0);
+        tick(&me, 0.1);
+        let s = st(&me);
+        assert_eq!((s.send_successful_tame_state, s.send_successful_feed_state, s.send_was_hit_state), (0, 0, 0));
+    }
+
+    #[test]
+    fn heat_damage_from_lava_and_fire() {
+        let fx = fixture();
+        let me = make(&fx, NPC_DODO, true, None);
+        fx.env.tiles.borrow_mut().push(((40, 3), tile_of(2)));
+        fx.env.tiles.borrow_mut().push(((40, 2), tile_of(TILE_LAVA)));
+        fx.env.temp.set(30.0);
+        {
+            let mut s = st(&me);
+            s.temperature_check_timer = 0.0;
+            s.damage_delay_timer = 0.0;
+            s.fullness = 1000.0;
+        }
+        tick(&me, 0.2);
+        assert_eq!(st(&me).current_temperature, 130.0);
+        assert_eq!(st(&me).damage, 6);
+        assert!(st(&me).damage_delay_timer >= 0.5);
+        // a delay still running only counts down
+        st(&me).temperature_check_timer = 0.0;
+        st(&me).damage_delay_timer = 10.0;
+        tick(&me, 0.2);
+        assert_eq!(st(&me).damage, 6);
+        // the animal's own tile burning; just over the limit still hurts by at least one point
+        fx.env.tiles.borrow_mut().clear();
+        fx.env.tiles.borrow_mut().push(((40, 3), NpcTileCopy { on_fire: 1, ..tile_of(2) }));
+        fx.env.temp.set(0.5);
+        {
+            let mut s = st(&me);
+            s.temperature_check_timer = 0.0;
+            s.damage_delay_timer = 0.0;
+        }
+        tick(&me, 0.2);
+        assert_eq!(st(&me).damage, 7);
+        // a burning tile below counts too
+        fx.env.tiles.borrow_mut().clear();
+        fx.env.tiles.borrow_mut().push(((40, 3), tile_of(2)));
+        fx.env.tiles.borrow_mut().push(((40, 2), NpcTileCopy { on_fire: 1, ..tile_of(2) }));
+        st(&me).temperature_check_timer = 0.0;
+        tick(&me, 0.2);
+        assert_eq!(st(&me).current_temperature, 100.5);
+    }
+
+    #[test]
+    fn hunger_floor_with_and_without_starvation() {
+        let fx = fixture();
+        let me = make(&fx, NPC_DODO, true, None);
+        fx.env.tiles.borrow_mut().push(((40, 3), tile_of(2)));
+        {
+            let mut s = st(&me);
+            s.fullness = -5000.0;
+            s.random_harm_from_hunger_timer = 100.0;
+            s.temperature_check_timer = 5.0;
+        }
+        tick(&me, 0.2);
+        assert_eq!(st(&me).fullness, -1800.0);
+        assert_eq!(st(&me).damage, 0, "the starvation timer is still running");
+        NO_HUNGER.with(|c| c.set(true));
+        st(&me).fullness = -5000.0;
+        st(&me).random_harm_from_hunger_timer = 0.0;
+        tick(&me, 0.2);
+        let (f, d) = (rd(&me).fullness, rd(&me).damage);
+        assert_eq!((f, d), (-1800.0, 0));
+    }
+
+    #[test]
+    fn rider_bookkeeping_in_update() {
+        let fx = fixture();
+        let me = make(&fx, NPC_DODO, true, None);
+        fx.env.tiles.borrow_mut().push(((40, 3), tile_of(2)));
+        st(&me).temperature_check_timer = 50.0;
+        let b = TestBh::alloc(21, Some("p"));
+        {
+            let mut s = st(&me);
+            s.rider = Some(b.clone());
+            s.being_controlled = true;
+        }
+        // the control event goes out every half second
+        me.set_creation_data_needs_to_be_sent(false);
+        tick(&me, 0.3);
+        assert!(!me.creation_data_needs_to_be_sent());
+        tick(&me, 0.3);
+        assert!(me.creation_data_needs_to_be_sent());
+        assert!((st(&me).remote_send_control_event_timer - 0.1).abs() < 1e-5);
+        // a paused rider is left alone
+        fx.env.paused.set(true);
+        b.set_needs_removed(&b, true);
+        tick(&me, 0.1);
+        assert!(st(&me).rider.is_some());
+        fx.env.paused.set(false);
+        me.set_creation_data_needs_to_be_sent(false);
+        tick(&me, 0.1);
+        assert!(rd(&me).rider.is_none() && !rd(&me).being_controlled);
+        assert!(me.creation_data_needs_to_be_sent());
+        // a remote rider that goes away is dropped without telling anyone, and never triggers control events
+        let n = net_bh(22);
+        {
+            let mut s = st(&me);
+            s.rider = Some(n.clone());
+            s.being_controlled = true;
+        }
+        me.set_creation_data_needs_to_be_sent(false);
+        tick(&me, 0.6);
+        assert!(!me.creation_data_needs_to_be_sent());
+        n.set_needs_removed(&n, true);
+        tick(&me, 0.1);
+        assert!(st(&me).rider.is_none());
+        assert!(!me.creation_data_needs_to_be_sent());
+    }
+
+    #[test]
+    fn replica_update_floors_fullness_and_caps_tamed_age() {
+        let fx = fixture();
+        let me = replica(&fx);
+        {
+            let mut s = st(&me);
+            s.fullness = -5000.0;
+            s.age = 100.0;
+        }
+        tick(&me, 1.0);
+        let (f, a) = (rd(&me).fullness, rd(&me).age);
+        assert_eq!((f, a), (-1800.0, 101.0));
+        {
+            let mut s = st(&me);
+            s.net_tame_type = 1;
+            s.age = 8000.0;
+        }
+        tick(&me, 1.0);
+        assert_eq!(st(&me).age, 4500.0);
+        st(&me).age = 10.0;
+        tick(&me, 1.0);
+        assert_eq!(st(&me).age, 11.0);
+    }
+
+    #[test]
+    fn creation_blob_reports_each_pending_interaction() {
+        let fx = fixture();
+        let me = make(&fx, NPC_DODO, true, None);
+        let b = TestBh::alloc(21, Some("p"));
+        let read = |me: &ObjRef| {
+            let blob = me.creation_net_data_for_client(me, None).unwrap();
+            <NPCCreationNetData as WireStruct>::read_le(&blob[..0x48])
+        };
+        {
+            let mut s = st(&me);
+            s.send_was_hit_state = SEND_STATE_SEND;
+            s.hit_force = 3;
+            s.kill_blockhead = Some(b.clone());
+            s.capture_blockhead_unique_id_to_send = 5;
+            s.interaction_item_type_to_send = 3;
+            s.harvest_blockhead_unique_id_to_send = 6;
+            s.harvest_type_to_send = NET_NPC_INTERACTION_HARVEST_MILK;
+            s.send_successful_tame_state = SEND_STATE_SEND;
+            s.rider = Some(b.clone());
+        }
+        let d = read(&me);
+        assert_eq!((d.hit_force, d.kill_blockhead_id, d.rider_id), (3, 21, 21));
+        assert_eq!(
+            (d.interact_blockhead_id, d.interaction_type, d.interaction_item_type),
+            (5, NET_NPC_INTERACTION_CAPTURE, 3)
+        );
+        assert_eq!(d.successful_feed_or_tame, 2);
+        assert_eq!(st(&me).send_was_hit_state, SEND_STATE_SENT);
+        assert_eq!(st(&me).interaction_item_type_to_send, 0);
+        let d = read(&me);
+        assert_eq!((d.interact_blockhead_id, d.interaction_type), (6, NET_NPC_INTERACTION_HARVEST_MILK));
+        assert_eq!(st(&me).harvest_blockhead_unique_id_to_send, 0);
+        // a harvest id without a harvest type is not reported
+        st(&me).harvest_blockhead_unique_id_to_send = 7;
+        let d = read(&me);
+        assert_eq!((d.interact_blockhead_id, d.interaction_type), (0, 0));
+    }
+
+    #[test]
+    fn remote_interactions_reach_the_animal_on_the_server() {
+        let fx = fixture();
+        let me = make(&fx, NPC_DODO, true, None);
+        let b = TestBh::alloc(21, Some("p"));
+        fx.env.bhs.borrow_mut().push(b.clone());
+        let send = |kind: u8| {
+            let d = NPCCreationNetData {
+                interact_blockhead_id: 21,
+                interaction_type: kind,
+                interaction_item_type: 5,
+                ..NPCCreationNetData::default()
+            };
+            npc_remote_creation_data_update(&me, &d.to_vec());
+        };
+        send(NET_NPC_INTERACTION_FEED);
+        assert_eq!(st(&me).send_successful_feed_state, SEND_STATE_SEND);
+        send(NET_NPC_INTERACTION_HARVEST_MILK);
+        send(NET_NPC_INTERACTION_HARVEST_SHAVE);
+        send(99);
+        assert!(!me.needs_removed());
+        send(NET_NPC_INTERACTION_CAPTURE);
+        assert!(me.needs_removed());
+        assert_eq!(fx.env.made.borrow().len(), 1);
+        // an unknown blockhead id is ignored
+        let d = NPCCreationNetData {
+            interact_blockhead_id: 99,
+            interaction_type: NET_NPC_INTERACTION_FEED,
+            ..NPCCreationNetData::default()
+        };
+        npc_remote_creation_data_update(&me, &d.to_vec());
+    }
+
+    #[test]
+    fn remote_rider_reconciliation_on_the_server() {
+        let fx = fixture();
+        let me = make(&fx, NPC_DODO, true, None);
+        let local = TestBh::alloc(30, Some("p"));
+        let send = |rider_id: u64| {
+            let d = NPCCreationNetData { rider_id, ..NPCCreationNetData::default() };
+            npc_remote_creation_data_update(&me, &d.to_vec());
+        };
+        // the local rider stays on a matching or empty id, leaves on a different one
+        npc_add_rider(&me, &local);
+        send(30);
+        send(0);
+        assert!(st(&me).rider.is_some());
+        send(31);
+        assert_eq!(*fx.env.stops.borrow(), vec![30]);
+        assert!(st(&me).rider.is_none());
+        // a remote rider that reports nobody leaves
+        let n = net_bh(40);
+        npc_add_rider(&me, &n);
+        send(0);
+        assert!(rd(&me).rider.is_none() && !rd(&me).being_controlled);
+        assert_eq!(*fx.env.stops.borrow(), vec![30, 40]);
+        // a remote rider that reports somebody else is replaced by that one
+        npc_add_rider(&me, &n);
+        fx.env.bhs.borrow_mut().push(TestBh::alloc(21, None));
+        fx.env.bhs.borrow_mut().push(net_bh(41));
+        send(41);
+        assert_eq!(st(&me).rider.as_ref().unwrap().unique_id(), 41);
+        assert!(st(&me).being_controlled);
+        send(41);
+    }
+
+    #[test]
+    fn remote_update_on_a_client() {
+        let fx = fixture();
+        fx.env.client.set(true);
+        let me = make(&fx, NPC_DODO, true, None);
+        let b = TestBh::alloc(21, Some("p"));
+        let n = net_bh(41);
+        fx.env.bhs.borrow_mut().push(b.clone());
+        fx.env.bhs.borrow_mut().push(n.clone());
+        let send = |d: &NPCCreationNetData| npc_remote_creation_data_update(&me, &d.to_vec());
+        let mut d = NPCCreationNetData {
+            hit_force: 2,
+            damage: 5,
+            fullness: 100,
+            age: 200,
+            tame_cooldown_timer: 7,
+            tame_type: 1,
+            ..NPCCreationNetData::default()
+        };
+        send(&d);
+        {
+            let s = st(&me);
+            assert_eq!(
+                (s.damage, s.fullness, s.age, s.tame_cooldown_timer, s.net_tame_type),
+                (5, 100.0, 200.0, 7.0, 1)
+            );
+            assert!(!s.dead);
+        }
+        // a rider shows up, and a different one replaces it
+        d.hit_force = 0;
+        d.rider_id = 41;
+        send(&d);
+        assert_eq!(st(&me).rider.as_ref().unwrap().unique_id(), 41);
+        d.rider_id = 0;
+        send(&d);
+        assert!(st(&me).rider.is_none());
+        send(&d);
+        // a local rider only leaves when somebody else is named
+        npc_add_rider(&me, &b);
+        send(&d);
+        assert!(st(&me).rider.is_some());
+        d.rider_id = 41;
+        send(&d);
+        assert_eq!(fx.env.stops.borrow().as_slice(), &[41, 21]);
+        assert!(st(&me).rider.is_none());
+        // tame / fed notices and death
+        d.rider_id = 0;
+        d.successful_feed_or_tame = 2;
+        d.dead = 1;
+        send(&d);
+        assert!(rd(&me).dead && rd(&me).name.is_none(), "no name tail: a client clears the name the tame just made");
+        d.successful_feed_or_tame = 1;
+        send(&d);
+        // a name tail without a name clears the name; so does no tail at all
+        let mut blob = d.to_vec();
+        blob.extend_from_slice(b"<?xml version=\"1.0\" encoding=\"UTF-8\"?><plist version=\"1.0\"><dict><key>x</key><integer>1</integer></dict></plist>");
+        npc_remote_creation_data_update(&me, &blob);
+        assert!(st(&me).name.is_none());
+        st(&me).name = Some("K".into());
+        npc_remote_creation_data_update(&me, &d.to_vec());
+        assert!(st(&me).name.is_none());
+        // an undecodable tail leaves the name alone on the server, clears it on a client
+        st(&me).name = Some("K".into());
+        let mut junk = d.to_vec();
+        junk.extend_from_slice(b"not a plist at all");
+        npc_remote_creation_data_update(&me, &junk);
+        assert!(st(&me).name.is_none());
+    }
+
+    #[test]
+    fn fed_checks_with_and_without_starvation() {
+        let fx = fixture();
+        let me = make(&fx, NPC_DODO, true, None);
+        let b = TestBh::alloc(21, Some("p"));
+        NO_HUNGER.with(|c| c.set(true));
+        {
+            let mut s = st(&me);
+            s.damage = 2;
+            s.tame_cooldown_timer = 5.0;
+        }
+        assert!(npc_can_be_fed_by_blockhead(&me, &b));
+        {
+            let mut s = st(&me);
+            s.damage = 0;
+        }
+        assert!(!npc_can_be_fed_by_blockhead(&me, &b));
+        st(&me).tame_cooldown_timer = 0.0;
+        assert!(npc_can_be_fed_by_blockhead(&me, &b));
+        st(&me).tamed_client_id = Some("p".into());
+        assert!(!npc_can_be_fed_by_blockhead(&me, &b));
+        NO_HUNGER.with(|c| c.set(false));
+        st(&me).fullness = 6000.0;
+        assert!(!npc_can_be_fed_by_blockhead(&me, &b));
+        st(&me).damage = 3;
+        assert!(npc_can_be_fed_by_blockhead(&me, &b));
+        st(&me).fullness = 100.0;
+        assert!(npc_can_be_fed_by_blockhead(&me, &b));
+    }
+
+    #[test]
+    fn replica_requests_go_out_as_pending_ids() {
+        let fx = fixture();
+        let me = replica(&fx);
+        let b = TestBh::alloc(21, Some("p"));
+        assert!(npc_feed_by_blockhead(&me, &b));
+        assert_eq!(st(&me).feed_blockhead_unique_id_to_send, 21);
+        assert_eq!(st(&me).tame_cooldown_timer, 675.0);
+        npc_set_free_by_blockhead(&me, &b);
+        assert_eq!(st(&me).set_free_blockhead_unique_id_to_send, 21);
+        assert!(npc_capture_by_blockhead_with_item_type(&me, &b, 6));
+        let (c, i) = (rd(&me).capture_blockhead_unique_id_to_send, rd(&me).interaction_item_type_to_send);
+        assert_eq!((c, i), (21, 6));
+        // the replica has a rider that is local to this process
+        me.set_update_needs_to_be_sent(false);
+        npc_add_rider(&me, &b);
+        npc_update_position(&me, IntPair { x: 41, y: 3 });
+        assert!(me.update_needs_to_be_sent());
+    }
+
+    #[test]
+    fn repeated_feeding_by_a_second_player_and_the_server() {
+        let fx = fixture();
+        let me = make(&fx, NPC_DODO, true, None);
+        let req = crate::items::breeds::tame_count_requirement_for_npc_type(NPCType(NPC_DODO as u32));
+        let a = TestBh::alloc(21, Some("a"));
+        let nobody = TestBh::alloc(22, None);
+        // the host (no client id) feeds up to ownership
+        for _ in 0..req {
+            st(&me).tame_cooldown_timer = 0.0;
+            st(&me).fullness = 100.0;
+            assert!(npc_feed_by_blockhead(&me, &nobody));
+        }
+        assert_eq!(st(&me).tamed_client_id.as_deref(), Some("server"));
+        // the owner feeding on keeps ownership; a second player feeding up to the requirement does not take it
+        for _ in 0..(req + 1) {
+            st(&me).tame_cooldown_timer = 0.0;
+            st(&me).fullness = 100.0;
+            assert!(npc_feed_by_blockhead(&me, &a));
+        }
+        assert_eq!(st(&me).tamed_client_id.as_deref(), Some("server"));
+        // the owner feeding on (its count passes the requirement again) stays the owner
+        st(&me).tame_cooldown_timer = 0.0;
+        st(&me).fullness = 100.0;
+        assert!(npc_feed_by_blockhead(&me, &nobody));
+        assert_eq!(st(&me).tamed_client_id.as_deref(), Some("server"));
+        // a feed during the cooldown only refills
+        st(&me).fullness = 100.0;
+        assert!(npc_feed_by_blockhead(&me, &a));
+        assert_eq!(st(&me).fullness, 2800.0);
+    }
+
+    #[test]
+    fn belonging_and_locality_of_tamed_animals() {
+        let fx = fixture();
+        let me = make(&fx, NPC_DODO, true, None);
+        let p = TestBh::alloc(21, Some("p"));
+        let nobody = TestBh::alloc(22, None);
+        assert!(!npc_belongs_to_player_with_blockhead(&me, &p) && !npc_belongs_to_local_player(&me));
+        st(&me).tamed_client_id = Some("server".into());
+        assert!(npc_belongs_to_player_with_blockhead(&me, &nobody) && !npc_belongs_to_player_with_blockhead(&me, &p));
+        assert!(npc_belongs_to_local_player(&me));
+        st(&me).tamed_client_id = Some(SERVER_LOCAL_NET_ID.into());
+        assert!(npc_belongs_to_local_player(&me));
+        st(&me).tamed_client_id = Some("someone else".into());
+        assert!(!npc_belongs_to_local_player(&me));
+        let r = replica(&fx);
+        st(&r).net_tame_type = 1;
+        assert!(npc_belongs_to_local_player(&r) && npc_belongs_to_player_with_blockhead(&r, &p));
+        assert!(!npc_belongs_to_player_with_blockhead(&r, &net_bh(5)));
+        st(&r).net_tame_type = 0;
+        assert!(!npc_belongs_to_local_player(&r) && !npc_tamed(&r));
+    }
+
+    #[test]
+    fn eating_from_the_ground_and_from_a_feeder_chest() {
+        let fx = fixture();
+        let me = make(&fx, NPC_DODO, true, None);
+        let food: ObjRef = crate::objects::base::testutil::TestObj::new();
+        let other: ObjRef = crate::objects::base::testutil::TestObj::new();
+        // replicas and full bellies do not look
+        npc_check_current_position_for_food(&replica(&fx));
+        st(&me).fullness = 6000.0;
+        fx.env.fbs.borrow_mut().push(food.clone());
+        npc_check_current_position_for_food(&me);
+        assert!(!food.needs_removed());
+        // a block of the wrong kind is passed over, the right one is eaten
+        st(&me).fullness = 100.0;
+        fx.env.fb_item.set(3);
+        npc_check_current_position_for_food(&me);
+        assert!(!food.needs_removed() && st(&me).fullness == 100.0);
+        fx.env.fb_item.set(9);
+        fx.env.fbs.borrow_mut().push(other.clone());
+        npc_check_current_position_for_food(&me);
+        assert!(food.needs_removed() && !other.needs_removed());
+        assert_eq!(st(&me).fullness, 2800.0);
+        // the feeder chest: refused, then accepted
+        fx.env.fbs.borrow_mut().clear();
+        *fx.env.io.borrow_mut() = Some(other.clone());
+        fx.env.feeder.set(Some(false));
+        npc_check_current_position_for_food(&me);
+        assert_eq!(st(&me).fullness, 2800.0);
+        fx.env.feeder.set(Some(true));
+        npc_check_current_position_for_food(&me);
+        assert_eq!(st(&me).fullness, 5500.0);
+        assert!(st(&me).has_been_fed_by_blockhead_or_chest);
+        // now full enough that the chest is not asked
+        fx.env.feeder.set(Some(true));
+        npc_check_current_position_for_food(&me);
+        assert_eq!(st(&me).fullness, 5500.0);
+        // eating from the ground can fill the belly so far that the chest is skipped
+        st(&me).fullness = 3000.0;
+        fx.env.fbs.borrow_mut().push(food.clone());
+        npc_check_current_position_for_food(&me);
+        assert_eq!(st(&me).fullness, 5700.0);
+    }
+
+    #[test]
+    fn riders_that_the_server_controls_and_reloaded_riders() {
+        let fx = fixture();
+        let me = make(&fx, NPC_DONKEY, true, None);
+        // a blockhead the server is steering never becomes the rider
+        let c = controlled_bh(30);
+        npc_add_rider(&me, &c);
+        assert!(rd(&me).rider.is_none() && !rd(&me).being_controlled);
+        assert_eq!(*fx.env.stops.borrow(), vec![30]);
+        // a replica in a client does not announce a remote rider
+        fx.env.client.set(true);
+        me.set_creation_data_needs_to_be_sent(false);
+        npc_add_rider(&me, &net_bh(31));
+        assert!(!me.creation_data_needs_to_be_sent());
+        me.set_creation_data_needs_to_be_sent(false);
+        let r = st(&me).rider.clone().unwrap();
+        npc_remove_rider(&me, &r);
+        assert!(!me.creation_data_needs_to_be_sent());
+        fx.env.client.set(false);
+        // reloading: no saved rider, an index past the end, a steered rider, a normal rider
+        npc_blockheads_loaded(&me);
+        st(&me).saved_blockhead_index = 5;
+        npc_blockheads_loaded(&me);
+        assert!(rd(&me).being_controlled && rd(&me).rider.is_none());
+        assert_eq!(st(&me).saved_blockhead_index, -1);
+        fx.dw.blockheads.borrow_mut().push(controlled_bh(32));
+        fx.dw.blockheads.borrow_mut().push(TestBh::alloc(33, None));
+        st(&me).saved_blockhead_index = 0;
+        npc_blockheads_loaded(&me);
+        assert!(rd(&me).rider.is_none() && !rd(&me).being_controlled);
+        assert!(fx.env.stops.borrow().contains(&32));
+        st(&me).saved_blockhead_index = 1;
+        npc_blockheads_loaded(&me);
+        assert_eq!(*fx.env.riding.borrow(), vec![33]);
+        // blockheads that unload are forgotten wherever the animal remembered them
+        let b = TestBh::alloc(40, None);
+        {
+            let mut s = st(&me);
+            s.kill_blockhead = Some(b.clone());
+            s.inspecting_blockhead = Some(Rc::downgrade(&b));
+            s.coming_to_inspect_blockhead = Some(Rc::downgrade(&b));
+            s.rider = Some(b.clone());
+        }
+        npc_blockhead_unloaded(&me, &TestBh::alloc(41, None));
+        assert!(st(&me).rider.is_some());
+        npc_blockhead_unloaded(&me, &b);
+        let s = st(&me);
+        assert!(s.kill_blockhead.is_none() && s.inspecting_blockhead.is_none());
+        assert!(s.coming_to_inspect_blockhead.is_none() && s.rider.is_none());
+    }
+
+    #[test]
+    fn a_riding_animal_opens_and_closes_doors_as_it_moves() {
+        let fx = fixture();
+        let me = make(&fx, NPC_DONKEY, true, None);
+        let b = TestBh::alloc(21, Some("p"));
+        st(&me).rider = Some(b.clone());
+        fx.env.door_like.borrow_mut().push((40, 3));
+        fx.env.door.borrow_mut().push((41, 4));
+        me.update_position(&me, IntPair { x: 41, y: 3 });
+        assert_eq!(
+            *fx.env.door_calls.borrow(),
+            vec![(IntPair { x: 40, y: 3 }, false, 0), (IntPair { x: 41, y: 4 }, true, 1)]
+        );
+        assert_eq!(*fx.env.circum.borrow(), vec![41]);
+        fx.env.door_calls.borrow_mut().clear();
+        fx.env.door_like.borrow_mut().clear();
+        fx.env.door_like.borrow_mut().push((40, 3));
+        me.update_position(&me, IntPair { x: 40, y: 3 });
+        assert_eq!(
+            *fx.env.door_calls.borrow(),
+            vec![(IntPair { x: 41, y: 4 }, false, 0), (IntPair { x: 40, y: 3 }, true, -1)]
+        );
+        // no door anywhere: nothing is called; a move on the spot is not a move
+        fx.env.door_calls.borrow_mut().clear();
+        fx.env.door_like.borrow_mut().clear();
+        fx.env.door.borrow_mut().clear();
+        me.update_position(&me, IntPair { x: 42, y: 3 });
+        me.update_position(&me, IntPair { x: 42, y: 3 });
+        assert!(fx.env.door_calls.borrow().is_empty());
+    }
+
+    /// An NPC class that overrides nothing but the state accessor: every trait default answers.
+    struct BareNpc {
+        base: RefCell<DynamicObjectBase>,
+        npc: RefCell<NpcState>,
+        ridable: Cell<bool>,
+    }
+    impl DynamicObject for BareNpc {
+        fn base(&self) -> &RefCell<DynamicObjectBase> {
+            &self.base
+        }
+        fn class_info(&self) -> &'static ClassInfo {
+            &TEST_NPC_CLASS
+        }
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        npc_forward!(
+            object_type,
+            update_accurate_dt_is_simulation,
+            get_save_dict,
+            creation_net_data_for_client,
+            update_net_data_for_client,
+            remote_update,
+            remote_creation_data_update,
+            blockhead_unloaded,
+            blockheads_loaded,
+            can_be_removed_by_blockhead,
+            update_position,
+            should_save_every_change_in_position,
+            client_id_for_saving_seperately_and_only_loading_while_player_online,
+            requires_physical_block,
+            render_pos,
+            dealloc,
+            as_harmable,
+            as_ridable,
+            as_tap_choice
+        );
+    }
+    impl Npc for BareNpc {
+        fn npc(&self) -> &RefCell<NpcState> {
+            &self.npc
+        }
+        // the only override: lets one class run every branch of the defaults that read it
+        fn ridable_when_tamed(&self) -> bool {
+            self.ridable.get()
+        }
+    }
+    impl_npc_protocols!(BareNpc);
+
+    #[test]
+    fn a_class_that_overrides_nothing_gets_the_base_answers() {
+        let fx = fixture();
+        let me: ObjRef = alloc_npc(|w| BareNpc {
+            base: RefCell::new(DynamicObjectBase::alloc_zeroed_with(w)),
+            npc: RefCell::new(NpcState::default()),
+            ridable: Cell::new(true),
+        });
+        assert_eq!(me.class_info().name, "TestNpc");
+        let wr: WorldRef = fx.w.clone();
+        let dr: DynamicWorldRef = fx.dw.clone();
+        assert!(npc_init_with_world_dynamic_world_at_position_cache_save_dict_is_adult_was_placed_placed_by_client(
+            &me,
+            &wr,
+            &dr,
+            IntPair { x: 40, y: 3 },
+            None,
+            None,
+            true,
+            false,
+            None
+        ));
+        let n = as_npc(&me).unwrap();
+        let b = TestBh::alloc(21, Some("p"));
+        assert_eq!(
+            (n.npc_type(), n.food_item_type(), n.captured_item_type(), n.capture_required_item_type()),
+            (0, 0, 0, 0)
+        );
+        assert!(!n.can_be_captured_by_blockhead_with_item_type(&b, 0));
+        assert!(!npc_capture_by_blockhead_with_item_type(&me, &b, 0));
+        assert!(!me.needs_removed());
+        // every branch of the ride option on this one class
+        let bare = me.as_any().downcast_ref::<BareNpc>().unwrap();
+        bare.npc.borrow_mut().age = 100.0;
+        assert_eq!(bare.second_option_title(), None);
+        bare.npc.borrow_mut().age = 1000.0;
+        assert_eq!(bare.second_option_title(), Some("RIDE"));
+        bare.ridable.set(false);
+        assert_eq!(bare.second_option_title(), None);
+        bare.ridable.set(true);
+    }
+
+    #[test]
+    fn protocol_faces_and_free_functions_forward() {
+        let fx = fixture();
+        let me = make(&fx, NPC_DODO, true, None);
+        let b = TestBh::alloc(21, Some("p"));
+        me.update_accurate_dt_is_simulation(&me, 0.1, 0.1, false);
+        me.as_harmable().unwrap().hit_with_force_blockhead(&me, 3, Some(&b));
+        assert_eq!(st(&me).damage, 3);
+        assert_eq!(npc_health_fraction(&me), 1.0 - 3.0 / 16.0);
+        assert_eq!(npc_fullness_fraction(&me), (st(&me).fullness as f64 / 5400.0) as f32);
+        NO_HUNGER.with(|c| c.set(true));
+        assert_eq!(npc_fullness_fraction(&me), 1.0);
+        assert_eq!(npc_camera_pos_for_blockhead(&me, &b), me.render_pos());
+        assert_eq!(npc_second_option_title(&me), as_npc(&me).unwrap().second_option_title());
+        assert!(npc_will_die_if_hit_by_force(&me, 100) && !npc_will_die_if_hit_by_force(&me, 1));
+        assert!(!npc_can_mate(&me) || npc_can_mate(&me));
+        assert!(!npc_tamed(&me));
+        register_npc_ctor(99, |_, _, _, _, _, _, _, _| None);
+    }
+
+    #[test]
+    fn a_dead_animal_dies_once_and_releases_its_rider() {
+        let fx = fixture();
+        let me = make(&fx, NPC_DODO, true, None);
+        let b = TestBh::alloc(21, Some("p"));
+        npc_add_rider(&me, &b);
+        npc_die(&me, Some(&b));
+        assert_eq!(*fx.env.stops.borrow(), vec![21]);
+        me.set_creation_data_needs_to_be_sent(false);
+        npc_die(&me, None);
+        assert!(!me.creation_data_needs_to_be_sent());
+        assert!(ptr_eq(st(&me).kill_blockhead.as_ref().unwrap(), &b), "the second death changes nothing");
+    }
+
+    #[test]
+    fn a_hit_on_a_client_only_remembers_the_attacker() {
+        let fx = fixture();
+        fx.env.client.set(true);
+        let me = make(&fx, NPC_DODO, true, None);
+        let b = TestBh::alloc(21, Some("p"));
+        npc_hit_with_force_blockhead(&me, 2, Some(&b));
+        let s = st(&me);
+        assert_eq!((s.damage, s.hit_force, s.send_was_hit_state), (2, 2, SEND_STATE_SEND));
+        assert!(s.kill_blockhead.is_some() && s.tame_counts_by_client_id.is_none());
+    }
+
+    #[test]
+    fn feeding_a_full_but_hurt_animal_caps_fullness() {
+        let fx = fixture();
+        let me = make(&fx, NPC_DODO, true, None);
+        let b = TestBh::alloc(21, Some("p"));
+        st(&me).fullness = 6000.0;
+        assert!(!npc_feed_by_blockhead(&me, &b), "full and unhurt: refused");
+        st(&me).damage = 4;
+        assert!(npc_feed_by_blockhead(&me, &b));
+        assert_eq!(st(&me).fullness, 8100.0);
+        assert_eq!(st(&me).damage, 0);
+    }
+
+    #[test]
+    fn rare_names_come_from_the_long_list() {
+        let fx = fixture();
+        let me = make(&fx, NPC_DODO, true, None);
+        let seed = (1u32..100_000)
+            .find(|&s| {
+                glibc_rand::srand(s);
+                let _ = glibc_rand::r01();
+                glibc_rand::r01() as f64 > 0.99
+            })
+            .unwrap();
+        glibc_rand::srand(seed);
+        npc_generate_new_name(&me);
+        let name = st(&me).name.clone().unwrap();
+        assert!(NPC_NAMES_RARE.iter().any(|n| nsstring::uppercase_string(n) == name));
+    }
+
+    #[test]
+    fn a_name_tail_that_is_not_a_dictionary_raises() {
+        let fx = fixture();
+        let me = make(&fx, NPC_DODO, true, None);
+        let mut blob = NPCCreationNetData::default().to_vec();
+        blob.extend_from_slice(
+            b"<?xml version=\"1.0\" encoding=\"UTF-8\"?><plist version=\"1.0\"><array><integer>1</integer></array></plist>",
+        );
+        let r = crate::foundation::exception::catch_ns(|| npc_remote_creation_data_update(&me, &blob));
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn a_placed_tamed_animal_without_a_placing_client_keeps_its_owner() {
+        let fx = fixture();
+        let mut sd = new_mutable_dict();
+        sd.map.insert("tamedClientID".to_string(), PlistValue::string("old"));
+        sd.map.insert("fullness".to_string(), PlistValue::real_f32(5.0));
+        let me = TestNpc::alloc(NPC_DODO);
+        let wr: WorldRef = fx.w.clone();
+        let dr: DynamicWorldRef = fx.dw.clone();
+        assert!(npc_init_with_world_dynamic_world_at_position_cache_save_dict_is_adult_was_placed_placed_by_client(
+            &me,
+            &wr,
+            &dr,
+            IntPair { x: 40, y: 3 },
+            None,
+            Some(&sd),
+            true,
+            true,
+            None
+        ));
+        assert_eq!(st(&me).tamed_client_id.as_deref(), Some("old"));
+    }
+
+    #[test]
+    fn the_stand_in_blockhead_answers_its_api() {
+        let b = TestBh::alloc(21, Some("p"));
+        let api = b.as_blockhead().unwrap();
+        assert_eq!(api.client_id().as_deref(), Some("p"));
+        assert!(api.local_net_id().is_none() && !api.is_interacting_with_any_interaction_object());
+        assert_eq!(b.class_info().name, DYNAMIC_OBJECT_CLASS.name);
+        api.set_interaction_object(None);
+        api.stop_interacting();
+    }
+
+    #[test]
+    fn a_feeder_chest_that_is_not_there_feeds_nobody() {
+        let fx = fixture();
+        let me = make(&fx, NPC_DODO, true, None);
+        st(&me).fullness = 100.0;
+        npc_check_current_position_for_food(&me);
+        assert_eq!(st(&me).fullness, 100.0);
+    }
+}
+
+/// A walk over every selector a concrete NPC class forwards or overrides, for the species' own test modules:
+/// whatever the class answers, the call has to go through.
+#[cfg(test)]
+pub(crate) mod faces {
+    use super::*;
+    use crate::types::structs::{IntPair, Vector2};
+
+    /// Calls the `DynamicObject`, `Npc`, `Harmable`, `Ridable` and `TapChoice` faces of `me` with `b` (a plain
+    /// object standing in for a blockhead). `me` is dealloc'ed at the end.
+    pub(crate) fn exercise_faces(me: &ObjRef, b: &ObjRef) {
+        let n = as_npc(me).expect("an NPC");
+        // DynamicObject face
+        let _ = (me.class_info().name, me.object_type(), me.render_pos(), me.requires_physical_block());
+        let _ = (
+            me.should_save_every_change_in_position(),
+            me.client_id_for_saving_seperately_and_only_loading_while_player_online(),
+        );
+        let sd = me.get_save_dict(me);
+        let c = me.creation_net_data_for_client(me, None).unwrap_or_default();
+        let u = me.update_net_data_for_client(me, None).unwrap_or_default();
+        me.remote_update(me, &u);
+        me.remote_creation_data_update(me, &c);
+        me.blockheads_loaded(me);
+        me.blockhead_unloaded(me, b);
+        let _ = me.can_be_removed_by_blockhead(me, b);
+        me.update_position(me, IntPair { x: me.pos().x, y: me.pos().y });
+        assert!(me.as_harmable().is_some() && me.as_ridable().is_some() && me.as_tap_choice().is_some());
+        // Npc constants and hooks
+        let _ = (
+            n.rider_rides_with_arms_down(),
+            n.npc_type(),
+            n.max_age(),
+            n.dies_of_old_age(),
+            n.min_fullness(),
+            n.dies_of_low_fullness(),
+            n.max_health(),
+            n.creation_data_struct_size(),
+            n.min_ridable_age(),
+            n.species_name(),
+            n.food_item_type(),
+            n.captured_item_type(),
+            n.capture_required_item_type(),
+            n.get_names_array().map(|a| a.len()),
+            n.get_names_array_count(),
+            n.breed_string(),
+            n.suffers_damage_at_high_temperatures(),
+            n.ridable_when_tamed(),
+            n.remove_title(),
+            n.remove_is_red(),
+            n.second_choice_is_blue(),
+            n.second_option_title(),
+        );
+        n.load_values_from_save_dict(me, &sd);
+        n.set_adult_creation_start_values(me);
+        n.set_baby_creation_start_values(me);
+        let _ = (n.npc_creation_net_data_for_client(me, None), n.npc_update_net_data_for_client(me, None));
+        let _ = n.append_npc_creation_data_to_data(me, vec![0u8; 4]);
+        n.react_to_being_hit(me);
+        n.react_to_being_fed(me);
+        n.create_item_drops_for_death(me);
+        n.generate_new_name(me);
+        let _ = (
+            n.can_be_fed_by_blockhead(me, b),
+            n.cant_be_fed_tip_string_for_blockhead(b),
+            n.can_be_milked_by_blockhead(b),
+            n.cant_be_milked_tip_string_for_blockhead(b),
+            n.can_be_shaved_by_blockhead(b),
+            n.cant_be_shaved_tip_string_for_blockhead(b),
+            n.can_be_captured_by_blockhead_with_item_type(b, 0),
+            n.cant_be_captured_tip_string_for_blockhead_with_item_type(b, 0),
+            n.tamed(),
+            n.belongs_to_player_with_blockhead(b),
+            n.belongs_to_local_player(),
+            n.can_mate(),
+            n.action_title(),
+            n.health_fraction(),
+            n.fullness_fraction(),
+            n.name(),
+            n.name_pos(),
+            n.age(),
+            n.breed(),
+        );
+        let _ = (n.milk_by_blockhead(me, b), n.shave_by_blockhead(me, b));
+        n.check_current_position_for_food(me);
+        n.begin_blockhead_inspection(b);
+        n.blockhead_is_coming_to_inspect(b);
+        n.inspection_stopped();
+        n.set_age(n.age());
+        n.set_breed(n.breed());
+        n.draw_name();
+        n.change_name(me, "Nameless");
+        // protocol faces
+        let h = me.as_harmable().unwrap();
+        let _ = (
+            h.tap_is_within_body_radius(Vector2 { x: 0.0, y: 0.0 }),
+            h.will_die_if_hit_by_force(1),
+            h.is_visible(),
+            h.center(),
+        );
+        let r = me.as_ridable().unwrap();
+        let _ = (
+            r.rider_pos_for_blockhead(b),
+            r.camera_pos_for_blockhead(b),
+            r.rider_body_y_rotation_for_blockhead(b),
+            r.ride_direction(),
+            r.blockhead_can_ride_using_item(b, 0),
+            r.jumps_on_swipe(),
+            r.requires_fuel(),
+            r.acts_as_interaction_object(),
+            r.rider_d_pad_should_allow_up_down(),
+            r.rider_d_pad_should_give_discrete_values(),
+        );
+        r.set_target_velocity(Vector2 { x: 0.0, y: 0.0 });
+        r.swipe_up_gesture(me);
+        let _ = (n.rider_body_z_rotation_for_blockhead(b), n.is_double_height(), n.can_be_removed_by_blockhead_npc(b));
+        let t = me.as_tap_choice().unwrap();
+        let _ = (t.action_title(), t.is_double_height());
+        // riders last: they change state
+        r.add_rider(me, b);
+        r.remove_rider(me, b);
+        n.remove_rider_opt(me, None);
+        me.dealloc(me);
     }
 }

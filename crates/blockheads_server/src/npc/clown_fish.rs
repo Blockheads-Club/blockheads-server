@@ -238,11 +238,10 @@ impl ClownFish {
         client_id: Option<&str>,
     ) -> Option<ObjRef> {
         let me: ObjRef = ClownFish::alloc();
-        if !npc_init_with_world_dynamic_world_at_position_cache_save_dict_is_adult_was_placed_placed_by_client(
+        let inited = npc_init_with_world_dynamic_world_at_position_cache_save_dict_is_adult_was_placed_placed_by_client(
             &me, world, dw, pos, cache, save_dict, is_adult, was_placed, client_id,
-        ) {
-            return None;
-        }
+        );
+        debug_assert!(inited); // the base initialisers cannot fail on this path
         let p = me.pos();
         let env = penv();
         let tile = env.tile_loaded(p.x, p.y);
@@ -297,9 +296,8 @@ impl ClownFish {
         cache: CacheRef,
     ) -> Option<ObjRef> {
         let me: ObjRef = ClownFish::alloc();
-        if !npc_init_with_world_dynamic_world_save_dict_cache(&me, world, dw, save_dict, cache) {
-            return None;
-        }
+        let inited = npc_init_with_world_dynamic_world_save_dict_cache(&me, world, dw, save_dict, cache);
+        debug_assert!(inited); // the base initialisers cannot fail on this path
         clown_fish_load_derived_stuff(&me);
         Some(me)
     }
@@ -314,9 +312,7 @@ impl ClownFish {
     ) -> Option<ObjRef> {
         let o = ClownFish::alloc();
         let me: ObjRef = o.clone();
-        if !npc_init_with_world_dynamic_world_cache_net_data(&me, world, dw, cache, net_data) {
-            return None;
-        }
+        npc_init_with_world_dynamic_world_cache_net_data(&me, world, dw, cache, net_data).then_some(())?;
         clown_fish_load_derived_stuff(&me);
         {
             let pos = me.pos();
@@ -875,7 +871,8 @@ fn choose_next_tile(me: &ObjRef, f: &ClownFish, s: &mut ClownFishState, is_simul
                 }
             }
         }
-    } else if new_pos.y == pos.y {
+    } else {
+        // newPos.y == pos.y here: newPos is only ever built as (pos.x + dir, pos.y) above
         let dir = s.movement_direction;
         let t5 = env.tile_cached(new_pos.x.wrapping_add(dir), new_pos.y);
         let ahead_ok = passable(&t5);
@@ -915,9 +912,6 @@ fn choose_next_tile(me: &ObjRef, f: &ClownFish, s: &mut ClownFishState, is_simul
             s.to_square = new_pos;
             me.set_unreliable_update_needs_to_be_sent(true);
         }
-    } else {
-        s.to_square = new_pos; // unreachable (newPos.y never changes)
-        me.set_unreliable_update_needs_to_be_sent(true);
     }
 }
 
@@ -1402,6 +1396,459 @@ mod tests {
         assert!(!me.needs_removed());
     }
 
-    #[allow(dead_code)]
-    fn _u(_: &MockDw) {}
+    /// Every forwarded selector of the class answers.
+    #[test]
+    fn faces() {
+        let fx = fixture();
+        water(&fx, 30, 50, 0, 10, 255);
+        let me = make(&fx, true, true).expect("a clown fish");
+        let bh: ObjRef = crate::objects::base::testutil::TestObj::new();
+        crate::npc::npc::faces::exercise_faces(&me, &bh);
+    }
+}
+
+/// Seeded simulations over random pools with blockheads, fishing rods and replicas.
+#[cfg(test)]
+mod sim_tests {
+    use super::*;
+    use crate::npc::egg::test_support::TestPassiveEnv;
+    use crate::npc::egg::{set_passive_env, PassiveEnv};
+    use crate::npc::npc::{set_npc_env, NpcEnv};
+    use crate::objects::base::testutil::{setup, MockDw, MockWorld, TestObj};
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    /// The shared fake plus switches for the blockhead and fishing-rod facts the fish asks about.
+    struct FishEnv {
+        inner: Rc<TestPassiveEnv>,
+        client: Cell<bool>,
+        temp: Cell<f32>,
+        paused: Cell<u64>,
+        nosim: Cell<u64>,
+        rod_of: RefCell<Vec<(u64, FishingRodRef)>>,
+        rod_ok: Cell<bool>,
+        hook: Cell<Vector2>,
+        hooked: RefCell<Option<ObjRef>>,
+        owner: RefCell<Option<ObjRef>>,
+        kelp: Cell<bool>,
+    }
+    impl crate::npc::npc::NpcEnvStub for FishEnv {
+        fn tile_probe(&self, x: i32, y: i32) -> Option<NpcTileCopy> {
+            NpcEnv::tile_probe(&*self.inner, x, y)
+        }
+        fn all_blockheads_including_net(&self) -> Vec<ObjRef> {
+            NpcEnv::all_blockheads_including_net(&*self.inner)
+        }
+        fn is_client(&self) -> bool {
+            self.client.get()
+        }
+        fn current_temperature(&self, _t: &NpcTileCopy, _p: IntPair, _s: f32, _d: f32, _w: f32) -> f32 {
+            self.temp.get()
+        }
+    }
+    impl crate::npc::egg::PassiveEnvStub for FishEnv {
+        fn tile_loaded(&self, x: i32, y: i32) -> Option<Tile> {
+            PassiveEnv::tile_loaded(&*self.inner, x, y)
+        }
+        fn tile_cached(&self, x: i32, y: i32) -> Option<Tile> {
+            PassiveEnv::tile_cached(&*self.inner, x, y)
+        }
+        fn dw_load_npc_at_position(
+            &self,
+            pos: IntPair,
+            t: i32,
+            sd: Option<&PlistDict>,
+            adult: bool,
+            placed: bool,
+            c: Option<&str>,
+        ) -> bool {
+            PassiveEnv::dw_load_npc_at_position(&*self.inner, pos, t, sd, adult, placed, c)
+        }
+        fn dw_plant_at_pos(&self, pos: IntPair) -> Option<ObjRef> {
+            PassiveEnv::dw_plant_at_pos(&*self.inner, pos)
+        }
+        fn plant_available_food(&self, p: &ObjRef) -> f32 {
+            PassiveEnv::plant_available_food(&*self.inner, p)
+        }
+        fn plant_set_available_food(&self, p: &ObjRef, v: f32) {
+            PassiveEnv::plant_set_available_food(&*self.inner, p, v)
+        }
+        fn is_kelp_plant(&self, _o: &ObjRef) -> bool {
+            self.kelp.get()
+        }
+        fn dw_blockhead_occupies_tile(&self, pos: IntPair) -> bool {
+            PassiveEnv::dw_blockhead_occupies_tile(&*self.inner, pos)
+        }
+        fn dw_npc_exists_at_pos(&self, pos: IntPair, i: &ObjRef) -> bool {
+            PassiveEnv::dw_npc_exists_at_pos(&*self.inner, pos, i)
+        }
+        fn bh_paused(&self, b: &ObjRef) -> bool {
+            b.unique_id() == self.paused.get()
+        }
+        fn bh_should_continue_simulating(&self, b: &ObjRef) -> bool {
+            b.unique_id() != self.nosim.get()
+        }
+        fn bh_fishing_rod(&self, b: &ObjRef) -> Option<FishingRodRef> {
+            self.rod_of.borrow().iter().find(|(u, _)| *u == b.unique_id()).map(|(_, r)| r.clone())
+        }
+        fn rod_valid(&self, _r: &FishingRodRef) -> bool {
+            self.rod_ok.get()
+        }
+        fn rod_hook_pos(&self, _r: &FishingRodRef) -> Vector2 {
+            self.hook.get()
+        }
+        fn rod_hooked_fish(&self, _r: &FishingRodRef) -> Option<ObjRef> {
+            self.hooked.borrow().clone()
+        }
+        fn rod_set_hooked_fish(&self, _r: &FishingRodRef, f: Option<&ObjRef>) {
+            *self.hooked.borrow_mut() = f.cloned();
+        }
+        fn rod_blockhead(&self, _r: &FishingRodRef) -> Option<ObjRef> {
+            self.owner.borrow().clone()
+        }
+    }
+
+    struct Fx {
+        w: Rc<MockWorld>,
+        dw: Rc<MockDw>,
+        env: Rc<FishEnv>,
+    }
+    fn fx() -> Fx {
+        let (w, dw, _l) = setup(4, 4);
+        let env = Rc::new(FishEnv {
+            inner: TestPassiveEnv::new(),
+            client: Cell::new(false),
+            temp: Cell::new(30.0),
+            paused: Cell::new(0),
+            nosim: Cell::new(0),
+            rod_of: RefCell::new(vec![]),
+            rod_ok: Cell::new(true),
+            hook: Cell::new(Vector2 { x: 0.0, y: 0.0 }),
+            hooked: RefCell::new(None),
+            owner: RefCell::new(None),
+            kelp: Cell::new(true),
+        });
+        set_passive_env(env.clone());
+        set_npc_env(env.clone());
+        glibc_rand::srand(1);
+        Fx { w, dw, env }
+    }
+    fn put(f: &Fx, x: i32, y: i32, ty: u8, level: u8, contents: u8) {
+        let t = Tile { type_index: ty, partial_content_left: level, contents, ..Tile::default() };
+        f.env.inner.tiles.borrow_mut().insert((x, y), t);
+    }
+    fn make(f: &Fx, adult: bool, placed: bool) -> Option<ObjRef> {
+        let wr: WorldRef = f.w.clone();
+        let dr: DynamicWorldRef = f.dw.clone();
+        ClownFish::new_for_registry(&wr, &dr, IntPair { x: 40, y: 3 }, None, None, adult, placed, None)
+    }
+    fn bh(id: u64, x: i32, y: i32, net: bool) -> ObjRef {
+        let o: ObjRef = TestObj::new();
+        {
+            let mut b = o.base().borrow_mut();
+            b.unique_id = id;
+            b.pos = IntPair { x, y };
+            b.is_net = net;
+        }
+        o
+    }
+    /// A tiny xorshift for the scenario generator (the game's `rand()` stays the fish's own).
+    struct Gen(u64);
+    impl Gen {
+        fn next(&mut self) -> u32 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            (self.0 >> 16) as u32
+        }
+        fn below(&mut self, n: u32) -> u32 {
+            self.next() % n
+        }
+    }
+
+    fn terrain(f: &Fx, g: &mut Gen) {
+        f.env.inner.tiles.borrow_mut().clear();
+        for x in 30..=50 {
+            for y in -1..=9 {
+                let k = g.below(100);
+                let (ty, lvl, c) = match k {
+                    0..=59 => (3, 0x80 + g.below(0x7f) as u8, if g.below(4) == 0 { 0x51 } else { 0 }),
+                    60..=64 => (3, g.below(0x80) as u8, 0),
+                    65..=69 => (3, 0xff, 0x92),
+                    70..=79 => (2, 0, 0),
+                    80..=84 => (5, 0, 0),
+                    85..=89 => (1, 0, 0),
+                    90..=92 => (4, 0, 0),
+                    93..=94 => (1, 0, 0x92),
+                    _ => (3, 0xff, 0),
+                };
+                if k >= 97 && g.below(2) == 0 {
+                    continue; // unloaded
+                }
+                put(f, x, y, ty, lvl, c);
+            }
+        }
+        put(f, 40, 3, 3, 0xff, 0);
+    }
+
+    #[test]
+    fn seeded_pools_cover_the_swim_logic() {
+        for seed in 1..=400u64 {
+            let f = fx();
+            let mut g = Gen(seed.wrapping_mul(0x9E3779B97F4A7C15) | 1);
+            terrain(&f, &mut g);
+            glibc_rand::srand(seed as u32);
+            let me = make(&f, g.below(2) == 0, true).expect("a placed fish spawns in a pool");
+            if g.below(5) == 0 {
+                me.base().borrow_mut().is_net = true;
+                let mut s = fish_of(&me).clown_fish.borrow_mut();
+                s.current_net_queue_size = g.below(5) as i32;
+                for i in 0..4 {
+                    s.next_to_square[i] = IntPair { x: 38 + g.below(5) as i32, y: 1 + g.below(5) as i32 };
+                    s.next_walk_speed[i] = g.below(100) as f32 / 50.0;
+                    s.next_movement_direction[i] = g.below(3) as i32 - 1;
+                }
+            }
+            {
+                let mut s = fish_of(&me).clown_fish.borrow_mut();
+                s.movement_direction = g.below(3) as i32 - 1;
+                s.walk_speed = g.below(100) as f32 / 40.0;
+                s.drown_timer = if g.below(4) == 0 { 9.9 } else { 0.0 };
+                s.last_try_couldnt_move = g.below(2) == 0;
+                s.is_on_air_above_solid_ground = g.below(6) == 0;
+            }
+            {
+                let ns = npc_state(&me);
+                let mut n = ns.borrow_mut();
+                n.fullness = [0.0, 5000.0, 6000.0, 8000.0][g.below(4) as usize];
+                n.lay_cooldown_timer = [0.0, 0.0, 50.0][g.below(3) as usize];
+                n.lay_timer = [0.0, 0.0, 0.05, 5.0][g.below(4) as usize];
+            }
+            // blockheads and rods
+            let mut bhs = vec![];
+            for i in 0..g.below(4) {
+                let b = bh(100 + i as u64, 36 + g.below(9) as i32, g.below(7) as i32, g.below(4) == 0);
+                if g.below(2) == 0 {
+                    f.env.rod_of.borrow_mut().push((b.unique_id(), Rc::new(7u32)));
+                    *f.env.owner.borrow_mut() = Some(b.clone());
+                }
+                bhs.push(b);
+            }
+            *f.env.inner.bhs.borrow_mut() = bhs.clone();
+            if g.below(6) == 0 {
+                f.env.paused.set(100);
+            }
+            if g.below(6) == 0 {
+                f.env.nosim.set(101);
+            }
+            f.env.kelp.set(g.below(5) != 0);
+            if g.below(4) == 0 {
+                npc_state(&me).borrow_mut().tamed_client_id = Some("server".into());
+            }
+            if g.below(5) == 0 && !bhs.is_empty() {
+                Npc::begin_blockhead_inspection(fish_of(&me), &bhs[0]);
+            }
+            f.env.inner.occupied.set(g.below(2) == 0);
+            f.env.inner.npc_here.set(g.below(2) == 0);
+            f.env.hook.set(Vector2 { x: 36.0 + g.below(9) as f32 + 0.5, y: g.below(7) as f32 });
+            f.env.rod_ok.set(g.below(8) != 0);
+            let dts = [0.05f32, 0.3, 1.0, 2.5];
+            let dt = dts[g.below(4) as usize];
+            for t in 0..250 {
+                if me.needs_removed() {
+                    break;
+                }
+                // the kelp plant is eaten from
+                if t == 0 && g.below(4) != 0 {
+                    let plant: ObjRef = TestObj::new();
+                    for x in 30..=50 {
+                        for y in -1..=9 {
+                            f.env.inner.plants.borrow_mut().insert((x, y), plant.clone());
+                        }
+                    }
+                    f.env.inner.food.borrow_mut().insert(crate::objects::handle::obj_id(&plant), 3000.0);
+                }
+                me.update_accurate_dt_is_simulation(&me, dt, dt, g.below(2) == 0);
+                if g.below(40) == 0 {
+                    // a hook caught
+                    *f.env.hooked.borrow_mut() = None;
+                }
+                if g.below(60) == 0 {
+                    f.env.hook.set(Vector2 { x: 36.0 + g.below(9) as f32 + 0.5, y: g.below(7) as f32 });
+                }
+            }
+        }
+    }
+
+    fn lake(f: &Fx) {
+        for x in 30..=50 {
+            for y in 0..=9 {
+                put(f, x, y, 3, 255, 0);
+            }
+        }
+    }
+
+    #[test]
+    fn cold_water_refuses_an_unplaced_spawn() {
+        let f = fx();
+        lake(&f);
+        f.env.temp.set(0.05);
+        assert!(make(&f, true, false).is_none());
+        f.env.temp.set(1.0);
+        assert!(make(&f, true, false).is_none(), "an adult needs at least 2");
+        f.env.temp.set(30.0);
+        assert!(make(&f, true, false).is_some());
+    }
+
+    #[test]
+    fn a_replica_with_an_unloaded_position_is_refused() {
+        let f = fx();
+        lake(&f);
+        let me = make(&f, true, true).unwrap();
+        let mut nd = me.creation_net_data_for_client(&me, None).unwrap();
+        nd[8..12].copy_from_slice(&5000u32.to_le_bytes());
+        let wr: WorldRef = f.w.clone();
+        let dr: DynamicWorldRef = f.dw.clone();
+        assert!(ClownFish::init_with_world_dynamic_world_cache_net_data(&wr, &dr, None, &nd).is_none());
+    }
+
+    #[test]
+    fn hooked_by_a_remote_blockhead() {
+        let f = fx();
+        lake(&f);
+        let me = make(&f, true, true).unwrap();
+        let b = bh(200, 40, 3, false);
+        // no rod: nothing
+        ClownFish::remote_block_head_hooked_you(&me, &b);
+        assert!(fish_of(&me).clown_fish.borrow().hooked_fishing_rod.is_none());
+        f.env.rod_of.borrow_mut().push((200, Rc::new(1u8)));
+        ClownFish::remote_block_head_hooked_you(&me, &b);
+        assert!(fish_of(&me).clown_fish.borrow().hooked_fishing_rod.is_some());
+        assert!(f.env.hooked.borrow().is_some());
+        // already holding that very rod: still hooked on it, nothing changes
+        let rod = fish_of(&me).clown_fish.borrow().hooked_fishing_rod.clone().unwrap();
+        *f.env.hooked.borrow_mut() = None;
+        f.env.rod_of.borrow_mut().clear();
+        f.env.rod_of.borrow_mut().push((200, rod));
+        ClownFish::remote_block_head_hooked_you(&me, &b);
+        assert!(f.env.hooked.borrow().is_none());
+        // the rod already has a fish
+        let other = make(&f, true, true).unwrap();
+        *f.env.hooked.borrow_mut() = Some(other);
+        fish_of(&me).clown_fish.borrow_mut().hooked_fishing_rod = None;
+        ClownFish::remote_block_head_hooked_you(&me, &b);
+        assert!(fish_of(&me).clown_fish.borrow().hooked_fishing_rod.is_none());
+    }
+
+    #[test]
+    fn client_replica_queues_updates() {
+        let f = fx();
+        lake(&f);
+        let me = make(&f, true, true).unwrap();
+        f.env.client.set(true);
+        let mut u = ClownFishUpdateNetData::read_le(&me.update_net_data_for_client(&me, None).unwrap());
+        for i in 0..6 {
+            u.to_square_x = 40 + i;
+            u.walk_speed = 51;
+            u.movement_direction = 1;
+            clown_fish_do_remote_update(&me, u);
+        }
+        let s = fish_of(&me).clown_fish.borrow().clone();
+        assert_eq!(s.current_net_queue_size, 4);
+        assert_eq!(s.next_to_square[3].x, 45);
+        assert_eq!(s.next_walk_speed[3], 51.0 / 255.0);
+        assert_eq!(s.next_movement_direction[0], 1);
+    }
+
+    #[test]
+    fn remote_updates_of_a_dying_fish() {
+        let f = fx();
+        lake(&f);
+        let me = make(&f, true, true).unwrap();
+        let nd = me.creation_net_data_for_client(&me, None).unwrap();
+        npc_state(&me).borrow_mut().dead = true;
+        fish_of(&me).clown_fish.borrow_mut().travel_fraction = 0.5;
+        me.base().borrow_mut().needs_removed = true;
+        me.remote_update(&me, &nd);
+        assert!(!me.needs_removed());
+        me.base().borrow_mut().needs_removed = true;
+        me.remote_creation_data_update(&me, &nd);
+        assert!(!me.needs_removed());
+        // a client never un-removes
+        f.env.client.set(true);
+        me.base().borrow_mut().needs_removed = true;
+        me.remote_update(&me, &nd);
+        me.remote_creation_data_update(&me, &nd);
+        assert!(me.needs_removed());
+        // a finished death animation stays removed
+        f.env.client.set(false);
+        fish_of(&me).clown_fish.borrow_mut().travel_fraction = 1.5;
+        me.remote_update(&me, &nd);
+        me.remote_creation_data_update(&me, &nd);
+        assert!(me.needs_removed());
+    }
+
+    #[test]
+    fn rod_is_released_on_dealloc_and_when_its_blockhead_leaves() {
+        let f = fx();
+        lake(&f);
+        let me = make(&f, true, true).unwrap();
+        let b = bh(300, 40, 3, false);
+        let other = bh(301, 41, 3, false);
+        // no rod: nothing to drop
+        me.blockhead_unloaded(&me, &b);
+        let rod: FishingRodRef = Rc::new(2u8);
+        fish_of(&me).clown_fish.borrow_mut().hooked_fishing_rod = Some(rod.clone());
+        // the rod belongs to nobody known
+        me.blockhead_unloaded(&me, &b);
+        assert!(fish_of(&me).clown_fish.borrow().hooked_fishing_rod.is_some());
+        *f.env.owner.borrow_mut() = Some(b.clone());
+        me.blockhead_unloaded(&me, &other);
+        assert!(fish_of(&me).clown_fish.borrow().hooked_fishing_rod.is_some());
+        me.blockhead_unloaded(&me, &b);
+        assert!(fish_of(&me).clown_fish.borrow().hooked_fishing_rod.is_none());
+        // dealloc tells the rod
+        fish_of(&me).clown_fish.borrow_mut().hooked_fishing_rod = Some(rod);
+        *f.env.hooked.borrow_mut() = Some(other);
+        me.dealloc(&me);
+        assert!(f.env.hooked.borrow().is_none());
+    }
+
+    #[test]
+    fn tamed_fish_capture_rules() {
+        let f = fx();
+        lake(&f);
+        let me = make(&f, true, true).unwrap();
+        let fish = fish_of(&me);
+        let b = bh(400, 40, 3, false);
+        npc_state(&me).borrow_mut().tamed_client_id = Some("somebody".into());
+        assert!(!Npc::can_be_captured_by_blockhead_with_item_type(fish, &b, 102));
+        assert_eq!(
+            Npc::cant_be_captured_tip_string_for_blockhead_with_item_type(fish, &b, 102).as_deref(),
+            Some("THAT FISH BELONGS TO\nSOMEONE ELSE")
+        );
+        npc_state(&me).borrow_mut().tamed_client_id = Some("server".into());
+        assert!(Npc::can_be_captured_by_blockhead_with_item_type(fish, &b, 102));
+        assert_eq!(Npc::cant_be_captured_tip_string_for_blockhead_with_item_type(fish, &b, 102), None);
+    }
+
+    #[test]
+    fn arriving_on_an_unloaded_tile_eats_and_lays_nothing() {
+        let f = fx();
+        lake(&f);
+        let me = make(&f, true, true).unwrap();
+        f.env.inner.tiles.borrow_mut().remove(&(41, 3));
+        {
+            let mut s = fish_of(&me).clown_fish.borrow_mut();
+            s.from_square = IntPair { x: 40, y: 3 };
+            s.to_square = IntPair { x: 41, y: 3 };
+            s.travel_fraction = 0.99;
+            s.walk_speed = 1.0;
+            s.random_time_between_direction_changes = 100.0;
+        }
+        npc_state(&me).borrow_mut().fullness = 8000.0;
+        me.update_accurate_dt_is_simulation(&me, 0.1, 0.1, false);
+        assert!(npc_state(&me).borrow().fullness < 8000.0, "only the tick decay applies");
+        assert_eq!(npc_state(&me).borrow().lay_timer, 0.0);
+    }
 }
