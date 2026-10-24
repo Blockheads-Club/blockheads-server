@@ -101,10 +101,8 @@ fn pnginfo_verdict(out: std::io::Result<std::process::Output>) -> bool {
 /// `atomically:YES` write: temp file in the same directory, then rename. Failures are silent.
 fn write_atomically(path: &str, bytes: &[u8]) {
     let tmp = format!("{}.tmp{}", path, std::process::id());
-    if std::fs::write(&tmp, bytes).is_ok() {
-        if std::fs::rename(&tmp, path).is_err() {
-            let _ = std::fs::remove_file(&tmp);
-        }
+    if std::fs::write(&tmp, bytes).is_ok() && std::fs::rename(&tmp, path).is_err() {
+        let _ = std::fs::remove_file(&tmp);
     }
 }
 
@@ -189,7 +187,7 @@ impl Painting {
             st.item_type = save_dict.map.get(&"itemType".to_string()).map_or(0, |v| v.int_value());
             st.image_data = image.clone();
             st.has_verified_image_data =
-                save_dict.map.get(&"hasVerifiedImageData".to_string()).map_or(false, |v| v.bool_value());
+                save_dict.map.get(&"hasVerifiedImageData".to_string()).is_some_and(|v| v.bool_value());
         }
         let dwc = |m: &Rc<Painting>| {
             m.links.dw().dynamic_world_changed_at_pos_object_type(m.base.borrow().pos, DYNAMIC_OBJECT_TYPE_PAINTING)
@@ -215,7 +213,7 @@ impl Painting {
                 me.st.borrow_mut().owner_name = n;
             }
             // Note: `playerIsBannedWithID:nil` for an ownerless painting is taken as NO (nil never matches).
-            let banned = owner.as_deref().map_or(false, |o| dw.player_is_banned_with_id(o));
+            let banned = owner.as_deref().is_some_and(|o| dw.player_is_banned_with_id(o));
             me.st.borrow_mut().hidden_due_to_server_ban = banned;
         }
         Some(me)
@@ -244,10 +242,10 @@ impl Painting {
             st.item_type = hdr.item_type as i32;
             st.owner_name = dict_str(dict.as_ref(), "ownerName");
             st.hidden_due_to_server_ban =
-                dict.as_ref().and_then(|d| d.object_for_key("hiddenDueToServerBan")).map_or(false, |v| v.bool_value());
+                dict.as_ref().and_then(|d| d.object_for_key("hiddenDueToServerBan")).is_some_and(|v| v.bool_value());
             st.image_data = image;
         }
-        let need = me.st.borrow().image_data.as_ref().map_or(true, Vec::is_empty);
+        let need = me.st.borrow().image_data.as_ref().is_none_or(Vec::is_empty);
         if need {
             dw.request_painting_data_for_painting(&me_obj);
         }
@@ -385,8 +383,7 @@ impl DynamicObject for Painting {
     fn remote_update(&self, me: &ObjRef, net_data: &[u8]) {
         base_remote_update(me, net_data);
         let dict = gunzip_plist(subdata_from(net_data, 0x20));
-        let new =
-            dict.as_ref().and_then(|d| d.object_for_key("hiddenDueToServerBan")).map_or(false, |v| v.bool_value());
+        let new = dict.as_ref().and_then(|d| d.object_for_key("hiddenDueToServerBan")).is_some_and(|v| v.bool_value());
         if new != self.st.borrow().hidden_due_to_server_ban {
             self.st.borrow_mut().hidden_due_to_server_ban = new;
         }

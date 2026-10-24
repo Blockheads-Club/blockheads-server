@@ -180,7 +180,7 @@ mod tests {
         rec.sand.set(0.5);
         let v = w.get_weather_fraction_for_pos_at_world_time(ip(40, 600), 1000.0);
         let h = clamp(((600 - 512) as f32 - 256.0f32) / 256.0f32, 0.0, 1.0);
-        let mut expect = 0.5f32 as f32 - h;
+        let mut expect = 0_f32 - h;
         expect -= 3.0f32 * 0.5f32;
         assert_eq!(v, clamp(expect, -1.0, 2.0));
         let log = rec.take();

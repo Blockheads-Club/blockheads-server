@@ -132,11 +132,11 @@ pub fn perlin_noise_3d(vec: &mut [f64; 3], s: &NoiseFunctionStruct, octaves: i32
             lz = 1;
         }
         let value = noise3(vec, s, lx, ly, lz);
-        result = value * amp + result;
+        result += value * amp;
         vec[0] *= 2.0;
         vec[1] *= 2.0;
         vec[2] *= 2.0;
-        amp = s.persistance * amp;
+        amp *= s.persistance;
         i += 1;
     }
     result

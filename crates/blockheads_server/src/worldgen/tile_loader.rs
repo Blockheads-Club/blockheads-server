@@ -408,7 +408,7 @@ impl WorldTileLoader {
         } else if r.oceans == 3 {
             above = above * 0.5f32 + 0.5f32;
         } else if r.terrain_type == 3 {
-            above = above / 1.5f32;
+            above /= 1.5f32;
         }
         if r.oceans == 0 || r.terrain_type == 0 || r.terrain_type == 1 {
             below = 1.0f32;

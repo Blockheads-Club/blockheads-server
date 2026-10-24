@@ -309,10 +309,8 @@ impl Chest {
             ITEM_DISPLAY_CABINET => chest_type = CHEST_DISPLAY_CABINET,
             ITEM_CHEST_GOLD => chest_type = CHEST_GOLD,
             ITEM_CHEST_FEEDER => chest_type = CHEST_FEEDER,
-            ITEM_CHEST_PORTAL => {
-                if world.custom_rules().custom_rules_enabled == 0 {
-                    chest_type = CHEST_PORTAL;
-                }
+            ITEM_CHEST_PORTAL if world.custom_rules().custom_rules_enabled == 0 => {
+                chest_type = CHEST_PORTAL;
             }
             _ => {}
         }
@@ -1112,7 +1110,7 @@ impl InteractionObjectLike for Chest {
     }
     /// `-canBeUsedByBlockhead:`.
     fn can_be_used_by_blockhead(&self, me: &ObjRef, b: &ObjRef) -> bool {
-        let controlled = b.as_blockhead().map_or(false, |x| x.is_client_blockhead_being_controlled_by_server());
+        let controlled = b.as_blockhead().is_some_and(|x| x.is_client_blockhead_being_controlled_by_server());
         if self.world().is_admin() && !controlled {
             return true;
         }
@@ -1143,7 +1141,7 @@ impl InteractionObjectLike for Chest {
                 (io.is_in_use, io.current_blockhead.clone(), io.remote_blockhead_in_use_unique_id)
             };
             if in_use {
-                if cur.as_ref().map_or(false, |c| c.is_net()) || remote != 0 {
+                if cur.as_ref().is_some_and(|c| c.is_net()) || remote != 0 {
                     self.io.borrow_mut().needs_to_be_removed_when_interaction_ends = true;
                     return;
                 }
@@ -1343,7 +1341,7 @@ mod tests {
     fn net_ctor_short_record_raises() {
         // the 0x28-byte record is fine for the base header but `subdataWithRange:{0x40,..}` raises
         let r = crate::foundation::exception::catch_ns(|| subdata_from(&[0u8; 0x28], 0x40).len());
-        let e = r.err().expect("raise");
+        let e = r.expect_err("raise");
         assert_eq!(e.name, "NSRangeException");
         assert_eq!(subdata_from(&[0u8; 0x40], 0x40).len(), 0);
     }

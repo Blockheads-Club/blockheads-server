@@ -967,7 +967,7 @@ impl World {
     /// decimal strings of their numeric keys.
     pub fn welcome_back_message_for_info_dict(&self, simulation_events: Option<&PlistValue>) -> Option<String> {
         let events = match simulation_events {
-            Some(PlistValue::Dict(d)) if d.len() > 0 => d,
+            Some(PlistValue::Dict(d)) if !d.is_empty() => d,
             _ => return None,
         };
         let mut out = String::from("While you were away,");
@@ -1321,7 +1321,7 @@ pub(crate) mod testkit {
             self.push(format!("send({:?},{:?},{})", data, peers, reliable));
         }
         fn player_is_admin_with_id(&self, id: Option<&str>) -> bool {
-            id.map_or(false, |i| self.admin.borrow().iter().any(|a| a == i))
+            id.is_some_and(|i| self.admin.borrow().iter().any(|a| a == i))
         }
         fn update_player(&self, id: &str) {
             self.push(format!("updatePlayer({})", id));
@@ -1684,7 +1684,7 @@ mod tests {
     fn msg(recs: Vec<PlistValue>) -> Option<String> {
         let w = World::alloc(32);
         let pairs: Vec<(String, PlistValue)> = recs.into_iter().enumerate().map(|(i, r)| (i.to_string(), r)).collect();
-        let ev = PlistValue::dict(GsDict::from_pairs(pairs.into_iter()));
+        let ev = PlistValue::dict(GsDict::from_pairs(pairs));
         w.welcome_back_message_for_info_dict(Some(&ev))
     }
     fn rec(extra: Vec<(&str, PlistValue)>) -> PlistValue {

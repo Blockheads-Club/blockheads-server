@@ -162,7 +162,7 @@ pub fn item_type_from_tile_is_foregorund(tile: TileRef, pos: IntPair, is_foregro
                 2 => 0x1C,
                 _ => 0x418,
             },
-            48 | 49 | 50 => 0x426,
+            48..=50 => 0x426,
             7 | 8 => 0x41B,
             58 => 0x433,
             1 => match t.contents {
