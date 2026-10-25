@@ -142,6 +142,7 @@ impl BHServer {
             .and_then(|i| dict_get(&i.borrow(), "minorVersion").map(|v| v.int_value()))
             .unwrap_or(0);
         let connected = self.connected_clients.borrow().clone();
+        let photo_only = crate::server::server_photo::get().is_some();
         let mut out = Vec::new();
         for info in self.node.live_player_infos() {
             let d = info.borrow().clone();
@@ -160,7 +161,11 @@ impl BHServer {
                     photo = Some(ph.bytes.clone());
                 }
             }
-            let is_connected = dict_get(&d, "local").is_some_and(|v| v.bool_value()) || connected.contains(&pid);
+            let local = dict_get(&d, "local").is_some_and(|v| v.bool_value());
+            let is_connected = local || connected.contains(&pid);
+            // The local info of the server's photo (not in the original) is listed as an invisible admin: clients
+            // keep its photo for the chat but leave the server out of the players they show.
+            let hidden = local && photo_only;
             let modk = if self.player_is_owner_with_alias(Some(&alias)) {
                 Some("owner")
             } else if self.player_is_admin_with_alias(Some(&alias)) {
@@ -170,7 +175,9 @@ impl BHServer {
             } else {
                 None
             };
-            let supermod = if self.player_is_cloud_wide_admin_with_alias(Some(&alias)) {
+            let supermod = if hidden {
+                Some("mode2")
+            } else if self.player_is_cloud_wide_admin_with_alias(Some(&alias)) {
                 Some(if self.player_is_cloud_wide_invisible_admin_with_alias(Some(&alias)) { "mode2" } else { "mode1" })
             } else {
                 None
@@ -464,19 +471,23 @@ mod tests {
             d.insert("local".to_string(), PlistValue::boolean(true));
             d.insert("photo".to_string(), PlistValue::data(vec![9, 8, 7]));
         }
-        // A client that joins now (initial list: nothing withheld) gets the photo, as a connected player.
+        // A client that joins now (initial list: nothing withheld) gets the photo; the server is an invisible admin
+        // (no button in the clients' top bar).
+        crate::server::server_photo::set(Some(vec![9, 8, 7]));
         let list = h.srv.player_list_to_send_including_photos_for_clients_send_client(None, &ids[0]);
         let srv = list.iter().find(|e| e.alias == "SERVER").unwrap();
         assert_eq!(
-            (srv.photo.clone(), srv.connected, srv.player_id.clone()),
-            (Some(vec![9, 8, 7]), true, h.srv.local_player_id())
+            (srv.photo.clone(), srv.connected, srv.supermod, srv.player_id.clone()),
+            (Some(vec![9, 8, 7]), true, Some("mode2"), h.srv.local_player_id())
         );
+        assert!(list.iter().filter(|e| e.alias != "SERVER").all(|e| e.supermod.is_none()), "players stay visible");
         // ... and so does a client that is only sent the photos of the players that joined since the last update.
         let list = h.srv.player_list_to_send_including_photos_for_clients_send_client(Some(&[]), &ids[0]);
         assert_eq!(list.iter().find(|e| e.alias == "SERVER").unwrap().photo, Some(vec![9, 8, 7]));
         // It travels as NSData in the 0x1e plist.
         let pkt = crate::protocol::messages::player_list(&list);
         assert!(pkt.windows(6).any(|w| w == b"<data>"));
+        crate::server::server_photo::set(None);
     }
 
     #[test]
