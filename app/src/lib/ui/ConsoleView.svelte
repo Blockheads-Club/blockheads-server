@@ -146,6 +146,12 @@
     return p;
   }
 
+  // Opening the console (or the server coming up while it is shown) puts the cursor in the command line, ready to
+  // type. Not on a phone (the keyboard would cover the log) nor when a search was handed over.
+  $effect(() => {
+    if (active && !phone && !initialQuery) void tick().then(() => cmdInput?.focus());
+  });
+
   function quick(c: string) {
     cmd = c;
     cmdInput?.focus();

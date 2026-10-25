@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { setLang } from '../i18n.svelte';
 import type { LogEntry } from '../types';
@@ -12,6 +12,19 @@ const entries = [E(1, 'info', 'World load complete.'), E(2, 'chat', 'MIRA: hi mi
 const base = { entries, active: true, history: ['/players', '/help'], onsend: () => {} };
 
 describe('ConsoleView', () => {
+  it('puts the cursor in the command line when it opens on a running server', async () => {
+    render(ConsoleView, base);
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('textbox', { name: 'Server command' })));
+    cleanup();
+    // Not on a phone, not with a handed-over search, not while stopped.
+    for (const props of [{ ...base, phone: true }, { ...base, initialQuery: 'x' }, { ...base, active: false }]) {
+      render(ConsoleView, props);
+      await new Promise((r) => setTimeout(r, 0));
+      expect(document.activeElement).not.toBe(screen.getByRole('textbox', { name: 'Server command' }));
+      cleanup();
+    }
+  });
+
   it('renders level tags and an empty state', () => {
     render(ConsoleView, base);
     expect(screen.getByText('CHAT')).toBeInTheDocument();
