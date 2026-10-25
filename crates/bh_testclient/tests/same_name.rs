@@ -83,7 +83,7 @@ fn with_the_setting_the_name_is_the_identity() {
     let (mut a, r) = join(port, Identity::new("Zed").udid("device-1"));
     assert_eq!(r, JoinOutcome::Approved);
     // online on device 1, joins from device 2: the new login takes over
-    let (b, r) = join(port, Identity::new("zed").udid("device-2"));
+    let (mut b, r) = join(port, Identity::new("zed").udid("device-2"));
     assert_eq!(r, JoinOutcome::Approved);
     assert_eq!(Identity::new("zed").player_id(), Identity::new("Zed").player_id());
     // the old session is told why and is dropped
