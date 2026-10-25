@@ -432,6 +432,21 @@ describe('Settings', () => {
     expect(await screen.findByText('Settings saved')).toBeInTheDocument();
   });
 
+  it('turns the same-name rule off and on again (on when the setting is missing)', async () => {
+    render(Settings);
+    const sw = screen.getByRole('switch', { name: 'Same name from any device' }) as HTMLInputElement;
+    expect(sw.checked).toBe(true);
+    await fireEvent.click(sw);
+    expect(screen.getByText('1 unsaved change')).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
+    expect(sw.checked).toBe(true);
+    await fireEvent.click(sw);
+    await fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(store.settings.run.sharedNames).toBe(false));
+    expect(sw.checked).toBe(false);
+    expect(screen.queryByRole('region', { name: 'Unsaved changes' })).toBeNull();
+  });
+
   it('discards edits and restarts a running server on save', async () => {
     store.state = 'running';
     render(Settings);

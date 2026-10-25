@@ -311,6 +311,79 @@ impl BhNetServerMatch {
     }
 }
 
+impl BhNetServerMatch {
+    /// The persistent id a hello stands for (the MD5 of the lower-cased alias); none without an alias or when it
+    /// is the server's own.
+    fn persistent_id_of(&self, client: &PlistDict) -> Option<String> {
+        let persistent_id: Option<String> = match client.get(&"alias".to_string()) {
+            None => None,
+            Some(PlistValue::String(s)) => Some(string_from_md5(&lowercase_string(&s.s))),
+            Some(other) => unrecognized_selector(other.class_name(), "lowercaseString"),
+        };
+        persistent_id.filter(|p| *p != self.local_player_id())
+    }
+
+    /// The info dict of a hello from `enet_or_player_id` (no map changes).
+    fn info_for_hello(&self, client: &PlistDict, persistent_id: &str, enet_or_player_id: &str) -> PlayerInfo {
+        let key = |k: &str| k.to_string();
+        let mut d = new_info_dict();
+        d.insert(key("playerID"), PlistValue::string(persistent_id.to_string()));
+        if let Some(a) = client.get(&key("alias")) {
+            d.insert(key("alias"), a.clone());
+        }
+        if let Some(p) = client.get(&key("photo")) {
+            d.insert(key("photo"), p.clone());
+        }
+        d.insert(key("local"), PlistValue::boolean(false));
+        d.insert(key("micOrSpeakerOn"), PlistValue::boolean(true));
+        d.insert(key("voiceConnected"), PlistValue::boolean(false));
+        d.insert(key("connected"), PlistValue::boolean(true));
+        if let Some(c) = client.get(&key("cloudKey")) {
+            d.insert(key("cloudKey"), c.clone());
+        }
+        // peer = connections[persistentIdsToEnetIds[persistentID]]; the map entry is `enet_or_player_id` by now.
+        let peer = self.connections.borrow().as_ref().and_then(|c| c.get(&enet_or_player_id.to_string()).copied());
+        if let Some(peer) = peer {
+            let ip = self.host.borrow().as_ref().and_then(|h| h.peer_ip_string(peer));
+            if let Some(ip) = ip {
+                d.insert(key("ip"), PlistValue::string(ip));
+            }
+        }
+        for k in ["udidNew", "iCloudID", "gameCenterID", "minorVersion", "clientPassword"] {
+            if let Some(v) = client.get(&key(k)) {
+                d.insert(key(k), v.clone());
+            }
+        }
+        Rc::new(std::cell::RefCell::new(d))
+    }
+
+    /// The "same name from another device" setting: the connection `stored` that holds the name goes. It is told
+    /// why, its player state is released as for a disconnect, and the connection is closed once that message left.
+    fn replace_session(&self, persistent_id: &str, stored: &str) {
+        let old_peer = self.connections.borrow().as_ref().and_then(|c| c.get(&stored.to_string()).copied());
+        let Some(old_peer) = old_peer else { return };
+        nslog("name taken over by a new connection");
+        for d in self.delegate() {
+            d.name_taken_over(persistent_id);
+        }
+        self.remove_client(persistent_id);
+        for d in self.delegate() {
+            d.match_player_did_change_state(self, persistent_id, PlayerConnectionState::Disconnected);
+        }
+        // Out of the maps, so the connection's own disconnect event cannot touch the player that took over.
+        for c in self.connections.borrow_mut().as_mut() {
+            c.remove(&stored.to_string());
+        }
+        for m in self.enet_ids_to_persistent_ids.borrow_mut().as_mut() {
+            m.remove(&stored.to_string());
+        }
+        // `old_peer` came from `connections`, which only exists together with the host.
+        for h in self.host.borrow_mut().as_mut() {
+            h.peer_disconnect_later(old_peer, 0);
+        }
+    }
+}
+
 impl BhMatch for BhNetServerMatch {
     fn set_delegate(&self, d: Option<Weak<dyn MatchDelegate>>) {
         *self.base.delegate.borrow_mut() = d;
@@ -457,19 +530,13 @@ impl BhMatch for BhNetServerMatch {
     ) -> Option<PlayerInfo> {
         let client = client?;
         let key = |k: &str| k.to_string();
-        let persistent_id: Option<String> = match client.get(&key("alias")) {
-            None => None,
-            Some(PlistValue::String(s)) => Some(string_from_md5(&lowercase_string(&s.s))),
-            Some(other) => unrecognized_selector(other.class_name(), "lowercaseString"),
-        };
-        let persistent_id = match persistent_id {
-            Some(p) if p != self.local_player_id() => p,
-            _ => return None,
-        };
+        let persistent_id = self.persistent_id_of(client)?;
         let stored_enet_id =
             self.persistent_ids_to_enet_ids.borrow().as_ref().and_then(|m| m.get(&persistent_id).cloned());
         if let Some(stored) = stored_enet_id {
-            if stored != enet_or_player_id {
+            if stored != enet_or_player_id && crate::server::shared_names::enabled() {
+                self.replace_session(&persistent_id, &stored);
+            } else if stored != enet_or_player_id {
                 let mut found_same_device = false;
                 let snapshot: Vec<PlayerInfo> = self.player_infos.borrow().clone();
                 for dict in snapshot {
@@ -510,36 +577,17 @@ impl BhMatch for BhNetServerMatch {
         if let Some(m) = self.enet_ids_to_persistent_ids.borrow_mut().as_mut() {
             m.insert(enet_or_player_id.to_string(), persistent_id.clone());
         }
-        let mut d = new_info_dict();
-        d.insert(key("playerID"), PlistValue::string(persistent_id.clone()));
-        if let Some(a) = client.get(&key("alias")) {
-            d.insert(key("alias"), a.clone());
-        }
-        if let Some(p) = client.get(&key("photo")) {
-            d.insert(key("photo"), p.clone());
-        }
-        d.insert(key("local"), PlistValue::boolean(false));
-        d.insert(key("micOrSpeakerOn"), PlistValue::boolean(true));
-        d.insert(key("voiceConnected"), PlistValue::boolean(false));
-        d.insert(key("connected"), PlistValue::boolean(true));
-        if let Some(c) = client.get(&key("cloudKey")) {
-            d.insert(key("cloudKey"), c.clone());
-        }
-        // peer = connections[persistentIdsToEnetIds[persistentID]]
-        let mapped = self.persistent_ids_to_enet_ids.borrow().as_ref().and_then(|m| m.get(&persistent_id).cloned());
-        let peer = mapped.and_then(|e| self.connections.borrow().as_ref().and_then(|c| c.get(&e).copied()));
-        if let Some(peer) = peer {
-            let ip = self.host.borrow().as_ref().and_then(|h| h.peer_ip_string(peer));
-            if let Some(ip) = ip {
-                d.insert(key("ip"), PlistValue::string(ip));
-            }
-        }
-        for k in ["udidNew", "iCloudID", "gameCenterID", "minorVersion", "clientPassword"] {
-            if let Some(v) = client.get(&key(k)) {
-                d.insert(key(k), v.clone());
-            }
-        }
-        Some(Rc::new(std::cell::RefCell::new(d)))
+        Some(self.info_for_hello(client, &persistent_id, enet_or_player_id))
+    }
+
+    /// With the "same name from another device" setting on: the info a hello would get while another live
+    /// connection holds its name (nothing is changed); none when the name is free or held by this connection.
+    fn name_holder_elsewhere(&self, client: Option<&PlistDict>, enet_or_player_id: &str) -> Option<PlayerInfo> {
+        let client = client?;
+        let persistent_id = self.persistent_id_of(client)?;
+        let stored = self.persistent_ids_to_enet_ids.borrow().as_ref().and_then(|m| m.get(&persistent_id).cloned())?;
+        let live = self.connections.borrow().as_ref().is_some_and(|c| c.get(&stored).is_some());
+        (stored != enet_or_player_id && live).then(|| self.info_for_hello(client, &persistent_id, enet_or_player_id))
     }
 
     /// `-clientApprovedWithInfo:`: stores only if no entry with that playerID; always calls `infoArrived`.
@@ -613,6 +661,9 @@ mod tests {
         raise: Cell<bool>,
     }
     impl MatchDelegate for Del {
+        fn name_taken_over(&self, player_id: &str) {
+            self.log.borrow_mut().push(format!("taken {player_id}"));
+        }
         fn match_player_did_change_state(&self, _m: &dyn BhMatch, p: &str, s: PlayerConnectionState) {
             if self.raise.get() {
                 ns_raise("NSRangeException", "boom");
@@ -1114,6 +1165,64 @@ mod tests {
         first.borrow_mut().map.remove(&"udidNew".to_string());
         assert!(join(Some("U1"), "3:3").is_none());
         let _ = pid;
+    }
+
+    #[test]
+    fn the_same_name_from_another_device_replaces_the_session_that_holds_it() {
+        use crate::server::shared_names::set_enabled;
+        let (m, d, _) = make(args("0"));
+        let port = m.local_port().unwrap();
+        let hello = |alias: Option<&str>, udid: &str| {
+            let mut cd = new_info_dict();
+            if let Some(a) = alias {
+                cd.insert("alias".into(), PlistValue::string(a));
+            }
+            cd.insert("udidNew".into(), PlistValue::string(udid));
+            cd
+        };
+        let mut c1 = client(8);
+        let mut c2 = client(8);
+        for c in [&mut c1, &mut c2] {
+            c.connect(SocketAddr::from(([127, 0, 0, 1], port)), 8, 0).unwrap();
+        }
+        pump(&m, &mut [&mut c1, &mut c2], || d.log.borrow().len() == 2);
+        let ids: Vec<String> = d.log.borrow().iter().map(|l| l.split(' ').nth(1).unwrap().to_string()).collect();
+        let (e1, e2) = (ids[0].clone(), ids[1].clone());
+        // Nothing to replace: a free name, no hello, no alias, the connection that holds it itself.
+        assert!(m.name_holder_elsewhere(Some(&hello(Some("Zed"), "u1")), &e1).is_none());
+        assert!(m.name_holder_elsewhere(None, &e1).is_none());
+        assert!(m.name_holder_elsewhere(Some(&hello(None, "u1")), &e1).is_none());
+        let first = m.client_player_information_recieved_from_peer(Some(&hello(Some("Zed"), "u1")), &e1).unwrap();
+        m.client_approved_with_info(&first);
+        assert!(m.name_holder_elsewhere(Some(&hello(Some("zed"), "u1")), &e1).is_none());
+        // Vanilla: another device cannot have the name while it is online.
+        assert!(m.name_holder_elsewhere(Some(&hello(Some("zed"), "u2")), &e2).is_some());
+        assert!(m.client_player_information_recieved_from_peer(Some(&hello(Some("zed"), "u2")), &e2).is_none());
+        assert!(m.player_ids().unwrap().contains(&string_from_md5("zed")));
+        // With the setting the holder is told, released like a disconnect, and the new connection has the name.
+        set_enabled(true);
+        d.log.borrow_mut().clear();
+        let second = m.client_player_information_recieved_from_peer(Some(&hello(Some("zed"), "u2")), &e2).unwrap();
+        set_enabled(false);
+        let pid = string_from_md5("zed");
+        assert_eq!(*d.log.borrow(), [format!("taken {pid}"), format!("state {pid} 2")]);
+        assert_eq!(dget(&second.borrow(), "udidNew").and_then(|v| v.as_str()), Some("u2"));
+        assert_eq!(m.persistent_id_for_net_id(&e2).as_deref(), Some(pid.as_str()));
+        assert_eq!(m.persistent_id_for_net_id(&e1), None, "the replaced connection no longer maps to the player");
+        assert!(m.load_info_for_player(&pid).is_none(), "the old record is gone, the approval adds the new one");
+        m.client_approved_with_info(&second);
+        assert!(Rc::ptr_eq(&m.load_info_for_player(&pid).unwrap(), &second));
+        // The replaced connection is closed once its message left; its own disconnect does not touch the player.
+        pump(&m, &mut [&mut c1, &mut c2], || d.log.borrow().iter().any(|l| l == &format!("state {e1} 2")));
+        assert!(d.log.borrow().contains(&format!("state {e1} 2")));
+        assert_eq!(m.persistent_id_for_net_id(&e2).as_deref(), Some(pid.as_str()));
+        // A stale entry (no connection behind it) is just overwritten.
+        set_enabled(true);
+        m.disconnect_player(&pid);
+        m.persistent_ids_to_enet_ids.borrow_mut().as_mut().unwrap().insert(pid.clone(), "9:9".into());
+        assert!(m.name_holder_elsewhere(Some(&hello(Some("zed"), "u3")), &e1).is_none());
+        assert!(m.client_player_information_recieved_from_peer(Some(&hello(Some("zed"), "u3")), &e1).is_some());
+        set_enabled(false);
     }
 
     #[test]

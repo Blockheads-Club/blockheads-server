@@ -617,6 +617,53 @@ fn alias_length(raw: &PlistValue) -> usize {
     }
 }
 
+/// Steps 6 to 10 of the handshake: the reason this player may not join (cloud key, client version, password,
+/// blacklist, whitelist), none when it may.
+fn admission_reject(
+    srv: &Rc<BHServer>,
+    m: &dyn crate::net::bhmatch::BhMatch,
+    world: &dyn ServerWorld,
+    info: &PlayerInfo,
+) -> Option<u8> {
+    let info_alias = dict_str(&info.borrow(), "alias");
+    // 6.
+    if let Some(salt) = m.cloud_salt() {
+        let server_key = string_from_md5(&format!("{}{}", salt, info_alias.clone().unwrap_or_default()));
+        let cloud_key = dict_str(&info.borrow(), "cloudKey");
+        if cloud_key.is_none() || safe_ci(cloud_key.as_deref(), Some(&server_key)) != 0 {
+            return Some(reject::INCORRECT_CLOUD_KEY);
+        }
+    }
+    // 7.
+    if world.custom_rules_enabled() || world.world_width_macro() < 512 {
+        let minor = dict_get(&info.borrow(), "minorVersion").map(|v| v.int_value());
+        if minor.is_none_or(|v| v < 2) {
+            return Some(reject::CLIENT_TOO_OLD);
+        }
+    }
+    // 8.
+    if let Some(pw) = world.server_password() {
+        if !srv.player_is_owner_with_alias(info_alias.as_deref())
+            && !srv.player_is_cloud_wide_admin_with_alias(info_alias.as_deref())
+        {
+            let cp = dict_str(&info.borrow(), "clientPassword");
+            if cp.as_deref() != Some(pw.as_str()) {
+                return Some(reject::INCORRECT_PASSWORD);
+            }
+        }
+    }
+    let info_snapshot = info.borrow().clone();
+    // 9.
+    if srv.player_is_black_listed_with_info(&info_snapshot) {
+        return Some(reject::BLACKLISTED);
+    }
+    // 10.
+    if !srv.player_is_white_listed_with_info(&info_snapshot) {
+        return Some(reject::NOT_WHITELISTED);
+    }
+    None
+}
+
 /// Handshake (type 0x1f).
 fn handshake(srv: &Rc<BHServer>, payload: &[u8], peer: &str) {
     let send_to =
@@ -677,6 +724,16 @@ fn handshake(srv: &Rc<BHServer>, payload: &[u8], peer: &str) {
     }
     // 5.
     let Some(m) = srv.match_() else { return };
+    // With the "same name from another device" setting another connection that holds the name is replaced by
+    // this one, but only once this join would be admitted (a join that fails must not log anyone out).
+    if crate::server::shared_names::enabled() {
+        if let Some(prov) = m.name_holder_elsewhere(raw_dict.as_ref(), peer) {
+            if let Some(r) = admission_reject(srv, &*m, &*world, &prov) {
+                reject_to(r, peer);
+                return;
+            }
+        }
+    }
     let info: Option<PlayerInfo> = m.client_player_information_recieved_from_peer(raw_dict.as_ref(), peer);
     let p_id: Option<String> = m.persistent_id_for_net_id(peer);
     let already = p_id.as_ref().is_some_and(|p| srv.connected_clients.borrow().iter().any(|e| e == p));
@@ -687,46 +744,12 @@ fn handshake(srv: &Rc<BHServer>, payload: &[u8], peer: &str) {
     };
     let p = p_id.as_str();
     let info_alias = dict_str(&info.borrow(), "alias");
-    // 6.
-    if let Some(salt) = m.cloud_salt() {
-        let server_key = string_from_md5(&format!("{}{}", salt, info_alias.clone().unwrap_or_default()));
-        let cloud_key = dict_str(&info.borrow(), "cloudKey");
-        if cloud_key.is_none() || safe_ci(cloud_key.as_deref(), Some(&server_key)) != 0 {
-            reject_p(reject::INCORRECT_CLOUD_KEY, p);
-            return;
-        }
-    }
-    // 7.
-    if world.custom_rules_enabled() || world.world_width_macro() < 512 {
-        let minor = dict_get(&info.borrow(), "minorVersion").map(|v| v.int_value());
-        if minor.is_none_or(|v| v < 2) {
-            reject_p(reject::CLIENT_TOO_OLD, p);
-            return;
-        }
-    }
-    // 8.
-    if let Some(pw) = world.server_password() {
-        if !srv.player_is_owner_with_alias(info_alias.as_deref())
-            && !srv.player_is_cloud_wide_admin_with_alias(info_alias.as_deref())
-        {
-            let cp = dict_str(&info.borrow(), "clientPassword");
-            if cp.as_deref() != Some(pw.as_str()) {
-                reject_p(reject::INCORRECT_PASSWORD, p);
-                return;
-            }
-        }
+    // 6-10.
+    if let Some(r) = admission_reject(srv, &*m, &*world, &info) {
+        reject_p(r, p);
+        return;
     }
     let info_snapshot = info.borrow().clone();
-    // 9.
-    if srv.player_is_black_listed_with_info(&info_snapshot) {
-        reject_p(reject::BLACKLISTED, p);
-        return;
-    }
-    // 10.
-    if !srv.player_is_white_listed_with_info(&info_snapshot) {
-        reject_p(reject::NOT_WHITELISTED, p);
-        return;
-    }
     // 11.
     if m.requires_player_authentication() {
         if !srv.is_cloud_match() {
@@ -739,7 +762,10 @@ fn handshake(srv: &Rc<BHServer>, payload: &[u8], peer: &str) {
             }
             if is_reset {
                 srv.save_reset_list();
-            } else if let Some(old) = srv.saved_player_info_data_for_player(p).and_then(|d| property_list_from_data(&d))
+            } else if let Some(old) = srv
+                .saved_player_info_data_for_player(p)
+                .and_then(|d| property_list_from_data(&d))
+                .filter(|_| !crate::server::shared_names::enabled())
             {
                 let old_d = match &old {
                     PlistValue::Dict(d) => d.clone(),
@@ -988,6 +1014,34 @@ mod tests {
         // same device is accepted
         let (_p, r) = try_join(&h, "Zed", "udid-Zed", 5);
         assert_eq!(r, None);
+    }
+
+    #[test]
+    fn same_name_from_another_device_follows_the_setting() {
+        use crate::server::shared_names::set_enabled;
+        use crate::storage::lists::BLACK_HEADER;
+        let h = Harness::with_files("d_shared", |s| {
+            std::fs::write(format!("{}/blacklist.txt", s), format!("{}\nbob", BLACK_HEADER)).unwrap();
+        });
+        // a returning player on another device: refused as in vanilla, welcome with the setting
+        let pid = h.join("Zed");
+        h.srv.match_player_did_change_state(&*h.m, &pid, crate::net::bhmatch::PlayerConnectionState::Disconnected);
+        assert_eq!(try_join(&h, "Zed", "other-device", 5).1, Some(1));
+        set_enabled(true);
+        h.m.name_held.set(true);
+        h.m.removed.borrow_mut().clear();
+        // the name is held by another connection: a join that fails changes nothing for the holder
+        let (_p, r) = try_join(&h, "Bob", "ub", 5);
+        assert_eq!(r, Some(6));
+        assert!(h.m.removed.borrow().is_empty(), "the holder is not touched");
+        // an admitted join goes on to the match, which replaces the holder
+        let (pid, r) = try_join(&h, "Zed", "other-device", 5);
+        assert_eq!(r, None);
+        assert!(h.srv.connected_client_ids().contains(&pid));
+        // no holder: the same
+        h.m.name_held.set(false);
+        assert_eq!(try_join(&h, "Zed", "third-device", 5).1, Some(2));
+        set_enabled(false);
     }
 
     #[test]

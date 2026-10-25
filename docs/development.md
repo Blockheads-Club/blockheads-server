@@ -147,6 +147,13 @@ the original.
 `list_worlds` / `create_world` / `delete_world` manage worlds. A server can be started again after it stopped,
 in the same process.
 
+`HostConfig::shared_names` (not in the original, `false` = vanilla) makes the player name the identity, like a
+Minecraft offline-mode server: a join under a known name from a new device plays as that player (the player id is the
+MD5 of the lower-cased name, so blockheads, inventory, ownership and admin/mod/white/black state already follow the
+name), and a session that is online under that name is told "You logged in from another location." and replaced.
+The new join is checked first (password, white/black list, IP bans), so a failing join never logs anyone out. The
+host app turns it on by default (Settings, "Same name from any device"); the CLI keeps the vanilla rules.
+
 ## Host app (desktop and Android)
 
 `app/` is a Tauri 2 + SvelteKit app ("Blockheads Server") that runs the server in-process on a background thread:

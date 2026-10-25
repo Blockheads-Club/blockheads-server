@@ -44,6 +44,14 @@ pub struct RunOptions {
     pub max_players: i32,
     pub password: String,
     pub save_delay: i32,
+    /// Same name from any device: the name is the identity (a Minecraft offline-mode server). Older settings
+    /// files have none: on.
+    #[serde(default = "yes")]
+    pub shared_names: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 impl Default for RunOptions {
@@ -54,6 +62,7 @@ impl Default for RunOptions {
             max_players: 0,
             password: String::new(),
             save_delay: 10,
+            shared_names: true,
         }
     }
 }
@@ -400,6 +409,7 @@ impl Core {
             port: Some(o.port),
             max_players: o.max_players,
             save_delay: o.save_delay,
+            shared_names: o.shared_names,
             // Applied by the server thread itself right after the world loaded, so it never depends on the UI
             // (a backgrounded Android WebView stops polling).
             on_ready_commands: if o.password.is_empty() {
@@ -889,6 +899,8 @@ mod tests {
         let u = c.get_settings().updates;
         assert!(u.auto_check);
         assert_eq!((u.channel.as_str(), u.last_checked), ("stable", 0));
+        // ... and the same-name rule is on, as in a new installation.
+        assert!(c.get_settings().run.shared_names && RunOptions::default().shared_names);
     }
 
     #[test]

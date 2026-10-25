@@ -197,6 +197,23 @@ fn cleanup_disconnects_everyone_and_silences_the_transport() {
 }
 
 #[test]
+fn a_replaced_session_is_told_why_and_released() {
+    let h = Harness::new("bs_taken");
+    let a = h.join("Alice");
+    h.m.clear();
+    h.srv.name_taken_over(&a);
+    let pk = h.m.packets_to(&a);
+    assert!(pk.iter().any(|p| p[0] == 0x24), "the chat line");
+    assert!(pk.iter().any(|p| p[0] == 0x26 && p[1] == 2), "user logged in");
+    assert!(h
+        .srv
+        .node
+        .live_player_infos()
+        .iter()
+        .all(|i| dict_str(&i.borrow(), "playerID").as_deref() != Some(a.as_str())));
+}
+
+#[test]
 fn recent_players_come_from_the_database_before_the_file() {
     let h = Harness::new("bs_recent_db");
     let blob =

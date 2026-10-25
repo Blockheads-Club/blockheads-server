@@ -32,6 +32,8 @@ pub fn host_config(args: &[String]) -> Result<HostConfig> {
         match a.as_str() {
             // The server keeps running when the last client has left (the vanilla server exits then).
             "--no-exit" => cfg.no_exit = true,
+            // Same name from another device (the setting of the host app; the reference has no such option).
+            "--shared-names" => cfg.shared_names = true,
             "--new" => name = Some(val()?),
             "--load" => cfg.world = WorldSelect::Load(val()?),
             "--world_id" => cfg.world_id = Some(val()?),
@@ -200,14 +202,16 @@ mod tests {
             "--owner",
             "O",
             "--no-exit",
+            "--shared-names",
         ]))
         .unwrap();
         assert!(matches!(c.world, WorldSelect::New { ref name, width_multiplier: 104 } if name == "x"));
         assert_eq!(c.world_id.as_deref(), Some("abc"));
         assert_eq!(c.custom_rules_json.as_deref(), Some("{}"));
         assert_eq!((c.save_delay, c.max_players, c.owner_name.as_deref()), (3, 7, Some("O")));
-        assert!(c.no_exit);
+        assert!(c.no_exit && c.shared_names);
         let c = host_config(&a(&["--load", "abc"])).unwrap();
+        assert!(!c.shared_names);
         assert!(matches!(c.world, WorldSelect::Load(ref n) if n == "abc"));
         for w in ["1", "4", "16", "1/16"] {
             assert!(host_config(&a(&["--new", "x", "--world_width", w])).is_ok());

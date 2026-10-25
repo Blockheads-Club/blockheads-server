@@ -1024,6 +1024,21 @@ impl MatchDelegate for BHServer {
         self.send_updated_player_list_to_clients();
     }
 
+    fn name_taken_over(&self, player_id: &str) {
+        let to = [player_id.to_string()];
+        self.send_chat_message_display_notification_send_to_clients(
+            Some(crate::server::shared_names::TAKEOVER_TEXT),
+            false,
+            Some(&to),
+        );
+        self.send_network_data_to_peers_reliable(
+            messages::rejection(crate::protocol::codec::reject::USER_LOGGED_IN),
+            &to,
+            true,
+        );
+        self.client_finished_away_simulation(player_id);
+    }
+
     fn match_did_fail_with_error(&self, _m: &dyn BhMatch) {
         self.cleanup();
     }
@@ -1124,6 +1139,8 @@ pub(crate) mod test_support {
         pub authenticates: Cell<bool>,
         /// When set, approving a client is not announced to the delegate and unknown players have no stored info.
         pub quiet_approval: Cell<bool>,
+        /// Another connection holds the joining name (the "same name from another device" setting).
+        pub name_held: Cell<bool>,
     }
 
     impl MockMatch {
@@ -1141,6 +1158,7 @@ pub(crate) mod test_support {
                 approved: RefCell::new(Vec::new()),
                 authenticates: Cell::new(true),
                 quiet_approval: Cell::new(false),
+                name_held: Cell::new(false),
             })
         }
         pub fn packets_to(&self, id: &str) -> Vec<Vec<u8>> {
@@ -1205,6 +1223,9 @@ pub(crate) mod test_support {
             d.insert("ip".to_string(), PlistValue::string("127.0.0.1"));
             let info = Rc::new(RefCell::new(d));
             Some(info)
+        }
+        fn name_holder_elsewhere(&self, client: Option<&PlistDict>, enet: &str) -> Option<PlayerInfo> {
+            self.name_held.get().then(|| self.client_player_information_recieved_from_peer(client, enet)).flatten()
         }
         fn client_approved_with_info(&self, info: &PlayerInfo) {
             self.approved.borrow_mut().push(info.clone());

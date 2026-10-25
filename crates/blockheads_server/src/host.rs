@@ -63,6 +63,11 @@ pub struct HostConfig {
     pub mods: crate::mods::ModsConfig,
     /// The CLI's `-N`: do not stop the server when the last client has left (the vanilla server exits then).
     pub no_exit: bool,
+    /// Same name from another device (not in the original): the name is the identity, like a Minecraft
+    /// offline-mode server. A join under a known name from a new device plays as that player, and a session that
+    /// is online under that name is replaced by the new one. `false` (the default here) is the vanilla behaviour;
+    /// the desktop app turns it on by default.
+    pub shared_names: bool,
 }
 
 impl Default for HostConfig {
@@ -81,6 +86,7 @@ impl Default for HostConfig {
             world_id: None,
             mods: crate::mods::ModsConfig::default(),
             no_exit: false,
+            shared_names: false,
         }
     }
 }
@@ -191,6 +197,7 @@ pub fn start(cfg: HostConfig, log: LogCallback) -> std::io::Result<ServerHandle>
         });
         prepare_thread(cfg.data_dir.as_deref(), Some(sink));
         crate::mods::set_config(cfg.mods.clone());
+        crate::server::shared_names::set_enabled(cfg.shared_names);
         nslog::set_process_name("blockheads_server");
         let (new_name, load_name, width) = match &cfg.world {
             WorldSelect::Load(n) => (None, Some(n.clone()), -1),

@@ -21,6 +21,7 @@
   let max = $state(String(store.settings.run.maxPlayers));
   let pw = $state(store.settings.run.password);
   let delay = $state(String(store.settings.run.saveDelay));
+  let shared = $state(store.settings.run.sharedNames ?? true);
   let showPw = $state(false);
   let saving = $state(false);
 
@@ -31,7 +32,13 @@
   const pwErr = $derived(pw.length < 16 ? '' : t('settings.pwErr'));
   const valid = $derived(!portErr && !maxErr && !delayErr && !pwErr);
   const changes = $derived(
-    [int(port) !== run.port, int(max) !== run.maxPlayers, pw !== run.password, int(delay) !== run.saveDelay].filter(Boolean).length
+    [
+      int(port) !== run.port,
+      int(max) !== run.maxPlayers,
+      pw !== run.password,
+      int(delay) !== run.saveDelay,
+      shared !== (run.sharedNames ?? true)
+    ].filter(Boolean).length
   );
   const mobile = $derived(store.info?.platform === 'android');
 
@@ -40,11 +47,12 @@
     max = String(run.maxPlayers);
     pw = run.password;
     delay = String(run.saveDelay);
+    shared = run.sharedNames ?? true;
   }
 
   async function save() {
     saving = true;
-    const ok = await store.applyRun({ ...run, port: int(port), maxPlayers: int(max), password: pw, saveDelay: int(delay) });
+    const ok = await store.applyRun({ ...run, port: int(port), maxPlayers: int(max), password: pw, saveDelay: int(delay), sharedNames: shared });
     saving = false;
     if (ok) toast(t('settings.saved'));
   }
@@ -87,6 +95,9 @@
           <Button variant="ghost" size="sm" icon="eye" label={showPw ? t('settings.hidePw') : t('settings.showPw')} pressed={showPw} onclick={() => (showPw = !showPw)} />
         {/snippet}
       </Field>
+    </SettingRow>
+    <SettingRow title={t('settings.sameName')} hint={t('settings.sameNameHint')} restart>
+      <Toggle label={t('settings.sameName')} hideLabel bind:checked={shared} />
     </SettingRow>
   </Card>
 

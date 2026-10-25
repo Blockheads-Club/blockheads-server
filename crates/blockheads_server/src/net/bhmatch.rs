@@ -88,6 +88,9 @@ pub trait MatchDelegate {
     fn boot_all_clients_due_to_no_credit(&self);
     /// `-match:connectionWithPlayer:failedWithError:`; never sent by the server match.
     fn match_connection_with_player_failed_with_error(&self, m: &dyn BhMatch, player_id: &str);
+    /// Not in the original: the session of `player_id` is replaced by a newer login under the same name (the
+    /// "same name from another device" setting); it still has its connection, tell it why it goes.
+    fn name_taken_over(&self, _player_id: &str) {}
 }
 
 /// Storage of the `BHMatch` ivars (`delegate`, `host`, `port`). A trait cannot hold fields, so implementors embed
@@ -149,6 +152,12 @@ pub trait BhMatch {
         _client: Option<&PlistDict>,
         _enet_or_player_id: &str,
     ) -> Option<PlayerInfo> {
+        None
+    }
+    /// Not in the original: with the "same name from another device" setting on, the info the new connection
+    /// `enet_or_player_id` would get while another connection holds the same name, without changing anything (so
+    /// the join can be checked before that connection is replaced). Default none.
+    fn name_holder_elsewhere(&self, _client: Option<&PlistDict>, _enet_or_player_id: &str) -> Option<PlayerInfo> {
         None
     }
     /// `-clientApprovedWithInfo:`; default no-op.
@@ -661,6 +670,7 @@ mod tests {
         assert!(!m.send_data_to_players_with_data_mode_error(Some(b"x"), &["a".to_string()], SendDataMode::Reliable));
         assert!(m.load_info_for_player("p").is_some());
         assert!(m.client_player_information_recieved_from_peer(None, "e").is_none());
+        assert!(m.name_holder_elsewhere(None, "e").is_none());
         let i = info("p", false);
         m.client_approved_with_info(&i);
         m.send_player_information_to_server_password(Some(&i), Some("pw"));
@@ -726,6 +736,7 @@ mod tests {
         nobody.match_did_fail_with_error(&M);
         nobody.boot_all_clients_due_to_no_credit();
         nobody.match_connection_with_player_failed_with_error(&M, "p");
+        nobody.name_taken_over("p");
         // The same match again keeps the players and only re-registers the delegate.
         let same: Rc<dyn BhMatch> = first.clone();
         node.update_match(same, Rc::downgrade(&nobody));

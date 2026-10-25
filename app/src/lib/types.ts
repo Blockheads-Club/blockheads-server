@@ -14,6 +14,8 @@ export interface RunOptions {
   maxPlayers: number;
   password: string;
   saveDelay: number;
+  /** Same name from any device (the name is the identity); missing in older settings = on. */
+  sharedNames?: boolean;
 }
 export interface Settings {
   language: string;
