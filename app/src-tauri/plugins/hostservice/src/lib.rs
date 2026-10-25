@@ -129,6 +129,23 @@ impl<R: Runtime> HostService<R> {
         }
     }
 
+    /// The folder for downloaded update APKs on Android: `<filesDir>/updates`, the folder the app's FileProvider
+    /// shares with the system installer (Tauri's app data folder is elsewhere). `None` off Android.
+    pub fn updates_dir(&self) -> Option<String> {
+        #[cfg(target_os = "android")]
+        {
+            #[derive(Deserialize)]
+            struct Res {
+                path: String,
+            }
+            self.handle.run_mobile_plugin::<Res>("updatesDir", ()).map(|r| r.path).ok()
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            None
+        }
+    }
+
     /// Hand a downloaded APK (under the app's `updates` folder) to the system package installer. The user
     /// confirms there; the app is replaced and closed by it. Fails off Android.
     pub fn install_apk(&self, path: &str) -> Result<(), String> {

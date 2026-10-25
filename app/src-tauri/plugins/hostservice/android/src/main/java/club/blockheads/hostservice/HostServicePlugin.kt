@@ -107,6 +107,12 @@ class HostServicePlugin(private val activity: Activity) : Plugin(activity) {
         invoke.resolve(JSObject().put("allowed", ok))
     }
 
+    /** Where update APKs are downloaded: the folder `res/xml/file_paths.xml` shares with the installer. */
+    @Command
+    fun updatesDir(invoke: Invoke) {
+        invoke.resolve(JSObject().put("path", File(activity.filesDir, "updates").absolutePath))
+    }
+
     /** Opens the system installer for a downloaded update APK. Only files in `<files>/updates/` are accepted. */
     @Command
     fun installApk(invoke: Invoke) {

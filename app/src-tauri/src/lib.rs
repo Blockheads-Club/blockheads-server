@@ -688,7 +688,10 @@ pub fn run() {
             app.manage(core.clone());
             // Test builds may point the update check at another feed.
             let feed = std::env::var("BHS_UPDATE_FEED").ok().filter(|_| cfg!(debug_assertions));
-            app.manage(Arc::new(Updater::new(dir.join("updates"), feed.unwrap_or_else(|| update::FEED.into()))));
+            // On Android the APK goes where the FileProvider can hand it to the installer.
+            let updates =
+                app.hostservice().updates_dir().map(std::path::PathBuf::from).unwrap_or_else(|| dir.join("updates"));
+            app.manage(Arc::new(Updater::new(updates, feed.unwrap_or_else(|| update::FEED.into()))));
             // "Stop server" in the Android notification: save and stop, then release the service.
             let handle = app.handle().clone();
             let _ = app.hostservice().on_stop_requested(move || {
