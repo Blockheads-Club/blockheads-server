@@ -439,6 +439,15 @@ impl CommandLineDelegate {
             Ok(s) => s.to_string(),
             Err(_) => return,
         };
+        // Not in the original: the host app changes the running world's welcome message (never typed by a person).
+        if let Some(rest) = s.strip_prefix(crate::host::WELCOME_CONTROL) {
+            let msg = crate::host::unescape_line(rest.trim_end_matches('\n'));
+            for w in self.game_controller.borrow().as_ref().and_then(|gc| gc.world()) {
+                w.set_new_welcome_message(Some(msg.as_str()).filter(|m| !m.is_empty()));
+                nslog!("Welcome message changed.");
+            }
+            return;
+        }
         let len = nsstring::length(&s);
         if len <= 1 {
             return;
@@ -538,6 +547,12 @@ impl CommandLineDelegate {
 
     /// `-updateSaveGameValue:forKey:save:`.
     pub fn update_save_game_value(&self, value: PlistValue, key: &str, save_id: &str) {
+        self.set_save_game_value(Some(value), key, save_id);
+    }
+
+    /// [`Self::update_save_game_value`] that can also remove the key (`None`; not in the original). True when the
+    /// record was written.
+    fn set_save_game_value(&self, value: Option<PlistValue>, key: &str, save_id: &str) -> bool {
         let full = paths::save_dir(save_id);
         let env = DatabaseEnvironment::new(&format!("{}/world_db/", full), 4, 1024);
         let db: Option<Database> = env.as_ref().and_then(|e| Database::new(e, "main"));
@@ -549,16 +564,23 @@ impl CommandLineDelegate {
         }
         // A missing record and a non-dictionary one are reported alike (a non-dictionary plist would make
         // `initWithDictionary:` raise in the original; not observed).
-        let Some(PlistValue::Dict(d)) = save_dict else { return nslog!("Unable to load world data to update") };
+        let Some(PlistValue::Dict(d)) = save_dict else {
+            nslog!("Unable to load world data to update");
+            return false;
+        };
         let mut m = PlistDict {
             map: GsDict::copy_from(&d.map),
             tag: ClassTag { origin: Origin::Built, mutable: true, alt: false },
         };
-        m.map.insert(key.to_string(), value);
+        match value {
+            Some(v) => m.map.insert(key.to_string(), v),
+            None => m.map.remove(&key.to_string()),
+        };
         let blob = data_from_property_list(&PlistValue::Dict(m));
         for db in &db {
             db.set_data(blob.as_deref(), Some("worldv2"));
         }
+        db.is_some()
     }
 
     /// `-createNewWorldWithName:...`.
@@ -698,6 +720,28 @@ fn detached_delegate() -> Rc<CommandLineDelegate> {
 pub fn list_saved_worlds() -> Vec<SavedWorld> {
     let saves = catch_ns(|| detached_delegate().game_saves()).unwrap_or_default();
     saves.iter().map(|d| SavedWorld { id: text(get(d, "saveID")), name: text(get(d, "worldName")) }).collect()
+}
+
+/// The `saveID` of the saved world with this id or name.
+fn saved_world_id(d: &CommandLineDelegate, id_or_name: &str) -> Option<String> {
+    let saves = catch_ns(|| d.game_saves()).unwrap_or_default();
+    CommandLineDelegate::find_save(&saves, id_or_name).map(|f| text(get(f, "saveID")))
+}
+
+/// The welcome message of a saved world (host API; not in the original). `None` without such a world or message.
+pub fn saved_world_welcome(id_or_name: &str) -> Option<String> {
+    let d = detached_delegate();
+    let id = saved_world_id(&d, id_or_name)?;
+    let dict = d.load_save_dict_for_world_with_id(&id)?;
+    opt_text(get(&dict, "welcomeMessage"))
+}
+
+/// Set (`Some`) or remove the welcome message of a saved world that is not running (host API; not in the
+/// original). False when there is no such world or its record cannot be written.
+pub fn set_saved_world_welcome(id_or_name: &str, message: Option<&str>) -> bool {
+    let d = detached_delegate();
+    let Some(id) = saved_world_id(&d, id_or_name) else { return false };
+    d.set_save_game_value(message.map(PlistValue::string), "welcomeMessage", &id)
 }
 
 /// Create a world on disk without starting it (host API; same as the creation step of `--new`).
@@ -965,6 +1009,26 @@ mod tests {
     }
 
     #[test]
+    fn host_api_welcome_message() {
+        let root = data_dir("welcome");
+        let w = create_saved_world("greet", 1, false).unwrap();
+        assert_eq!(saved_world_welcome(&w.id), None);
+        assert!(set_saved_world_welcome("GREET", Some("Hi <b>all</b>\nline 2")));
+        assert_eq!(saved_world_welcome(&w.id).as_deref(), Some("Hi <b>all</b>\nline 2"));
+        assert!(set_saved_world_welcome(&w.id, None));
+        assert_eq!(saved_world_welcome("GREET"), None);
+        // No such world.
+        assert!(!set_saved_world_welcome("nope", Some("x")));
+        assert_eq!(saved_world_welcome("nope"), None);
+        // A listed world whose record is gone.
+        std::fs::remove_dir_all(root.join("saves").join(&w.id).join("world_db")).unwrap();
+        let _ = std::fs::remove_file(root.join("saves").join(&w.id).join("worldv2"));
+        let _ = saved_world_welcome(&w.id);
+        let _ = set_saved_world_welcome(&w.id, Some("x"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn host_api_create_list_delete() {
         let root = data_dir("host");
         let w = create_saved_world("my world", 116, false).unwrap();
@@ -1029,6 +1093,13 @@ mod tests {
         d.command_typed(b"no newline"); // chat as typed
         d.command_typed(b"/pvp-off\n"); // a command
         d.command_typed(b"x"); // too short
+                               // The host's welcome message control line, set and cleared.
+        let line = |m: &str| format!("{}{}\n", crate::host::WELCOME_CONTROL, crate::host::escape_line(m));
+        let world = d.game_controller.borrow().as_ref().unwrap().world().unwrap();
+        d.command_typed(line("Hi%\nthere").as_bytes());
+        assert_eq!(world.welcome_message().as_deref(), Some("Hi%\nthere"));
+        d.command_typed(line("").as_bytes());
+        assert_eq!(world.welcome_message(), None);
         assert!(!d.done());
     }
 }

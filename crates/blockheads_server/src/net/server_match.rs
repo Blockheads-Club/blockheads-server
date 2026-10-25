@@ -114,12 +114,19 @@ impl BhNetServerMatch {
             privacy: Cell::new(0),
         });
         m.set_privacy_by_string(args.privacy.as_deref());
-        if args.has_local_player {
+        // Not in the original: a configured server photo gives the server a local player info that carries it.
+        let server_photo = crate::server::server_photo::get();
+        if args.has_local_player || server_photo.is_some() {
             // `[super loadInfoForPlayer:]` bypasses the override: fresh dict.
             let info = bhmatch_load_info_for_player(&m.local_player_id());
             {
                 let mut d = info.borrow_mut();
-                d.insert("alias".into(), PlistValue::string(m.user_name.clone()));
+                // The alias of the photo variant is the name the chat shows for the server ("SERVER").
+                let alias = if server_photo.is_some() { m.local_player_name() } else { m.user_name.clone() };
+                d.insert("alias".into(), PlistValue::string(alias));
+                if let Some(p) = server_photo {
+                    d.insert("photo".into(), PlistValue::data(p));
+                }
                 d.insert("local".into(), PlistValue::boolean(true));
                 d.insert("micOrSpeakerOn".into(), PlistValue::boolean(true));
                 d.insert("voiceConnected".into(), PlistValue::boolean(false));
@@ -1012,6 +1019,22 @@ mod tests {
         let e = r.unwrap_err();
         assert_eq!(e.name, "NSInvalidArgumentException");
         assert!(e.reason.unwrap().ends_with("does not recognize lowercaseString"));
+    }
+
+    #[test]
+    fn server_photo_gives_the_server_a_local_player_info_with_the_photo() {
+        crate::server::server_photo::set(Some(vec![0x89, b'P', b'N', b'G']));
+        let (m, _, _) = make(args("0"));
+        crate::server::server_photo::set(None);
+        let i = m.load_info_for_player(&m.local_player_id()).unwrap();
+        let mut keys = i.borrow().keys_in_order();
+        keys.sort();
+        assert_eq!(keys, ["alias", "local", "micOrSpeakerOn", "photo", "playerID", "voiceConnected"]);
+        assert_eq!(dget(&i.borrow(), "alias").and_then(|v| v.as_str()), Some("SERVER"));
+        assert!(matches!(dget(&i.borrow(), "photo"), Some(PlistValue::Data(d)) if d.bytes == [0x89, b'P', b'N', b'G']));
+        // Without a photo the dedicated server has no local player info (vanilla).
+        let (m, _, _) = make(args("0"));
+        assert!(m.load_info_for_player(&m.local_player_id()).is_none());
     }
 
     #[test]

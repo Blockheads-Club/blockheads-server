@@ -68,6 +68,10 @@ pub struct HostConfig {
     /// is online under that name is replaced by the new one. `false` (the default here) is the vanilla behaviour;
     /// the desktop app turns it on by default.
     pub shared_names: bool,
+    /// PNG/JPEG bytes of the server's chat avatar (not in the original). The server then has a local player
+    /// info with this `photo`, so clients get it with the player list and show it next to the server's chat
+    /// lines instead of the generic face. `None` (the default) is exactly the vanilla behaviour.
+    pub server_photo: Option<Vec<u8>>,
 }
 
 impl Default for HostConfig {
@@ -87,6 +91,7 @@ impl Default for HostConfig {
             mods: crate::mods::ModsConfig::default(),
             no_exit: false,
             shared_names: false,
+            server_photo: None,
         }
     }
 }
@@ -104,6 +109,48 @@ pub enum Status {
     Stopped(i32),
     /// The server died with an error (message).
     Failed(String),
+}
+
+/// Console line prefix the host uses to change the running world's welcome message (not in the original; the
+/// control character keeps it apart from anything a person types).
+pub(crate) const WELCOME_CONTROL: &str = "\u{1}welcome ";
+
+/// `text` on one console line: `%` and control characters (newlines) `%XX`-escaped.
+pub(crate) fn escape_line(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        if c == '%' || c.is_control() {
+            let mut b = [0u8; 4];
+            for byte in c.encode_utf8(&mut b).bytes() {
+                out.push_str(&format!("%{byte:02X}"));
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// The text of an [`escape_line`] (a `%` not followed by two hex digits stays as it is).
+pub(crate) fn unescape_line(line: &str) -> String {
+    let b = line.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        let hex =
+            b.get(i + 1..i + 3).and_then(|h| std::str::from_utf8(h).ok()).and_then(|h| u8::from_str_radix(h, 16).ok());
+        match (b[i], hex) {
+            (b'%', Some(v)) => {
+                out.push(v);
+                i += 3;
+            }
+            (c, _) => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// Handle of a running server.
@@ -198,6 +245,7 @@ pub fn start(cfg: HostConfig, log: LogCallback) -> std::io::Result<ServerHandle>
         prepare_thread(cfg.data_dir.as_deref(), Some(sink));
         crate::mods::set_config(cfg.mods.clone());
         crate::server::shared_names::set_enabled(cfg.shared_names);
+        crate::server::server_photo::set(cfg.server_photo.clone());
         nslog::set_process_name("blockheads_server");
         let (new_name, load_name, width) = match &cfg.world {
             WorldSelect::Load(n) => (None, Some(n.clone()), -1),
@@ -258,6 +306,11 @@ impl ServerHandle {
         let _ = self.cmd.send(b);
     }
 
+    /// Change the running world's welcome message (`None` or empty: none); it is saved with the world.
+    pub fn set_welcome_message(&self, message: Option<&str>) {
+        self.send_command(&format!("{WELCOME_CONTROL}{}", escape_line(message.unwrap_or(""))));
+    }
+
     /// Ask the server to save and stop; does not wait.
     pub fn request_stop(&self) {
         {
@@ -311,6 +364,20 @@ pub fn create_world(
     .flatten()
 }
 
+/// The welcome message of a world that is not running (by id or name).
+pub fn world_welcome_message(data_dir: Option<&Path>, id_or_name: &str) -> Option<String> {
+    let n = id_or_name.to_string();
+    on_worker(data_dir.map(Path::to_path_buf), move || delegate::saved_world_welcome(&n)).flatten()
+}
+
+/// Set (`Some`) or remove the welcome message of a world that is not running (a running world:
+/// [`ServerHandle::set_welcome_message`]). False when the world does not exist.
+pub fn set_world_welcome_message(data_dir: Option<&Path>, id_or_name: &str, message: Option<String>) -> bool {
+    let n = id_or_name.to_string();
+    on_worker(data_dir.map(Path::to_path_buf), move || delegate::set_saved_world_welcome(&n, message.as_deref()))
+        .unwrap_or(false)
+}
+
 /// Delete a world by id or name. False when it does not exist.
 pub fn delete_world(data_dir: Option<&Path>, id_or_name: &str) -> bool {
     let n = id_or_name.to_string();
@@ -336,6 +403,24 @@ mod tests {
         *status.lock().unwrap() = Status::Stopping;
         note_ready(&status, "World load complete.", &cmds, &tx);
         assert_eq!(*status.lock().unwrap(), Status::Stopping);
+    }
+
+    #[test]
+    fn console_lines_escape_and_unescape() {
+        for t in ["", "plain", "50% off\nnext\r\tline", "ünï ✓"] {
+            let l = escape_line(t);
+            assert!(!l.contains(['\n', '\r']), "{l:?}");
+            assert_eq!(unescape_line(&l), t);
+        }
+        assert_eq!(escape_line("a%\nb"), "a%25%0Ab");
+        assert_eq!(unescape_line("50% %zz %4"), "50% %zz %4");
+        // The handle sends the control line.
+        let (tx, rx) = channel::<Vec<u8>>();
+        let h = ServerHandle { cmd: tx, status: Arc::new(Mutex::new(Status::Stopped(0))), join: None };
+        h.set_welcome_message(Some("hi\n"));
+        h.set_welcome_message(None);
+        let lines: Vec<String> = rx.try_iter().map(|b| String::from_utf8(b).unwrap()).collect();
+        assert_eq!(lines, [format!("{WELCOME_CONTROL}hi%0A\n"), format!("{WELCOME_CONTROL}\n")]);
     }
 
     #[test]
@@ -369,6 +454,11 @@ mod tests {
         let w = create_world(Some(&dir), "managed", 116, false).unwrap();
         assert_eq!(w.name, "MANAGED");
         assert_eq!(list_worlds(Some(&dir)), vec![w.clone()]);
+        // The welcome message of a stopped world.
+        assert_eq!(world_welcome_message(Some(&dir), &w.id), None);
+        assert!(set_world_welcome_message(Some(&dir), &w.id, Some("Hello".into())));
+        assert_eq!(world_welcome_message(Some(&dir), "MANAGED").as_deref(), Some("Hello"));
+        assert!(!set_world_welcome_message(Some(&dir), "nothing", None));
         assert!(!delete_world(Some(&dir), "nothing"));
         assert!(delete_world(Some(&dir), &w.id));
         assert!(list_worlds(Some(&dir)).is_empty());

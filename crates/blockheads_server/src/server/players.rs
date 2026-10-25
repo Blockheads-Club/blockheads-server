@@ -152,7 +152,10 @@ impl BHServer {
             let Some(alias) = dict_str(&d, "alias") else { continue };
             let mut photo = None;
             if let Some(PlistValue::Data(ph)) = dict_get(&d, "photo") {
-                let withheld = send_minor > 0 && include_clients.is_some_and(|inc| !inc.contains(&pid));
+                // The server's own photo (not in the original) is never withheld: it is not tracked as unsent, and
+                // a client must keep it whichever list it got last.
+                let is_local = dict_get(&d, "local").is_some_and(|v| v.bool_value());
+                let withheld = !is_local && send_minor > 0 && include_clients.is_some_and(|inc| !inc.contains(&pid));
                 if !withheld {
                     photo = Some(ph.bytes.clone());
                 }
@@ -444,6 +447,36 @@ mod tests {
         *h.srv.reset_list.borrow_mut() = None;
         h.srv.save_reset_list();
         assert!(!std::path::Path::new(&path).exists());
+    }
+
+    #[test]
+    fn the_server_photo_is_listed_for_every_client_that_has_not_got_the_list_yet() {
+        let h = Harness::new("players_server_photo");
+        let ids: Vec<String> = ["Ann", "Bob"].iter().map(|a| h.join(a)).collect();
+        // Without a photo the server is not a listed player (vanilla).
+        let list = h.srv.player_list_to_send_including_photos_for_clients_send_client(None, &ids[0]);
+        assert!(list.iter().all(|e| e.alias != "SERVER"));
+        // The local player info the match gives the server when a photo is configured.
+        let info = h.srv.node.player_info_for_peer_id(&h.srv.local_player_id()).unwrap();
+        {
+            let mut d = info.borrow_mut();
+            d.insert("alias".to_string(), PlistValue::string("SERVER"));
+            d.insert("local".to_string(), PlistValue::boolean(true));
+            d.insert("photo".to_string(), PlistValue::data(vec![9, 8, 7]));
+        }
+        // A client that joins now (initial list: nothing withheld) gets the photo, as a connected player.
+        let list = h.srv.player_list_to_send_including_photos_for_clients_send_client(None, &ids[0]);
+        let srv = list.iter().find(|e| e.alias == "SERVER").unwrap();
+        assert_eq!(
+            (srv.photo.clone(), srv.connected, srv.player_id.clone()),
+            (Some(vec![9, 8, 7]), true, h.srv.local_player_id())
+        );
+        // ... and so does a client that is only sent the photos of the players that joined since the last update.
+        let list = h.srv.player_list_to_send_including_photos_for_clients_send_client(Some(&[]), &ids[0]);
+        assert_eq!(list.iter().find(|e| e.alias == "SERVER").unwrap().photo, Some(vec![9, 8, 7]));
+        // It travels as NSData in the 0x1e plist.
+        let pkt = crate::protocol::messages::player_list(&list);
+        assert!(pkt.windows(6).any(|w| w == b"<data>"));
     }
 
     #[test]

@@ -8,4 +8,5 @@ pub mod dispatch;
 pub mod players;
 pub mod profanity;
 pub mod server_client;
+pub mod server_photo;
 pub mod shared_names;

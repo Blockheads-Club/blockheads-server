@@ -34,6 +34,18 @@ pub fn host_config(args: &[String]) -> Result<HostConfig> {
             "--no-exit" => cfg.no_exit = true,
             // Same name from another device (the setting of the host app; the reference has no such option).
             "--shared-names" => cfg.shared_names = true,
+            // The server's chat avatar as hex bytes (the host app embeds its icon; the reference has no such option).
+            "--server-photo-hex" => {
+                let h = val()?;
+                let bad = || HarnessError::Usage("server-photo-hex".into());
+                if h.len() % 2 != 0 || !h.is_ascii() {
+                    return Err(bad());
+                }
+                let bytes = (0..h.len() / 2)
+                    .map(|i| u8::from_str_radix(&h[2 * i..2 * i + 2], 16))
+                    .collect::<std::result::Result<Vec<u8>, _>>();
+                cfg.server_photo = Some(bytes.map_err(|_| bad())?);
+            }
             "--new" => name = Some(val()?),
             "--load" => cfg.world = WorldSelect::Load(val()?),
             "--world_id" => cfg.world_id = Some(val()?),
@@ -203,6 +215,8 @@ mod tests {
             "O",
             "--no-exit",
             "--shared-names",
+            "--server-photo-hex",
+            "89504e47",
         ]))
         .unwrap();
         assert!(matches!(c.world, WorldSelect::New { ref name, width_multiplier: 104 } if name == "x"));
@@ -210,14 +224,18 @@ mod tests {
         assert_eq!(c.custom_rules_json.as_deref(), Some("{}"));
         assert_eq!((c.save_delay, c.max_players, c.owner_name.as_deref()), (3, 7, Some("O")));
         assert!(c.no_exit && c.shared_names);
+        assert_eq!(c.server_photo, Some(vec![0x89, b'P', b'N', b'G']));
         let c = host_config(&a(&["--load", "abc"])).unwrap();
-        assert!(!c.shared_names);
+        assert!(!c.shared_names && c.server_photo.is_none());
         assert!(matches!(c.world, WorldSelect::Load(ref n) if n == "abc"));
         for w in ["1", "4", "16", "1/16"] {
             assert!(host_config(&a(&["--new", "x", "--world_width", w])).is_ok());
         }
         assert!(host_config(&a(&["--world_width", "3"])).is_err());
         assert!(host_config(&a(&["--bogus"])).is_err());
+        for bad in ["8", "zz", "é"] {
+            assert!(host_config(&a(&["--server-photo-hex", bad])).is_err());
+        }
         assert!(host_config(&a(&["--new"])).is_err());
         assert!(host_config(&a(&["--save_delay", "x"])).is_err());
         assert!(host_config(&a(&["--max_players", "x"])).is_err());
