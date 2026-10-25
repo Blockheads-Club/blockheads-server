@@ -43,11 +43,15 @@ test('settings: check now and the automatic options', async ({ page }) => {
   expect(await calls(page)).toContain('set_settings');
 });
 
-test('phone: the update opens the APK download in the browser', async ({ page }) => {
+test('phone: the update downloads in the app and hands the APK to the installer', async ({ page }) => {
   test.skip(!phone(page), 'phone only');
   await mockTauri(page, { update: true });
   await page.goto('/');
   await page.getByRole('dialog', { name: 'Server 2.0.0 is here' }).getByRole('button', { name: 'Download and install' }).click();
-  await expect(page.getByRole('dialog')).toHaveCount(0);
-  expect(await calls(page)).toContain('open_url');
+  await expect(page.getByRole('dialog', { name: 'Update downloaded' })).toBeVisible();
+  await page.getByRole('button', { name: 'Restart now' }).click();
+  await expect.poll(() => calls(page)).toContain('app_quit');
+  const names = await calls(page);
+  expect(names).toContain('update_install');
+  expect(names).not.toContain('open_url');
 });

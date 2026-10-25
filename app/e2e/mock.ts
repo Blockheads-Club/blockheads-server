@@ -128,7 +128,7 @@ export async function mockTauri(
               version: '2.0.0', current: '1.2.3', notes: '## New\n- Faster saves\n- **Safer** restarts', prerelease: false, publishedAt: null,
               page: 'https://github.com/Blockheads-Club/blockheads-server/releases/tag/v2.0.0',
               asset: { name: 'a', url: 'https://github.com/Blockheads-Club/blockheads-server/releases/download/v2.0.0/a', size: 33_000_000 },
-              mode: innerWidth < 600 ? 'browser' : 'installer'
+              mode: 'installer'
             } : null;
           case 'update_download': (s as any).dl = 0; return;
           case 'update_progress': {
