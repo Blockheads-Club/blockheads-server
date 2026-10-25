@@ -14,6 +14,8 @@ fn start(tag: &str, shared: bool, console: bool) -> HostServer {
             .iter()
             .map(|s| s.to_string())
             .collect();
+    // (the vanilla server stops when the last client has left)
+    args.push("--no-exit".into());
     if shared {
         args.push("--shared-names".into());
     }
@@ -32,9 +34,21 @@ fn join(port: u16, id: Identity) -> (Session, JoinOutcome) {
     (s, r)
 }
 
-/// Waits until the server logged that `name` left (a client leaving is noticed a moment later).
-fn wait_gone(server: &mut HostServer, name: &str) {
-    server.wait_for_log(&format!("Player Disconnected {name}"), Duration::from_secs(10)).unwrap();
+/// Leaves a session that was refused and gives the server time to notice (its own disconnect event must not come
+/// in the middle of the next join).
+fn leave(mut s: Session) {
+    s.disconnect();
+    std::thread::sleep(Duration::from_millis(1000));
+}
+
+/// Waits until the server logged that `name` left for the `n`th time (a client leaving is noticed a moment later).
+fn wait_gone(server: &mut HostServer, name: &str, n: usize) {
+    let end = std::time::Instant::now() + Duration::from_secs(15);
+    let needle = format!("player disconnected {}", name.to_lowercase());
+    while server.log().to_lowercase().matches(&needle).count() < n {
+        assert!(std::time::Instant::now() < end, "{name} did not leave:\n{}", server.log());
+        std::thread::sleep(Duration::from_millis(50));
+    }
 }
 
 #[test]
@@ -46,16 +60,16 @@ fn vanilla_refuses_a_name_that_belongs_to_another_device() {
     // online on device 1: "user logged in"
     let (mut b, r) = join(port, Identity::new("Zed").udid("device-2"));
     assert_eq!(r, JoinOutcome::Rejected { reason: 2 });
-    b.disconnect();
+    leave(b);
     // device 1 is still the one playing
     a.run_for(300).unwrap();
     assert!(!a.state.disconnected && a.state.last_rejection.is_none());
     a.disconnect();
-    wait_gone(&mut server, "Zed");
+    wait_gone(&mut server, "Zed", 1);
     // offline, known on device 1: "username taken"
     let (mut b, r) = join(port, Identity::new("Zed").udid("device-2"));
     assert_eq!(r, JoinOutcome::Rejected { reason: 1 });
-    b.disconnect();
+    leave(b);
     // the owner device is welcome
     let (mut a, r) = join(port, Identity::new("Zed").udid("device-1"));
     assert_eq!(r, JoinOutcome::Approved);
@@ -82,12 +96,13 @@ fn with_the_setting_the_name_is_the_identity() {
     b.run_for(500).unwrap();
     assert!(!b.state.disconnected && b.state.last_rejection.is_none());
     b.disconnect();
-    wait_gone(&mut server, "Zed");
+    // (the replaced session left once already)
+    wait_gone(&mut server, "Zed", 2);
     // offline, known on other devices: a third device plays as the same player
     let (mut c, r) = join(port, Identity::new("Zed").udid("device-3"));
     assert_eq!(r, JoinOutcome::Approved);
     c.disconnect();
-    wait_gone(&mut server, "Zed");
+    wait_gone(&mut server, "Zed", 3);
     let log = server.log();
     let ids: std::collections::HashSet<&str> = log
         .lines()
@@ -108,7 +123,7 @@ fn a_join_that_fails_does_not_log_the_player_out() {
     // wrong password from another device: refused, and device 1 keeps playing
     let (mut b, r) = join(port, Identity::new("Zed").udid("device-2").password("nope"));
     assert_eq!(r, JoinOutcome::Rejected { reason: 10 });
-    b.disconnect();
+    leave(b);
     a.run_for(2500).unwrap();
     assert!(!a.state.disconnected && a.state.last_rejection.is_none());
     // the right password takes over
