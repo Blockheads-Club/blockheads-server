@@ -18,7 +18,7 @@
 ---
 
 ## 🚀 Project Status
-**Current Status:** Alpha (v0.3.0 pre-release). A from-scratch rewrite of the official Blockheads 1.7.1 dedicated
+**Current Status:** Alpha (v0.4.0 pre-release). A from-scratch rewrite of the official Blockheads 1.7.1 dedicated
 server: same network protocol, same save files, same commands. Existing game clients and worlds work unchanged.
 
 It comes as a command-line server (like the original) and as the **Blockheads Server** app for desktop and Android,
@@ -47,7 +47,7 @@ Download from the [latest release](https://github.com/Blockheads-Club/blockheads
 - **Docker:**
 
 ```bash
-docker run -i --rm -p 15151:15151/udp -v bh-data:/data ghcr.io/blockheads-club/blockheads-server:0.3.0 --new MYWORLD
+docker run -i --rm -p 15151:15151/udp -v bh-data:/data ghcr.io/blockheads-club/blockheads-server:0.4.0 --new MYWORLD
 ```
 
 Players join with Join World -> Advanced... -> Online IP/Port. On Android 10+ the game client needs the popup fix from
