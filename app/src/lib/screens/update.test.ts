@@ -96,8 +96,13 @@ describe('UpdateDialog', () => {
     r.unmount();
     updates.open = true;
     store.info = { ...store.info!, platform: 'android' };
+    const r2 = render(UpdateDialog);
+    expect(screen.queryByText(/Android asks you to confirm/)).toBeNull();
+    r2.unmount();
+    updates.info = makeUpdate() as never;
     render(UpdateDialog);
     expect(screen.getByText(/Android asks you to confirm/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Download and install' })).toBeInTheDocument();
     await fireEvent.click(screen.getByRole('button', { name: 'Later' }));
     expect(updates.open).toBe(false);
   });

@@ -189,8 +189,12 @@ minutes with a chat warning).
 - Before any restart the server is saved and stopped and the loaded world is copied to
   `<data dir>/update-backups/<world>-<ms>` (newest three kept). `updates/pending.json` tells the next start which
   version was expected and whether to start the server again.
-- Android: the APK download opens in the browser; Android asks the user to confirm. This needs every APK signed
-  with the same persistent release key (`ANDROID_KEYSTORE_*` secrets).
+- Android: checked at every launch. The universal `*-android.apk` (all three ABIs) is downloaded in the app with
+  progress and verified against `SHA256SUMS.txt` (a release without it opens the browser instead). On the user's
+  tap the app saves and stops the server, backs up the world and hands the file to the system installer through the
+  hostservice plugin (`installApk`, a `FileProvider` URI under `files/updates/`). When "install unknown apps" is not
+  allowed yet (`REQUEST_INSTALL_PACKAGES`), the settings screen for it opens before anything is stopped and the
+  download is kept. This needs every APK signed with the same persistent release key (`ANDROID_KEYSTORE_*` secrets).
 - Debug builds can point the check at another feed with `BHS_UPDATE_FEED=<url>`.
 
 Release side: `createUpdaterArtifacts` is on, so `tauri build` needs `TAURI_SIGNING_PRIVATE_KEY` and

@@ -444,6 +444,12 @@ async fn update_install(
     let info = fallback.as_ref().map(|(_, i)| i.clone()).or_else(|| updater.last()).ok_or("nothing")?;
     let (c, u) = (core.inner().clone(), updater.inner().clone());
     tauri::async_runtime::spawn_blocking(move || {
+        // Android: "install unknown apps" must be allowed before the server is stopped. If it is not, the settings
+        // screen opens and the download is kept for the next try.
+        #[cfg(target_os = "android")]
+        if fallback.is_some() && !app.hostservice().install_allowed().map_err(|_| "launch".to_string())? {
+            return Err("permission".to_string());
+        }
         let world_id = c.poll(u64::MAX).world_id.unwrap_or_else(|| c.get_settings().run.world_id);
         let was_running = c.is_active();
         c.stop()?;
@@ -486,6 +492,9 @@ fn launch(app: &AppHandle, file: &std::path::Path, mode: Mode) -> Res<()> {
             let target = Platform::current().appimage.ok_or("launch")?;
             update::replace_file(file, &target)?;
             std::process::Command::new(&target).spawn().map(drop).map_err(fail)
+        }
+        Mode::Installer if cfg!(target_os = "android") => {
+            app.hostservice().install_apk(&file.to_string_lossy()).map_err(|_| "launch".to_string())
         }
         Mode::Installer if cfg!(windows) => std::process::Command::new(file).spawn().map(drop).map_err(fail),
         Mode::Installer => app.opener().open_path(file.to_string_lossy(), None::<&str>).map_err(|_| "launch".into()),

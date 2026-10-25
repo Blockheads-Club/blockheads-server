@@ -100,7 +100,7 @@
     <p class="hint">
       {#if u.info.asset}{`${t('upd.size', { s: mb(u.info.asset.size) })} · `}{/if}<button class="link" onclick={() => u.openNotes()}>{t('upd.fullNotes')}</button> · {t('upd.kept')}
     </p>
-    <p class="hint">{u.mobile ? t('upd.android') : browser ? t('upd.browserHint') : t('upd.noStop')}</p>
+    <p class="hint">{u.mobile && !browser ? t('upd.android') : browser ? t('upd.browserHint') : t('upd.noStop')}</p>
   {:else if stage === 'downloading'}
     <div class="line"><strong>{p?.stage === 'verifying' ? t('upd.verifying') : t('upd.downloadingLbl')}</strong><span class="mono">{pct}</span></div>
     <div
@@ -165,8 +165,8 @@
       <Button variant="primary" onclick={close}>{t('upd.ok')}</Button>
     {:else if stage === 'available'}
       <Button variant="ghost" onclick={close}>{t('upd.later')}</Button>
-      <Button variant="primary" icon={browser && !u.mobile ? 'ext' : 'download'} onclick={() => u.download()}>
-        {u.mobile ? t('upd.androidInstall') : browser ? t('upd.openPage') : t('upd.download')}
+      <Button variant="primary" icon={browser ? 'ext' : 'download'} onclick={() => u.download()}>
+        {u.mobile && !browser ? t('upd.androidInstall') : browser ? t('upd.openPage') : t('upd.download')}
       </Button>
     {:else if stage === 'downloading'}
       <Button variant="ghost" onclick={close}>{t('upd.hide')}</Button>

@@ -5,7 +5,8 @@
 //! test versions only when the user allows them). Windows, macOS and AppImage builds then update in place through
 //! the Tauri updater plugin from the release's signed `latest.json` ([`Mode::Plugin`]). Elsewhere, or for a release
 //! without `latest.json`, the platform asset is downloaded, verified against `SHA256SUMS.txt` and handed to the
-//! system installer. Android opens the APK download in the browser. See docs/development.md ("App updates").
+//! system installer; on Android that is the package installer, started on the user's tap. Without a `SHA256SUMS.txt`
+//! the browser takes over. See docs/development.md ("App updates").
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -60,11 +61,11 @@ pub struct Asset {
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Mode {
-    /// Download, verify, then start the platform installer (Windows setup, macOS disk image, Linux package).
+    /// Download, verify, then start the platform installer (Windows setup, macOS disk image, Linux package, Android APK).
     Installer,
     /// Download, verify, then swap the running AppImage for the new one.
     Replace,
-    /// Open the download (Android APK) or the release page in the browser.
+    /// Open the download or the release page in the browser (no verifiable asset).
     Browser,
     /// The Tauri updater plugin: signed download, in-place install, relaunch.
     Plugin,
@@ -141,7 +142,8 @@ pub fn pick<'a>(releases: &'a [GhRelease], current: &semver::Version, beta: bool
 fn suffixes(p: &Platform) -> Vec<(String, Mode)> {
     let a = |x64: &str, arm: &str| if p.arch == "aarch64" { arm.to_string() } else { x64.to_string() };
     match p.os.as_str() {
-        "android" => vec![("-android.apk".into(), Mode::Browser)],
+        // One universal APK (arm64-v8a, armeabi-v7a, x86_64), signed with the release key: installs over the app.
+        "android" => vec![("-android.apk".into(), Mode::Installer)],
         "windows" => vec![(a("_x64-setup.exe", "_arm64-setup.exe"), Mode::Installer)],
         "macos" => vec![(a("_x64.dmg", "_aarch64.dmg"), Mode::Installer)],
         "linux" => {
@@ -616,7 +618,8 @@ mod tests {
         rpm.pkg = "rpm".into();
         assert_eq!(get(&rpm), Some((names[8].into(), Mode::Installer)));
         assert_eq!(get(&plat("linux", "aarch64")), Some((names[5].into(), Mode::Browser)));
-        assert_eq!(get(&plat("android", "aarch64")), Some((names[9].into(), Mode::Browser)));
+        assert_eq!(get(&plat("android", "aarch64")), Some((names[9].into(), Mode::Installer)));
+        assert_eq!(get(&plat("android", "armv7")), Some((names[9].into(), Mode::Installer)));
         assert_eq!(get(&plat("ios", "aarch64")), None);
         let mut rpm_arm = plat("linux", "aarch64");
         rpm_arm.pkg = "rpm".into();

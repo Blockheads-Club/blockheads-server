@@ -104,6 +104,27 @@ describe('start, resume and the daily check', () => {
     expect(mock.api.updateCheck).not.toHaveBeenCalled();
   });
 
+  it('checks at every launch on Android, at most daily elsewhere', async () => {
+    const u = fresh();
+    store.settings.updates = { ...DEFAULT_PREFS, lastChecked: Date.now() };
+    await u.autoCheck(true);
+    expect(mock.api.updateCheck).not.toHaveBeenCalled();
+    store.info = { ...store.info!, platform: 'android' };
+    await u.autoCheck();
+    expect(mock.api.updateCheck).not.toHaveBeenCalled();
+    await u.autoCheck(true);
+    expect(mock.api.updateCheck).toHaveBeenCalledTimes(1);
+    store.info = { ...store.info!, platform: 'linux' };
+  });
+
+  it('keeps the download and says what to allow when installs are not permitted', async () => {
+    const u = fresh({ updateInstall: vi.fn(async () => { throw 'permission'; }) });
+    await u.install();
+    expect(u.failed).toBe('install');
+    expect(u.error).toBe(t('upd.err.permission'));
+    expect(mock.api.updateDownload).not.toHaveBeenCalled();
+  });
+
   it('reports an update restart and starts the server again', async () => {
     const u = fresh({ updateResume: vi.fn(async () => ({ version: '9.9.9', from: '1.0.0', at: Date.now() - 24000, wasRunning: true, worldId: W1 })) });
     await u.start();

@@ -52,7 +52,7 @@ export class Updates {
     store.settings.updates = { ...this.prefs, ...patch };
   }
 
-  /** Android hands the APK to the system installer through the browser; nothing installs by itself there. */
+  /** Android: the APK is downloaded and verified in the app, then the system installer asks the user to confirm. */
   get mobile() {
     return store.info?.platform === 'android';
   }
@@ -73,7 +73,7 @@ export class Updates {
     if (this.started) return;
     this.started = true;
     const resumed = await this.resume();
-    if (!resumed) await this.autoCheck();
+    if (!resumed) await this.autoCheck(true);
     this.timers.push(setInterval(() => void this.autoCheck(), HOUR));
     this.timers.push(setInterval(() => void this.tick(), 1000));
   }
@@ -103,8 +103,9 @@ export class Updates {
     return true;
   }
 
-  async autoCheck() {
-    if (!this.prefs.autoCheck || Date.now() - this.prefs.lastChecked < DAY) return;
+  /** `launch`: the check at app start. Android checks at every launch, the rest at most once a day. */
+  async autoCheck(launch = false) {
+    if (!this.prefs.autoCheck || (!(launch && this.mobile) && Date.now() - this.prefs.lastChecked < DAY)) return;
     await this.check(true);
   }
 
@@ -151,7 +152,7 @@ export class Updates {
     if (this.stage === 'uptodate' || this.stage === 'done' || (this.stage === 'error' && this.failed === 'check')) this.stage = 'idle';
   }
 
-  /** Download (desktop) or open the download in the browser (Android, or no verifiable asset). */
+  /** Download and verify, or open the download in the browser (a release without checksums). */
   async download() {
     const info = this.info;
     if (!info) return;

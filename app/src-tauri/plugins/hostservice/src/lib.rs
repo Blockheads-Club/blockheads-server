@@ -112,6 +112,44 @@ impl<R: Runtime> HostService<R> {
         }
     }
 
+    /// Whether this app may install packages ("install unknown apps"). When it may not, the system settings screen
+    /// for that opens and `false` comes back. Always `true` off Android.
+    pub fn install_allowed(&self) -> Result<bool, String> {
+        #[cfg(target_os = "android")]
+        {
+            #[derive(Deserialize)]
+            struct Res {
+                allowed: bool,
+            }
+            self.handle.run_mobile_plugin::<Res>("installAllowed", ()).map(|r| r.allowed).map_err(|e| e.to_string())
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            Ok(true)
+        }
+    }
+
+    /// Hand a downloaded APK (under the app's `updates` folder) to the system package installer. The user
+    /// confirms there; the app is replaced and closed by it. Fails off Android.
+    pub fn install_apk(&self, path: &str) -> Result<(), String> {
+        #[cfg(target_os = "android")]
+        {
+            #[derive(Serialize)]
+            struct Args<'a> {
+                path: &'a str,
+            }
+            self.handle
+                .run_mobile_plugin::<serde_json::Value>("installApk", Args { path })
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            let _ = path;
+            Err("not android".into())
+        }
+    }
+
     /// Ask for the Android 13+ notification permission (no-op elsewhere).
     pub fn request_notification_permission(&self) -> Result<(), String> {
         #[cfg(target_os = "android")]

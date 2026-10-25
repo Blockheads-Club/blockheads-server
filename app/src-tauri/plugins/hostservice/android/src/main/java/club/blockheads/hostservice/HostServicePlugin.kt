@@ -4,7 +4,11 @@ import android.Manifest
 import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
+import android.provider.Settings
+import androidx.core.content.FileProvider
+import java.io.File
 import androidx.core.content.ContextCompat
 import app.tauri.annotation.Command
 import app.tauri.annotation.InvokeArg
@@ -37,6 +41,11 @@ class AlertArgs {
 @InvokeArg
 class StopHandlerArgs {
     lateinit var channel: Channel
+}
+
+@InvokeArg
+class ApkArgs {
+    var path: String = ""
 }
 
 @TauriPlugin
@@ -80,6 +89,44 @@ class HostServicePlugin(private val activity: Activity) : Plugin(activity) {
         // while the WebView is suspended.
         ServerService.stopRequested = { args.channel.send(JSObject()) }
         invoke.resolve(JSObject())
+    }
+
+    /** Resolves `{allowed}`; when Android does not allow this app to install packages yet, opens that settings screen. */
+    @Command
+    fun installAllowed(invoke: Invoke) {
+        val ok = Build.VERSION.SDK_INT < 26 || activity.packageManager.canRequestPackageInstalls()
+        if (!ok) {
+            val settings = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${activity.packageName}"))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            try {
+                activity.startActivity(settings)
+            } catch (e: Exception) {
+                // no such screen on this device: the answer is still "not allowed"
+            }
+        }
+        invoke.resolve(JSObject().put("allowed", ok))
+    }
+
+    /** Opens the system installer for a downloaded update APK. Only files in `<files>/updates/` are accepted. */
+    @Command
+    fun installApk(invoke: Invoke) {
+        val args = invoke.parseArgs(ApkArgs::class.java)
+        val base = File(activity.filesDir, "updates").canonicalFile
+        val file = try { File(args.path).canonicalFile } catch (e: Exception) { null }
+        if (file == null || !file.path.startsWith(base.path + File.separator) || !file.name.endsWith(".apk") || !file.isFile) {
+            invoke.reject("invalid_path")
+            return
+        }
+        try {
+            val uri = FileProvider.getUriForFile(activity, "${activity.packageName}.fileprovider", file)
+            val view = Intent(Intent.ACTION_VIEW)
+                .setDataAndType(uri, "application/vnd.android.package-archive")
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+            activity.startActivity(view)
+            invoke.resolve(JSObject())
+        } catch (e: Exception) {
+            invoke.reject("launch: ${e.message}")
+        }
     }
 
     @Command
