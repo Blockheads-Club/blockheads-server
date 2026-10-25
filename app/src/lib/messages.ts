@@ -304,6 +304,11 @@ export const en = {
   'settings.saveRestart': 'Save & restart',
   'settings.saved': 'Settings saved',
 
+  'welcome.title': 'Welcome message',
+  'welcome.hint': 'Players see it when they join {world}. Leave it empty for none. A running world gets it at once; the owner can also change it in the game.',
+  'welcome.save': 'Save message',
+  'welcome.saved': 'Welcome message saved',
+  'err.tooLong': 'The message is too long (4000 characters at most).',
   'err.running': 'Stop the server first.',
   'err.world': 'Select a world.',
   'err.name': 'Enter a name.',
@@ -1120,6 +1125,11 @@ export const tr: Record<Key, string> = {
   'settings.saveRestart': 'Kaydet ve yeniden başlat',
   'settings.saved': 'Ayarlar kaydedildi',
 
+  'welcome.title': 'Karşılama mesajı',
+  'welcome.hint': 'Oyuncular {world} dünyasına girerken bunu görür. Boş bırakırsan mesaj olmaz. Dünya açıksa hemen uygulanır; sahip bunu oyun içinden de değiştirebilir.',
+  'welcome.save': 'Mesajı kaydet',
+  'welcome.saved': 'Karşılama mesajı kaydedildi',
+  'err.tooLong': 'Mesaj çok uzun (en fazla 4000 karakter).',
   'err.running': 'Önce sunucuyu durdur.',
   'err.world': 'Bir dünya seç.',
   'err.name': 'Bir ad gir.',

@@ -307,9 +307,27 @@ describe('lists and moderation', () => {
   });
 
   it('survives unreadable lists', async () => {
-    const s = fresh({ getList: vi.fn(async () => { throw new Error('x'); }) });
+    const s = fresh({ getList: vi.fn(async () => { throw new Error('x'); }), getWelcome: vi.fn(async () => { throw 'world'; }) });
     await s.loadLists();
     expect(s.lists.white).toEqual([]);
+    expect(s.welcome).toBe('');
+  });
+
+  it('loads and saves the welcome message with the world', async () => {
+    const s = fresh();
+    await s.loadLists();
+    expect(s.welcome).toBe('Hello');
+    expect(mock.api.getWelcome).toHaveBeenCalledWith(W1);
+    expect(await s.saveWelcome('  ')).toBe(true);
+    expect(s.welcome).toBe('');
+    expect(await s.saveWelcome('Hi  \n')).toBe(true);
+    expect([s.welcome, mock.api.setWelcome.mock.calls.at(-1)]).toEqual(['Hi', [W1, 'Hi  \n']]);
+    mock.api.setWelcome = vi.fn(async () => { throw 'world'; });
+    expect(await s.saveWelcome('x')).toBe(false);
+    expect(s.welcome).toBe('Hi');
+    s.settings.run.worldId = '';
+    await s.loadLists();
+    expect(s.welcome).toBe('');
   });
 
   it('kicks and bans', async () => {

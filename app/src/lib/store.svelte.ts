@@ -48,6 +48,8 @@ export class AppStore {
   offline = $state(false);
   screen = $state<Screen>('dashboard');
   lists = $state<Record<ListKind, string[]>>(emptyLists());
+  /** The selected world's welcome message (empty: none). */
+  welcome = $state('');
   history = $state<string[]>([]);
   known = $state<KnownPlayer[]>([]);
   /** Latest CPU / memory sample and the last STATS_KEEP of them (one per poll), oldest first. */
@@ -309,10 +311,19 @@ export class AppStore {
     const id = this.settings.run.worldId;
     if (!id) {
       this.lists = emptyLists();
+      this.welcome = '';
       return;
     }
     const entries = await Promise.all(KINDS.map(async (k) => [k, await api.getList(id, k).catch(() => [] as string[])] as const));
     this.lists = Object.fromEntries(entries) as Record<ListKind, string[]>;
+    this.welcome = await api.getWelcome(id).catch(() => '');
+  }
+
+  /** Set the selected world's welcome message (blank: none); a running world gets it at once. */
+  async saveWelcome(text: string) {
+    const ok = await this.guard(() => api.setWelcome(this.settings.run.worldId, text));
+    if (ok) this.welcome = text.trim() ? text.trimEnd() : '';
+    return ok;
   }
 
   async commitList(kind: ListKind, next: string[]) {

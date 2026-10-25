@@ -34,6 +34,8 @@ describe('api', () => {
     await api.sendCommand('/help');
     await api.getList('w', 'admin');
     await api.setList('w', 'mod', ['a']);
+    await api.getWelcome('w');
+    await api.setWelcome('w', 'hi');
     await api.networkInfo(15151);
     await api.getSettings();
     await api.setSettings({ language: 'en', run });
@@ -54,10 +56,11 @@ describe('api', () => {
     await api.openUrl('https://x');
     expect(invoke.mock.calls.map((c: any[]) => c[0])).toEqual([
       'app_info', 'list_worlds', 'create_world', 'delete_world', 'start_server', 'stop_server', 'poll', 'stats',
-      'send_command', 'get_list', 'set_list', 'network_info', 'get_settings', 'set_settings',
+      'send_command', 'get_list', 'set_list', 'get_welcome', 'set_welcome', 'network_info', 'get_settings', 'set_settings',
       'boot', 'splash_set', 'splash_get', 'splash_retry', 'choose_data_folder', 'app_quit', 'main_ready',
       'update_check', 'update_download', 'update_progress', 'update_cancel', 'update_install', 'update_resume', 'app_restart', 'open_url'
     ]);
+    expect(invoke).toHaveBeenCalledWith('set_welcome', { worldId: 'w', text: 'hi' });
     expect(invoke).toHaveBeenCalledWith('update_check', { beta: true });
     expect(invoke).toHaveBeenCalledWith('update_install', { backup: true });
     expect(invoke).toHaveBeenCalledWith('open_url', { url: 'https://x' });

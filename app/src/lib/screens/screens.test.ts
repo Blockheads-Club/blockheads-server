@@ -48,6 +48,7 @@ function reset(over: Record<string, unknown> = {}) {
   store.info = { version: '1.0.0', dataDir: '/data', platform: 'linux', nativeControls: false };
   store.settings = { language: 'en', run: { worldId: W1, port: 15151, maxPlayers: 0, password: '', saveDelay: 10 } };
   store.lists = { admin: ['amy'], mod: [], white: ['zed'], black: [] };
+  store.welcome = 'Hello';
 }
 beforeEach(() => reset());
 afterEach(() => cleanup());
@@ -404,6 +405,35 @@ describe('Access', () => {
 });
 
 describe('Settings', () => {
+  it('edits the selected world\'s welcome message', async () => {
+    render(Settings);
+    render(Toasts);
+    expect(screen.getByText(/Players see it when they join Sunny/)).toBeInTheDocument();
+    const box = screen.getByRole('textbox', { name: 'Welcome message' }) as HTMLTextAreaElement;
+    expect(box.value).toBe('Hello');
+    const save = screen.getByRole('button', { name: 'Save message' });
+    expect(save).toBeDisabled();
+    await fireEvent.input(box, { target: { value: 'Hi <b>all</b>\n' } });
+    expect(screen.getByText('14/4000')).toBeInTheDocument();
+    await fireEvent.click(save);
+    await waitFor(() => expect(mock.api.setWelcome).toHaveBeenCalledWith(W1, 'Hi <b>all</b>\n'));
+    expect(await screen.findByText('Welcome message saved')).toBeInTheDocument();
+    expect(store.welcome).toBe('Hi <b>all</b>');
+    expect(save).toBeDisabled();
+    // A failure keeps the text and shows the reason.
+    mock.api.setWelcome = vi.fn(async () => { throw 'tooLong'; });
+    await fireEvent.input(box, { target: { value: 'x' } });
+    await fireEvent.click(save);
+    await waitFor(() => expect(store.error).toBe('The message is too long (4000 characters at most).'));
+    expect(box.value).toBe('x');
+  });
+
+  it('has no welcome message without a world', () => {
+    store.worlds = [];
+    render(Settings);
+    expect(screen.queryByRole('textbox', { name: 'Welcome message' })).toBeNull();
+  });
+
   it('validates and saves connection settings', async () => {
     render(Settings);
     render(Toasts);

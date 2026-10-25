@@ -14,6 +14,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::mods;
 
+/// 64x64 PNG of the app icon (about 5 KB), sent to clients as the server's chat avatar.
+const SERVER_PHOTO: &[u8] = include_bytes!("../icons/64x64.png");
 const LOG_CAP: usize = 3000;
 pub const DEFAULT_PORT: u16 = 15151;
 
@@ -278,7 +280,12 @@ struct Running {
     world_id: String,
     port: u16,
     started_at: u64,
+    /// The world's welcome message: read at the start, then the last one set here.
+    welcome: Option<String>,
 }
+
+/// Longest welcome message the app sets (characters).
+pub const WELCOME_MAX: usize = 4000;
 
 /// Application core. One per process.
 pub struct Core {
@@ -410,6 +417,8 @@ impl Core {
             max_players: o.max_players,
             save_delay: o.save_delay,
             shared_names: o.shared_names,
+            // A hosted world keeps running when the last player leaves (the vanilla server exits then); Stop ends it.
+            no_exit: true,
             // Applied by the server thread itself right after the world loaded, so it never depends on the UI
             // (a backgrounded Android WebView stops polling).
             on_ready_commands: if o.password.is_empty() {
@@ -422,10 +431,14 @@ impl Core {
                 disabled: false,
                 variant_blocks: false,
             },
+            // The server's own chat lines ("SERVER: ...") show the app icon instead of the generic face: the
+            // client takes a chat row's icon from the sender's player info `photo`.
+            server_photo: Some(SERVER_PHOTO.to_vec()),
             ..HostConfig::default()
         };
+        let welcome = host::world_welcome_message(Some(&self.data_dir()), &o.world_id);
         let handle = host::start(cfg, Arc::new(move |l: &str| lock(&shared).push(l))).map_err(|e| e.to_string())?;
-        *run = Some(Running { handle, world_id: o.world_id.clone(), port: o.port, started_at: now_ms() });
+        *run = Some(Running { handle, world_id: o.world_id.clone(), port: o.port, started_at: now_ms(), welcome });
         Ok(())
     }
 
@@ -527,6 +540,42 @@ impl Core {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
         std::fs::write(&p, render_list(kind, &names)).map_err(|e| e.to_string())
+    }
+
+    // ---- welcome message ----
+
+    /// The message players see when they join the world (empty: none). While the world runs, the one it started
+    /// with or the last one set here (an owner's edit in the game shows here after the next start).
+    pub fn get_welcome(&self, world_id: &str) -> Result<String, String> {
+        if world_id.is_empty() {
+            return Err("world".into());
+        }
+        if let Some(r) = lock(&self.running).as_ref().filter(|r| r.world_id == world_id && r.handle.is_alive()) {
+            return Ok(r.welcome.clone().unwrap_or_default());
+        }
+        Ok(host::world_welcome_message(Some(&self.data_dir()), world_id).unwrap_or_default())
+    }
+
+    /// Set the welcome message (blank: none). A running world gets it at once and saves it with the world;
+    /// a stopped one has its save updated.
+    pub fn set_welcome(&self, world_id: &str, text: &str) -> Result<(), String> {
+        if world_id.is_empty() {
+            return Err("world".into());
+        }
+        if text.chars().count() > WELCOME_MAX {
+            return Err("tooLong".into());
+        }
+        let msg = Some(text.trim_end().to_string()).filter(|m| !m.trim().is_empty());
+        if let Some(r) = lock(&self.running).as_mut().filter(|r| r.world_id == world_id && r.handle.is_alive()) {
+            r.handle.set_welcome_message(msg.as_deref());
+            r.welcome = msg;
+            return Ok(());
+        }
+        if host::set_world_welcome_message(Some(&self.data_dir()), world_id, msg) {
+            Ok(())
+        } else {
+            Err("world".into())
+        }
     }
 
     // ---- network ----
@@ -981,6 +1030,15 @@ mod tests {
         assert_eq!(w.name, "TEST");
         assert_eq!(c.list_worlds(), vec![w.clone()]);
 
+        // Stopped: the welcome message goes into the save.
+        assert_eq!(c.get_welcome(&w.id).unwrap(), "");
+        c.set_welcome(&w.id, "Hello <b>all</b>\n\n").unwrap();
+        assert_eq!(c.get_welcome(&w.id).unwrap(), "Hello <b>all</b>");
+        assert_eq!(c.get_welcome("").unwrap_err(), "world");
+        assert_eq!(c.set_welcome("", "x").unwrap_err(), "world");
+        assert_eq!(c.set_welcome("nope", "x").unwrap_err(), "world");
+        assert_eq!(c.set_welcome(&w.id, &"x".repeat(WELCOME_MAX + 1)).unwrap_err(), "tooLong");
+
         // Stopped: lists are plain files.
         assert!(c.get_list(&w.id, ListKind::Black).unwrap().is_empty());
         c.set_list(&w.id, ListKind::Admin, &["Alice".into()]).unwrap();
@@ -1000,6 +1058,12 @@ mod tests {
         assert_eq!(p.world_id.as_deref(), Some(w.id.as_str()));
         assert!(p.lines.iter().any(|l| l.contains("World load complete.")));
         c.set_list(&w.id, ListKind::Mod, &["Zed".into()]).unwrap();
+        // Running: the message read at the start, then changed live (and saved with the world).
+        assert_eq!(c.get_welcome(&w.id).unwrap(), "Hello <b>all</b>");
+        c.set_welcome(&w.id, "  ").unwrap();
+        assert_eq!(c.get_welcome(&w.id).unwrap(), "");
+        c.set_welcome(&w.id, "Live").unwrap();
+        assert_eq!(c.get_welcome(&w.id).unwrap(), "Live");
         c.send_command("/players").unwrap();
         std::thread::sleep(std::time::Duration::from_millis(1500));
         let after = c.poll(p.next);
@@ -1007,6 +1071,8 @@ mod tests {
         c.stop().unwrap();
         assert_eq!(c.poll(0).state, "stopped");
         assert!(c.poll(0).lines.iter().any(|l| l.contains("Password set") || l.contains("World load complete.")));
+        assert!(c.poll(0).lines.iter().any(|l| l.contains("Welcome message changed.")));
+        assert_eq!(c.get_welcome(&w.id).unwrap(), "Live", "saved with the world");
         // Console-applied list change was persisted by the server.
         assert!(c.get_list(&w.id, ListKind::Mod).unwrap().iter().any(|n| n.eq_ignore_ascii_case("zed")));
         c.delete_world(&w.id).unwrap();

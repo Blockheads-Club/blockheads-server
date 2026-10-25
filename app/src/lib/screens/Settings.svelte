@@ -15,6 +15,7 @@
   import { copyText } from '../util';
   import JvmSettings from './JvmSettings.svelte';
   import UpdateSettings from './UpdateSettings.svelte';
+  import WelcomeSettings from './WelcomeSettings.svelte';
 
   const run = $derived(store.settings.run);
   let port = $state(String(store.settings.run.port));
@@ -100,6 +101,8 @@
       <Toggle label={t('settings.sameName')} hideLabel bind:checked={shared} />
     </SettingRow>
   </Card>
+
+  <WelcomeSettings />
 
   <Card class="grp" label={t('settings.saving')}>
     <h2>{t('settings.saving')}</h2>

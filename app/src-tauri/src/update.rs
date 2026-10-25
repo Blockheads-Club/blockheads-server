@@ -197,7 +197,7 @@ pub fn info_for(r: &GhRelease, current: &str, p: &Platform) -> UpdateInfo {
 /// Download speed (bytes/s) and seconds left after `done` of `total` bytes in `elapsed`.
 pub fn rate(done: u64, total: u64, elapsed: Duration) -> (u64, u64) {
     let speed = (done as f64 / elapsed.as_secs_f64().max(0.001)) as u64;
-    let eta = if speed > 0 { total.saturating_sub(done) / speed } else { 0 };
+    let eta = total.saturating_sub(done).checked_div(speed).unwrap_or(0);
     (speed, eta)
 }
 

@@ -50,6 +50,9 @@ export const api = {
   getList: (worldId: string, kind: ListKind) => invoke<string[]>('get_list', { worldId, kind }),
   setList: (worldId: string, kind: ListKind, names: string[]) =>
     invoke<void>('set_list', { worldId, kind, names }),
+  /** The world's welcome message (empty: none). */
+  getWelcome: (worldId: string) => invoke<string>('get_welcome', { worldId }),
+  setWelcome: (worldId: string, text: string) => invoke<void>('set_welcome', { worldId, text }),
   networkInfo: (port: number) => invoke<NetAddr[]>('network_info', { port }),
   getSettings: () => invoke<Settings>('get_settings'),
   setSettings: (settings: Settings) => invoke<void>('set_settings', { settings }),

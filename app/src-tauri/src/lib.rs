@@ -298,6 +298,16 @@ fn set_list(core: State<'_, Arc<Core>>, world_id: String, kind: String, names: V
 }
 
 #[tauri::command]
+async fn get_welcome(core: State<'_, Arc<Core>>, world_id: String) -> Res<String> {
+    core.get_welcome(&world_id)
+}
+
+#[tauri::command]
+async fn set_welcome(core: State<'_, Arc<Core>>, world_id: String, text: String) -> Res<()> {
+    core.set_welcome(&world_id, &text)
+}
+
+#[tauri::command]
 fn network_info(core: State<'_, Arc<Core>>, port: u16) -> Vec<NetAddr> {
     core.network_addrs(port)
 }
@@ -399,7 +409,7 @@ fn taskbar(app: &AppHandle, p: &Progress) {
     if let Some(w) = app.get_webview_window("main") {
         use tauri::window::{ProgressBarState, ProgressBarStatus};
         let busy = p.stage == "downloading" || p.stage == "verifying";
-        let pct = if p.total > 0 { (p.done * 100 / p.total).min(100) } else { 0 };
+        let pct = (p.done * 100).checked_div(p.total).map_or(0, |v| v.min(100));
         let _ = w.set_progress_bar(ProgressBarState {
             status: Some(if busy { ProgressBarStatus::Normal } else { ProgressBarStatus::None }),
             progress: busy.then_some(pct),
@@ -756,6 +766,8 @@ pub fn run() {
             send_command,
             get_list,
             set_list,
+            get_welcome,
+            set_welcome,
             network_info,
             get_settings,
             set_settings,
