@@ -58,7 +58,7 @@ fn vanilla_refuses_a_name_that_belongs_to_another_device() {
     let (mut a, r) = join(port, Identity::new("Zed").udid("device-1"));
     assert_eq!(r, JoinOutcome::Approved);
     // online on device 1: "user logged in"
-    let (mut b, r) = join(port, Identity::new("Zed").udid("device-2"));
+    let (b, r) = join(port, Identity::new("Zed").udid("device-2"));
     assert_eq!(r, JoinOutcome::Rejected { reason: 2 });
     leave(b);
     // device 1 is still the one playing
@@ -67,7 +67,7 @@ fn vanilla_refuses_a_name_that_belongs_to_another_device() {
     a.disconnect();
     wait_gone(&mut server, "Zed", 1);
     // offline, known on device 1: "username taken"
-    let (mut b, r) = join(port, Identity::new("Zed").udid("device-2"));
+    let (b, r) = join(port, Identity::new("Zed").udid("device-2"));
     assert_eq!(r, JoinOutcome::Rejected { reason: 1 });
     leave(b);
     // the owner device is welcome
@@ -83,7 +83,7 @@ fn with_the_setting_the_name_is_the_identity() {
     let (mut a, r) = join(port, Identity::new("Zed").udid("device-1"));
     assert_eq!(r, JoinOutcome::Approved);
     // online on device 1, joins from device 2: the new login takes over
-    let (mut b, r) = join(port, Identity::new("zed").udid("device-2"));
+    let (b, r) = join(port, Identity::new("zed").udid("device-2"));
     assert_eq!(r, JoinOutcome::Approved);
     assert_eq!(Identity::new("zed").player_id(), Identity::new("Zed").player_id());
     // the old session is told why and is dropped
@@ -121,7 +121,7 @@ fn a_join_that_fails_does_not_log_the_player_out() {
     let (mut a, r) = join(port, Identity::new("Zed").udid("device-1").password("secret"));
     assert_eq!(r, JoinOutcome::Approved);
     // wrong password from another device: refused, and device 1 keeps playing
-    let (mut b, r) = join(port, Identity::new("Zed").udid("device-2").password("nope"));
+    let (b, r) = join(port, Identity::new("Zed").udid("device-2").password("nope"));
     assert_eq!(r, JoinOutcome::Rejected { reason: 10 });
     leave(b);
     a.run_for(2500).unwrap();
