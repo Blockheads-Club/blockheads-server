@@ -127,8 +127,12 @@ channels. Tests: `crates/bh_testclient/tests/mods_protocol.rs` (also compares pa
   `.cargo/config.toml`, `c++abi` from the build script) so the app ships no `libc++_shared.so`.
 
 Commits follow [Conventional Commits](https://www.conventionalcommits.org);
-releases are cut by pushing a signed tag `vX.Y.Z` on `dev`: `.github/workflows/release.yml` builds
-every asset into a draft GitHub release, which is published by hand once CI is green.
+releases are automatic. Once CI passes for a push to `dev`, `.github/workflows/auto-release.yml` runs
+semantic-release (`.releaserc.json`): `fix`/`perf` commits cut a patch release, `feat` a minor one,
+`BREAKING CHANGE` a major one, other types none. It sets the version (`scripts/set-version.ts`), commits
+`chore(release): vX.Y.Z`, tags it, opens a draft release with the generated notes and dispatches
+`.github/workflows/release.yml` with `publish`, which attaches every asset, publishes the release, rebuilds the
+website and pushes the docker image. A hand-pushed tag `vX.Y.Z` still builds into a draft release to publish by hand.
 
 The `faithful-crashes` cargo feature (emulating original crash behaviour) is
 off by default.
