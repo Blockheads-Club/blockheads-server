@@ -106,8 +106,7 @@ dependencies = [
 
 [[package]]
 name = "bhmod-content"
-version = "0.3.0"
-source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=506077d45f12e4aadd111204a78eab2f97244369#506077d45f12e4aadd111204a78eab2f97244369"
+version = "0.3.1"
 dependencies = [
  "bhmod-manifest",
  "bhmod-proto",
@@ -117,8 +116,7 @@ dependencies = [
 
 [[package]]
 name = "bhmod-core"
-version = "0.3.0"
-source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=506077d45f12e4aadd111204a78eab2f97244369#506077d45f12e4aadd111204a78eab2f97244369"
+version = "0.3.1"
 dependencies = [
  "bhmod-manifest",
  "bhmod-proto",
@@ -126,17 +124,19 @@ dependencies = [
  "mlua",
  "semver",
  "serde",
+ "serde_json",
  "toml",
+ "toml_edit",
  "zip",
 ]
 
 [[package]]
 name = "bhmod-manifest"
-version = "0.3.0"
-source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=506077d45f12e4aadd111204a78eab2f97244369#506077d45f12e4aadd111204a78eab2f97244369"
+version = "0.3.1"
 dependencies = [
  "semver",
  "serde",
+ "serde_json",
  "sha2",
  "toml",
  "zip",
@@ -144,16 +144,14 @@ dependencies = [
 
 [[package]]
 name = "bhmod-proto"
-version = "0.3.0"
-source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=506077d45f12e4aadd111204a78eab2f97244369#506077d45f12e4aadd111204a78eab2f97244369"
+version = "0.3.1"
 dependencies = [
  "sha2",
 ]
 
 [[package]]
 name = "bhmod-wasm"
-version = "0.3.0"
-source = "git+https://github.com/Blockheads-Club/mod-sdk?rev=506077d45f12e4aadd111204a78eab2f97244369#506077d45f12e4aadd111204a78eab2f97244369"
+version = "0.3.1"
 dependencies = [
  "bhmod-core",
  "bhmod-manifest",
@@ -614,7 +612,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1559,7 +1557,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1798,7 +1796,7 @@ dependencies = [
  "getrandom",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1883,7 +1881,7 @@ dependencies = [
  "indexmap",
  "serde_core",
  "serde_spanned",
- "toml_datetime",
+ "toml_datetime 0.7.5+spec-1.1.0",
  "toml_parser",
  "toml_writer",
  "winnow 0.7.15",
@@ -1896,6 +1894,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92e1cfed4a3038bc5a127e35a2d360f145e1f4b971b551a2ba5fd7aedf7e1347"
 dependencies = [
  "serde_core",
+]
+
+[[package]]
+name = "toml_datetime"
+version = "1.1.2+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b86d767906c6c42421dcba507eb9d203e779497710a47782a224bb871653053"
+dependencies = [
+ "serde_core",
+]
+
+[[package]]
+name = "toml_edit"
+version = "0.25.17+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e3641d5bbb5349a79e1020a242d251efbc546ad8048d133958323ce9c40a9c9c"
+dependencies = [
+ "indexmap",
+ "toml_datetime 1.1.2+spec-1.1.0",
+ "toml_parser",
+ "toml_writer",
+ "winnow 1.0.4",
 ]
 
 [[package]]
@@ -2351,7 +2371,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2578,6 +2598,9 @@ name = "winnow"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "23b97319f7b8343df12cc98938e5c3eb436064524c8d2b4e30a1d3a36eecdf81"
+dependencies = [
+ "memchr",
+]
 
 [[package]]
 name = "wit-component"
