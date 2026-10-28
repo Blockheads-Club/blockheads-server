@@ -119,7 +119,12 @@ fn set_refuses_bad_values_keys_and_files() {
     let dir = t.path();
     with_settings(dir, "voice");
     let err = |k: &str, v: Value| set(dir, "voice", k, v).unwrap_err();
-    let unknown = |k: &str| ModError { code: "settingKey".into(), detail: Some(k.into()), got: Some(k.into()), ..ModError::default() };
+    let unknown = |k: &str| ModError {
+        code: "settingKey".into(),
+        detail: Some(k.into()),
+        got: Some(k.into()),
+        ..ModError::default()
+    };
     assert_eq!(err("keys", json!("x")), unknown("keys"), "client scope");
     assert_eq!(err("nope", json!(1)), unknown("nope"));
     let e = err("radius", json!(0));
