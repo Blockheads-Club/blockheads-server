@@ -28,6 +28,8 @@ pub mod net;
 #[cfg(feature = "mods")]
 mod server_host;
 pub mod voice;
+#[cfg(feature = "mods")]
+pub mod voice_glue;
 
 /// The 0xBC mod protocol packet type (mod-sdk `docs/protocol-0xbc.md`). Only routed when a mod host is installed.
 pub const MOD_PACKET: u8 = 0xBC;
@@ -355,12 +357,7 @@ pub fn start(save_id: Option<&str>, server: &Rc<BHServer>) {
     }
     #[cfg(feature = "mods")]
     install(server_host::load(&dir, save_id, server));
-    // Voice (relay, UDP socket) only runs next to a mod host.
-    if hooks().is_some() {
-        if let Some(warning) = voice::start() {
-            crate::nslog!("[mods WARN] {}", warning);
-        }
-    }
+    // The voice socket is the host's (bound while a voice mod is loaded).
     #[cfg(not(feature = "mods"))]
     let _ = (save_id, server);
 }

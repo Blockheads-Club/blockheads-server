@@ -72,8 +72,9 @@ pub struct HostConfig {
     /// info with this `photo`, so clients get it with the player list and show it next to the server's chat
     /// lines instead of the generic face. `None` (the default) is exactly the vanilla behaviour.
     pub server_photo: Option<Vec<u8>>,
-    /// Voice transport (not in the original): the optional dedicated UDP voice port (`voice.udp_port`, off by
-    /// default) and the relays plugged into it. Only used while a mod host runs; the default changes nothing.
+    /// Voice transport (not in the original): the dedicated UDP voice port (`voice.udp_port`; by default the one
+    /// after the game port) and an optional embedder relay. The socket is only bound while a loaded mod holds the `voice` permission;
+    /// without one nothing changes.
     pub voice: crate::mods::voice::VoiceConfig,
 }
 

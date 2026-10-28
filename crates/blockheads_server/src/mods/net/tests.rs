@@ -12,7 +12,6 @@ use crate::mods::content::Content;
 #[derive(Default)]
 struct Fake {
     sent: RefCell<Vec<(String, Vec<u8>)>>,
-    unreliable: RefCell<Vec<(String, Vec<u8>)>>,
     rejected: RefCell<Vec<(String, u8)>>,
     approved: RefCell<Vec<String>>,
     waiting: RefCell<Vec<String>>,
@@ -22,10 +21,6 @@ struct Fake {
 impl Link for Fake {
     fn send(&self, peer: &str, packet: Vec<u8>) {
         self.sent.borrow_mut().push((peer.to_string(), packet));
-    }
-    fn send_unreliable(&self, peer: &str, packet: &[u8]) -> bool {
-        self.unreliable.borrow_mut().push((peer.to_string(), packet.to_vec()));
-        true
     }
     fn reject(&self, peer: &str, reason: u8) {
         self.rejected.borrow_mut().push((peer.to_string(), reason));
@@ -535,30 +530,59 @@ fn limbo_holds_vanilla_peers_until_the_grace_ends() {
 }
 
 #[test]
-fn unreliable_packets_go_only_to_modded_players_in_the_game() {
-    let l = Fake::default();
+fn voice_and_settings_features() {
+    use bhmod_proto::{feature, SettingsSet, VoiceCtrl, VoiceKey};
+    let link = Fake::default();
     let mut n = net();
-    let frame = |len: usize| {
-        let mut p = vec![PACKET_TYPE, crate::mods::voice::VOICE_FRAME];
-        p.resize(len, 7);
-        p
+    let with_features = |f: &[&str]| {
+        Message::Hello(Hello {
+            proto: PROTO,
+            loader: "0.1.0".into(),
+            platform: "pc-linux-x86_64".into(),
+            api: "0.3.4".into(),
+            runtimes: vec![],
+            cached: vec![],
+            features: f.iter().map(|s| s.to_string()).collect(),
+        })
+        .encode()
     };
-    // Vanilla, or modded but not approved yet: nothing.
-    assert!(!n.send_unreliable(&l, "e", &frame(10)));
-    n.packet(&l, "e", &hello(1), &[]);
-    assert!(!n.send_unreliable(&l, "e", &frame(10)));
-    l.approved.borrow_mut().push("e".into());
-    l.approved.borrow_mut().push("vanilla".into());
-    assert!(!n.send_unreliable(&l, "vanilla", &frame(10)));
-    // In the game: the largest packet that stays one unsequenced ENet packet goes out, one byte more does not;
-    // neither do non-0xBC bytes nor an empty packet.
-    assert!(n.send_unreliable(&l, "e", &frame(crate::mods::voice::MAX_UNRELIABLE)));
-    assert!(!n.send_unreliable(&l, "e", &frame(crate::mods::voice::MAX_UNRELIABLE + 1)));
-    assert!(!n.send_unreliable(&l, "e", &[0x05, 0x16]));
-    assert!(!n.send_unreliable(&l, "e", &[]));
-    let sent = l.unreliable.borrow().clone();
-    assert_eq!(sent.len(), 1);
-    assert_eq!((sent[0].0.as_str(), sent[0].1.len()), ("e", crate::mods::voice::MAX_UNRELIABLE));
-    // Nothing went the reliable way.
-    assert!(l.sent.borrow().iter().all(|(_, p)| p.get(1) != Some(&crate::mods::voice::VOICE_FRAME)));
+    // Without a voice or settings mod: no feature, no port, even when one is set.
+    n.voice_udp_port = Some(24_000);
+    n.packet(&link, "p", &with_features(&["voice", "settings"]), &[]);
+    let Message::ServerHello(h) = &link.take()[0] else { panic!("no SERVER_HELLO") };
+    assert!(h.features.is_empty() && h.voice_udp_port.is_none());
+    assert_eq!(n.features_of("p"), ["voice", "settings"]);
+    assert!(n.features_of("nobody").is_empty());
+    // The ops are ignored while not served.
+    link.approved.borrow_mut().push("p".into());
+    let key = Message::VoiceKey(VoiceKey { public: [1; 32], peer: None, udp_port: None }).encode();
+    let set = SettingsSet { mod_id: "m".into(), key: "k".into(), value: vec![0xf5] };
+    let set_packet = Message::SettingsSet(set.clone()).encode();
+    assert_eq!(n.packet(&link, "p", &key, &[]), None);
+    assert_eq!(n.packet(&link, "p", &set_packet, &[]), None);
+    // Served: handed to the host, only for players in the game.
+    n.features = vec![feature::VOICE.into(), feature::SETTINGS.into()];
+    assert!(n.serves(feature::VOICE) && !n.serves("other"));
+    assert!(matches!(n.packet(&link, "p", &key, &[]), Some(Inbound::Voice(Message::VoiceKey(_)))));
+    let ctrl = Message::VoiceCtrl(VoiceCtrl { self_mute: true, deafen: false }).encode();
+    assert!(matches!(n.packet(&link, "p", &ctrl, &[]), Some(Inbound::Voice(Message::VoiceCtrl(_)))));
+    assert_eq!(n.packet(&link, "p", &set_packet, &[]), Some(Inbound::SettingsSet(set)));
+    n.packet(&link, "q", &with_features(&[]), &[]);
+    let Message::ServerHello(h) = &link.take()[0] else { panic!("no SERVER_HELLO") };
+    assert_eq!(
+        (h.features.clone(), h.voice_udp_port),
+        (vec!["voice".to_string(), "settings".to_string()], Some(24_000))
+    );
+    assert_eq!(n.packet(&link, "q", &key, &[]), None);
+    assert_eq!(n.packet(&link, "q", &set_packet, &[]), None);
+    // Settings alone: the port is not announced.
+    n.features = vec![feature::SETTINGS.into()];
+    n.packet(&link, "r", &with_features(&[]), &[]);
+    let Message::ServerHello(h) = &link.take()[0] else { panic!("no SERVER_HELLO") };
+    assert_eq!(h.voice_udp_port, None);
+    // has-mod: only what READY listed.
+    assert!(!n.has_mod("p", "voice") && !n.has_mod("vanilla", "voice"));
+    let ready = Message::Ready(Ready { accepted_hash: [0; 32], loaded: vec![("voice".into(), "0.1.0".into())] });
+    n.packet(&link, "p", &ready.encode(), &[]);
+    assert!(n.has_mod("p", "voice") && !n.has_mod("p", "other"));
 }

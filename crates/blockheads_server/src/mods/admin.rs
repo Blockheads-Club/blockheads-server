@@ -7,13 +7,16 @@
 //! /mods reload [id]          reload the changed mods (or one mod, changed or not) without restarting the world
 //! /mods timings [id]         calls, total/avg/max time per handler kind, budget hits and strikes
 //! /mods timings reset [id]   clear the accounting
+//! /mods settings <mod>       a mod's settings (bhmod-core `ModHost::settings_command`)
+//! /mods set <mod> <k> <v>    change one
 //! ```
 
 use bhmod_core::host::{ModHost, ModState, ReloadOutcome};
 use bhmod_core::timings::format_lines;
 
 /// The usage line.
-pub const USAGE: &str = "Usage: /mods [list] | reload [id] | timings [id] | timings reset [id]";
+pub const USAGE: &str =
+    "Usage: /mods [list] | reload [id] | timings [id] | timings reset [id] | settings <mod> | set <mod> <key> <value>";
 
 /// What a `/mods` command printed and whether it changed the set of running mods (the offered client packages are
 /// then built again).
@@ -136,7 +139,7 @@ pub(crate) mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let mut host = ModHost::load(
             HostOptions::new(tmp.path(), Side::Server),
-            Rc::new(Bridge { srv: std::rc::Weak::new(), net: Rc::default() }),
+            Rc::new(Bridge { srv: std::rc::Weak::new(), net: Rc::default(), voice: Rc::default() }),
         );
         assert_eq!(lines(&mut host, ""), ["No mods are loaded."]);
         assert_eq!(lines(&mut host, "timings"), ["No mods are loaded."]);

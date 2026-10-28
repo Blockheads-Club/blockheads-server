@@ -124,6 +124,7 @@ fn info(m: &Manifest, sides: Vec<&str>, client_required: bool, sha256: Hash, siz
             net_http: p.net_http.clone(),
             channels: p.channels,
             native: p.native,
+            voice: p.voice,
         },
         // The server does not read the public index; clients check it themselves.
         source_url: None,

@@ -142,11 +142,6 @@ pub trait BhMatch {
     ) -> bool {
         false
     }
-    /// Not in the original: one unreliable, unsequenced packet to one player (the dispatcher's name: ENet id
-    /// before approval, player id after it) on ENet channel 0. True when it was queued. Default NO.
-    fn send_unsequenced(&self, _player: &str, _data: &[u8]) -> bool {
-        false
-    }
     /// `-loadInfoForPlayer:`; default `{playerID: id}` (fresh mutable dict).
     fn load_info_for_player(&self, player_id: &str) -> Option<PlayerInfo> {
         Some(bhmatch_load_info_for_player(player_id))
@@ -673,7 +668,6 @@ mod tests {
         m.disconnect();
         assert_eq!(m.expected_player_count(), 0);
         assert!(!m.send_data_to_players_with_data_mode_error(Some(b"x"), &["a".to_string()], SendDataMode::Reliable));
-        assert!(!m.send_unsequenced("a", b"x"));
         assert!(m.load_info_for_player("p").is_some());
         assert!(m.client_player_information_recieved_from_peer(None, "e").is_none());
         assert!(m.name_holder_elsewhere(None, "e").is_none());

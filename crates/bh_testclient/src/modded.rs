@@ -44,6 +44,8 @@ pub struct LoaderOptions {
     pub interrupt_after: Option<u64>,
     /// How long to wait for `SERVER_HELLO`.
     pub hello_timeout_ms: u64,
+    /// `HELLO.features` (optional protocol features such as `voice`, `settings`).
+    pub features: Vec<String>,
 }
 
 impl LoaderOptions {
@@ -61,6 +63,7 @@ impl LoaderOptions {
             native_installed: Vec::new(),
             interrupt_after: None,
             hello_timeout_ms: HELLO_TIMEOUT_MS,
+            features: Vec::new(),
         }
     }
 }
@@ -158,7 +161,7 @@ impl ModClient {
             api: self.opts.api.clone(),
             runtimes: self.opts.runtimes.clone(),
             cached: self.cached(),
-            features: Vec::new(),
+            features: self.opts.features.clone(),
         })
     }
 

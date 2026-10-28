@@ -71,3 +71,4 @@ bhmod-wasm = { path = "/home/kahverengi/Projects/blockheads-club/mod-sdk-wt/voic
 bhmod-manifest = { path = "/home/kahverengi/Projects/blockheads-club/mod-sdk-wt/voice-int/crates/bhmod-manifest" }
 bhmod-proto = { path = "/home/kahverengi/Projects/blockheads-club/mod-sdk-wt/voice-int/crates/bhmod-proto" }
 bhmod-content = { path = "/home/kahverengi/Projects/blockheads-club/mod-sdk-wt/voice-int/crates/bhmod-content" }
+bhmod-voice = { path = "/home/kahverengi/Projects/blockheads-club/mod-sdk-wt/voice-int/crates/bhmod-voice" }

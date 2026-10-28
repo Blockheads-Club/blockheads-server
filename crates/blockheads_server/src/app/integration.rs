@@ -437,6 +437,9 @@ impl WorldCoreHooks for Glue {
         let t = crate::world::tiles::tile_at_world_position_loaded(x, y, &world)?.get();
         Some((crate::world::tiles::wrapped_x(&world, x), t.type_index, t.padding))
     }
+    fn mods_world_width(&self) -> Option<i32> {
+        Some(self.world()?.world_width_macro().wrapping_mul(32))
+    }
     fn mods_set_tile_record(&self, x: i32, y: i32, base: u8, record: &dyn Fn(i32, i32) -> [u8; 16]) -> bool {
         let Some(world) = self.world() else { return false };
         let Some(tile) = crate::world::tiles::tile_at_world_position_loaded(x, y, &world) else { return false };

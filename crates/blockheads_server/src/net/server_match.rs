@@ -524,27 +524,6 @@ impl BhMatch for BhNetServerMatch {
         true
     }
 
-    /// Not in the original: one unsequenced packet on channel 0 to `player`, named as `-sendData:...` names it (the
-    /// persistent id of an approved peer, else its ENet id). False off the main thread, without a host, or when the
-    /// player has no connection.
-    fn send_unsequenced(&self, player: &str, data: &[u8]) -> bool {
-        if std::thread::current().id() != self.main_thread.get() {
-            return false;
-        }
-        let player = player.to_string();
-        let enet = self.persistent_ids_to_enet_ids.borrow().as_ref().and_then(|m| m.get(&player).cloned());
-        let enet = enet.unwrap_or_else(|| player.clone());
-        let named = self.enet_ids_to_persistent_ids.borrow().as_ref().and_then(|m| m.get(&enet).cloned());
-        if named.as_ref().unwrap_or(&enet) != &player {
-            return false;
-        }
-        let peer = self.connections.borrow().as_ref().and_then(|c| c.get(&enet).copied());
-        match (peer, self.host.borrow_mut().as_mut()) {
-            (Some(peer), Some(h)) => h.send_unsequenced(peer, data),
-            _ => false,
-        }
-    }
-
     /// `-loadInfoForPlayer:`: first `playerInfos` dict with that playerID, no creation.
     fn load_info_for_player(&self, player_id: &str) -> Option<PlayerInfo> {
         self.player_infos.borrow().iter().find(|d| dict_player_id(d).as_deref() == Some(player_id)).cloned()
@@ -1174,55 +1153,6 @@ mod tests {
             catch_ns(|| m.send_data_to_players_with_data_mode_error(Some(b"x"), &["a".into()], SendDataMode::Reliable))
                 .unwrap_err();
         assert_eq!(e.name, "Background thread network send");
-    }
-
-    #[test]
-    fn unsequenced_sends_reach_the_named_peer_on_channel_0() {
-        let (m, d, _) = make(args("0"));
-        // Nobody connected yet: nothing to send to.
-        assert!(!m.send_unsequenced("nobody", b"x"));
-        let port = m.local_port().unwrap();
-        let mut c = client(8);
-        c.connect(SocketAddr::from(([127, 0, 0, 1], port)), 8, 0).unwrap();
-        pump(&m, &mut [&mut c], || d.log.borrow().len() == 1);
-        let enet_id = d.log.borrow()[0].split(' ').nth(1).unwrap().to_string();
-        let recv = |c: &mut enet::Host<UdpSocket>| {
-            let mut got = Vec::new();
-            let end = Instant::now() + Duration::from_secs(3);
-            while Instant::now() < end && got.is_empty() {
-                m.poll_net_events();
-                while let Ok(Some(ev)) = c.service() {
-                    if let enet::Event::Receive { channel_id, packet, .. } = ev {
-                        // `kind()` always says Reliable in rusty_enet 0.4; the flags (UNSEQUENCED = 2) are in `Debug`.
-                        got.push((channel_id, format!("{packet:?}").contains("flags: 2,"), packet.data().to_vec()));
-                    }
-                }
-                std::thread::sleep(Duration::from_millis(2));
-            }
-            got
-        };
-        // Before approval the peer is named by its ENet id.
-        assert!(m.send_unsequenced(&enet_id, b"\xbc\x16v1"));
-        let unseq = true;
-        assert_eq!(recv(&mut c), [(0, unseq, b"\xbc\x16v1".to_vec())]);
-        // After approval by its player id; the ENet id no longer names it.
-        let mut cd = new_info_dict();
-        cd.insert("alias".into(), PlistValue::string("Vic"));
-        let info = m.client_player_information_recieved_from_peer(Some(&cd), &enet_id).unwrap();
-        m.client_approved_with_info(&info);
-        let pid = string_from_md5("vic");
-        assert!(!m.send_unsequenced(&enet_id, b"old"));
-        assert!(m.send_unsequenced(&pid, b"\xbc\x16v2"));
-        assert_eq!(recv(&mut c), [(0, unseq, b"\xbc\x16v2".to_vec())]);
-        // Off the main thread: refused (no exception, unlike the reliable path).
-        let other = std::thread::spawn(|| std::thread::current().id()).join().unwrap();
-        let main = m.main_thread.get();
-        m.main_thread.set(other);
-        assert!(!m.send_unsequenced(&pid, b"x"));
-        m.main_thread.set(main);
-        // Without a host (after disconnect) nothing is sent.
-        m.disconnect();
-        assert!(!m.send_unsequenced(&pid, b"x"));
     }
 
     #[test]

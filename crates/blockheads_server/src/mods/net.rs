@@ -12,13 +12,12 @@ use bhmod_core::remote::{RemoteCall, RemoteError};
 use bhmod_core::types::ApiError;
 use bhmod_proto::{
     file_error, hex, Channel, ChannelInfo, ChannelRegister, Cosmetics, FileChunk, FileError, Hash, Message, ModList,
-    PlayerCount, RejectText, ServerHello, ServiceCall, ServiceFailure, ServiceResult, CHUNK_SIZE, MAX_IN_FLIGHT,
-    PACKET_TYPE, PROTO, REJECT_CLIENT_TOO_OLD,
+    PlayerCount, RejectText, ServerHello, ServiceCall, ServiceFailure, ServiceResult, SettingsSet, CHUNK_SIZE,
+    MAX_IN_FLIGHT, PROTO, REJECT_CLIENT_TOO_OLD,
 };
 
 use super::catalog::Catalog;
 use super::content::Content;
-use super::voice::MAX_UNRELIABLE;
 use super::LoaderKey;
 
 /// Most peers downloading at the same time; more get `FILE_ERROR` BUSY.
@@ -45,9 +44,6 @@ pub fn pre_login_text(reason: u8) -> String {
 pub trait Link {
     /// Sends one reliable packet to a peer.
     fn send(&self, peer: &str, packet: Vec<u8>);
-    /// Sends one unreliable, unsequenced packet to a peer (ENet channel 0). True when it was queued. Callers go
-    /// through [`ModNet::send_unreliable`], which checks the packet and the peer first.
-    fn send_unreliable(&self, peer: &str, packet: &[u8]) -> bool;
     /// Rejects a peer that is waiting for approval (`0x26 reason`, then it is no longer waiting).
     fn reject(&self, peer: &str, reason: u8);
     /// True when the peer is approved (in the game).
@@ -67,6 +63,10 @@ pub enum Inbound {
     Call(ServiceCall),
     /// The player's client answers a call of a server mod.
     Result(ServiceResult),
+    /// `VOICE_KEY` or `VOICE_CTRL` for the voice relay (only while the server lists `voice` in `SERVER_HELLO`).
+    Voice(Message),
+    /// `SETTINGS_SET` (only while the server lists `settings` in `SERVER_HELLO`).
+    SettingsSet(SettingsSet),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -84,6 +84,8 @@ struct Peer {
     ready: Option<Hash>,
     /// The mods of `READY.loaded`: the required client mods plus the optional ones the player switched on.
     loaded: Option<BTreeSet<String>>,
+    /// `HELLO.features`: the optional protocol features the client speaks.
+    features: Vec<String>,
 }
 
 /// A vanilla peer held in the limbo until `until`.
@@ -108,6 +110,12 @@ pub struct ModNet {
     wire: BTreeMap<String, u16>,
     /// Vanilla peers shown the readable rejection (not approved, not in the game).
     limbo: Vec<Limbo>,
+    /// The optional features the server serves (`SERVER_HELLO.features`): `voice` while a loaded mod holds the
+    /// voice permission and the voice socket is bound, `settings` while a mod has server settings. Empty: nothing
+    /// new on the wire.
+    pub features: Vec<String>,
+    /// The voice UDP port announced in `SERVER_HELLO` (only with `voice`).
+    pub voice_udp_port: Option<u16>,
 }
 
 impl ModNet {
@@ -124,6 +132,22 @@ impl ModNet {
     /// True when some peer sent `HELLO`.
     pub fn has_peers(&self) -> bool {
         !self.peers.is_empty()
+    }
+
+    /// True when the server serves the optional feature `f` (see [`ModNet::features`]).
+    pub fn serves(&self, f: &str) -> bool {
+        self.features.iter().any(|x| x == f)
+    }
+
+    /// The `HELLO.features` of a modded peer (empty for a vanilla one).
+    pub fn features_of(&self, peer: &str) -> Vec<String> {
+        self.peers.get(peer).map(|p| p.features.clone()).unwrap_or_default()
+    }
+
+    /// True when the client of `peer` listed mod `id` in its `READY` (API 0.3.4 `players.has-mod`): false for a
+    /// vanilla peer and for one that sent no `READY`.
+    pub fn has_mod(&self, peer: &str, id: &str) -> bool {
+        self.peers.get(peer).and_then(|p| p.loaded.as_ref()).is_some_and(|l| l.contains(id))
     }
 
     /// The `acceptedHash` of the peer's `READY`.
@@ -318,17 +342,6 @@ impl ModNet {
         Ok(n)
     }
 
-    /// Sends one unreliable, unsequenced 0xBC packet (a voice frame) to a modded peer in the game. False, and
-    /// nothing sent, when the packet is not 0xBC, is longer than [`MAX_UNRELIABLE`] (ENet would turn it into
-    /// reliable fragments), or the peer has no mod loader or is not in the game.
-    pub fn send_unreliable(&self, link: &dyn Link, peer: &str, packet: &[u8]) -> bool {
-        packet.first() == Some(&PACKET_TYPE)
-            && packet.len() <= MAX_UNRELIABLE
-            && self.is_modded(peer)
-            && link.approved(peer)
-            && link.send_unreliable(peer, packet)
-    }
-
     /// Sends a service call of a server mod to a modded peer in the game (`SERVICE_CALL`). `unavailable` for a peer
     /// without the mod loader, one that is not in the game, or one that is gone.
     pub fn send_service_call(&self, link: &dyn Link, peer: &str, call: &RemoteCall) -> Result<(), RemoteError> {
@@ -413,16 +426,17 @@ impl ModNet {
                 link.reject(peer, REJECT_CLIENT_TOO_OLD);
                 return None;
             }
-            self.peers.insert(peer.to_string(), Peer::default());
+            self.peers.insert(peer.to_string(), Peer { features: h.features.clone(), ..Peer::default() });
+            let voice = self.serves(bhmod_proto::feature::VOICE);
             let reply = ServerHello {
                 proto: PROTO,
                 mods_hash: self.catalog.mods_hash,
                 client_required: self.catalog.client_required,
                 count: self.catalog.entries.len() as u64,
                 players: link.players().map(|(online, capacity)| PlayerCount { online, capacity }),
-                // No optional feature yet (settings and voice ops are not served): nothing new on the wire.
-                features: Vec::new(),
-                voice_udp_port: None,
+                // Empty without a voice or settings mod: nothing new on the wire.
+                features: self.features.clone(),
+                voice_udp_port: self.voice_udp_port.filter(|_| voice),
             };
             link.send(peer, Message::ServerHello(reply).encode());
             return None;
@@ -459,11 +473,16 @@ impl ModNet {
             }
             Message::ServiceCall(c) if link.approved(peer) => return Some(Inbound::Call(c)),
             Message::ServiceResult(r) if link.approved(peer) => return Some(Inbound::Result(r)),
-            // Client CHANNEL_REGISTER (the server owns the id space), server-to-client ops, channel and service
-            // traffic before approval: ignored.
-            // TODO(mod-sdk feat/voice-api): SETTINGS_SCHEMA requests / SETTINGS_SET (admins only, checked with the
-            // server's admin list) once mod-sdk ships a host-agnostic session handler; `ModHost::settings_schema_cbor`
-            // and `set_setting_cbor` already exist. Until then they are ignored like any unknown op.
+            Message::VoiceKey(_) | Message::VoiceCtrl(_)
+                if link.approved(peer) && self.serves(bhmod_proto::feature::VOICE) =>
+            {
+                return Some(Inbound::Voice(msg));
+            }
+            Message::SettingsSet(s) if link.approved(peer) && self.serves(bhmod_proto::feature::SETTINGS) => {
+                return Some(Inbound::SettingsSet(s));
+            }
+            // Client CHANNEL_REGISTER (the server owns the id space), server-to-client ops, channel, service, voice
+            // and settings traffic before approval (or of a feature the server does not serve): ignored.
             _ => {}
         }
         None

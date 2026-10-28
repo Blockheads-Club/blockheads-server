@@ -83,14 +83,34 @@ there is no CLI flag because the help text is frozen. Live tests: `crates/bh_tes
 
 ### Mod settings
 
-`bhmod_core::ModHost` owns mod settings (mod-sdk `docs/settings.md`): `/mod settings <mod>` and
-`/mod set <mod> <key> <value>` (admins from the server's lists and the console; `Bridge::player_role`), hot reload of
-`[<id>.settings]` in `mods.toml` from `poll()` and the `<id>:settings-changed` event. `ServerMods` hands only those two
-forms to the host (`vanilla_mod` in `mods/server_host.rs`): `/mod <player>` and every other `/mod` line stay the
-built-in modlist command. The catalog honours the admin's `client-required` override
-(`bhmod_core::config::client_required`). The host app edits `mods.toml` with `toml_edit` (`mods::edit_config`,
-`bhmod_core::config::write_setting`), so comments and every mod's settings survive on/off and grant changes.
-0xBC `SETTINGS_SCHEMA` / `SETTINGS_SET` are not served yet (`TODO(mod-sdk feat/voice-api)` in `mods/net.rs`).
+`bhmod_core::ModHost` owns mod settings (mod-sdk `docs/settings.md`): `/mods settings <mod>` and
+`/mods set <mod> <key> <value>` go to `ModHost::settings_command` from the server's own `/mods` (admins from the
+server's lists and the console; `Bridge::player_role`); `/mod` is never touched, it stays the built-in modlist command.
+Hot reload of `[<id>.settings]` in `mods.toml` from `poll()` and the `<id>:settings-changed` event. The catalog honours
+the admin's `client-required` override (`bhmod_core::config::client_required`). The host app edits `mods.toml` with
+`toml_edit` (`mods::edit_config`, `bhmod_core::config::write_setting`), so comments and every mod's settings survive
+on/off and grant changes. 0xBC `SETTINGS_SCHEMA` / `SETTINGS_SET` / `SETTINGS_RESULT` go through
+`bhmod_core::netsettings::SettingsNet` (admin check = the server's admin list), only while `settings` is served.
+
+### Voice (API 0.3.4)
+
+Voice frames travel only over the dedicated UDP voice port; control (`VOICE_KEY`, `VOICE_STATE`, `VOICE_CTRL`) stays
+on reliable 0xBC, and an in-band `VOICE_FRAME` (op 0x16) is dropped. `mods/voice.rs` holds the socket and its thread;
+`mods/voice_glue.rs` glues mod-sdk's `bhmod_voice::server::VoiceServer` to it: `VoiceGlue` is `GameBridge::voice`
+(the voice mod's policy; of `set-transport` only the port counts), `UdpGlue` the socket handler (binds a peer to
+the address it authenticated from; reliable output of the UDP thread is queued for the server thread).
+`ServerMods::sync_voice` (at load, after a reload, every poll) binds the socket while a loaded mod holds the `voice`
+permission, on `VoiceGlue::wanted_port`: the mod's non-zero `udp_port`, else `HostConfig.voice.udp_port`, else the
+game port + 1. `SERVER_HELLO.features` lists `voice` (and `voiceUdpPort`) only while the socket is bound; a port that
+cannot be opened is logged once (`voice: UDP port N could not be opened (...); voice chat is off`) and voice stays
+off. No status channel carries the voice port to the host app yet (it sees the log line). `settings` is listed while
+a running mod has server settings: without such mods nothing new goes on the wire. The ENet unsequenced send of the
+earlier in-band design was removed. The bridge also answers `tile_solid` (`tileIsSolid`), `world_width`,
+`platform`, `player_sleeping`, `player_alive` (the player's first blockhead, as `player_pos`) and `player_has_mod`
+(`READY.loaded`); each world step compares the joined players' blockheads with the last step and fires
+`player:sleep|wake|respawn` (read only). The voice mod keeps admin mutes and gains in its own storage. Live test:
+`crates/bh_testclient/tests/voice_mod.rs` (game ports 15490-15499, voice on the next port; the fixture
+`tests/data/mods/voice/voice.wasm` is mod-sdk's `examples/voice-rust` built by `scripts/build-wasm.sh`).
 
 ### The 0xBC mod protocol (server side)
 

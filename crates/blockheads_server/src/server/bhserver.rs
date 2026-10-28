@@ -682,12 +682,6 @@ impl BHServer {
         }
     }
 
-    /// Not in the original: one unreliable, unsequenced packet to one peer (ENet channel 0), for real-time mod
-    /// data. True when it was queued. Only the mod host calls it, so the vanilla path never sends such a packet.
-    pub fn send_unsequenced(&self, peer: &str, data: &[u8]) -> bool {
-        self.node.match_().is_some_and(|m| m.send_unsequenced(peer, data))
-    }
-
     /// `-sendChatMessage:sendToClients:` (BHNetNode 2-argument form). Nil text is a no-op.
     pub fn send_chat_message_send_to_clients<'a>(&self, text: impl Into<Option<&'a str>>, clients: Option<&[String]>) {
         if let Some(t) = text.into() {
@@ -1133,8 +1127,6 @@ pub(crate) mod test_support {
     pub struct MockMatch {
         pub base: BhMatchBase,
         pub sent: RefCell<Vec<(Vec<String>, Vec<u8>)>>,
-        /// Unsequenced packets `(peer, data)`.
-        pub unsequenced: RefCell<Vec<(String, Vec<u8>)>>,
         pub owner: RefCell<Option<String>>,
         pub cloud: Cell<bool>,
         pub salt: RefCell<Option<String>>,
@@ -1156,7 +1148,6 @@ pub(crate) mod test_support {
             Rc::new(MockMatch {
                 base: BhMatchBase::default(),
                 sent: RefCell::new(Vec::new()),
-                unsequenced: RefCell::new(Vec::new()),
                 owner: RefCell::new(None),
                 cloud: Cell::new(false),
                 salt: RefCell::new(None),
@@ -1192,10 +1183,6 @@ pub(crate) mod test_support {
             _mode: SendDataMode,
         ) -> bool {
             self.sent.borrow_mut().push((players.to_vec(), data.unwrap_or(&[]).to_vec()));
-            true
-        }
-        fn send_unsequenced(&self, player: &str, data: &[u8]) -> bool {
-            self.unsequenced.borrow_mut().push((player.to_string(), data.to_vec()));
             true
         }
         fn requires_player_authentication(&self) -> bool {

@@ -461,6 +461,8 @@ fn mods_hooks_give_items_and_edit_tile_records() {
         assert_eq!(W::mods_tile_record(&*f.dead, 5, 9), None);
         let width = f.world.world_width_macro * 32;
         assert_eq!(W::mods_tile_record(&*f.g, 5 - width, 9).map(|r| r.0), Some(5));
+        assert_eq!(W::mods_world_width(&*f.g), Some(width));
+        assert_eq!(W::mods_world_width(&*f.dead), None);
 
         // Setting it changes the block, keeps the bytes and tells the clients; the record gets the wrapped x.
         let seen = std::cell::Cell::new((0, 0));

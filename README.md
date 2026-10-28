@@ -69,8 +69,13 @@ placement, damage, death, movement; placing, breaking and damage can be cancelle
 player), a scheduler, per-world storage (`saves/<world>/mods/storage`, separate from the world database) and
 services, custom events and channels to work with each other (the SDK's `economy` and `landclaim` samples do). They run with a time budget and
 are disabled after repeated faults. Mods that declare settings get a form on their page in the host app and the
-admin commands `/mod settings <mod>` and `/mod set <mod> <key> <value>` (values live under `[<mod>.settings]` in
-`mods.toml` and apply while the server runs; any other `/mod` is still the vanilla modlist command). `client-required =
+admin commands `/mods settings <mod>` and `/mods set <mod> <key> <value>` (values live under `[<mod>.settings]` in
+`mods.toml` and apply while the server runs; `/mod` stays the vanilla modlist command); admins with a modded client
+also get them in the loader's settings screen. A mod with the `voice` permission (the official voice chat mod) turns
+on voice chat for modded players: encrypted voice frames relayed over a dedicated UDP voice port (the mod's
+`udp_port` setting, else `HostConfig.voice.udp_port`, else the game port + 1, so 15152 by default; open it next to
+the game port). If that port cannot be opened the server logs it and voice chat stays off. The server never decodes
+audio. `client-required =
 false` under a mod lets players without that client mod join. Without a mods folder nothing changes: same bytes, saves and output as
 vanilla. Vanilla game clients can join servers with server-side mods.
 

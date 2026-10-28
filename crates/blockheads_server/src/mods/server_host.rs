@@ -2,31 +2,39 @@
 //! storage in a separate LMDB environment (`<world>/mods/storage`), never in the vanilla world database.
 
 use std::cell::RefCell;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::rc::{Rc, Weak};
+use std::sync::Arc;
 use std::time::Instant;
 
 use bhmod_content::Kind;
 use bhmod_core::host::split_command;
-use bhmod_core::host::{ModState, ReloadOutcome};
+use bhmod_core::host::{ModState, PlayerEvent, ReloadOutcome};
+use bhmod_core::netsettings::SettingsNet;
 use bhmod_core::remote::{RemoteCall, RemoteError, RemoteTarget};
 use bhmod_core::storage::{KvBackend, StorageProvider};
 use bhmod_core::types::{
     ApiError, BreakLayer, ChannelSource, ChannelTarget, CommandSender, ContentKind, Event, EventKind, LogLevel,
     ObjectKind, Pos, RejectReason, Role, SavePhase, Side,
 };
+use bhmod_core::voice::VoiceHost;
 use bhmod_core::watch::Watcher;
 use bhmod_core::{GameBridge, HostOptions, ModHost};
 use bhmod_manifest::content::SLOTS;
+use bhmod_manifest::settings::Scope;
+use bhmod_proto::{feature, settings_error, Message, SettingsFailure, SettingsResult};
+use bhmod_voice::server::VoiceServer;
 use bhmod_wasm::{WasmConfig, WasmRuntime};
 
 use super::admin::{self, Reply};
-use super::catalog;
+use super::catalog::{self, Catalog};
 use super::net::{pre_login_text, Inbound, Link, ModNet};
-use super::voice::{self, VoiceOut};
+use super::voice::{self, UdpOut, UdpVoiceHandler};
+use super::voice_glue::{unix_ms, ThreadSink, VoiceGlue};
 use super::{ChatVerdict, LoaderKey, ModHooks, Optional, LIMBO_GRACE};
+use crate::objects::handle::ObjRef;
 use crate::server::bhserver::BHServer;
 use crate::storage::lmdb::{Database, DatabaseEnvironment};
 use crate::types::structs::IntPair;
@@ -78,9 +86,6 @@ impl Link for SrvLink<'_> {
     fn send(&self, peer: &str, packet: Vec<u8>) {
         self.0.send_network_data_to_peers_reliable(packet, &[peer.to_string()], true);
     }
-    fn send_unreliable(&self, peer: &str, packet: &[u8]) -> bool {
-        self.0.send_unsequenced(peer, packet)
-    }
     fn reject(&self, peer: &str, reason: u8) {
         self.send(peer, crate::protocol::messages::rejection(reason));
         self.0.unapproved_clients.borrow_mut().retain(|e| e != peer);
@@ -98,27 +103,79 @@ impl Link for SrvLink<'_> {
     }
 }
 
-/// Where the voice relay sends: unsequenced 0xBC packets to modded players in the game.
-struct VoiceLink<'a> {
-    link: SrvLink<'a>,
-    net: &'a ModNet,
-}
-
-impl VoiceOut for VoiceLink<'_> {
-    fn send(&mut self, peer: &str, packet: &[u8]) -> bool {
-        self.net.send_unreliable(&self.link, peer, packet)
-    }
-}
-
 /// The game as seen by mods.
 pub(super) struct Bridge {
     pub(super) srv: Weak<BHServer>,
     pub(super) net: Rc<RefCell<ModNet>>,
+    pub(super) voice: Rc<VoiceGlue>,
+}
+
+/// The (first) blockhead of a player in the dynamic world: the one `player_pos` reports.
+fn first_blockhead(id: &str) -> Option<ObjRef> {
+    let h = crate::world::lifecycle::core_hooks();
+    h.dynamic_world_all_blockheads_including_net().into_iter().find(|b| h.blockhead_client_id(b).as_deref() == Some(id))
+}
+
+/// A player's blockhead as the `player:*` events see it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Life {
+    /// No blockhead in the world.
+    Gone,
+    /// Dead (regenerating).
+    Dead,
+    /// Alive, asleep or not.
+    Alive { asleep: bool },
+}
+
+fn life_of(id: &str) -> Life {
+    let h = crate::world::lifecycle::core_hooks();
+    match first_blockhead(id) {
+        None => Life::Gone,
+        Some(b) if h.blockhead_regenerating(&b) => Life::Dead,
+        Some(b) => Life::Alive { asleep: h.blockhead_asleep(&b) },
+    }
+}
+
+/// The `player:*` event of a change (read from the world, never changing it).
+fn life_event(before: Life, now: Life) -> Option<PlayerEvent> {
+    match (before, now) {
+        (Life::Dead, Life::Alive { .. }) => Some(PlayerEvent::Respawn),
+        (Life::Alive { asleep: false }, Life::Alive { asleep: true }) => Some(PlayerEvent::Sleep),
+        (Life::Alive { asleep: true }, Life::Alive { asleep: false }) => Some(PlayerEvent::Wake),
+        _ => None,
+    }
+}
+
+/// True while a loaded mod holds the `voice` permission (its server half is in the catalog): the voice socket is
+/// then bound, and `voice` served while it is.
+fn voice_mod_loaded(catalog: &Catalog) -> bool {
+    let server_side = |e: &catalog::Entry| e.info.sides.iter().any(|s| s == "server");
+    catalog.entries.iter().any(|e| e.info.permissions.voice && server_side(e))
+}
+
+/// The game's UDP port (the voice socket defaults to the next one); 15151 without a listening match.
+fn game_port(s: &BHServer) -> u16 {
+    s.node.match_().and_then(|m| m.as_server_match().and_then(|sm| sm.local_port())).unwrap_or(15151)
+}
+
+/// The optional 0xBC features the server serves besides `voice` (see [`ServerMods::sync_voice`]): `settings`
+/// while a running mod has server settings.
+fn served_features(host: &ModHost) -> Vec<String> {
+    let mut f = Vec::new();
+    let running = host.mods().into_iter().filter(|m| !matches!(m.state, ModState::Disabled(_)));
+    if running.into_iter().any(|m| host.settings_form(&m.id, Scope::Server).is_some()) {
+        f.push(feature::SETTINGS.to_string());
+    }
+    f
 }
 
 impl Bridge {
     fn online(&self, s: &BHServer, id: &str) -> bool {
         s.connected_client_ids().iter().any(|c| c == id)
+    }
+
+    fn online_now(&self, id: &str) -> bool {
+        self.srv.upgrade().is_some_and(|s| self.online(&s, id))
     }
 }
 
@@ -189,9 +246,30 @@ impl GameBridge for Bridge {
     }
     fn player_pos(&self, id: &str) -> Option<Pos> {
         // The player's (first) blockhead in the dynamic world.
-        let h = crate::world::lifecycle::core_hooks();
-        let all = h.dynamic_world_all_blockheads_including_net();
-        all.iter().find(|b| h.blockhead_client_id(b).as_deref() == Some(id)).map(|b| pos(b.pos()))
+        first_blockhead(id).map(|b| pos(b.pos()))
+    }
+    fn voice(&self) -> Option<&dyn VoiceHost> {
+        Some(&*self.voice)
+    }
+    fn tile_solid(&self, x: i32, y: i32) -> Option<bool> {
+        // `tileIsSolid`: anything but air, water and snow.
+        let (_, type_index, _) = crate::world::lifecycle::core_hooks().mods_tile_record(x, y)?;
+        Some(!matches!(type_index, 2 | 3 | 5))
+    }
+    fn world_width(&self) -> Option<i32> {
+        crate::world::lifecycle::core_hooks().mods_world_width()
+    }
+    fn platform(&self) -> String {
+        format!("server-{}-{}", std::env::consts::OS, std::env::consts::ARCH)
+    }
+    fn player_sleeping(&self, id: &str) -> bool {
+        self.online_now(id) && life_of(id) == Life::Alive { asleep: true }
+    }
+    fn player_alive(&self, id: &str) -> bool {
+        self.online_now(id) && matches!(life_of(id), Life::Alive { .. })
+    }
+    fn player_has_mod(&self, id: &str, mod_id: &str) -> bool {
+        self.online_now(id) && self.net.borrow().has_mod(id, mod_id)
     }
     fn content_id(&self, kind: ContentKind, key: &str) -> Option<u64> {
         self.net.borrow().content.id(registry_kind(kind), key)
@@ -331,15 +409,6 @@ fn mods_args(line: &str) -> Option<Vec<String>> {
     split_command(line).filter(|(name, _)| name == "mods").map(|(_, args)| args)
 }
 
-/// True for a `/mod` line that is not the host's `/mod settings <mod>` or `/mod set <mod> <key> <value>`: those stay the
-/// built-in `/MOD player_name` (adds a player to the modlist), so mods never change what vanilla `/mod` does.
-fn vanilla_mod(line: &str) -> bool {
-    split_command(line).is_some_and(|(name, args)| {
-        let host = args.len() >= 2 && (args[0] == "settings" || args[0] == "set");
-        name == bhmod_core::host::MOD_COMMAND && !host
-    })
-}
-
 /// The installed host.
 struct ServerMods {
     host: RefCell<ModHost>,
@@ -350,18 +419,152 @@ struct ServerMods {
     dir: PathBuf,
     /// The developer file watcher (`BLOCKHEADS_MODS_WATCH`).
     watch: RefCell<Option<Watcher>>,
+    /// The voice relay (idle unless the server serves `voice`).
+    voice: Rc<VoiceGlue>,
+    /// The voice socket's handler.
+    udp: Arc<dyn UdpVoiceHandler>,
+    /// Admins' settings screens (0xBC `SETTINGS_*`).
+    settings: RefCell<SettingsNet>,
+    /// Each joined player's blockhead, for `player:sleep|wake|respawn`.
+    life: RefCell<BTreeMap<String, Life>>,
 }
 
 impl ServerMods {
     fn bridge(&self) -> Bridge {
-        Bridge { srv: self.srv.clone(), net: self.net.clone() }
+        Bridge { srv: self.srv.clone(), net: self.net.clone(), voice: self.voice.clone() }
+    }
+
+    fn is_admin(&self, player: &str) -> bool {
+        self.bridge().player_role(player) >= Role::Admin
+    }
+
+    fn serves(&self, f: &str) -> bool {
+        self.net.borrow().serves(f)
+    }
+
+    /// Runs `f` with the voice output of the server thread: reliable packets to modded players in the game,
+    /// datagrams on the voice socket. Nothing without a server. Not generic: one copy of the code for every caller.
+    fn voice_io(&self, f: &mut dyn FnMut(&mut ThreadSink<'_>)) {
+        let Some(s) = self.srv.upgrade() else { return };
+        let link = SrvLink(&s);
+        let net = self.net.borrow();
+        let mut send = |p: &str, packet: Vec<u8>| {
+            if net.is_modded(p) && link.approved(p) {
+                link.send(p, packet);
+            }
+        };
+        let udp = voice::udp_sender();
+        let mut sink =
+            ThreadSink { send: &mut send, bound: self.voice.bound(), udp: udp.as_ref().map(|u| u as &dyn UdpOut) };
+        f(&mut sink);
+    }
+
+    /// Binds, moves or closes the voice socket: bound while a voice mod is loaded, on
+    /// [`VoiceGlue::wanted_port`]. `voice` is served (and its port announced) only while the socket is bound; a
+    /// port that cannot be opened is logged once and voice chat stays off.
+    fn sync_voice(&self) {
+        let Some(s) = self.srv.upgrade() else { return };
+        let cfg = voice::config();
+        let wanted = voice_mod_loaded(&self.net.borrow().catalog);
+        let want = wanted.then(|| self.voice.wanted_port(cfg.udp_port, game_port(&s)));
+        // An embedder's relay (HostConfig.voice) wins over the built-in one.
+        let handler = cfg.udp_handler.unwrap_or_else(|| self.udp.clone());
+        let warning = self.voice.sync_udp(
+            want,
+            &mut |p| voice::open_udp(p, Some(handler.clone())).map_err(|e| e.to_string()),
+            &mut voice::close_udp,
+        );
+        if let Some(w) = warning {
+            // TODO(host app): no status channel carries the voice port yet; the app sees this log line.
+            GameBridge::log(&self.bridge(), None, LogLevel::Warn, &w);
+        }
+        let port = self.voice.udp_port().filter(|_| wanted);
+        let mut net = self.net.borrow_mut();
+        net.voice_udp_port = port;
+        net.features.retain(|f| f != feature::VOICE);
+        if port.is_some() {
+            net.features.insert(0, feature::VOICE.to_string());
+        }
+    }
+
+    /// The voice part of a poll: the voice socket, packets of the UDP thread, the relay's tick and its events for
+    /// the mods.
+    fn voice_poll(&self) {
+        self.sync_voice();
+        if !self.serves(feature::VOICE) {
+            return;
+        }
+        let queued = self.voice.drain();
+        let now = unix_ms();
+        let mut queued = Some(queued);
+        self.voice_io(&mut |sink| {
+            for (p, packet) in queued.take().unwrap_or_default() {
+                bhmod_voice::server::ServerSink::reliable(sink, &p, packet);
+            }
+            self.voice.server.lock().tick(now, sink);
+        });
+        self.with((), |h| {
+            for e in self.voice.take_events() {
+                h.voice_event(&e);
+            }
+        });
+    }
+
+    /// The settings part of a poll: fresh `SETTINGS_SCHEMA`s for admins.
+    fn settings_poll(&self) {
+        if !self.serves(feature::SETTINGS) {
+            return;
+        }
+        let is_admin = |p: &str| self.is_admin(p);
+        let out = self.with(Vec::new(), |h| self.settings.borrow_mut().refresh(h, &is_admin));
+        self.send_all(out);
+    }
+
+    fn send_all(&self, packets: Vec<(String, Vec<u8>)>) {
+        let Some(s) = self.srv.upgrade() else { return };
+        for (p, packet) in packets {
+            SrvLink(&s).send(&p, packet);
+        }
+    }
+
+    /// One world step: `player:sleep`, `player:wake` and `player:respawn` from the blockheads of the joined players.
+    fn life_events(&self) {
+        let mut fire = Vec::new();
+        {
+            let joined = self.joined.borrow();
+            let mut life = self.life.borrow_mut();
+            for p in joined.iter() {
+                let now = life_of(p);
+                if let Some(e) = life.insert(p.clone(), now).and_then(|before| life_event(before, now)) {
+                    fire.push((e, p.clone()));
+                }
+            }
+        }
+        if !fire.is_empty() {
+            self.with((), |h| {
+                for (e, p) in fire {
+                    h.player_event(e, &p);
+                }
+            });
+        }
+    }
+
+    /// The optional features to serve after the mods changed.
+    fn refresh_features(&self) {
+        if let Some(f) = self.with(None, |h| Some(served_features(h))) {
+            self.net.borrow_mut().features = f;
+        }
+        self.sync_voice();
     }
 
     /// `/mods ...` from the console or a player: admins only.
     fn mods_command(&self, issuer: Option<&str>, args: &[String]) {
         let allowed = issuer.is_none_or(|p| self.bridge().player_role(p) >= Role::Admin);
         let reply = if allowed {
-            let reply = self.with(Reply::busy(), |h| admin::run(h, args));
+            let reply = self.with(Reply::busy(), |h| match h.settings_command(true, args) {
+                Some(lines) => Reply { lines, changed: false },
+                None => admin::run(h, args),
+            });
             if reply.changed {
                 self.refresh_catalog();
             }
@@ -386,6 +589,7 @@ impl ServerMods {
         let bridge = self.bridge();
         let catalog = catalog::build(&self.dir, &running, &mut |m| GameBridge::log(&bridge, None, LogLevel::Warn, &m));
         self.net.borrow_mut().catalog = catalog;
+        self.refresh_features();
     }
 
     /// The developer watcher found a change: reload what changed and log it.
@@ -442,6 +646,17 @@ impl ModHooks for ServerMods {
         self.joined.borrow_mut().insert(player_id.to_string());
         if let Some(s) = self.srv.upgrade() {
             self.net.borrow().cosmetics_full(&SrvLink(&s), player_id);
+            let features = self.net.borrow().features_of(player_id);
+            if self.serves(feature::VOICE) {
+                let alias = s.player_alias_for_peer_id(Some(player_id)).unwrap_or_default();
+                self.voice.join(player_id, &alias, &features);
+            }
+            if self.serves(feature::SETTINGS) {
+                let admin = self.is_admin(player_id);
+                let packets =
+                    self.with(Vec::new(), |h| self.settings.borrow_mut().join(h, player_id, admin, &features));
+                self.send_all(packets.into_iter().map(|p| (player_id.to_string(), p)).collect());
+            }
         }
         self.with((), |h| {
             h.fire(Event::PlayerJoin { player: player_id.to_string() });
@@ -451,6 +666,9 @@ impl ModHooks for ServerMods {
         if !self.joined.borrow_mut().remove(player_id) {
             return;
         }
+        self.voice.leave(player_id);
+        self.settings.borrow_mut().leave(player_id);
+        self.life.borrow_mut().remove(player_id);
         if let Some(s) = self.srv.upgrade() {
             self.net.borrow_mut().player_left(&SrvLink(&s), player_id);
         }
@@ -468,12 +686,9 @@ impl ModHooks for ServerMods {
         })
     }
     fn owns_command(&self, line: &str) -> bool {
-        !vanilla_mod(line) && (mods_args(line).is_some() || self.with(false, |h| h.owns_command(line)))
+        mods_args(line).is_some() || self.with(false, |h| h.owns_command(line))
     }
     fn command(&self, issuer: Option<&str>, line: &str) -> bool {
-        if vanilla_mod(line) {
-            return false;
-        }
         if let Some(args) = mods_args(line) {
             self.mods_command(issuer, &args);
             return true;
@@ -488,6 +703,7 @@ impl ModHooks for ServerMods {
     }
     fn tick(&self, dt: f32) {
         self.with((), |h| h.tick(dt));
+        self.life_events();
     }
     fn poll(&self) {
         self.with((), |h| h.poll());
@@ -495,6 +711,8 @@ impl ModHooks for ServerMods {
             self.watched_reload();
         }
         self.drop_expired_limbo(Instant::now());
+        self.voice_poll();
+        self.settings_poll();
         if !self.net.borrow().has_peers() {
             return;
         }
@@ -507,15 +725,7 @@ impl ModHooks for ServerMods {
     }
     fn mod_packet(&self, peer: &str, data: &[u8]) {
         let Some(s) = self.srv.upgrade() else { return };
-        // Voice frames take the fast path: straight to the relay, no mod is asked; without one they are dropped
-        // like any unknown op.
-        if data.get(1) == Some(&voice::VOICE_FRAME) {
-            let net = self.net.borrow();
-            if net.is_modded(peer) && SrvLink(&s).approved(peer) {
-                voice::dispatch(peer, &data[2..], &mut VoiceLink { link: SrvLink(&s), net: &net });
-            }
-            return;
-        }
+        // An in-band VOICE_FRAME is dropped by `ModNet::packet` (frames go over the voice socket only).
         let names = self.with(Vec::new(), |h| h.channel_names());
         let inbound = self.net.borrow_mut().packet(&SrvLink(&s), peer, data, &names);
         let from = RemoteTarget::Player(peer.to_string());
@@ -541,6 +751,21 @@ impl ModHooks for ServerMods {
             Some(Inbound::Result(r)) => {
                 let outcome = r.outcome.map_err(RemoteError::from);
                 self.with(false, |h| h.remote_result(&from, r.id, outcome));
+            }
+            Some(Inbound::Voice(m)) => {
+                let now = unix_ms();
+                self.voice_io(&mut |sink| self.voice.server.lock().receive(now, peer, &m, sink));
+            }
+            Some(Inbound::SettingsSet(set)) => {
+                let admin = self.is_admin(peer);
+                let packet =
+                    self.with(None, |h| Some(self.settings.borrow_mut().receive_set(h, peer, admin, &set, unix_ms())));
+                let packet = packet.unwrap_or_else(|| {
+                    let outcome = Err(SettingsFailure { code: settings_error::BUSY, message: None });
+                    Message::SettingsResult(SettingsResult { outcome, mod_id: Some(set.mod_id), key: Some(set.key) })
+                        .encode()
+                });
+                SrvLink(&s).send(peer, packet);
             }
             None => {}
         }
@@ -677,7 +902,8 @@ pub(super) fn load(dir: &Path, save_id: Option<&str>, server: &Rc<BHServer>) -> 
     let world_dir = PathBuf::from(crate::foundation::paths::save_dir(save_id.unwrap_or("(null)")));
     opts.storage = Box::new(LmdbStorage::new(world_dir.join("mods/storage")));
     let net = Rc::new(RefCell::new(ModNet::default()));
-    let bridge = Rc::new(Bridge { srv: Rc::downgrade(server), net: net.clone() });
+    let glue = Rc::new(VoiceGlue::new(VoiceServer::new()));
+    let bridge = Rc::new(Bridge { srv: Rc::downgrade(server), net: net.clone(), voice: glue.clone() });
     #[cfg(feature = "jvm")]
     for (level, note) in &notes {
         GameBridge::log(&*bridge, None, *level, note);
@@ -703,20 +929,28 @@ pub(super) fn load(dir: &Path, save_id: Option<&str>, server: &Rc<BHServer>) -> 
         GameBridge::log(&*bridge, None, LogLevel::Error, &m)
     });
     super::set_tables(content.tables(super::variant_blocks_enabled()));
+    net.borrow_mut().features = served_features(&host);
     net.borrow_mut().catalog = catalog;
     net.borrow_mut().content = content;
     let watch = super::watch_enabled().then(|| Watcher::new(dir));
     if watch.is_some() {
         GameBridge::log(&*bridge, None, LogLevel::Info, "watching the mods directory: changed mods are reloaded");
     }
-    Some(Rc::new(ServerMods {
+    let sm = Rc::new(ServerMods {
         host: RefCell::new(host),
         srv: Rc::downgrade(server),
         joined: RefCell::new(BTreeSet::new()),
         net,
         dir: dir.to_path_buf(),
         watch: RefCell::new(watch),
-    }))
+        udp: Arc::new(glue.udp_handler()),
+        voice: glue,
+        settings: RefCell::default(),
+        life: RefCell::default(),
+    });
+    // The voice socket is bound before any client says HELLO.
+    sm.sync_voice();
+    Some(sm)
 }
 
 #[cfg(test)]
@@ -728,7 +962,7 @@ mod tests {
 
     #[test]
     fn bridge_without_a_server() {
-        let b = Bridge { srv: Weak::new(), net: Rc::default() };
+        let b = Bridge { srv: Weak::new(), net: Rc::default(), voice: Rc::default() };
         assert_eq!(b.side(), Side::Server);
         assert!(b.host_name().starts_with("blockheads-server "));
         assert!(b.online_players().is_empty());
@@ -760,7 +994,7 @@ mod tests {
 
     #[test]
     fn content_bridge_without_a_server() {
-        let b = Bridge { srv: Weak::new(), net: Rc::default() };
+        let b = Bridge { srv: Weak::new(), net: Rc::default(), voice: Rc::default() };
         b.net.borrow_mut().content = crate::mods::content::Content {
             wire: [("cosmetics".to_string(), [("hats:crown".to_string(), 1u64)].into())].into(),
             cosmetics: [(1, "hat".to_string())].into(),
@@ -783,9 +1017,6 @@ mod tests {
 
     impl Link for Waiting {
         fn send(&self, _: &str, _: Vec<u8>) {}
-        fn send_unreliable(&self, _: &str, _: &[u8]) -> bool {
-            false
-        }
         fn reject(&self, _: &str, _: u8) {}
         fn approved(&self, _: &str) -> bool {
             false
@@ -804,12 +1035,11 @@ mod tests {
         // The stand-in link: nobody is approved, everybody is alive, rejections are swallowed.
         assert!(Waiting.alive("x") && !Waiting.approved("x"));
         Waiting.reject("x", 3);
-        assert!(!Waiting.send_unreliable("x", b""));
         let h = Harness::new("m_svc_player");
         let mods = installed(&h, false);
         mods.0.world_loaded("World", "w");
         let pid = h.join("Sam");
-        let bridge = Bridge { srv: Rc::downgrade(&h.srv), net: mods.0.net.clone() };
+        let bridge = mods.0.bridge();
         let call = RemoteCall {
             id: 1,
             target: RemoteTarget::Player(pid.clone()),
@@ -880,63 +1110,10 @@ mod tests {
     }
 
     #[test]
-    fn voice_frames_take_the_fast_path_to_the_relay() {
-        use crate::mods::voice::{self, VoiceOut, VoiceSink, VOICE_FRAME};
-        use bhmod_proto::{Hello, Message};
-        /// Relays every frame back to its speaker and to a vanilla player, and records the outcomes.
-        struct Back(Rc<RefCell<Vec<(String, Vec<u8>, bool, bool)>>>, String);
-        impl VoiceSink for Back {
-            fn frame(&mut self, peer: &str, body: &[u8], out: &mut dyn VoiceOut) {
-                let mut p = vec![0xbc, VOICE_FRAME];
-                p.extend_from_slice(body);
-                let to_speaker = out.send(peer, &p);
-                let to_vanilla = out.send(&self.1, &p);
-                self.0.borrow_mut().push((peer.to_string(), body.to_vec(), to_speaker, to_vanilla));
-            }
-        }
-        let h = Harness::new("m_voice_fast");
-        let mods = installed(&h, false);
-        mods.0.world_loaded("World", "w");
-        let pid = h.join("Sam");
-        let vanilla = h.join("Van");
-        let frame = [0xbc, VOICE_FRAME, 1, 2, 3];
-        // No relay: dropped, nothing sent either way.
-        voice::set_sink(None);
-        h.m.clear();
-        mods.0.mod_packet(&pid, &frame);
-        assert!(h.m.sent.borrow().is_empty() && h.m.unsequenced.borrow().is_empty());
-        let seen = Rc::new(RefCell::new(Vec::new()));
-        voice::set_sink(Some(Box::new(Back(seen.clone(), vanilla.clone()))));
-        // A player without the mod loader reaches no relay.
-        mods.0.mod_packet(&pid, &frame);
-        assert!(seen.borrow().is_empty());
-        let hello = Message::Hello(Hello {
-            proto: 1,
-            loader: "0.1.0".into(),
-            platform: "pc-linux-x86_64".into(),
-            api: "0.3.1".into(),
-            runtimes: vec![],
-            cached: vec![],
-            features: vec![],
-        });
-        mods.0.net.borrow_mut().packet(&Waiting, &pid, &hello.encode(), &[]);
-        mods.0.net.borrow_mut().packet(&Waiting, "waiting", &hello.encode(), &[]);
-        // Modded but not in the game: no relay either.
-        mods.0.mod_packet("waiting", &frame);
-        assert!(seen.borrow().is_empty());
-        // Modded and in the game: the relay gets the body; the echo leaves unsequenced, the vanilla copy does not.
-        mods.0.mod_packet(&pid, &frame);
-        assert_eq!(*seen.borrow(), [(pid.clone(), vec![1, 2, 3], true, false)]);
-        assert_eq!(*h.m.unsequenced.borrow(), [(pid.clone(), frame.to_vec())]);
-        assert!(h.m.sent.borrow().is_empty(), "nothing reliable");
-        voice::set_sink(None);
-    }
-
-    #[test]
     fn cosmetics_are_set_for_an_online_player() {
         let h = Harness::new("m_bridge_cosmetics");
         let pid = h.join("Ann");
-        let b = Bridge { srv: Rc::downgrade(&h.srv), net: Rc::default() };
+        let b = Bridge { srv: Rc::downgrade(&h.srv), net: Rc::default(), voice: Rc::default() };
         b.net.borrow_mut().content = crate::mods::content::Content {
             wire: [("cosmetics".to_string(), [("hats:crown".to_string(), 1u64)].into())].into(),
             cosmetics: [(1, "hat".to_string())].into(),
@@ -965,6 +1142,9 @@ mod tests {
             let (ty, pad) = (*self.tile.borrow())?;
             Some((x.rem_euclid(1024), ty, pad))
         }
+        fn mods_world_width(&self) -> Option<i32> {
+            Some(1024)
+        }
         fn mods_set_tile_record(&self, x: i32, y: i32, base: u8, record: &dyn Fn(i32, i32) -> [u8; 16]) -> bool {
             if y < 0 {
                 return false;
@@ -979,7 +1159,7 @@ mod tests {
         use crate::mods::{set_config, set_tables, ModsConfig};
         let h = Harness::new("m_bridge_items");
         let pid = h.join("Ann");
-        let b = Bridge { srv: Rc::downgrade(&h.srv), net: Rc::default() };
+        let b = Bridge { srv: Rc::downgrade(&h.srv), net: Rc::default(), voice: Rc::default() };
         let world = Rc::new(World { has_blockhead: true, ..World::default() });
         crate::world::lifecycle::set_core_hooks(world.clone());
 
@@ -1029,7 +1209,7 @@ mod tests {
     #[test]
     fn busy_host_returns_defaults() {
         let tmp = tempfile::tempdir().unwrap();
-        let bridge = Rc::new(Bridge { srv: Weak::new(), net: Rc::default() });
+        let bridge = Rc::new(Bridge { srv: Weak::new(), net: Rc::default(), voice: Rc::default() });
         let host = ModHost::load(HostOptions::new(tmp.path(), Side::Server), bridge);
         let sm = ServerMods {
             host: RefCell::new(host),
@@ -1038,6 +1218,10 @@ mod tests {
             net: Rc::default(),
             dir: tmp.path().to_path_buf(),
             watch: RefCell::new(None),
+            voice: Rc::default(),
+            udp: Arc::new(VoiceGlue::default().udp_handler()),
+            settings: RefCell::default(),
+            life: RefCell::default(),
         };
         let _busy = sm.host.borrow_mut();
         assert_eq!(sm.chat("p", "x"), ChatVerdict::Keep);
@@ -1079,7 +1263,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let net = Rc::new(RefCell::new(ModNet::default()));
         net.borrow_mut().catalog.client_required = client_required;
-        let bridge = Rc::new(Bridge { srv: Rc::downgrade(&h.srv), net: net.clone() });
+        let glue = Rc::new(VoiceGlue::default());
+        let bridge = Rc::new(Bridge { srv: Rc::downgrade(&h.srv), net: net.clone(), voice: glue.clone() });
         let host = ModHost::load(HostOptions::new(tmp.path(), Side::Server), bridge);
         let sm = Rc::new(ServerMods {
             host: RefCell::new(host),
@@ -1088,6 +1273,10 @@ mod tests {
             net,
             dir: tmp.path().to_path_buf(),
             watch: RefCell::new(None),
+            udp: Arc::new(glue.udp_handler()),
+            voice: glue,
+            settings: RefCell::default(),
+            life: RefCell::default(),
         });
         crate::mods::install(Some(sm.clone()));
         Installed(sm, tmp)
@@ -1104,9 +1293,9 @@ mod tests {
         write_lua_mod(mods.1.path(), "alpha", "1.0.0", main);
         let pid = h.join("Sam");
         assert!(sm.owns_command("/MODS reload") && sm.owns_command("/mods"));
-        // `/mod settings <mod>` and `/mod set ...` are the host's; any other `/mod` is the built-in modlist command.
-        assert!(sm.owns_command("/mod settings alpha") && sm.owns_command("/mod set alpha k v"));
-        assert!(!sm.owns_command("/mod") && !sm.owns_command("/mod tom") && !sm.owns_command("/MOD settings"));
+        // `/mods settings|set` are the host's; `/mod` is always the built-in modlist command.
+        assert!(sm.owns_command("/mods settings alpha") && sm.owns_command("/mods set alpha k v"));
+        assert!(!sm.owns_command("/mod") && !sm.owns_command("/mod tom") && !sm.owns_command("/mod settings alpha"));
         // A player who is not an admin is refused and nothing happens.
         h.m.clear();
         assert!(sm.command(Some(&pid), "/mods reload"));
@@ -1161,15 +1350,15 @@ mod tests {
         // A player who is not an admin cannot change it; the built-in `/mod tom` is not taken over.
         let pid = h.join("Sam");
         h.m.clear();
-        assert!(sm.command(Some(&pid), "/mod set knobs radius 64"));
+        assert!(sm.command(Some(&pid), "/mods set knobs radius 64"));
         assert!(!h.m.packets_to(&pid).is_empty(), "the refusal reached the player");
         assert!(!sm.command(Some(&pid), "/mod tom") && !sm.command(None, "/mod tom"));
         assert!(sm.command(None, "/radius"));
         assert_eq!(last(1), ["32 0"]);
         // An admin from the server's admin list can; the mod hears about it and mods.toml keeps the value.
         *h.srv.admin_list.borrow_mut() = Some(vec!["Sam".to_string()]);
-        assert!(sm.command(Some(&pid), "/mod set knobs radius 64"));
-        assert!(sm.command(None, "/mod settings knobs"));
+        assert!(sm.command(Some(&pid), "/mods set knobs radius 64"));
+        assert!(sm.command(None, "/mods settings knobs"));
         assert_eq!(last(2), ["knobs settings:", "radius = 64"]);
         assert!(sm.command(None, "/radius"));
         assert_eq!(last(1), ["64 1"]);
@@ -1319,6 +1508,316 @@ mod tests {
         let mods = installed(&h, true);
         assert!(!mods.0.limbo_join("e", "p", Some(&LoaderKey::default())));
         assert!(!mods.0.limbo_packet("p"));
+    }
+
+    const PACKET_TYPE_TEST: u8 = bhmod_proto::PACKET_TYPE;
+
+    /// Queues reliable output as the UDP thread would.
+    fn queue(g: &VoiceGlue, items: impl IntoIterator<Item = (String, Vec<u8>)>) {
+        g.queue_for_test(items);
+    }
+
+    fn hello_with(features: &[&str]) -> Vec<u8> {
+        bhmod_proto::Message::Hello(bhmod_proto::Hello {
+            proto: 1,
+            loader: "0.1.0".into(),
+            platform: "pc-linux-x86_64".into(),
+            api: "0.3.4".into(),
+            runtimes: vec!["lua".into()],
+            cached: vec![],
+            features: features.iter().map(|f| f.to_string()).collect(),
+        })
+        .encode()
+    }
+
+    #[test]
+    fn voice_terrain_and_life_through_the_bridge() {
+        use crate::world::lifecycle::testkit::{Bh, Rec};
+        let h = Harness::new("m_bridge_voice");
+        let pid = h.join("Ann");
+        let b = Bridge { srv: Rc::downgrade(&h.srv), net: Rc::default(), voice: Rc::default() };
+        assert!(b.platform().starts_with("server-"));
+        assert_eq!(b.voice().unwrap().state(&pid), Ok(bhmod_core::voice::VoiceState::None));
+        // Terrain: solid unless air, water or snow; unloaded tiles are unknown.
+        let world = Rc::new(World::default());
+        crate::world::lifecycle::set_core_hooks(world.clone());
+        assert_eq!(b.tile_solid(1, 2), None);
+        *world.tile.borrow_mut() = Some((2, [0; 16]));
+        assert_eq!(b.tile_solid(1, 2), Some(false));
+        *world.tile.borrow_mut() = Some((11, [0; 16]));
+        assert_eq!(b.tile_solid(1, 2), Some(true));
+        assert_eq!(b.world_width(), Some(1024));
+        // Life: from the player's blockhead.
+        let rec = Rc::new(Rec::default());
+        crate::world::lifecycle::set_core_hooks(rec.clone());
+        assert!(!b.player_alive(&pid) && !b.player_sleeping(&pid));
+        assert_eq!(life_of(&pid), Life::Gone);
+        let o = crate::world::helpers::testutil::new_obj();
+        o.base().borrow_mut().unique_id = 7;
+        rec.bh.borrow_mut().insert(7, Bh { client_id: Some(pid.clone()), ..Bh::default() });
+        rec.blockheads.borrow_mut().push(o);
+        assert!(b.player_alive(&pid) && !b.player_sleeping(&pid));
+        assert!(b.player_pos(&pid).is_some());
+        rec.bh.borrow_mut().get_mut(&7).unwrap().asleep = true;
+        assert!(b.player_alive(&pid) && b.player_sleeping(&pid));
+        rec.bh.borrow_mut().get_mut(&7).unwrap().regenerating = true;
+        assert!(!b.player_alive(&pid) && !b.player_sleeping(&pid));
+        assert_eq!(life_of(&pid), Life::Dead);
+        // Players who are not online are neither.
+        assert!(!b.player_alive("nobody") && !b.player_sleeping("nobody") && !b.player_has_mod("nobody", "m"));
+        assert!(!b.player_has_mod(&pid, "m"));
+        crate::world::lifecycle::set_core_hooks(Rc::new(crate::world::lifecycle::NullCoreHooks));
+        // The events of each change.
+        let (gone, dead) = (Life::Gone, Life::Dead);
+        let (up, asleep) = (Life::Alive { asleep: false }, Life::Alive { asleep: true });
+        assert_eq!(life_event(dead, up), Some(PlayerEvent::Respawn));
+        assert_eq!(life_event(dead, asleep), Some(PlayerEvent::Respawn));
+        assert_eq!(life_event(up, asleep), Some(PlayerEvent::Sleep));
+        assert_eq!(life_event(asleep, up), Some(PlayerEvent::Wake));
+        assert_eq!(life_event(gone, up), None);
+        assert_eq!(life_event(up, dead), None);
+        assert_eq!(life_event(up, up), None);
+    }
+
+    #[test]
+    fn sleep_wake_and_respawn_reach_the_mods() {
+        use crate::mods::admin::tests::write_lua_mod;
+        use crate::world::lifecycle::testkit::{Bh, Rec};
+        let h = Harness::new("m_life_events");
+        let mods = installed(&h, false);
+        let sm = &mods.0;
+        sm.world_loaded("World", "w");
+        let main = "local seen = {}\n\
+            return { on_enable = function()\n\
+            for _, n in ipairs({'sleep', 'wake', 'respawn'}) do\n\
+              bh.events.on_custom('player:' .. n, function() table.insert(seen, n) end)\n\
+            end\n\
+            bh.commands.register({ name = 'life' }, function() return table.concat(seen, ',') end)\n\
+            end }";
+        write_lua_mod(mods.1.path(), "life", "1.0.0", main);
+        assert!(sm.command(None, "/mods reload"));
+        let rec = Rc::new(Rec::default());
+        crate::world::lifecycle::set_core_hooks(rec.clone());
+        let pid = h.join("Ann");
+        sm.player_join(&pid);
+        let o = crate::world::helpers::testutil::new_obj();
+        o.base().borrow_mut().unique_id = 3;
+        rec.bh.borrow_mut().insert(3, Bh { client_id: Some(pid.clone()), ..Bh::default() });
+        rec.blockheads.borrow_mut().push(o);
+        let said = |h: &Harness| {
+            assert!(sm.command(None, "/life"));
+            h.d.messages().last().cloned().unwrap_or_default()
+        };
+        sm.tick(0.2);
+        assert_eq!(said(&h), "", "the first sight of a blockhead is no event");
+        let set = |f: &dyn Fn(&mut Bh)| f(rec.bh.borrow_mut().get_mut(&3).unwrap());
+        set(&|b| b.asleep = true);
+        sm.tick(0.2);
+        set(&|b| b.asleep = false);
+        sm.tick(0.2);
+        set(&|b| b.regenerating = true);
+        sm.tick(0.2);
+        set(&|b| b.regenerating = false);
+        sm.tick(0.2);
+        sm.tick(0.2);
+        assert_eq!(said(&h), "sleep,wake,respawn");
+        // A player who left is forgotten.
+        sm.player_quit(&pid, false);
+        assert!(sm.life.borrow().is_empty());
+        crate::world::lifecycle::set_core_hooks(Rc::new(crate::world::lifecycle::NullCoreHooks));
+    }
+
+    #[test]
+    fn an_embedders_udp_handler_wins_over_the_built_in_one() {
+        use std::sync::mpsc;
+        struct Seen(std::sync::Mutex<mpsc::Sender<Vec<u8>>>);
+        impl UdpVoiceHandler for Seen {
+            fn datagram(&self, _: std::net::SocketAddr, data: &[u8], _: &dyn UdpOut) {
+                let _ = self.0.lock().unwrap().send(data.to_vec());
+            }
+        }
+        let h = Harness::new("m_voice_embedder");
+        let mods = installed(&h, false);
+        let sm = &mods.0;
+        let (tx, rx) = mpsc::channel();
+        let handler: Arc<dyn UdpVoiceHandler> = Arc::new(Seen(std::sync::Mutex::new(tx)));
+        voice::set_config(voice::VoiceConfig { udp_port: Some(0), udp_handler: Some(handler) });
+        voice_catalog(sm, true);
+        sm.poll();
+        let port = voice::udp_port().expect("bound");
+        let c = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        c.send_to(b"to the embedder", ("127.0.0.1", port)).unwrap();
+        assert_eq!(rx.recv_timeout(std::time::Duration::from_secs(3)).unwrap(), b"to the embedder");
+        voice::stop();
+        voice::set_config(voice::VoiceConfig::default());
+    }
+
+    /// Pretends a mod with the `voice` permission is (or is no longer) loaded, as a reload would.
+    fn voice_catalog(sm: &ServerMods, on: bool) {
+        let info = bhmod_proto::ModInfo {
+            id: "talk".into(),
+            version: "1.0.0".into(),
+            name: Default::default(),
+            description: Default::default(),
+            sides: vec!["server".into()],
+            client_required: false,
+            sha256: [0; 32],
+            size: 0,
+            permissions: bhmod_proto::ModPermissions { voice: on, ..Default::default() },
+            source_url: None,
+            index_listed: false,
+        };
+        sm.net.borrow_mut().catalog.entries = vec![catalog::Entry { info, bytes: None }];
+    }
+
+    #[test]
+    fn the_voice_socket_follows_the_voice_mod() {
+        let h = Harness::new("m_voice_socket");
+        let mods = installed(&h, false);
+        let sm = &mods.0;
+        // No voice mod: no socket, no feature.
+        voice::set_config(voice::VoiceConfig { udp_port: Some(0), udp_handler: None });
+        sm.poll();
+        assert_eq!(voice::udp_port(), None);
+        assert!(!sm.serves(feature::VOICE));
+        // A voice mod: bound, served, announced.
+        voice_catalog(sm, true);
+        sm.poll();
+        let port = voice::udp_port().expect("bound");
+        assert!(sm.serves(feature::VOICE));
+        assert_eq!(sm.net.borrow().voice_udp_port, Some(port));
+        // The mod's own port wins; a taken one is warned about and voice chat is off.
+        let taken = std::net::UdpSocket::bind("0.0.0.0:0").unwrap();
+        let busy = taken.local_addr().unwrap().port();
+        let t = |udp_port| bhmod_core::voice::TransportConfig { mode: bhmod_core::voice::Transport::Udp, udp_port };
+        sm.voice.set_transport(t(Some(busy))).unwrap();
+        sm.poll();
+        // (The warning goes to the server log; the live test reads it.)
+        assert_eq!(voice::udp_port(), None);
+        assert!(!sm.serves(feature::VOICE) && sm.net.borrow().voice_udp_port.is_none());
+        // Port 0 from the mod means "not set": the configured port again.
+        sm.voice.set_transport(t(Some(0))).unwrap();
+        sm.poll();
+        assert!(voice::udp_port().is_some() && sm.serves(feature::VOICE));
+        // The mod goes away: closed, no longer served.
+        voice_catalog(sm, false);
+        sm.poll();
+        assert_eq!(voice::udp_port(), None);
+        assert!(!sm.serves(feature::VOICE));
+        voice::set_config(voice::VoiceConfig::default());
+        // The default port is the game's + 1.
+        assert_eq!(game_port(&h.srv), 15151);
+    }
+
+    #[test]
+    fn voice_and_settings_over_the_wire() {
+        use bhmod_proto::{Message, Ready, SettingsSet};
+        use bhmod_voice::client::VoiceClient;
+        use bhmod_voice::codec::TestCodec;
+        let h = Harness::new("m_voice_settings");
+        let mods = installed(&h, false);
+        let sm = &mods.0;
+        sm.world_loaded("World", "w");
+        voice::set_config(voice::VoiceConfig { udp_port: Some(0), udp_handler: None });
+        // Nothing served: a poll opens no socket.
+        sm.poll();
+        assert_eq!(voice::udp_port(), None);
+        let d = mods.1.path().join("talk");
+        std::fs::create_dir_all(d.join("server")).unwrap();
+        let toml = "schema = 1\nid = \"talk\"\nversion = \"1.0.0\"\nname = { en = \"N\" }\nauthors = [\"a\"]\n\
+                    license = \"MIT\"\napi = \"^0.3.4\"\n[sides]\nserver = true\nclient = false\n[entry]\n\
+                    server = { runtime = \"lua\", path = \"server/main.luau\" }\n[permissions]\nvoice = true\nchannels = true\n\
+                    [settings.radius]\ntype = \"int\"\ndefault = 32\nmin = 4\nmax = 128\nlabel = \"Radius\"\n";
+        std::fs::write(d.join("mod.toml"), toml).unwrap();
+        let main = "local got = ''\n\
+                    return { on_enable = function()\n\
+                    bh.channels.open('talk:ping', function(origin, data) got = got .. data end)\n\
+                    bh.commands.register({ name = 'pings' }, function() return 'pings:' .. got end)\n\
+                    end }";
+        std::fs::write(d.join("server/main.luau"), main).unwrap();
+        std::fs::write(mods.1.path().join("mods.toml"), "[talk]\ngrant = [\"voice\", \"channels\"]\n").unwrap();
+        assert!(sm.command(None, "/mods reload"));
+        assert_eq!(sm.net.borrow().features, ["voice", "settings"]);
+        // A new modded client learns both features.
+        sm.mod_packet("newcomer", &hello_with(&[]));
+        let reply = Message::decode(&h.m.packets_to("newcomer")[0]).unwrap();
+        assert!(matches!(reply, Message::ServerHello(s) if s.features == ["voice", "settings"]));
+
+        // An admin with voice and settings joins: schemas, then a voice session.
+        let pid = h.join("Sam");
+        *h.srv.admin_list.borrow_mut() = Some(vec!["Sam".to_string()]);
+        sm.net.borrow_mut().packet(&Waiting, &pid, &hello_with(&["voice", "settings"]), &[]);
+        let ready = Message::Ready(Ready { accepted_hash: [0; 32], loaded: vec![] });
+        sm.net.borrow_mut().packet(&Waiting, &pid, &ready.encode(), &[]);
+        h.m.clear();
+        sm.player_join(&pid);
+        let got = |h: &Harness| -> Vec<Message> {
+            h.m.packets_to(&pid).iter().filter_map(|p| Message::decode(p).ok()).collect()
+        };
+        assert!(got(&h).iter().any(|m| matches!(m, Message::SettingsSchema(s) if s.mod_id == "talk")));
+        let port = voice::udp_port().expect("the voice socket is bound");
+        assert_eq!(sm.net.borrow().voice_udp_port, Some(port));
+        let mut c = VoiceClient::new(Arc::new(TestCodec));
+        h.m.clear();
+        sm.mod_packet(&pid, &c.start().unwrap());
+        for p in h.m.packets_to(&pid) {
+            c.on_packet(&p);
+        }
+        assert!(c.connected());
+        assert_eq!(c.udp_port(), Some(port), "VOICE_KEY announces the voice port");
+        // An in-band frame is dropped: no talk spurt starts.
+        sm.voice.set_allowed(&pid, 1, 7).unwrap();
+        sm.mod_packet(&pid, &[PACKET_TYPE_TEST, crate::mods::voice::VOICE_FRAME, 0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 3]);
+        sm.poll();
+        assert!(!format!("{:?}", sm.voice.take_events()).contains("TalkStart"));
+
+        // Channels still work next to voice.
+        sm.mod_packet(&pid, &Message::ListRequest.encode());
+        let ch = bhmod_proto::Channel { channel_id: 1, payload: b"hi".to_vec() };
+        sm.mod_packet(&pid, &Message::Channel(ch).encode());
+        sm.poll();
+        assert!(sm.command(None, "/pings"));
+        assert_eq!(h.d.messages().last().map(String::as_str), Some("pings:hi"), "{:?}", h.d.messages());
+
+        // Reliable output the UDP thread queued goes out with the next poll (to modded players in the game only).
+        queue(
+            &sm.voice,
+            [(pid.clone(), vec![PACKET_TYPE_TEST, 0xff]), ("vanilla".into(), vec![PACKET_TYPE_TEST, 0xfe])],
+        );
+        h.m.clear();
+        sm.poll();
+        assert!(h.m.packets_to(&pid).iter().any(|p| p == &[PACKET_TYPE_TEST, 0xff]));
+        assert!(h.m.packets_to("vanilla").is_empty());
+
+        // SETTINGS_SET: stored, answered, and every admin gets the new schema with the next poll.
+        let set =
+            |v: u8| Message::SettingsSet(SettingsSet { mod_id: "talk".into(), key: "radius".into(), value: vec![v] });
+        h.m.clear();
+        sm.mod_packet(&pid, &set(0x14).encode());
+        let r = got(&h);
+        assert!(r.iter().any(|m| matches!(m, Message::SettingsResult(r) if r.outcome.is_ok())), "{r:?}");
+        h.m.clear();
+        sm.poll();
+        assert!(got(&h).iter().any(|m| matches!(m, Message::SettingsSchema(_))));
+        assert!(sm.command(None, "/mods settings talk"));
+        assert!(h.d.messages().iter().any(|m| m == "radius = 20"), "{:?}", h.d.messages());
+        // While a mod runs the host cannot be entered: BUSY.
+        {
+            let _busy = sm.host.borrow_mut();
+            h.m.clear();
+            sm.mod_packet(&pid, &set(0x15).encode());
+            assert!(got(&h).iter().any(|m| matches!(m, Message::SettingsResult(r) if r.outcome.is_err())));
+        }
+
+        // The player leaves; then the voice mod goes away: the relay is removed.
+        sm.player_quit(&pid, false);
+        std::fs::write(d.join("mod.toml"), toml.replace("voice = true\n", "")).unwrap();
+        assert!(sm.command(None, "/mods reload"));
+        assert_eq!(sm.net.borrow().features, ["settings"]);
+        sm.poll();
+        assert_eq!(voice::udp_port(), None);
+        voice::stop();
+        voice::set_config(voice::VoiceConfig::default());
     }
 
     #[test]
