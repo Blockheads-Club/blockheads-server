@@ -132,6 +132,8 @@ fn voice_frames_are_relayed_unsequenced_and_the_udp_socket_answers() {
     let mut v = srv.session("VANILLA");
     assert_eq!(v.join(10_000).unwrap(), JoinOutcome::Approved, "{}", srv.log());
 
+    // A channel the connection does not have is an error (8 channels were asked for).
+    assert!(s.client.send_unsequenced(200, b"x").is_err());
     // A frame sent unsequenced comes back unsequenced on channel 0, through the relay (body reversed).
     s.send_unsequenced(&[0xbc, VOICE_FRAME, 1, 2, 3, 4]).unwrap();
     let rx = s.wait_for_matching(5000, &mut |rx| rx.data.starts_with(&[0xbc, VOICE_FRAME])).unwrap();

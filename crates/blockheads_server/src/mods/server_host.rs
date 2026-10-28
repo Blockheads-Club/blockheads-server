@@ -792,6 +792,7 @@ mod tests {
         // The stand-in link: nobody is approved, everybody is alive, rejections are swallowed.
         assert!(Waiting.alive("x") && !Waiting.approved("x"));
         Waiting.reject("x", 3);
+        assert!(!Waiting.send_unreliable("x", b""));
         let h = Harness::new("m_svc_player");
         let mods = installed(&h, false);
         mods.0.world_loaded("World", "w");
