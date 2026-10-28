@@ -741,13 +741,16 @@ impl Session {
         }
     }
 
-    /// Pump + process for `ms` (keeps ENet alive).
+    /// Pump + process for `ms` (keeps ENet alive). Always services the host at least once, so `run_for(0)` is one
+    /// non-blocking step.
     pub fn run_for(&mut self, ms: u64) -> Res<()> {
         let deadline = Instant::now() + Duration::from_millis(ms);
-        while Instant::now() < deadline {
+        loop {
             self.step()?;
+            if Instant::now() >= deadline {
+                return Ok(());
+            }
         }
-        Ok(())
     }
 
     /// Packets processed since the last drain.

@@ -447,3 +447,25 @@ fn the_receive_side_tracks_what_the_server_sends() {
     let mut s = Session::connect(cfg_for(no_summary.port), Identity::new("Zed")).unwrap();
     assert_eq!(s.join(300).unwrap(), JoinOutcome::NoContact);
 }
+
+#[test]
+fn run_for_zero_services_the_host_once() {
+    let reply = m::chat_message(&m::server_chat_dict("pong", "S", "p", 1.0));
+    let ty = reply[0];
+    let fake = Fake::start_replying(
+        m::initial_contact(None, false, "w"),
+        vec![m::world_summary(&m::WorldSummary::default())],
+        Some((0x77, vec![reply])),
+    );
+    let mut s = Session::connect(cfg_for(fake.port), Identity::new("Zed")).unwrap();
+    assert_eq!(s.join(5000).unwrap(), JoinOutcome::Approved);
+    let before = s.count_of(ty);
+    s.client.send(&[0x77]).unwrap();
+    // A loop of `run_for(0)` alone sends the request and receives the answer (each call is one step).
+    let end = std::time::Instant::now() + Duration::from_secs(5);
+    while s.count_of(ty) == before {
+        assert!(std::time::Instant::now() < end, "run_for(0) never serviced the host");
+        s.run_for(0).unwrap();
+    }
+    assert!(!s.state.disconnected);
+}
