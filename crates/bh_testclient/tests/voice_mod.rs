@@ -270,6 +270,7 @@ const PORT_ROUTED: u16 = 15490;
 const PORT_CONFIGURED: u16 = 15493;
 const PORT_TAKEN: u16 = 15496;
 const PORT_VANILLA: u16 = 15499;
+const PORT_RECONNECT: u16 = 15502;
 
 #[test]
 fn voice_is_routed_by_proximity_over_udp_and_muted_by_the_admin() {
@@ -412,5 +413,40 @@ fn without_a_voice_mod_no_voice_socket_is_opened() {
     std::fs::create_dir_all(&mods).unwrap();
     let srv = Running::start(tmp.path(), PORT_VANILLA, mods, VoiceConfig::default());
     UdpSocket::bind(("0.0.0.0", PORT_VANILLA + 1)).expect("no voice socket without a voice mod");
+    srv.stop();
+}
+
+#[test]
+fn voice_works_after_a_reconnect_before_the_old_session_timed_out() {
+    let _w = watchdog("voice_mod_reconnect", 240);
+    let tmp = tempfile::tempdir().unwrap();
+    let srv = Running::start(tmp.path(), PORT_RECONNECT, mods_dir(tmp.path(), ""), VoiceConfig::default());
+    let mut old = srv.talker("ANNA");
+    let mut b = srv.talker("BERT");
+    let (px, py) = (summary_int(&b.s, "startPortalPos.x"), summary_int(&b.s, "startPortalPos.y"));
+    old.spawn(px, py + 2);
+    b.spawn(px, py + 2);
+    ready(&mut [&mut old, &mut b]);
+    // ANNA's game reconnects from the same device while the old connection is still alive (not timed out): the
+    // server takes the old session over. The new session must get its own voice handshake (`talker` waits for
+    // VOICE_KEY + AUTH_OK) and its frames must be relayed both ways.
+    let mut a = srv.talker("ANNA");
+    assert!(srv.log().contains("attempt to reconnect from same device"), "{}", srv.log());
+    old.pump(300);
+    a.spawn(px, py + 2);
+    ready(&mut [&mut a, &mut b]);
+    assert!(a.v.connected() && a.udp.is_some(), "the new session authenticated on the voice port");
+    let got = talk_for(&mut a, &mut [&mut b], 1000);
+    assert!(got[0] > 20, "B heard {} frames from the new session\n{}", got[0], srv.log());
+    let got = talk_for(&mut b, &mut [&mut a], 1000);
+    assert!(got[0] > 20, "the new session heard {} frames from B\n{}", got[0], srv.log());
+    // The old connection going away later does not take the new session's voice down.
+    old.s.client.disconnect(0);
+    b.pump(500);
+    a.pump(500);
+    let got = talk_for(&mut a, &mut [&mut b], 1000);
+    assert!(got[0] > 20, "B heard {} frames after the old connection closed\n{}", got[0], srv.log());
+    a.s.client.disconnect(0);
+    b.s.client.disconnect(0);
     srv.stop();
 }
