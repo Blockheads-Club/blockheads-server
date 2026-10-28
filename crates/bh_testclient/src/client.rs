@@ -44,6 +44,8 @@ pub struct Rx {
     pub t_ms: u64,
     pub channel: u8,
     pub reliable: bool,
+    /// Sent unreliable and unsequenced (`ENET_PACKET_FLAG_UNSEQUENCED`, e.g. 0xBC voice frames).
+    pub unsequenced: bool,
     pub data: Vec<u8>,
 }
 
@@ -69,6 +71,14 @@ pub struct Client {
 
 fn enet_err<E: std::fmt::Debug>(what: &str, e: E) -> io::Error {
     io::Error::other(format!("{what}: {e:?}"))
+}
+
+/// True when an ENet packet carries `ENET_PACKET_FLAG_UNSEQUENCED`. rusty_enet 0.4's `Packet::kind` ORs the flags
+/// with `!SENT` (instead of masking), so it reports every packet as reliable; the raw flags only show in `Debug`.
+pub fn is_unsequenced(p: &enet::Packet) -> bool {
+    let d = format!("{p:?}");
+    let flags = d.split("flags: ").nth(1).and_then(|r| r.split(',').next()).and_then(|f| f.trim().parse::<u32>().ok());
+    flags.is_some_and(|f| f & 2 != 0)
 }
 
 /// Queue the CONNECT to `cfg.addr` on a free peer slot.
@@ -139,11 +149,18 @@ impl Client {
                 }
                 enet::EventNoRef::Receive { channel_id, packet, .. } => {
                     let reliable = matches!(packet.kind(), enet::PacketKind::Reliable);
+                    let unsequenced = is_unsequenced(&packet);
                     let data = packet.data().to_vec();
                     if let Some(tr) = &self.trace {
                         tr.record(Dir::Rx, &self.label, t, channel_id, reliable, &data);
                     }
-                    self.queue.push_back(NetEvent::Packet(Rx { t_ms: t, channel: channel_id, reliable, data }));
+                    self.queue.push_back(NetEvent::Packet(Rx {
+                        t_ms: t,
+                        channel: channel_id,
+                        reliable,
+                        unsequenced,
+                        data,
+                    }));
                 }
             }
         }
@@ -168,6 +185,14 @@ impl Client {
         if let Some(tr) = &self.trace {
             tr.record(Dir::Tx, &self.label, self.now_ms(), channel, reliable, data);
         }
+        self.host.flush();
+        Ok(())
+    }
+
+    /// Unreliable, unsequenced send (what modded clients use for voice frames); flushes the host. Not traced.
+    pub fn send_unsequenced(&mut self, channel: u8, data: &[u8]) -> io::Result<()> {
+        let pkt = enet::Packet::unreliable_unsequenced(data);
+        self.host.peer_mut(self.peer).send(channel, &pkt).map_err(|e| enet_err("send", e))?;
         self.host.flush();
         Ok(())
     }

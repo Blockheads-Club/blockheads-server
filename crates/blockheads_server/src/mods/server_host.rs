@@ -25,6 +25,7 @@ use bhmod_wasm::{WasmConfig, WasmRuntime};
 use super::admin::{self, Reply};
 use super::catalog;
 use super::net::{pre_login_text, Inbound, Link, ModNet};
+use super::voice::{self, VoiceOut};
 use super::{ChatVerdict, LoaderKey, ModHooks, Optional, LIMBO_GRACE};
 use crate::server::bhserver::BHServer;
 use crate::storage::lmdb::{Database, DatabaseEnvironment};
@@ -77,6 +78,9 @@ impl Link for SrvLink<'_> {
     fn send(&self, peer: &str, packet: Vec<u8>) {
         self.0.send_network_data_to_peers_reliable(packet, &[peer.to_string()], true);
     }
+    fn send_unreliable(&self, peer: &str, packet: &[u8]) -> bool {
+        self.0.send_unsequenced(peer, packet)
+    }
     fn reject(&self, peer: &str, reason: u8) {
         self.send(peer, crate::protocol::messages::rejection(reason));
         self.0.unapproved_clients.borrow_mut().retain(|e| e != peer);
@@ -91,6 +95,18 @@ impl Link for SrvLink<'_> {
         // The same limit `full()` applies: the configured maximum, never more than 32.
         let capacity = u32::try_from(self.0.max_players.get()).ok().filter(|c| *c > 0)?.min(32);
         Some((u32::try_from(self.0.connected_clients.borrow().len()).unwrap_or(u32::MAX), capacity))
+    }
+}
+
+/// Where the voice relay sends: unsequenced 0xBC packets to modded players in the game.
+struct VoiceLink<'a> {
+    link: SrvLink<'a>,
+    net: &'a ModNet,
+}
+
+impl VoiceOut for VoiceLink<'_> {
+    fn send(&mut self, peer: &str, packet: &[u8]) -> bool {
+        self.net.send_unreliable(&self.link, peer, packet)
     }
 }
 
@@ -479,6 +495,15 @@ impl ModHooks for ServerMods {
     }
     fn mod_packet(&self, peer: &str, data: &[u8]) {
         let Some(s) = self.srv.upgrade() else { return };
+        // Voice frames take the fast path: straight to the relay, no mod is asked; without one they are dropped
+        // like any unknown op.
+        if data.get(1) == Some(&voice::VOICE_FRAME) {
+            let net = self.net.borrow();
+            if net.is_modded(peer) && SrvLink(&s).approved(peer) {
+                voice::dispatch(peer, &data[2..], &mut VoiceLink { link: SrvLink(&s), net: &net });
+            }
+            return;
+        }
         let names = self.with(Vec::new(), |h| h.channel_names());
         let inbound = self.net.borrow_mut().packet(&SrvLink(&s), peer, data, &names);
         let from = RemoteTarget::Player(peer.to_string());
@@ -746,6 +771,9 @@ mod tests {
 
     impl Link for Waiting {
         fn send(&self, _: &str, _: Vec<u8>) {}
+        fn send_unreliable(&self, _: &str, _: &[u8]) -> bool {
+            false
+        }
         fn reject(&self, _: &str, _: u8) {}
         fn approved(&self, _: &str) -> bool {
             false
@@ -835,6 +863,58 @@ mod tests {
         let stray = Message::ServiceResult(ServiceResult { id: 5, outcome: Ok(vec![0xf6]) });
         mods.0.mod_packet(&pid, &stray.encode());
         assert!(h.m.packets_to(&pid).is_empty());
+    }
+
+    #[test]
+    fn voice_frames_take_the_fast_path_to_the_relay() {
+        use crate::mods::voice::{self, VoiceOut, VoiceSink, VOICE_FRAME};
+        use bhmod_proto::{Hello, Message};
+        /// Relays every frame back to its speaker and to a vanilla player, and records the outcomes.
+        struct Back(Rc<RefCell<Vec<(String, Vec<u8>, bool, bool)>>>, String);
+        impl VoiceSink for Back {
+            fn frame(&mut self, peer: &str, body: &[u8], out: &mut dyn VoiceOut) {
+                let mut p = vec![0xbc, VOICE_FRAME];
+                p.extend_from_slice(body);
+                let to_speaker = out.send(peer, &p);
+                let to_vanilla = out.send(&self.1, &p);
+                self.0.borrow_mut().push((peer.to_string(), body.to_vec(), to_speaker, to_vanilla));
+            }
+        }
+        let h = Harness::new("m_voice_fast");
+        let mods = installed(&h, false);
+        mods.0.world_loaded("World", "w");
+        let pid = h.join("Sam");
+        let vanilla = h.join("Van");
+        let frame = [0xbc, VOICE_FRAME, 1, 2, 3];
+        // No relay: dropped, nothing sent either way.
+        voice::set_sink(None);
+        h.m.clear();
+        mods.0.mod_packet(&pid, &frame);
+        assert!(h.m.sent.borrow().is_empty() && h.m.unsequenced.borrow().is_empty());
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        voice::set_sink(Some(Box::new(Back(seen.clone(), vanilla.clone()))));
+        // A player without the mod loader reaches no relay.
+        mods.0.mod_packet(&pid, &frame);
+        assert!(seen.borrow().is_empty());
+        let hello = Message::Hello(Hello {
+            proto: 1,
+            loader: "0.1.0".into(),
+            platform: "pc-linux-x86_64".into(),
+            api: "0.3.1".into(),
+            runtimes: vec![],
+            cached: vec![],
+        });
+        mods.0.net.borrow_mut().packet(&Waiting, &pid, &hello.encode(), &[]);
+        mods.0.net.borrow_mut().packet(&Waiting, "waiting", &hello.encode(), &[]);
+        // Modded but not in the game: no relay either.
+        mods.0.mod_packet("waiting", &frame);
+        assert!(seen.borrow().is_empty());
+        // Modded and in the game: the relay gets the body; the echo leaves unsequenced, the vanilla copy does not.
+        mods.0.mod_packet(&pid, &frame);
+        assert_eq!(*seen.borrow(), [(pid.clone(), vec![1, 2, 3], true, false)]);
+        assert_eq!(*h.m.unsequenced.borrow(), [(pid.clone(), frame.to_vec())]);
+        assert!(h.m.sent.borrow().is_empty(), "nothing reliable");
+        voice::set_sink(None);
     }
 
     #[test]
