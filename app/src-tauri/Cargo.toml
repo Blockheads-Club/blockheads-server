@@ -33,8 +33,8 @@ semver = "1"
 tauri-plugin-opener = "2"
 # Mods: the same discovery, manifest checks and dependency rules as the server's mod host, from mod-sdk at the rev the
 # server workspace pins (keep them equal; see docs/development.md for a local mod-sdk override).
-bhmod-core = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "506077d45f12e4aadd111204a78eab2f97244369" }
-bhmod-manifest = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "506077d45f12e4aadd111204a78eab2f97244369" }
+bhmod-core = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "9cfec781c19c58fc35f36c75092134f2c841bbe7" }
+bhmod-manifest = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "9cfec781c19c58fc35f36c75092134f2c841bbe7" }
 # Edits mods.toml in place (comments, order and each mod's settings stay).
 toml_edit = "0.25"
 
@@ -64,11 +64,3 @@ strip = true
 [target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
 libc = "0.2"
 
-# TEMP: local mod-sdk feat/voice-integration (replace with a git rev before push).
-[patch."https://github.com/Blockheads-Club/mod-sdk"]
-bhmod-core = { path = "/home/kahverengi/Projects/blockheads-club/mod-sdk-wt/voice-int/crates/bhmod-core" }
-bhmod-wasm = { path = "/home/kahverengi/Projects/blockheads-club/mod-sdk-wt/voice-int/crates/bhmod-wasm" }
-bhmod-manifest = { path = "/home/kahverengi/Projects/blockheads-club/mod-sdk-wt/voice-int/crates/bhmod-manifest" }
-bhmod-proto = { path = "/home/kahverengi/Projects/blockheads-club/mod-sdk-wt/voice-int/crates/bhmod-proto" }
-bhmod-content = { path = "/home/kahverengi/Projects/blockheads-club/mod-sdk-wt/voice-int/crates/bhmod-content" }
-bhmod-voice = { path = "/home/kahverengi/Projects/blockheads-club/mod-sdk-wt/voice-int/crates/bhmod-voice" }

@@ -23,12 +23,12 @@ lmdb-master-sys = "=0.2.6"
 anyhow = "1"
 # The shared mod host and its WASM runtime, from Blockheads-Club/mod-sdk at a pinned commit. For local work on both
 # repositories, override them with a sibling checkout (see docs/development.md, "Developing against a local mod-sdk").
-bhmod-core = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "506077d45f12e4aadd111204a78eab2f97244369" }
-bhmod-wasm = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "506077d45f12e4aadd111204a78eab2f97244369" }
-bhmod-manifest = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "506077d45f12e4aadd111204a78eab2f97244369" }
-bhmod-proto = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "506077d45f12e4aadd111204a78eab2f97244369" }
-bhmod-content = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "506077d45f12e4aadd111204a78eab2f97244369" }
-bhmod-voice = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "506077d45f12e4aadd111204a78eab2f97244369" }
+bhmod-core = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "9cfec781c19c58fc35f36c75092134f2c841bbe7" }
+bhmod-wasm = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "9cfec781c19c58fc35f36c75092134f2c841bbe7" }
+bhmod-manifest = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "9cfec781c19c58fc35f36c75092134f2c841bbe7" }
+bhmod-proto = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "9cfec781c19c58fc35f36c75092134f2c841bbe7" }
+bhmod-content = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "9cfec781c19c58fc35f36c75092134f2c841bbe7" }
+bhmod-voice = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "9cfec781c19c58fc35f36c75092134f2c841bbe7" }
 
 # The original is a C/ObjC binary: unwinding is needed to emulate its exception catch sites.
 [profile.dev]
@@ -84,11 +84,3 @@ single_range_in_vec_init = "allow"
 # `clamp` panics on min > max and treats NaN differently from the original's `if x < lo {..} else if x > hi {..}`.
 manual_clamp = "allow"
 
-# TEMP: local mod-sdk feat/voice-integration (replace with a git rev before push).
-[patch."https://github.com/Blockheads-Club/mod-sdk"]
-bhmod-core = { path = "/home/kahverengi/Projects/blockheads-club/mod-sdk-wt/voice-int/crates/bhmod-core" }
-bhmod-wasm = { path = "/home/kahverengi/Projects/blockheads-club/mod-sdk-wt/voice-int/crates/bhmod-wasm" }
-bhmod-manifest = { path = "/home/kahverengi/Projects/blockheads-club/mod-sdk-wt/voice-int/crates/bhmod-manifest" }
-bhmod-proto = { path = "/home/kahverengi/Projects/blockheads-club/mod-sdk-wt/voice-int/crates/bhmod-proto" }
-bhmod-content = { path = "/home/kahverengi/Projects/blockheads-club/mod-sdk-wt/voice-int/crates/bhmod-content" }
-bhmod-voice = { path = "/home/kahverengi/Projects/blockheads-club/mod-sdk-wt/voice-int/crates/bhmod-voice" }
