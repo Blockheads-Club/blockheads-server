@@ -108,6 +108,18 @@ impl EnetHost {
         }
     }
 
+    /// Not in the original: `enet_packet_create(UNSEQUENCED)` + `enet_peer_send` on channel 0 (the vanilla client asks
+    /// for 8 channels, so 0 always exists). Unreliable and unordered: for real-time data (voice frames) that is
+    /// worthless late. False when the peer slot is unknown or the send failed (peer not connected). NOT flushed: the
+    /// packet leaves at the next `service`. Payloads above ENet's fragment threshold (1364 bytes at MTU 1392) would
+    /// be sent as reliable fragments, so callers keep packets below it.
+    pub fn send_unsequenced(&mut self, peer: PeerSlot, data: &[u8]) -> bool {
+        match self.host.get_peer_mut(peer) {
+            Some(p) => p.send(0, &enet::Packet::unreliable_unsequenced(data)).is_ok(),
+            None => false,
+        }
+    }
+
     /// `enet_peer_disconnect`.
     pub fn peer_disconnect(&mut self, peer: PeerSlot, data: u32) {
         if let Some(p) = self.host.get_peer_mut(peer) {
@@ -176,6 +188,14 @@ mod tests {
         assert_eq!(to_v4(None).to_string(), "0.0.0.0:0");
         let h = EnetHost::create(0).unwrap();
         assert_eq!(h.peer_ip_string(enet::PeerID(0)), None);
+    }
+
+    #[test]
+    fn unsequenced_sends_need_a_connected_peer() {
+        let mut h = EnetHost::create(0).unwrap();
+        // A free slot (not connected) and a slot past the peer limit.
+        assert!(!h.send_unsequenced(enet::PeerID(0), b"x"));
+        assert!(!h.send_unsequenced(enet::PeerID(999), b"x"));
     }
 
     #[test]

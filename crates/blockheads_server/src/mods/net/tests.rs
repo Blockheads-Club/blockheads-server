@@ -12,6 +12,7 @@ use crate::mods::content::Content;
 #[derive(Default)]
 struct Fake {
     sent: RefCell<Vec<(String, Vec<u8>)>>,
+    unreliable: RefCell<Vec<(String, Vec<u8>)>>,
     rejected: RefCell<Vec<(String, u8)>>,
     approved: RefCell<Vec<String>>,
     waiting: RefCell<Vec<String>>,
@@ -21,6 +22,10 @@ struct Fake {
 impl Link for Fake {
     fn send(&self, peer: &str, packet: Vec<u8>) {
         self.sent.borrow_mut().push((peer.to_string(), packet));
+    }
+    fn send_unreliable(&self, peer: &str, packet: &[u8]) -> bool {
+        self.unreliable.borrow_mut().push((peer.to_string(), packet.to_vec()));
+        true
     }
     fn reject(&self, peer: &str, reason: u8) {
         self.rejected.borrow_mut().push((peer.to_string(), reason));
@@ -527,4 +532,33 @@ fn limbo_holds_vanilla_peers_until_the_grace_ends() {
     assert_eq!(n.leave_limbo("e4"), Some("p4".to_string()));
     assert_eq!(n.leave_limbo("p5"), Some("p5".to_string()));
     assert_eq!(n.leave_limbo("p5"), None);
+}
+
+#[test]
+fn unreliable_packets_go_only_to_modded_players_in_the_game() {
+    let l = Fake::default();
+    let mut n = net();
+    let frame = |len: usize| {
+        let mut p = vec![PACKET_TYPE, crate::mods::voice::VOICE_FRAME];
+        p.resize(len, 7);
+        p
+    };
+    // Vanilla, or modded but not approved yet: nothing.
+    assert!(!n.send_unreliable(&l, "e", &frame(10)));
+    n.packet(&l, "e", &hello(1), &[]);
+    assert!(!n.send_unreliable(&l, "e", &frame(10)));
+    l.approved.borrow_mut().push("e".into());
+    l.approved.borrow_mut().push("vanilla".into());
+    assert!(!n.send_unreliable(&l, "vanilla", &frame(10)));
+    // In the game: the largest packet that stays one unsequenced ENet packet goes out, one byte more does not;
+    // neither do non-0xBC bytes nor an empty packet.
+    assert!(n.send_unreliable(&l, "e", &frame(crate::mods::voice::MAX_UNRELIABLE)));
+    assert!(!n.send_unreliable(&l, "e", &frame(crate::mods::voice::MAX_UNRELIABLE + 1)));
+    assert!(!n.send_unreliable(&l, "e", &[0x05, 0x16]));
+    assert!(!n.send_unreliable(&l, "e", &[]));
+    let sent = l.unreliable.borrow().clone();
+    assert_eq!(sent.len(), 1);
+    assert_eq!((sent[0].0.as_str(), sent[0].1.len()), ("e", crate::mods::voice::MAX_UNRELIABLE));
+    // Nothing went the reliable way.
+    assert!(l.sent.borrow().iter().all(|(_, p)| p.get(1) != Some(&crate::mods::voice::VOICE_FRAME)));
 }

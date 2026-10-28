@@ -1002,6 +1002,10 @@ impl Session {
     pub fn send_raw(&mut self, packet: &[u8]) -> Res<()> {
         self.client.send(packet)
     }
+    /// One unreliable, unsequenced packet on channel 0 (0xBC voice frames).
+    pub fn send_unsequenced(&mut self, packet: &[u8]) -> Res<()> {
+        self.client.send_unsequenced(0, packet)
+    }
     /// `[ty] ++ plist text` (hand written Apple-dialect plist).
     pub fn send_xml(&mut self, ty: u8, plist_text: &str) -> Res<()> {
         let mut p = vec![ty];

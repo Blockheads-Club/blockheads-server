@@ -12,12 +12,13 @@ use bhmod_core::remote::{RemoteCall, RemoteError};
 use bhmod_core::types::ApiError;
 use bhmod_proto::{
     file_error, hex, Channel, ChannelInfo, ChannelRegister, Cosmetics, FileChunk, FileError, Hash, Message, ModList,
-    PlayerCount, RejectText, ServerHello, ServiceCall, ServiceFailure, ServiceResult, CHUNK_SIZE, MAX_IN_FLIGHT, PROTO,
-    REJECT_CLIENT_TOO_OLD,
+    PlayerCount, RejectText, ServerHello, ServiceCall, ServiceFailure, ServiceResult, CHUNK_SIZE, MAX_IN_FLIGHT,
+    PACKET_TYPE, PROTO, REJECT_CLIENT_TOO_OLD,
 };
 
 use super::catalog::Catalog;
 use super::content::Content;
+use super::voice::MAX_UNRELIABLE;
 use super::LoaderKey;
 
 /// Most peers downloading at the same time; more get `FILE_ERROR` BUSY.
@@ -44,6 +45,9 @@ pub fn pre_login_text(reason: u8) -> String {
 pub trait Link {
     /// Sends one reliable packet to a peer.
     fn send(&self, peer: &str, packet: Vec<u8>);
+    /// Sends one unreliable, unsequenced packet to a peer (ENet channel 0). True when it was queued. Callers go
+    /// through [`ModNet::send_unreliable`], which checks the packet and the peer first.
+    fn send_unreliable(&self, peer: &str, packet: &[u8]) -> bool;
     /// Rejects a peer that is waiting for approval (`0x26 reason`, then it is no longer waiting).
     fn reject(&self, peer: &str, reason: u8);
     /// True when the peer is approved (in the game).
@@ -312,6 +316,17 @@ impl ModNet {
             n += 1;
         }
         Ok(n)
+    }
+
+    /// Sends one unreliable, unsequenced 0xBC packet (a voice frame) to a modded peer in the game. False, and
+    /// nothing sent, when the packet is not 0xBC, is longer than [`MAX_UNRELIABLE`] (ENet would turn it into
+    /// reliable fragments), or the peer has no mod loader or is not in the game.
+    pub fn send_unreliable(&self, link: &dyn Link, peer: &str, packet: &[u8]) -> bool {
+        packet.first() == Some(&PACKET_TYPE)
+            && packet.len() <= MAX_UNRELIABLE
+            && self.is_modded(peer)
+            && link.approved(peer)
+            && link.send_unreliable(peer, packet)
     }
 
     /// Sends a service call of a server mod to a modded peer in the game (`SERVICE_CALL`). `unavailable` for a peer
