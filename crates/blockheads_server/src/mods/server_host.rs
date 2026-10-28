@@ -917,6 +917,7 @@ mod tests {
             api: "0.3.1".into(),
             runtimes: vec![],
             cached: vec![],
+            features: vec![],
         });
         mods.0.net.borrow_mut().packet(&Waiting, &pid, &hello.encode(), &[]);
         mods.0.net.borrow_mut().packet(&Waiting, "waiting", &hello.encode(), &[]);
