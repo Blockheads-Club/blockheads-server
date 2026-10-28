@@ -35,7 +35,8 @@ tauri-plugin-opener = "2"
 # server workspace pins (keep them equal; see docs/development.md for a local mod-sdk override).
 bhmod-core = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "506077d45f12e4aadd111204a78eab2f97244369" }
 bhmod-manifest = { git = "https://github.com/Blockheads-Club/mod-sdk", rev = "506077d45f12e4aadd111204a78eab2f97244369" }
-toml = "0.9"
+# preserve_order: mod settings keep the order the mod declares them in.
+toml = { version = "0.9", features = ["preserve_order"] }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-dialog = "2"

@@ -72,35 +72,90 @@ struct ConfigOut {
     enabled: bool,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     grant: Vec<String>,
+    /// The admin's values of the mod's settings (see [`crate::mod_settings`]).
+    #[serde(skip_serializing_if = "toml::Table::is_empty")]
+    settings: toml::Table,
 }
 
 fn is_true(b: &bool) -> bool {
     *b
 }
 
-/// Reads `mods.toml`; a missing file is empty, an invalid one is an error (it is never overwritten).
-pub fn read_config(dir: &Path) -> MRes<ModsConfig> {
+/// `mods.toml` as plain TOML; a missing file is empty, an invalid one is an error (it is never overwritten).
+fn read_raw(dir: &Path) -> MRes<toml::Table> {
     match std::fs::read_to_string(dir.join(FILE_NAME)) {
-        Ok(t) => ModsConfig::parse(&t).map_err(|e| ModError::with("config", e)),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(ModsConfig::default()),
+        Ok(t) => t.parse::<toml::Table>().map_err(|e| ModError::with("config", e.to_string())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(toml::Table::new()),
         Err(e) => Err(io_err(e)),
     }
 }
 
+/// Takes the `[<id>.settings]` tables out of the raw file.
+// TODO(mod-sdk feat/settings): bhmod-core's `ModConfig` reads `settings` itself once mod-sdk feat/settings is
+// pinned; then `read_config` parses the file directly and this split goes away.
+fn split_settings(raw: &mut toml::Table) -> MRes<BTreeMap<String, toml::Table>> {
+    let mut out = BTreeMap::new();
+    for (id, v) in raw.iter_mut() {
+        match v.as_table_mut().and_then(|t| t.remove("settings")) {
+            Some(toml::Value::Table(s)) => {
+                out.insert(id.clone(), s);
+            }
+            Some(_) => return Err(ModError::with("config", format!("{id}.settings must be a table"))),
+            None => {}
+        }
+    }
+    Ok(out)
+}
+
+/// Reads `mods.toml` and the settings tables in it.
+fn read_all(dir: &Path) -> MRes<(ModsConfig, BTreeMap<String, toml::Table>)> {
+    let mut raw = read_raw(dir)?;
+    let settings = split_settings(&mut raw)?;
+    let text = toml::to_string(&raw).map_err(|e| ModError::with("config", e.to_string()))?;
+    let cfg = ModsConfig::parse(&text).map_err(|e| ModError::with("config", e))?;
+    Ok((cfg, settings))
+}
+
+/// The `[<id>.settings]` tables of `mods.toml` (an invalid file is an error).
+pub fn read_settings(dir: &Path) -> MRes<BTreeMap<String, toml::Table>> {
+    read_all(dir).map(|x| x.1)
+}
+
+/// Reads `mods.toml`; a missing file is empty, an invalid one is an error (it is never overwritten).
+pub fn read_config(dir: &Path) -> MRes<ModsConfig> {
+    read_all(dir).map(|x| x.0)
+}
+
 /// Changes `mods.toml` with `f`; entries that are back to the defaults are dropped.
 pub fn edit_config(dir: &Path, f: impl FnOnce(&mut ModsConfig)) -> MRes<()> {
-    let mut cfg = read_config(dir)?;
-    f(&mut cfg);
+    edit_all(dir, |c, _| f(c))
+}
+
+/// Changes the settings table of one mod (`[<id>.settings]`) with `f`.
+pub fn edit_settings(dir: &Path, id: &str, f: impl FnOnce(&mut toml::Table)) -> MRes<()> {
+    edit_all(dir, |c, s| {
+        c.mods.entry(id.into()).or_default();
+        f(s.entry(id.into()).or_default());
+    })
+}
+
+fn edit_all(dir: &Path, f: impl FnOnce(&mut ModsConfig, &mut BTreeMap<String, toml::Table>)) -> MRes<()> {
+    let (mut cfg, mut settings) = read_all(dir)?;
+    f(&mut cfg, &mut settings);
     let out: BTreeMap<&String, ConfigOut> = cfg
         .mods
         .iter()
-        .filter(|(_, c)| !c.enabled || !c.grant.is_empty())
-        .map(|(id, c)| (id, ConfigOut { enabled: c.enabled, grant: c.grant.clone() }))
+        .map(|(id, c)| {
+            let s = settings.remove(id).unwrap_or_default();
+            (id, ConfigOut { enabled: c.enabled, grant: c.grant.clone(), settings: s })
+        })
+        .filter(|(_, c)| !c.enabled || !c.grant.is_empty() || !c.settings.is_empty())
         .collect();
     let body = toml::to_string(&out).map_err(|e| ModError::with("io", e.to_string()))?;
     std::fs::create_dir_all(dir).map_err(io_err)?;
     let text = format!(
-        "# Mod settings: on/off and granted permissions. Blockheads Server keeps this file up to date.\n\n{body}"
+        "# Mod settings: on/off, granted permissions and each mod's own settings. Blockheads Server keeps this file \
+         up to date.\n\n{body}"
     );
     std::fs::write(dir.join(FILE_NAME), text).map_err(io_err)
 }
@@ -291,6 +346,8 @@ pub struct ModSummary {
     pub slowest_ms: Option<f64>,
     /// Bytes in the mod's storage for the loaded world; `None` while the server runs (the database is in use).
     pub storage_bytes: Option<u64>,
+    /// How many settings the admin can change on the mod's Settings tab (server-scope fields).
+    pub settings: usize,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -553,6 +610,7 @@ pub fn overview(dir: &Path, ctx: &Context) -> Overview {
             lines: ctx.live.and_then(|l| l.lines.get(&m.id)).map(|q| q.iter().cloned().collect()).unwrap_or_default(),
             slowest_ms,
             storage_bytes: storage.as_ref().and_then(|s| s.size(&m.id)),
+            settings: crate::mod_settings::backend().server_fields(&p.origin),
         });
     }
     ov.changes = changes;

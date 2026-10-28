@@ -15,6 +15,7 @@
     maxlength?: number;
     min?: number;
     max?: number;
+    step?: number | 'any';
     disabled?: boolean;
     hideLabel?: boolean;
     autocomplete?: 'off' | 'on';
@@ -37,6 +38,7 @@
     maxlength,
     min,
     max,
+    step,
     disabled = false,
     hideLabel = false,
     autocomplete = 'off',
@@ -66,6 +68,7 @@
       {maxlength}
       {min}
       {max}
+      {step}
       {disabled}
       {required}
       {autocomplete}

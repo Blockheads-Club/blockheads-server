@@ -193,6 +193,8 @@ export interface ModSummary {
   lines: ModLine[];
   slowestMs: number | null;
   storageBytes: number | null;
+  /** Settings the admin can change on the mod's Settings tab. */
+  settings: number;
 }
 export interface ModChange {
   kind: 'installed' | 'removed' | 'updated' | 'enabled' | 'disabled' | 'permissions';
@@ -275,4 +277,34 @@ export interface InstallProgress {
   step: 'download' | 'write' | 'done';
   done: number;
   total: number;
+}
+
+/** A JSON value as the mod settings commands send it. */
+export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
+export type SettingType = 'bool' | 'int' | 'float' | 'enum' | 'string' | 'roles' | 'matrix' | 'list';
+/** One field of a mod's settings schema (`mod_settings_get`, keys as the contract spells them). */
+export interface SettingField {
+  key: string;
+  type: SettingType;
+  default: Json;
+  label: Record<string, string>;
+  help?: Record<string, string>;
+  group?: string;
+  scope: 'server' | 'client';
+  restart: boolean;
+  min?: number;
+  max?: number;
+  step?: number;
+  values?: string[];
+  max_length?: number;
+  rows?: string[];
+  cols?: string[];
+  cell?: 'bool' | 'roles';
+  /** List item fields: sub-key -> field without its key. */
+  item?: Record<string, Omit<SettingField, 'key'>>;
+  max_items?: number;
+}
+export interface ModSettings {
+  fields: SettingField[];
+  values: Record<string, Json>;
 }

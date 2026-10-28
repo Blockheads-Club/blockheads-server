@@ -1,6 +1,7 @@
 //! Blockheads Server host app: Tauri commands over [`core::Core`].
 
 pub mod core;
+pub mod mod_settings;
 pub mod mods;
 pub mod notify;
 pub mod stats;
@@ -554,6 +555,20 @@ async fn mods_set_grant(core: State<'_, Arc<Core>>, id: String, perm: String, on
     blocking(move || c.mods_set_grant(&id, &perm, on)).await
 }
 
+/// The schema and values of a mod's settings (`{ fields, values }`).
+#[tauri::command]
+async fn mod_settings_get(core: State<'_, Arc<Core>>, id: String) -> MRes<mod_settings::View> {
+    let c = core.inner().clone();
+    blocking(move || c.mod_settings_get(&id)).await
+}
+
+/// Changes one setting; a value the field does not allow is refused with a `setting` error.
+#[tauri::command]
+async fn mod_settings_set(core: State<'_, Arc<Core>>, id: String, key: String, value: serde_json::Value) -> MRes<()> {
+    let c = core.inner().clone();
+    blocking(move || c.mod_settings_set(&id, &key, value)).await
+}
+
 #[tauri::command]
 async fn mods_remove(core: State<'_, Arc<Core>>, file: String) -> MRes<()> {
     let c = core.inner().clone();
@@ -789,7 +804,9 @@ pub fn run() {
             mods_plan,
             mods_inspect_url,
             mods_inspect_file,
-            mods_install
+            mods_install,
+            mod_settings_get,
+            mod_settings_set
         ])
         .run(tauri::generate_context!())
         .expect("error while running the Blockheads Server app");

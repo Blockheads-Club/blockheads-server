@@ -22,6 +22,7 @@ export type ModFilter = 'all' | 'running' | 'off' | 'attention' | 'updates' | 'c
 export type SideFilter = 'all' | 'server' | 'client' | 'both';
 export type Sides = 'server' | 'client' | 'both';
 export type ModView = 'list' | 'detail' | 'browse';
+export type ModTab = 'overview' | 'settings';
 export type BrowseSide = 'any' | 'server' | 'client';
 export type BrowseSort = 'name' | 'updated' | 'newest';
 
@@ -73,6 +74,8 @@ export class ModsStore {
   error = $state('');
   view = $state<ModView>('list');
   detailId = $state<string | null>(null);
+  /** Section of a mod's page. */
+  tab = $state<ModTab>('overview');
   query = $state('');
   filter = $state<ModFilter>('all');
   side = $state<SideFilter>('all');
@@ -170,8 +173,9 @@ export class ModsStore {
     return this.refreshing!;
   }
 
-  open(id: string) {
+  open(id: string, tab: ModTab = 'overview') {
     this.detailId = id;
+    this.tab = tab;
     this.view = 'detail';
     store.navigate('mods');
   }
