@@ -9,7 +9,9 @@ import type {
   InstallProgress,
   InstallRequest,
   ListKind,
+  ModSettings,
   ModsOverview,
+  Json,
   NetAddr,
   NewWorld,
   Plan,
@@ -82,6 +84,10 @@ export const api = {
   modsInspectFile: (name: string, bytes: Uint8Array) =>
     invoke<Inspected>('mods_inspect_file', bytes, { headers: { 'x-file-name': encodeURIComponent(name) } }),
   modsInstall: (request: InstallRequest) => invoke<Installed>('mods_install', { request }),
+  /** A mod's settings schema and values. */
+  modSettingsGet: (id: string) => invoke<ModSettings>('mod_settings_get', { id }),
+  /** Rejects with a ModError (`setting`: the value breaks the field's rules). */
+  modSettingsSet: (id: string, key: string, value: Json) => invoke<void>('mod_settings_set', { id, key, value }),
   onModsProgress: (cb: (p: InstallProgress) => void) => listen<InstallProgress>('mods-progress', (e) => cb(e.payload))
 };
 

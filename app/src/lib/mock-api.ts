@@ -59,6 +59,8 @@ export function makeApi(over: Partial<Record<string, unknown>> = {}) {
     modsInspectFile: vi.fn(async () => ({ source: 'x.bhmod', sha256: 'f'.repeat(64), plan: { items: [], satisfied: [], missing: [], totalBytes: 0 } })),
     modsInstall: vi.fn(async () => ({ ids: [], restart: false })),
     onModsProgress: vi.fn(async () => () => {}),
+    modSettingsGet: vi.fn(async () => ({ fields: [], values: {} })),
+    modSettingsSet: vi.fn(async () => {}),
     ...over
   };
 }
@@ -121,6 +123,7 @@ export function makeMod(over: Partial<ModSummary> = {}): ModSummary {
     lines: [],
     slowestMs: null,
     storageBytes: null,
+    settings: 0,
     ...over
   };
 }

@@ -72,8 +72,25 @@ export async function mockTauri(
         file: `${m.id}-${m.version}.bhmod`, packed: true, sha256: 'a'.repeat(64), size: 186000, reviewed: !!m.reviewed, update: m.update ?? null,
         faults: m.budget && s.state === 'running' ? [{ at: Date.now() - 60000, kind: 'slow', text: 'tick took 7.9 ms (budget 5 ms)', ms: 7.9 }, { at: Date.now() - 30000, kind: 'error', text: 'tick: timeout' }] : [],
         lines: s.state === 'running' ? [{ at: Date.now() - 90000, level: 'info', text: 'enabled' }, ...(m.budget ? [{ at: Date.now() - 30000, level: 'warn', text: 'tick took 7.9 ms (budget 5 ms)' }, { at: Date.now() - 1000, level: 'info', text: 'disabled: 3 faults within 60 s' }] : [])] : [],
-        slowestMs: s.state === 'running' && m.server && !m.native ? (m.budget ? 7.9 : 1.2) : null, storageBytes: s.state === 'running' ? null : 2200000
+        slowestMs: s.state === 'running' && m.server && !m.native ? (m.budget ? 7.9 : 1.2) : null, storageBytes: s.state === 'running' ? null : 2200000,
+        settings: m.id === 'better-chat' ? chatSettings.fields.filter((f) => f.scope === 'server').length : 0
       };
+    };
+    // Settings of Better Chat (the contract of mod_settings_get), checked like src-tauri/src/mod_settings.rs does.
+    const lbl = (en: string) => ({ en });
+    const chatSettings = {
+      fields: [
+        { key: 'filter', type: 'bool', default: true, label: lbl('Filter bad words'), help: lbl('Replaces listed words with ***.'), group: 'Chat', scope: 'server', restart: false },
+        { key: 'slowmode', type: 'int', default: 0, min: 0, max: 60, step: 5, label: lbl('Slow mode (seconds)'), group: 'Chat', scope: 'server', restart: false },
+        { key: 'format', type: 'enum', default: 'name', values: ['name', 'name-color', 'tag'], label: lbl('Name style'), group: 'Chat', scope: 'server', restart: true },
+        { key: 'motd', type: 'string', default: '', max_length: 80, label: lbl('Message of the day'), group: 'Chat', scope: 'server', restart: false },
+        { key: 'colors', type: 'roles', default: ['admin'], label: lbl('Who may use colors'), group: 'Roles', scope: 'server', restart: false },
+        { key: 'commands', type: 'matrix', default: { mute: { admin: true, mod: true } }, rows: ['mute', 'clear', 'announce'], cols: ['owner', 'admin', 'mod', 'everyone'], cell: 'bool', label: lbl('Commands'), group: 'Roles', scope: 'server', restart: false },
+        { key: 'channels', type: 'list', default: [], max_items: 3, label: lbl('Channels'), scope: 'server', restart: false,
+          item: { name: { type: 'string', default: '', max_length: 12, label: lbl('Name'), scope: 'server', restart: false }, color: { type: 'enum', default: 'white', values: ['white', 'red', 'blue'], label: lbl('Color'), scope: 'server', restart: false } } },
+        { key: 'mention_sound', type: 'bool', default: true, label: lbl('Mention sound'), scope: 'client', restart: false }
+      ],
+      values: { motd: 'Welcome!' } as Record<string, unknown>
     };
     (window as any).__mods = mods;
     const log = (t: string) => {
@@ -151,6 +168,13 @@ export async function mockTauri(
           }
           case 'mods_remove': mods.splice(mods.findIndex((m) => `${m.id}-${m.version}.bhmod` === a.file), 1); return;
           case 'mods_clear_data': case 'mods_open_folder': return;
+          case 'mod_settings_get': return JSON.parse(JSON.stringify(chatSettings));
+          case 'mod_settings_set': {
+            if (a.key === 'slowmode' && a.value % 5) throw { code: 'setting', detail: 'step', expected: '5' };
+            if (a.key === 'motd' && /https?:/.test(a.value)) throw { code: 'setting', detail: 'other' };
+            chatSettings.values[a.key] = a.value;
+            return;
+          }
           case 'mods_browse':
             return {
               generated: '2026-10-21T12:00:00Z', offline: false, error: null, hidden: 0,
