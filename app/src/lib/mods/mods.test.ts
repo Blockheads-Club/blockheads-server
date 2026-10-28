@@ -69,7 +69,7 @@ function browseMod(over: Partial<BrowseMod> = {}): BrowseMod {
 const demo = () => [
   makeMod({ id: 'better-chat', name: { en: 'Better Chat' }, authors: ['mira_k'] }),
   makeMod({ id: 'land-claims', update: '1.5.0', homepage: null, authors: [] }),
-  makeMod({ id: 'minimap', name: { en: 'Minimap' }, sides: { server: true, client: true, clientRequired: true } }),
+  makeMod({ id: 'minimap', name: { en: 'Minimap' }, sides: { server: true, client: true, clientRequired: true, clientRequiredDefault: true, clientRequiredLocked: false } }),
   makeMod({ id: 'weather-plus', name: { en: 'Weather Plus' }, status: 'budget', detail: '3 faults within 60 s', slowestMs: 7.9 }),
   makeMod({
     id: 'shop-signs',
@@ -83,7 +83,7 @@ const demo = () => [
   }),
   makeMod({ id: 'discord-bridge', name: { en: 'Discord Bridge' }, status: 'permissions', permissions: ['players:chat', 'net-http:discord.com'], granted: ['players:chat'], missing: ['net-http:discord.com'] }),
   makeMod({ id: 'fast-tools', name: { en: 'Fast Tools' }, status: 'failed', detail: 'missing symbol', native: true, permissions: ['native'], granted: ['native'], reviewed: false }),
-  makeMod({ id: 'hats', name: { en: 'Hats & Capes' }, status: 'off', enabled: false, sides: { server: false, client: true, clientRequired: true } })
+  makeMod({ id: 'hats', name: { en: 'Hats & Capes' }, status: 'off', enabled: false, sides: { server: false, client: true, clientRequired: true, clientRequiredDefault: true, clientRequiredLocked: false } })
 ];
 
 function reset(over: Record<string, unknown> = {}) {
@@ -554,6 +554,30 @@ describe('Mod detail', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Remove mod' }));
     await fireEvent.click(within(screen.getByRole('dialog', { name: 'Remove Land Claims?' })).getByRole('button', { name: 'Remove mod' }));
     await waitFor(() => expect(mods.view).toBe('list'));
+  });
+
+  it('the admin overrides whether players need a client mod', async () => {
+    store.state = 'stopped';
+    open('minimap');
+    const sec = screen.getByRole('region', { name: 'Players must have this mod' });
+    expect(within(sec).getByText(/The mod’s own default is required/)).toBeInTheDocument();
+    await fireEvent.click(within(sec).getByRole('switch', { name: 'required' }));
+    await waitFor(() => expect(mock.api.modsSetClientRequired).toHaveBeenCalledWith('minimap', false));
+    expect(toasts.items.at(-1)?.message).toBe('Saved. It applies after a restart.');
+    cleanup();
+    const locked = demo();
+    locked[2] = makeMod({ id: 'minimap', sides: { server: true, client: true, clientRequired: true, clientRequiredDefault: false, clientRequiredLocked: true } });
+    open('minimap', { mods: locked });
+    expect(screen.getByText('This mod adds content to the world, so every player needs it.')).toBeInTheDocument();
+    cleanup();
+    const optional = demo();
+    optional[2] = makeMod({ id: 'minimap', sides: { server: true, client: true, clientRequired: false, clientRequiredDefault: false, clientRequiredLocked: false } });
+    open('minimap', { mods: optional });
+    expect(screen.getByRole('switch', { name: 'optional' })).not.toBeChecked();
+    mods.busy = 'minimap:clientRequired';
+    await waitFor(() => expect(screen.getByRole('switch', { name: 'optional' })).toBeDisabled());
+    mods.busy = '';
+    expect(screen.getByText(/The mod’s own default is optional/)).toBeInTheDocument();
   });
 
   it('a mod over its time budget while running: meter, faults, log, console link', async () => {

@@ -89,6 +89,7 @@ describe('mods api', () => {
     await api.modsOverview();
     await api.modsSetEnabled('a', true);
     await api.modsSetGrant('a', 'players:chat', false);
+    await api.modsSetClientRequired('a', false);
     await api.modsRemove('a.bhmod');
     await api.modsClearData('a');
     await api.modsOpenFolder();
@@ -104,7 +105,7 @@ describe('mods api', () => {
     await api.modSettingsGet('voice');
     await api.modSettingsSet('voice', 'radius', 32);
     expect(invoke.mock.calls.map((c: any[]) => c[0])).toEqual([
-      'mods_overview', 'mods_set_enabled', 'mods_set_grant', 'mods_remove', 'mods_clear_data', 'mods_open_folder',
+      'mods_overview', 'mods_set_enabled', 'mods_set_grant', 'mods_set_client_required', 'mods_remove', 'mods_clear_data', 'mods_open_folder',
       'mods_open_folder', 'mods_browse', 'mods_plan', 'mods_plan', 'mods_inspect_url', 'mods_inspect_file', 'mods_install',
       'mod_settings_get', 'mod_settings_set'
     ]);

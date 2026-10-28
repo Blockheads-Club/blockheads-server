@@ -92,6 +92,55 @@ fn config_round_trip_and_invalid_file() {
 }
 
 #[test]
+fn edits_keep_comments_settings_and_other_keys() {
+    let t = tempfile::tempdir().unwrap();
+    let dir = t.path();
+    write_dir(dir, "a", &Spec { client: true, ..spec("aa") });
+    let content = "[content]\nitems = [{ key = \"cc:gem\", texture = \"assets/gem.png\", name = { en = \"Gem\" }, plural = { en = \"Gems\" } }]\n";
+    let c = write_dir(dir, "c", &Spec { client: true, api: "^0.3", extra: content, ..spec("cc") });
+    fs::create_dir_all(c.join("assets")).unwrap();
+    fs::copy(concat!(env!("CARGO_MANIFEST_DIR"), "/icons/32x32.png"), c.join("assets/gem.png")).unwrap();
+    assert!(discover(dir).1.is_empty(), "{:?}", discover(dir).1);
+    write_dir(dir, "s", &spec("ss"));
+    let text = "# keep me\n[aa.settings]\nradius = 9 # mine\n\n[bb]\nenabled = false\n";
+    fs::write(dir.join(FILE_NAME), text).unwrap();
+    // A mod with only settings gets its keys without an empty header; turning it back on leaves the settings.
+    set_enabled(dir, "aa", false).unwrap();
+    let now = fs::read_to_string(dir.join(FILE_NAME)).unwrap();
+    assert!(
+        now.contains("[aa]\nenabled = false\n# keep me\n[aa.settings]\nradius = 9 # mine")
+            && now.contains("[bb]\nenabled = false"),
+        "{now}"
+    );
+    assert!(!read_config(dir).unwrap().get("aa").enabled);
+    set_enabled(dir, "aa", true).unwrap();
+    assert_eq!(fs::read_to_string(dir.join(FILE_NAME)).unwrap(), text);
+    // The client-required override: the manifest's value is no override.
+    set_client_required(dir, "aa", false).unwrap();
+    assert_eq!(read_config(dir).unwrap().get("aa").client_required, Some(false));
+    let ov = overview(dir, &Context::default());
+    let s = &by_id(&ov, "aa").sides;
+    assert!(!s.client_required && s.client_required_default && !s.client_required_locked);
+    assert!(!ov.client_mods.contains(&"aa".to_string()));
+    set_client_required(dir, "aa", true).unwrap();
+    assert_eq!(read_config(dir).unwrap().get("aa").client_required, None);
+    assert_eq!(fs::read_to_string(dir.join(FILE_NAME)).unwrap(), text);
+    // Content always needs the client; a server-only mod has nothing to require.
+    assert_eq!(set_client_required(dir, "cc", false).unwrap_err().code, "clientRequired");
+    assert_eq!(set_client_required(dir, "ss", true).unwrap_err().code, "clientRequired");
+    let ov = overview(dir, &Context::default());
+    assert!(by_id(&ov, "cc").sides.client_required_locked && by_id(&ov, "ss").sides.client_required_locked);
+    // An inline table is edited in place too.
+    fs::write(dir.join(FILE_NAME), "aa = { grant = [\"x\"] }\n").unwrap();
+    set_enabled(dir, "aa", false).unwrap();
+    let cfg = read_config(dir).unwrap().get("aa");
+    assert_eq!((cfg.enabled, cfg.grant), (false, vec!["x".to_string()]));
+    // A file that is not TOML at all is not touched.
+    fs::write(dir.join(FILE_NAME), "broken =").unwrap();
+    assert_eq!(set_enabled(dir, "aa", false).unwrap_err().code, "config");
+}
+
+#[test]
 fn grants_and_remove() {
     let t = tempfile::tempdir().unwrap();
     let dir = t.path();
@@ -165,7 +214,7 @@ fn log_lines_and_live_state() {
 #[test]
 fn snapshots_list_what_a_restart_applies() {
     let a = |v: &str, en: bool, g: &[&str], fp: &str| {
-        (v.to_string(), en, g.iter().map(|s| s.to_string()).collect(), fp.to_string())
+        (v.to_string(), en, g.iter().map(|s| s.to_string()).collect(), fp.to_string(), None)
     };
     let mut loaded = Snapshot::default();
     loaded.mods.insert("same".into(), a("1", true, &[], "f"));
@@ -175,6 +224,8 @@ fn snapshots_list_what_a_restart_applies() {
     loaded.mods.insert("perm".into(), a("1", true, &[], "f"));
     loaded.mods.insert("permoff".into(), a("1", false, &[], "f"));
     loaded.mods.insert("gone".into(), a("1", true, &[], "f"));
+    loaded.mods.insert("req".into(), a("1", true, &[], "f"));
+    loaded.mods.insert("reqoff".into(), a("1", false, &[], "f"));
     let mut now = loaded.clone();
     now.mods.remove("gone");
     now.mods.insert("upd".into(), a("2", true, &[], "g"));
@@ -183,12 +234,15 @@ fn snapshots_list_what_a_restart_applies() {
     now.mods.insert("perm".into(), a("1", true, &["x"], "f"));
     now.mods.insert("permoff".into(), a("1", false, &["x"], "f"));
     now.mods.insert("new".into(), a("1", true, &[], "n"));
+    now.mods.get_mut("req").unwrap().4 = Some(false);
+    now.mods.get_mut("reqoff").unwrap().4 = Some(true);
     let kinds: Vec<(String, String)> = changes(&loaded, &now).into_iter().map(|c| (c.kind, c.id)).collect();
     let want = [
         ("installed", "new"),
         ("disabled", "off"),
         ("enabled", "on"),
         ("permissions", "perm"),
+        ("clientRequired", "req"),
         ("updated", "upd"),
         ("removed", "gone"),
     ];

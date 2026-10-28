@@ -212,6 +212,10 @@ export class ModsStore {
     const name = loc(m.name, m.id);
     return this.act(m.id, () => api.modsSetEnabled(m.id, on), t(on ? 'mods.turnedOn' : 'mods.turnedOff', { name }));
   }
+  /** The admin's override of whether players need the mod (takes effect at the next start). */
+  setClientRequired(m: ModSummary, on: boolean) {
+    return this.act(`${m.id}:clientRequired`, () => api.modsSetClientRequired(m.id, on), t('mods.clientRequiredSaved'));
+  }
   grant(m: ModSummary, perm: string, on: boolean) {
     return this.act(`${m.id}:${perm}`, () => api.modsSetGrant(m.id, perm, on));
   }

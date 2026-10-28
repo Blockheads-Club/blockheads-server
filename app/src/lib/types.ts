@@ -173,7 +173,11 @@ export interface ModSummary {
   authors: string[];
   license: string;
   homepage: string | null;
-  sides: { server: boolean; client: boolean; clientRequired: boolean };
+  /**
+   * clientRequired: players must run the client half (the manifest, or the admin's override in mods.toml);
+   * clientRequiredDefault: what the manifest says; clientRequiredLocked: no override possible (no client half, or content).
+   */
+  sides: { server: boolean; client: boolean; clientRequired: boolean; clientRequiredDefault: boolean; clientRequiredLocked: boolean };
   runtime: string | null;
   native: boolean;
   permissions: string[];
@@ -283,26 +287,30 @@ export interface InstallProgress {
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 export type SettingType = 'bool' | 'int' | 'float' | 'enum' | 'string' | 'roles' | 'matrix' | 'list';
 /** One field of a mod's settings schema (`mod_settings_get`, keys as the contract spells them). */
-export interface SettingField {
+/** A setting as mod-sdk's canonical JSON describes it (list item fields have no group, scope or restart). */
+export interface SettingFieldBase {
   key: string;
   type: SettingType;
   default: Json;
   label: Record<string, string>;
   help?: Record<string, string>;
-  group?: string;
-  scope: 'server' | 'client';
-  restart: boolean;
   min?: number;
   max?: number;
+  /** A hint for the number box; values off the step are allowed. */
   step?: number;
   values?: string[];
   max_length?: number;
   rows?: string[];
   cols?: string[];
   cell?: 'bool' | 'roles';
-  /** List item fields: sub-key -> field without its key. */
-  item?: Record<string, Omit<SettingField, 'key'>>;
+  /** List item fields, in declaration order. */
+  item?: SettingFieldBase[];
   max_items?: number;
+}
+export interface SettingField extends SettingFieldBase {
+  group?: string;
+  scope: 'server' | 'client';
+  restart: boolean;
 }
 export interface ModSettings {
   fields: SettingField[];

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { t } from '../i18n.svelte';
-  import type { Json, SettingField } from '../types';
+  import type { Json, SettingFieldBase } from '../types';
   import Button from '../ui/Button.svelte';
   import Field from '../ui/Field.svelte';
   import SelectField from '../ui/SelectField.svelte';
@@ -10,7 +10,7 @@
   import { fieldText, itemFields, matrixRoles, newItem, problemText, roleName, roleOptions, setCell, validate } from './settings.svelte';
 
   interface Props {
-    field: SettingField;
+    field: SettingFieldBase;
     value: Json;
     /** Accessible name of the control (the visible label sits next to it). */
     label: string;

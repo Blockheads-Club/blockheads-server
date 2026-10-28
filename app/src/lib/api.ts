@@ -74,6 +74,7 @@ export const api = {
   modsOverview: () => invoke<ModsOverview>('mods_overview'),
   modsSetEnabled: (id: string, on: boolean) => invoke<void>('mods_set_enabled', { id, on }),
   modsSetGrant: (id: string, perm: string, on: boolean) => invoke<void>('mods_set_grant', { id, perm, on }),
+  modsSetClientRequired: (id: string, on: boolean) => invoke<void>('mods_set_client_required', { id, on }),
   modsRemove: (file: string) => invoke<void>('mods_remove', { file }),
   modsClearData: (id: string) => invoke<void>('mods_clear_data', { id }),
   modsOpenFolder: (id?: string) => invoke<void>('mods_open_folder', { id: id ?? null }),

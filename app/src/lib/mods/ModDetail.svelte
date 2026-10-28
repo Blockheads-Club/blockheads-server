@@ -174,6 +174,22 @@
           <p class="hint">{t('mods.noPermissions')}</p>
         {/if}
       </section>
+      {#if mod.sides.client}
+        <section class="card sec" aria-labelledby="cr">
+          <h2 id="cr"><Icon name="monitor" />{` ${t('mods.clientRequired')}`}</h2>
+          {#if mod.sides.clientRequiredLocked}
+            <p class="hint">{t('mods.clientRequiredLocked')}</p>
+          {:else}
+            <Toggle
+              checked={mod.sides.clientRequired}
+              label={mod.sides.clientRequired ? t('mods.clientRequiredOn') : t('mods.clientRequiredOff')}
+              disabled={mods.busy === `${mod.id}:clientRequired`}
+              onchange={(v) => mods.setClientRequired(mod, v)}
+            />
+            <p class="hint">{t('mods.clientRequiredHint', { value: mod.sides.clientRequiredDefault ? t('mods.clientRequiredOn') : t('mods.clientRequiredOff') })}</p>
+          {/if}
+        </section>
+      {/if}
       <section class="card sec" aria-labelledby="cm">
         <h2 id="cm">{t('mods.commands')}</h2>
         <p class="hint">{t('mods.commandsHint')}</p>

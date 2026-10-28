@@ -2,7 +2,7 @@ import { api } from '../api';
 import { t } from '../i18n.svelte';
 import { en, type Key } from '../messages';
 import { store } from '../store.svelte';
-import type { Json, ModError, ModSettings, SettingField } from '../types';
+import type { Json, ModError, ModSettings, SettingField, SettingFieldBase } from '../types';
 import { toast } from '../ui/toast.svelte';
 import { isModError, loc, modErr } from './mods.svelte';
 
@@ -35,13 +35,13 @@ export function fieldText(map: Record<string, string> | undefined, fallback: str
   return map ? loc(map, fallback) : fallback;
 }
 
-/** List item fields with their keys, in declaration order. */
-export function itemFields(f: SettingField): SettingField[] {
-  return Object.entries(f.item ?? {}).map(([key, sub]) => ({ ...sub, key }));
+/** List item fields, in declaration order. */
+export function itemFields(f: SettingFieldBase): SettingFieldBase[] {
+  return f.item ?? [];
 }
 
 /** A new list item: every sub-field at its default. */
-export function newItem(f: SettingField): Record<string, Json> {
+export function newItem(f: SettingFieldBase): Record<string, Json> {
   return Object.fromEntries(itemFields(f).map((s) => [s.key, clone(s.default)]));
 }
 
@@ -62,13 +62,10 @@ export function matrixRoles(v: Json): Json[] {
   return Object.values(v).flatMap((row) => (row && typeof row === 'object' && !Array.isArray(row) ? Object.values(row) : []));
 }
 
-/** Matrix value with one cell changed; empty cells (off, nobody) are left out like the defaults do. */
+/** Matrix value with one cell changed (a matrix value has every row and column). */
 export function setCell(v: Json, row: string, col: string, cell: Json): Record<string, Record<string, Json>> {
   const m = clone((v && typeof v === 'object' && !Array.isArray(v) ? v : {}) as Record<string, Record<string, Json>>);
-  const r = (m[row] ??= {});
-  if (cell === false || (Array.isArray(cell) && cell.length === 0)) delete r[col];
-  else r[col] = cell;
-  if (Object.keys(r).length === 0) delete m[row];
+  (m[row] ??= {})[col] = cell;
   return m;
 }
 
@@ -80,13 +77,17 @@ function num(n: number): string {
 const isObj = (v: Json): v is { [k: string]: Json } => typeof v === 'object' && v !== null && !Array.isArray(v);
 const join = (at: string, part: string) => (at ? `${at}.${part}` : part);
 
+/** A role name: `[a-z0-9_-]{1,40}` (bhmod-manifest `is_role`). */
+const ROLE = /^[a-z0-9_-]{1,40}$/;
+
 function roles(v: Json, at: string): Problem | null {
   if (!Array.isArray(v)) return { rule: 'type', at };
-  return v.some((r) => typeof r !== 'string' || !r.trim() || r.length > 40) ? { rule: 'role', at } : null;
+  const bad = v.some((r, i) => typeof r !== 'string' || !ROLE.test(r) || v.indexOf(r) !== i);
+  return bad ? { rule: 'role', at } : null;
 }
 
-/** Checks a value against its field with the backend's rules; null when it is fine. */
-export function validate(f: SettingField, v: Json, at = ''): Problem | null {
+/** Checks a value against its field with the backend's rules (bhmod-manifest `validate_value`); null when it is fine. */
+export function validate(f: SettingFieldBase, v: Json, at = ''): Problem | null {
   const bounds = (n: number): Problem | null =>
     f.min !== undefined && n < f.min
       ? { rule: 'min', expected: num(f.min), at }
@@ -99,13 +100,7 @@ export function validate(f: SettingField, v: Json, at = ''): Problem | null {
     case 'int': {
       if (typeof v !== 'number' || !Number.isFinite(v)) return { rule: 'number', at };
       if (!Number.isInteger(v)) return { rule: 'integer', at };
-      const b = bounds(v);
-      if (b) return b;
-      if (f.step && f.step > 0) {
-        const off = (v - (f.min ?? 0)) / f.step;
-        if (Math.abs(off - Math.round(off)) > 1e-9) return { rule: 'step', expected: num(f.step), at };
-      }
-      return null;
+      return bounds(v);
     }
     case 'float':
       return typeof v !== 'number' || !Number.isFinite(v) ? { rule: 'number', at } : bounds(v);
@@ -156,9 +151,16 @@ export function problemText(p: Problem, top = false): string {
   return p.at && !top ? t('modSettings.errAt', { at: p.at, text }) : text;
 }
 
-/** The message of a failed save. */
-export function settingErr(e: unknown): string {
-  if (isModError(e) && e.code === 'setting') return problemText({ rule: e.detail ?? '', expected: e.expected, at: e.got });
+/**
+ * The message of a failed save of setting `key`. The backend names where the value broke from the key on
+ * (`radius`, `talk.global.owner`, `channels[1].name`); the key itself is left out like in {@link validate}.
+ */
+export function settingErr(e: unknown, key = ''): string {
+  if (isModError(e) && e.code === 'setting') {
+    const got = e.got ?? '';
+    const at = got === key ? '' : key && got.startsWith(`${key}.`) ? got.slice(key.length + 1) : got;
+    return problemText({ rule: e.detail ?? '', expected: e.expected, at: at || undefined });
+  }
   return modErr(e);
 }
 
@@ -255,7 +257,7 @@ export class SettingsStore {
         ok++;
         if (f.restart && store.active) this.restartNeeded = true;
       } catch (e) {
-        this.errors[f.key] = settingErr(e);
+        this.errors[f.key] = settingErr(e, f.key);
       }
     }
     this.saving = false;

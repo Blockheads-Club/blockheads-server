@@ -80,10 +80,10 @@ test('mods: a mod’s settings tab edits, validates and saves', async ({ page })
   await expect(page.getByRole('textbox', { name: 'Message of the day' })).toHaveValue('Welcome!');
   await expect(page.getByText('Needs restart')).toBeVisible();
 
-  // Client-side rules first: 7 is not a step of 5.
+  // Client-side rules first: 61 is over the maximum (the step of 5 is only a hint).
   const slow = page.getByRole('spinbutton', { name: 'Slow mode (seconds)' });
-  await slow.fill('7');
-  await expect(page.getByText('Must go in steps of 5.')).toBeVisible();
+  await slow.fill('61');
+  await expect(page.getByText('Must be at most 60.')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Save settings' })).toBeDisabled();
   await slow.fill('10');
   await page.getByRole('combobox', { name: 'Name style' }).selectOption('tag');
@@ -107,4 +107,17 @@ test('mods: a mod’s settings tab edits, validates and saves', async ({ page })
   await page.getByRole('tab', { name: 'Settings' }).click();
   await expect(page.getByRole('spinbutton', { name: 'Slow mode (seconds)' })).toHaveValue('10');
   await expect(page.getByRole('textbox', { name: 'Name #1' })).toHaveValue('builders');
+});
+
+test('mods: the admin lets players join without a client mod', async ({ page }) => {
+  await mockTauri(page, { worlds: true, mods: 'demo' });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: 'Server' }).getByRole('button', { name: /^Mods/ }).click();
+  await page.getByRole('button', { name: 'Minimap', exact: true }).click();
+  const sec = page.getByRole('main');
+  await expect(sec.getByRole('heading', { name: 'Players must have this mod' })).toBeVisible();
+  await expect(sec.getByText('The mod’s own default is required.')).toBeVisible();
+  await sec.getByRole('switch', { name: 'required' }).uncheck({ force: true });
+  await expect(page.getByText('Saved. It applies after a restart.')).toBeVisible();
+  await expect(sec.getByRole('switch', { name: 'optional' })).not.toBeChecked();
 });

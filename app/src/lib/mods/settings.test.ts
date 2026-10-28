@@ -47,18 +47,18 @@ function schema(): ModSettings {
       f({ key: 'curve', type: 'enum', default: 'log', values: ['linear', 'log'], group: 'Proximity', label: { en: 'Curve' } }),
       f({ key: 'motd', type: 'string', default: '', max_length: 5, label: { en: 'Message' } }),
       f({ key: 'admins', type: 'roles', default: ['admin'], label: { en: 'Who may mute' } }),
-      f({ key: 'talk', type: 'matrix', default: { proximity: { everyone: true } }, rows: ['proximity', 'global'], cols: ['owner', 'everyone'], cell: 'bool', label: { en: 'Who may talk' } }),
-      f({ key: 'who', type: 'matrix', default: {}, rows: ['global'], cols: ['talk'], cell: 'roles', label: { en: 'Roles per mode' } }),
+      f({ key: 'talk', type: 'matrix', default: { proximity: { owner: false, everyone: true }, global: { owner: false, everyone: false } }, rows: ['proximity', 'global'], cols: ['owner', 'everyone'], cell: 'bool', label: { en: 'Who may talk' } }),
+      f({ key: 'who', type: 'matrix', default: { global: { talk: [] } }, rows: ['global'], cols: ['talk'], cell: 'roles', label: { en: 'Roles per mode' } }),
       f({
         key: 'channels',
         type: 'list',
         default: [],
         max_items: 2,
         label: { en: 'Channels' },
-        item: {
-          name: { type: 'string', default: '', max_length: 8, label: { en: 'Name' }, scope: 'server', restart: false },
-          size: { type: 'int', default: 1, label: { en: 'Size' }, scope: 'server', restart: false }
-        }
+        item: [
+          { key: 'name', type: 'string', default: '', max_length: 8, label: { en: 'Name' } },
+          { key: 'size', type: 'int', default: 1, label: { en: 'Size' } }
+        ]
       }),
       f({ key: 'keys', type: 'string', default: 'V', scope: 'client' })
     ],
@@ -101,8 +101,8 @@ describe('settings helpers', () => {
     expect(matrixRoles([])).toEqual([]);
     expect(matrixRoles(null)).toEqual([]);
     expect(setCell(null, 'r', 'c', true)).toEqual({ r: { c: true } });
-    expect(setCell({ r: { c: true, d: true } }, 'r', 'c', false)).toEqual({ r: { d: true } });
-    expect(setCell({ r: { c: ['a'] } }, 'r', 'c', [])).toEqual({});
+    expect(setCell({ r: { c: true, d: true } }, 'r', 'c', false)).toEqual({ r: { c: false, d: true } });
+    expect(setCell({ r: { c: ['a'] } }, 'r', 'c', [])).toEqual({ r: { c: [] } });
     const list = schema().fields[9];
     expect(itemFields(list).map((s) => s.key)).toEqual(['name', 'size']);
     expect(itemFields(f({ key: 'x', type: 'list' }))).toEqual([]);
@@ -118,10 +118,7 @@ describe('settings helpers', () => {
     expect(validate(int, 4.5)?.rule).toBe('integer');
     expect(validate(int, 0)).toEqual({ rule: 'min', expected: '4', at: '' });
     expect(validate(int, 200)).toEqual({ rule: 'max', expected: '128', at: '' });
-    expect(validate(int, 10)).toEqual({ rule: 'step', expected: '4', at: '' });
-    expect(validate(int, 12)).toBeNull();
-    expect(validate(f({ key: 's', type: 'int', step: 5 }), 10)).toBeNull();
-    expect(validate(f({ key: 's', type: 'int', step: 0 }), 3)).toBeNull();
+    expect(validate(int, 10)).toBeNull();
     expect(validate(float, -1)?.rule).toBe('min');
     expect(validate(float, '1')?.rule).toBe('number');
     expect(validate(float, 0.5)).toBeNull();
@@ -134,6 +131,8 @@ describe('settings helpers', () => {
     expect(validate(roles, 'admin')?.rule).toBe('type');
     expect(validate(roles, [' '])?.rule).toBe('role');
     expect(validate(roles, ['x'.repeat(41)])?.rule).toBe('role');
+    expect(validate(roles, ['VIP'])?.rule).toBe('role');
+    expect(validate(roles, ['vip', 'vip'])?.rule).toBe('role');
     expect(validate(roles, ['vip'])).toBeNull();
     expect(validate(mtx, [])?.rule).toBe('type');
     expect(validate(mtx, { x: {} })).toEqual({ rule: 'unknown', at: 'x' });
@@ -161,6 +160,10 @@ describe('settings helpers', () => {
     expect(problemText({ rule: 'type' })).toBe('This value has the wrong type.');
     expect(settingErr({ code: 'setting', detail: 'max', expected: '9' })).toBe('Must be at most 9.');
     expect(settingErr({ code: 'setting' })).toBe('This value isn’t allowed.');
+    // Backend paths start at the key, which is left out.
+    expect(settingErr({ code: 'setting', detail: 'min', expected: '4', got: 'radius' }, 'radius')).toBe('Must be at least 4.');
+    expect(settingErr({ code: 'setting', detail: 'type', got: 'talk.global.owner' }, 'talk')).toBe('global.owner: This value has the wrong type.');
+    expect(settingErr({ code: 'setting', detail: 'length', expected: '8', got: 'channels[1].name' }, 'channels')).toBe('channels[1].name: At most 8 characters.');
     expect(settingErr({ code: 'settingKey', detail: 'x' })).toBe('The mod has no setting “x” you can change.');
     expect(settingErr('boom')).toBe('boom');
   });
@@ -180,8 +183,8 @@ describe('settings store', () => {
     expect(modSettings.saved.curve).toBe('log');
     expect(modSettings.dirty).toEqual([]);
     expect(modSettings.canSave).toBe(false);
-    modSettings.set('radius', 10);
-    expect(modSettings.problems.radius?.rule).toBe('step');
+    modSettings.set('radius', 200);
+    expect(modSettings.problems.radius?.rule).toBe('max');
     expect(modSettings.canSave).toBe(false);
     modSettings.set('radius', 12);
     modSettings.set('motd', 'hello');
@@ -269,8 +272,8 @@ describe('Settings tab', () => {
     expect(screen.getByText('1 unsaved change')).toBeInTheDocument();
     // int: a broken entry stays text and is named
     const radius = screen.getByRole('spinbutton', { name: 'Radius' });
-    await fireEvent.input(radius, { target: { value: '10' } });
-    expect(screen.getByText('Must go in steps of 4.')).toBeInTheDocument();
+    await fireEvent.input(radius, { target: { value: '200' } });
+    expect(screen.getByText('Must be at most 128.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Save settings' })).toBeDisabled();
     await fireEvent.input(radius, { target: { value: '' } });
     expect(modSettings.draft.radius).toBe('');
@@ -302,9 +305,9 @@ describe('Settings tab', () => {
     // matrix of checkboxes
     const cell = screen.getByRole('checkbox', { name: 'global: Owner' });
     await fireEvent.click(cell);
-    expect(modSettings.draft.talk).toEqual({ proximity: { everyone: true }, global: { owner: true } });
+    expect(modSettings.draft.talk).toEqual({ proximity: { owner: false, everyone: true }, global: { owner: true, everyone: false } });
     await fireEvent.click(screen.getByRole('checkbox', { name: 'proximity: Everyone' }));
-    expect(modSettings.draft.talk).toEqual({ global: { owner: true } });
+    expect(modSettings.draft.talk).toEqual({ proximity: { owner: false, everyone: false }, global: { owner: true, everyone: false } });
     // matrix of role chips
     const rc = screen.getByRole('group', { name: 'global: talk' });
     expect(within(rc).queryByRole('textbox')).toBeNull();
@@ -424,6 +427,9 @@ describe('Settings tab', () => {
     render(SettingControl, { field: mtx, value: { global: 3 }, label: 'M', onchange });
     expect(screen.getByRole('checkbox', { name: 'global: Owner' })).not.toBeChecked();
     cleanup();
+    render(SettingControl, { field: schema().fields[8], value: {}, label: 'R', onchange });
+    expect(within(screen.getByRole('group', { name: 'global: talk' })).getByRole('button', { name: 'Everyone' })).toHaveAttribute('aria-pressed', 'false');
+    cleanup();
     render(SettingControl, { field: { ...list, max_items: undefined }, value: [7, { size: 3, extra: 1 }], label: 'L', onchange });
     expect(screen.queryByText(/of/)).toBeNull();
     expect(screen.getByRole('spinbutton', { name: 'Size #2' })).toHaveValue(3);
@@ -433,7 +439,7 @@ describe('Settings tab', () => {
     render(SettingControl, { field: list, value: 'nope', label: 'L', onchange });
     expect(screen.getByText('Nothing added yet.')).toBeInTheDocument();
     cleanup();
-    const nested = f({ key: 'n', type: 'list', item: { r: { type: 'roles', default: [], label: { en: 'R' }, scope: 'server', restart: false } } });
+    const nested = f({ key: 'n', type: 'list', item: [{ key: 'r', type: 'roles', default: [], label: { en: 'R' } }] });
     render(SettingControl, { field: nested, value: [{}], label: 'N', onchange });
     expect(screen.getByRole('group', { name: 'R #1' })).toBeInTheDocument();
   });

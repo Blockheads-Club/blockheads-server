@@ -555,6 +555,13 @@ async fn mods_set_grant(core: State<'_, Arc<Core>>, id: String, perm: String, on
     blocking(move || c.mods_set_grant(&id, &perm, on)).await
 }
 
+/// The admin's `client-required` override of a mod with a client half.
+#[tauri::command]
+async fn mods_set_client_required(core: State<'_, Arc<Core>>, id: String, on: bool) -> MRes<()> {
+    let c = core.inner().clone();
+    blocking(move || c.mods_set_client_required(&id, on)).await
+}
+
 /// The schema and values of a mod's settings (`{ fields, values }`).
 #[tauri::command]
 async fn mod_settings_get(core: State<'_, Arc<Core>>, id: String) -> MRes<mod_settings::View> {
@@ -797,6 +804,7 @@ pub fn run() {
             mods_overview,
             mods_set_enabled,
             mods_set_grant,
+            mods_set_client_required,
             mods_remove,
             mods_clear_data,
             mods_open_folder,
