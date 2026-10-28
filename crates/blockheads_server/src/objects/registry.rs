@@ -37,9 +37,8 @@ use super::interaction_object::{
 };
 use super::protocols::TapChoiceDynamicObject;
 use super::type_tables::{
-    class_name_for_dynamic_object_type, class_name_for_interaction_object_type, register_dynamic_class,
-    register_interaction_class, ClassFactory, FromNetDataFn, FromPositionFn, FromPositionInteractionFn,
-    FromPositionTypeSaveDictFn, FromSaveDictFn,
+    register_dynamic_class, register_interaction_class, ClassFactory, FromNetDataFn, FromPositionFn,
+    FromPositionInteractionFn, FromPositionTypeSaveDictFn, FromSaveDictFn,
 };
 use crate::dynworld::state::DynamicWorld;
 use crate::items::inventory_item::InventoryItem;
@@ -788,7 +787,10 @@ pub fn install() {
     // 5. self-check
     #[cfg(debug_assertions)]
     {
-        use super::type_tables::{class_for_dynamic_object_type, class_for_interaction_object_type};
+        use super::type_tables::{
+            class_for_dynamic_object_type, class_for_interaction_object_type, class_name_for_dynamic_object_type,
+            class_name_for_interaction_object_type,
+        };
         for t in 1..=64 {
             let f = class_for_dynamic_object_type(t).expect("missing dynamic factory");
             debug_assert_eq!(Some(f.class.name), class_name_for_dynamic_object_type(t));
@@ -947,7 +949,9 @@ mod tests {
     use super::*;
     use crate::objects::base::testutil::setup;
     use crate::objects::class_info::class_info_by_name;
-    use crate::objects::type_tables::{class_for_dynamic_object_type, class_for_interaction_object_type};
+    use crate::objects::type_tables::{
+        class_for_dynamic_object_type, class_for_interaction_object_type, class_name_for_dynamic_object_type,
+    };
 
     /// Section 3 shape matrix as a const copy: five flags in the order P S N T I.
     const SHAPES: [(i32, &str); 64] = [
