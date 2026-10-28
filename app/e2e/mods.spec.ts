@@ -67,3 +67,57 @@ test('dashboard shows the mods card', async ({ page }) => {
   await card.getByRole('button', { name: 'Manage mods' }).click();
   await expect(page.getByRole('heading', { name: 'Mods', level: 1 })).toBeVisible();
 });
+
+test('mods: a mod’s settings tab edits, validates and saves', async ({ page }) => {
+  await mockTauri(page, { worlds: true, mods: 'demo' });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: 'Server' }).getByRole('button', { name: /^Mods/ }).click();
+  await page.getByRole('button', { name: 'Better Chat', exact: true }).click();
+  await page.getByRole('tab', { name: 'Settings' }).click();
+  await expect(page.getByRole('heading', { name: 'Chat', level: 2 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Roles', level: 2 })).toBeVisible();
+  await expect(page.getByText('Mention sound')).toHaveCount(0);
+  await expect(page.getByRole('textbox', { name: 'Message of the day' })).toHaveValue('Welcome!');
+  await expect(page.getByText('Needs restart')).toBeVisible();
+
+  // Client-side rules first: 61 is over the maximum (the step of 5 is only a hint).
+  const slow = page.getByRole('spinbutton', { name: 'Slow mode (seconds)' });
+  await slow.fill('61');
+  await expect(page.getByText('Must be at most 60.')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Save settings' })).toBeDisabled();
+  await slow.fill('10');
+  await page.getByRole('combobox', { name: 'Name style' }).selectOption('tag');
+  await page.getByRole('group', { name: 'Who may use colors' }).getByRole('button', { name: 'Moderators' }).click();
+  await page.getByRole('checkbox', { name: 'announce: Admins' }).check();
+  await page.getByRole('button', { name: 'Add', exact: true }).click();
+  await page.getByRole('textbox', { name: 'Name #1' }).fill('builders');
+  // The backend refuses a link in the message of the day: shown next to the field, the rest is saved.
+  await page.getByRole('textbox', { name: 'Message of the day' }).fill('see https://x');
+  await expect(page.getByText('6 unsaved changes')).toBeVisible();
+  await page.getByRole('button', { name: 'Save settings' }).click();
+  await expect(page.getByText('This value isn’t allowed.')).toBeVisible();
+  await expect(page.getByText('1 unsaved change')).toBeVisible();
+  await page.getByRole('button', { name: 'Reset Message of the day to default' }).click();
+  await page.getByRole('button', { name: 'Save settings' }).click();
+  await expect(page.getByText('All changes saved')).toBeVisible();
+
+  // Saved values come back after leaving the mod.
+  await page.getByRole('button', { name: 'All mods' }).click();
+  await page.getByRole('button', { name: 'Better Chat', exact: true }).click();
+  await page.getByRole('tab', { name: 'Settings' }).click();
+  await expect(page.getByRole('spinbutton', { name: 'Slow mode (seconds)' })).toHaveValue('10');
+  await expect(page.getByRole('textbox', { name: 'Name #1' })).toHaveValue('builders');
+});
+
+test('mods: the admin lets players join without a client mod', async ({ page }) => {
+  await mockTauri(page, { worlds: true, mods: 'demo' });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: 'Server' }).getByRole('button', { name: /^Mods/ }).click();
+  await page.getByRole('button', { name: 'Minimap', exact: true }).click();
+  const sec = page.getByRole('main');
+  await expect(sec.getByRole('heading', { name: 'Players must have this mod' })).toBeVisible();
+  await expect(sec.getByText('The mod’s own default is required.')).toBeVisible();
+  await sec.getByRole('switch', { name: 'required' }).uncheck({ force: true });
+  await expect(page.getByText('Saved. It applies after a restart.')).toBeVisible();
+  await expect(sec.getByRole('switch', { name: 'optional' })).not.toBeChecked();
+});

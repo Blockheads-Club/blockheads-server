@@ -541,6 +541,8 @@ fn fake_modded(port: u16, sha: [u8; 32], size: u64, chunks: Vec<Vec<u8>>) {
                     client_required: true,
                     count: 1,
                     players: None,
+                    features: vec![],
+                    voice_udp_port: None,
                 })
                 .encode(),
             )]
@@ -636,6 +638,8 @@ fn modded_client_edge_cases() {
                 client_required: true,
                 count: 0,
                 players: None,
+                features: vec![],
+                voice_udp_port: None,
             })
             .encode(),
         )],

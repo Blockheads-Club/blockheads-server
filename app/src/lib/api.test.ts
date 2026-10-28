@@ -89,6 +89,7 @@ describe('mods api', () => {
     await api.modsOverview();
     await api.modsSetEnabled('a', true);
     await api.modsSetGrant('a', 'players:chat', false);
+    await api.modsSetClientRequired('a', false);
     await api.modsRemove('a.bhmod');
     await api.modsClearData('a');
     await api.modsOpenFolder();
@@ -101,10 +102,15 @@ describe('mods api', () => {
     await api.modsInspectFile('fast tools.bhmod', bytes);
     const request = { items: [{ id: 'a', version: '1.0.0' }], grants: {}, enable: true, local: false };
     await api.modsInstall(request);
+    await api.modSettingsGet('voice');
+    await api.modSettingsSet('voice', 'radius', 32);
     expect(invoke.mock.calls.map((c: any[]) => c[0])).toEqual([
-      'mods_overview', 'mods_set_enabled', 'mods_set_grant', 'mods_remove', 'mods_clear_data', 'mods_open_folder',
-      'mods_open_folder', 'mods_browse', 'mods_plan', 'mods_plan', 'mods_inspect_url', 'mods_inspect_file', 'mods_install'
+      'mods_overview', 'mods_set_enabled', 'mods_set_grant', 'mods_set_client_required', 'mods_remove', 'mods_clear_data', 'mods_open_folder',
+      'mods_open_folder', 'mods_browse', 'mods_plan', 'mods_plan', 'mods_inspect_url', 'mods_inspect_file', 'mods_install',
+      'mod_settings_get', 'mod_settings_set'
     ]);
+    expect(invoke).toHaveBeenCalledWith('mod_settings_get', { id: 'voice' });
+    expect(invoke).toHaveBeenCalledWith('mod_settings_set', { id: 'voice', key: 'radius', value: 32 });
     expect(invoke).toHaveBeenCalledWith('mods_open_folder', { id: null });
     expect(invoke).toHaveBeenCalledWith('mods_plan', { id: 'a', version: null });
     expect(invoke).toHaveBeenCalledWith('mods_plan', { id: 'a', version: '1.0.0' });

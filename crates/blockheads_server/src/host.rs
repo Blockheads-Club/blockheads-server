@@ -72,6 +72,10 @@ pub struct HostConfig {
     /// info with this `photo`, so clients get it with the player list and show it next to the server's chat
     /// lines instead of the generic face. `None` (the default) is exactly the vanilla behaviour.
     pub server_photo: Option<Vec<u8>>,
+    /// Voice transport (not in the original): the dedicated UDP voice port (`voice.udp_port`; by default the one
+    /// after the game port) and an optional embedder relay. The socket is only bound while a loaded mod holds the `voice` permission;
+    /// without one nothing changes.
+    pub voice: crate::mods::voice::VoiceConfig,
 }
 
 impl Default for HostConfig {
@@ -92,6 +96,7 @@ impl Default for HostConfig {
             no_exit: false,
             shared_names: false,
             server_photo: None,
+            voice: crate::mods::voice::VoiceConfig::default(),
         }
     }
 }
@@ -244,6 +249,7 @@ pub fn start(cfg: HostConfig, log: LogCallback) -> std::io::Result<ServerHandle>
         });
         prepare_thread(cfg.data_dir.as_deref(), Some(sink));
         crate::mods::set_config(cfg.mods.clone());
+        crate::mods::voice::set_config(cfg.voice.clone());
         crate::server::shared_names::set_enabled(cfg.shared_names);
         crate::server::server_photo::set(cfg.server_photo.clone());
         nslog::set_process_name("blockheads_server");

@@ -173,7 +173,11 @@ export interface ModSummary {
   authors: string[];
   license: string;
   homepage: string | null;
-  sides: { server: boolean; client: boolean; clientRequired: boolean };
+  /**
+   * clientRequired: players must run the client half (the manifest, or the admin's override in mods.toml);
+   * clientRequiredDefault: what the manifest says; clientRequiredLocked: no override possible (no client half, or content).
+   */
+  sides: { server: boolean; client: boolean; clientRequired: boolean; clientRequiredDefault: boolean; clientRequiredLocked: boolean };
   runtime: string | null;
   native: boolean;
   permissions: string[];
@@ -193,6 +197,8 @@ export interface ModSummary {
   lines: ModLine[];
   slowestMs: number | null;
   storageBytes: number | null;
+  /** Settings the admin can change on the mod's Settings tab. */
+  settings: number;
 }
 export interface ModChange {
   kind: 'installed' | 'removed' | 'updated' | 'enabled' | 'disabled' | 'permissions';
@@ -275,4 +281,38 @@ export interface InstallProgress {
   step: 'download' | 'write' | 'done';
   done: number;
   total: number;
+}
+
+/** A JSON value as the mod settings commands send it. */
+export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
+export type SettingType = 'bool' | 'int' | 'float' | 'enum' | 'string' | 'roles' | 'matrix' | 'list';
+/** One field of a mod's settings schema (`mod_settings_get`, keys as the contract spells them). */
+/** A setting as mod-sdk's canonical JSON describes it (list item fields have no group, scope or restart). */
+export interface SettingFieldBase {
+  key: string;
+  type: SettingType;
+  default: Json;
+  label: Record<string, string>;
+  help?: Record<string, string>;
+  min?: number;
+  max?: number;
+  /** A hint for the number box; values off the step are allowed. */
+  step?: number;
+  values?: string[];
+  max_length?: number;
+  rows?: string[];
+  cols?: string[];
+  cell?: 'bool' | 'roles';
+  /** List item fields, in declaration order. */
+  item?: SettingFieldBase[];
+  max_items?: number;
+}
+export interface SettingField extends SettingFieldBase {
+  group?: string;
+  scope: 'server' | 'client';
+  restart: boolean;
+}
+export interface ModSettings {
+  fields: SettingField[];
+  values: Record<string, Json>;
 }

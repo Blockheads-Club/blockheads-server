@@ -65,44 +65,85 @@ pub type MRes<T> = Result<T, ModError>;
 // ---------------------------------------------------------------------------------------------------------------
 // mods.toml
 
-/// One `mods.toml` table, written back in the same shape bhmod-core reads.
-#[derive(Debug, Clone, Serialize)]
-struct ConfigOut {
-    #[serde(skip_serializing_if = "is_true")]
-    enabled: bool,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    grant: Vec<String>,
-}
+/// Header of a `mods.toml` the app creates.
+const CONFIG_HEADER: &str =
+    "# Mod settings: on/off, granted permissions and each mod's own settings. Blockheads Server keeps this file up to \
+     date.\n\n";
 
-fn is_true(b: &bool) -> bool {
-    *b
-}
-
-/// Reads `mods.toml`; a missing file is empty, an invalid one is an error (it is never overwritten).
-pub fn read_config(dir: &Path) -> MRes<ModsConfig> {
+/// `mods.toml` as text; a missing file is empty.
+fn read_text(dir: &Path) -> MRes<String> {
     match std::fs::read_to_string(dir.join(FILE_NAME)) {
-        Ok(t) => ModsConfig::parse(&t).map_err(|e| ModError::with("config", e)),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(ModsConfig::default()),
+        Ok(t) => Ok(t),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
         Err(e) => Err(io_err(e)),
     }
 }
 
-/// Changes `mods.toml` with `f`; entries that are back to the defaults are dropped.
+/// Reads `mods.toml`; a missing file is empty, an invalid one is an error (it is never overwritten).
+pub fn read_config(dir: &Path) -> MRes<ModsConfig> {
+    ModsConfig::parse(&read_text(dir)?).map_err(|e| ModError::with("config", e))
+}
+
+/// Sets `key` of a mods.toml table, or removes it (`None`).
+fn put(t: &mut dyn toml_edit::TableLike, key: &str, v: Option<toml_edit::Value>) {
+    match v {
+        Some(v) => {
+            t.insert(key, toml_edit::Item::Value(v));
+        }
+        None => {
+            t.remove(key);
+        }
+    }
+}
+
+/// Writes the keys the app owns into the table of one mod; false when nothing is left in it.
+fn apply(item: &mut toml_edit::Item, n: &bhmod_core::config::ModConfig) -> bool {
+    let t = item.as_table_like_mut().expect("mods.toml entries are tables");
+    put(t, "enabled", (!n.enabled).then(|| false.into()));
+    let grant = n.grant.iter().map(String::as_str).collect::<toml_edit::Array>();
+    put(t, "grant", (!n.grant.is_empty()).then(|| grant.into()));
+    put(t, "client-required", n.client_required.map(Into::into));
+    let kept = !t.is_empty();
+    // Only sub-tables left (`[<id>.settings]`): no empty `[<id>]` header.
+    let implicit = t.iter().all(|(_, v)| v.is_table());
+    if let Some(table) = item.as_table_mut() {
+        table.set_implicit(implicit);
+        // A header that only existed through `[<id>.settings]` goes right before it, not at the top of the file.
+        if table.position().is_none() {
+            let first = table.iter().filter_map(|(_, v)| v.as_table().and_then(|t| t.position())).min();
+            table.set_position(first);
+        }
+    }
+    kept
+}
+
+/// Changes `enabled`, `grant` and `client-required` in `mods.toml` with `f`, editing the file in place: comments,
+/// the order, other keys and each mod's `[<id>.settings]` stay as they are (those are written by
+/// `bhmod_core::config::write_setting`). Entries that are back to the defaults are dropped; a mod removed from the
+/// config loses its whole table.
 pub fn edit_config(dir: &Path, f: impl FnOnce(&mut ModsConfig)) -> MRes<()> {
-    let mut cfg = read_config(dir)?;
-    f(&mut cfg);
-    let out: BTreeMap<&String, ConfigOut> = cfg
-        .mods
-        .iter()
-        .filter(|(_, c)| !c.enabled || !c.grant.is_empty())
-        .map(|(id, c)| (id, ConfigOut { enabled: c.enabled, grant: c.grant.clone() }))
-        .collect();
-    let body = toml::to_string(&out).map_err(|e| ModError::with("io", e.to_string()))?;
+    let text = read_text(dir)?;
+    let mut doc: toml_edit::DocumentMut =
+        text.parse().map_err(|e: toml_edit::TomlError| ModError::with("config", e.to_string()))?;
+    let old = ModsConfig::parse(&text).map_err(|e| ModError::with("config", e))?;
+    let mut new = old.clone();
+    f(&mut new);
+    let ids: BTreeSet<&String> = old.mods.keys().chain(new.mods.keys()).collect();
+    for id in ids {
+        let Some(n) = new.mods.get(id) else {
+            doc.remove(id);
+            continue;
+        };
+        if old.get(id) == *n {
+            continue;
+        }
+        if !apply(doc.entry(id).or_insert_with(toml_edit::table), n) {
+            doc.remove(id);
+        }
+    }
     std::fs::create_dir_all(dir).map_err(io_err)?;
-    let text = format!(
-        "# Mod settings: on/off and granted permissions. Blockheads Server keeps this file up to date.\n\n{body}"
-    );
-    std::fs::write(dir.join(FILE_NAME), text).map_err(io_err)
+    let header = if text.trim().is_empty() { CONFIG_HEADER } else { "" };
+    std::fs::write(dir.join(FILE_NAME), format!("{header}{doc}")).map_err(io_err)
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -223,11 +264,13 @@ impl Live {
 // ---------------------------------------------------------------------------------------------------------------
 // Installed mods
 
+/// One mod as the server loaded it: (version, enabled, granted, package fingerprint, the admin's `client-required`).
+pub type Loaded = (String, bool, Vec<String>, String, Option<bool>);
+
 /// What the running server loaded (for "restart to apply").
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Snapshot {
-    /// id -> (version, enabled, granted, package fingerprint)
-    pub mods: BTreeMap<String, (String, bool, Vec<String>, String)>,
+    pub mods: BTreeMap<String, Loaded>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -235,7 +278,12 @@ pub struct Snapshot {
 pub struct Sides {
     pub server: bool,
     pub client: bool,
+    /// Players must run the client half: the manifest, or the admin's `client-required` in `mods.toml`.
     pub client_required: bool,
+    /// What the manifest says (the value without the admin's override).
+    pub client_required_default: bool,
+    /// The admin cannot change it: no client half, or `[content]` (always needs the client).
+    pub client_required_locked: bool,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -291,6 +339,8 @@ pub struct ModSummary {
     pub slowest_ms: Option<f64>,
     /// Bytes in the mod's storage for the loaded world; `None` while the server runs (the database is in use).
     pub storage_bytes: Option<u64>,
+    /// How many settings the admin can change on the mod's Settings tab (server-scope fields).
+    pub settings: usize,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -367,7 +417,8 @@ pub fn snapshot(dir: &Path) -> Snapshot {
         .iter()
         .map(|p| {
             let c = cfg.get(&p.manifest.id);
-            (p.manifest.id.clone(), (p.manifest.version.clone(), c.enabled, c.grant.clone(), fingerprint(p)))
+            let v = (p.manifest.version.clone(), c.enabled, c.grant.clone(), fingerprint(p), c.client_required);
+            (p.manifest.id.clone(), v)
         })
         .collect();
     Snapshot { mods }
@@ -377,16 +428,18 @@ pub fn snapshot(dir: &Path) -> Snapshot {
 pub fn changes(loaded: &Snapshot, now: &Snapshot) -> Vec<Change> {
     let mut out = Vec::new();
     let ch = |kind: &str, id: &str, v: &str| Change { kind: kind.into(), id: id.into(), version: v.into() };
-    for (id, (v, en, gr, fp)) in &now.mods {
+    for (id, (v, en, gr, fp, cr)) in &now.mods {
         match loaded.mods.get(id) {
             None => out.push(ch("installed", id, v)),
-            Some((v0, en0, gr0, fp0)) => {
+            Some((v0, en0, gr0, fp0, cr0)) => {
                 if fp != fp0 {
                     out.push(ch("updated", id, v));
                 } else if en != en0 {
                     out.push(ch(if *en { "enabled" } else { "disabled" }, id, v));
                 } else if gr != gr0 && *en {
                     out.push(ch("permissions", id, v));
+                } else if cr != cr0 && *en {
+                    out.push(ch("clientRequired", id, v));
                 } else {
                     let _ = v0;
                 }
@@ -522,7 +575,8 @@ pub fn overview(dir: &Path, ctx: &Context) -> Overview {
             let newer = Version::parse(&v.version).ok()? > m.semver();
             newer.then(|| v.version.clone())
         });
-        if c.enabled && m.client_required() {
+        let client_required = bhmod_core::config::client_required(m, &c);
+        if c.enabled && client_required {
             ov.client_mods.push(m.id.clone());
         }
         ov.mods.push(ModSummary {
@@ -533,7 +587,13 @@ pub fn overview(dir: &Path, ctx: &Context) -> Overview {
             authors: m.authors.clone(),
             license: m.license.clone(),
             homepage: m.homepage.clone(),
-            sides: Sides { server: m.sides.server, client: m.sides.client, client_required: m.client_required() },
+            sides: Sides {
+                server: m.sides.server,
+                client: m.sides.client,
+                client_required,
+                client_required_default: m.client_required(),
+                client_required_locked: client_required_locked(m),
+            },
             runtime: runtime_name(m),
             native: m.permissions.native,
             permissions: required,
@@ -553,6 +613,7 @@ pub fn overview(dir: &Path, ctx: &Context) -> Overview {
             lines: ctx.live.and_then(|l| l.lines.get(&m.id)).map(|q| q.iter().cloned().collect()).unwrap_or_default(),
             slowest_ms,
             storage_bytes: storage.as_ref().and_then(|s| s.size(&m.id)),
+            settings: crate::mod_settings::server_fields(m),
         });
     }
     ov.changes = changes;
@@ -630,6 +691,23 @@ pub fn set_grant(dir: &Path, id: &str, perm: &str, on: bool) -> MRes<()> {
             g.push(perm.into());
             g.sort();
         }
+    })
+}
+
+/// True when the admin cannot override `client-required` of `m`.
+fn client_required_locked(m: &Manifest) -> bool {
+    !m.sides.client || !m.content.is_empty()
+}
+
+/// The admin's `client-required` override: players without the mod may join (`false`) or not (`true`). The
+/// manifest's own value is stored as no override.
+pub fn set_client_required(dir: &Path, id: &str, on: bool) -> MRes<()> {
+    let m = find_package(dir, id)?.manifest;
+    if client_required_locked(&m) {
+        return Err(ModError::with("clientRequired", id));
+    }
+    edit_config(dir, |c| {
+        c.mods.entry(id.into()).or_default().client_required = (on != m.client_required()).then_some(on)
     })
 }
 

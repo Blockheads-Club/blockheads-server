@@ -143,3 +143,24 @@ fn hashes_parse() {
     assert_eq!(parse_hash(&"zz".repeat(32)), None);
     assert_eq!(parse_hash(&"é".repeat(32)), None);
 }
+
+#[test]
+fn the_admin_overrides_client_required() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mods = tmp.path();
+    // `req` declares client-required (the default), `opt` declares it optional; the admin flips both.
+    write_mod(mods, "req", false, true, "");
+    let opt = write_mod(mods, "opt", false, true, "");
+    let toml = fs::read_to_string(opt.join("mod.toml")).unwrap();
+    fs::write(opt.join("mod.toml"), toml.replace("client = true", "client = true\nclient-required = false")).unwrap();
+    let c = build(mods, &[], &mut |_| {});
+    let required = |c: &Catalog| c.entries.iter().map(|e| e.info.client_required).collect::<Vec<_>>();
+    assert_eq!(required(&c), [false, true]);
+    fs::write(mods.join("mods.toml"), "[req]\nclient-required = false\n[opt]\nclient-required = true\n").unwrap();
+    let c = build(mods, &[], &mut |_| {});
+    assert_eq!(required(&c), [true, false]);
+    assert!(c.client_required);
+    // Only the optional one turned off: nothing is required any more.
+    fs::write(mods.join("mods.toml"), "[req]\nclient-required = false\n").unwrap();
+    assert!(!build(mods, &[], &mut |_| {}).client_required);
+}

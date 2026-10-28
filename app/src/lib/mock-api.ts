@@ -50,6 +50,7 @@ export function makeApi(over: Partial<Record<string, unknown>> = {}) {
     modsOverview: vi.fn(async () => makeOverview()),
     modsSetEnabled: vi.fn(async () => {}),
     modsSetGrant: vi.fn(async () => {}),
+    modsSetClientRequired: vi.fn(async () => {}),
     modsRemove: vi.fn(async () => {}),
     modsClearData: vi.fn(async () => {}),
     modsOpenFolder: vi.fn(async () => {}),
@@ -59,6 +60,8 @@ export function makeApi(over: Partial<Record<string, unknown>> = {}) {
     modsInspectFile: vi.fn(async () => ({ source: 'x.bhmod', sha256: 'f'.repeat(64), plan: { items: [], satisfied: [], missing: [], totalBytes: 0 } })),
     modsInstall: vi.fn(async () => ({ ids: [], restart: false })),
     onModsProgress: vi.fn(async () => () => {}),
+    modSettingsGet: vi.fn(async () => ({ fields: [], values: {} })),
+    modSettingsSet: vi.fn(async () => {}),
     ...over
   };
 }
@@ -101,7 +104,7 @@ export function makeMod(over: Partial<ModSummary> = {}): ModSummary {
     authors: ['tobyblock'],
     license: 'MIT',
     homepage: 'https://github.com/tobyblock/land-claims',
-    sides: { server: true, client: false, clientRequired: false },
+    sides: { server: true, client: false, clientRequired: false, clientRequiredDefault: false, clientRequiredLocked: true },
     runtime: 'lua',
     native: false,
     permissions: ['world:read'],
@@ -121,6 +124,7 @@ export function makeMod(over: Partial<ModSummary> = {}): ModSummary {
     lines: [],
     slowestMs: null,
     storageBytes: null,
+    settings: 0,
     ...over
   };
 }

@@ -7,6 +7,7 @@
   import Button from '../ui/Button.svelte';
   import Dialog from '../ui/Dialog.svelte';
   import Icon from '../ui/Icon.svelte';
+  import Tabs from '../ui/Tabs.svelte';
   import Toggle from '../ui/Toggle.svelte';
   import { toast } from '../ui/toast.svelte';
   import { clock, copyText } from '../util';
@@ -15,6 +16,7 @@
   import DangerBadge from './DangerBadge.svelte';
   import DangerBlock from './DangerBlock.svelte';
   import ModIcon from './ModIcon.svelte';
+  import ModSettings from './ModSettings.svelte';
   import ModStatus from './ModStatus.svelte';
   import { loc, mods, sidesOf } from './mods.svelte';
   import Notice from './Notice.svelte';
@@ -29,6 +31,7 @@
   const dep = $derived(mod.dependencies.find((d) => !d.ok && !d.soft));
   const measuring = $derived(mod.status === 'running' || mod.slowestMs !== null);
   let asking = $state<'remove' | 'clear' | null>(null);
+  const tab = $derived(mod.settings > 0 ? mods.tab : 'overview');
 
   async function copy(text: string) {
     toast((await copyText(text)) ? t('install.copied') : t('qr.copyFailed'));
@@ -123,6 +126,21 @@
     </Notice>
   {/if}
 
+  {#if mod.settings > 0}
+    <div class="tabbar"><Tabs
+      label={t('mods.tabsAria')}
+      value={tab}
+      items={[
+        { id: 'overview', label: t('mods.tab.overview'), icon: 'info' },
+        { id: 'settings', label: t('mods.tab.settings'), icon: 'sliders' }
+      ]}
+      onchange={(v) => (mods.tab = v)}
+    /></div>
+  {/if}
+
+  {#if tab === 'settings'}
+    <div role="tabpanel" aria-label={t('mods.tab.settings')}><ModSettings {mod} /></div>
+  {:else}
   <div class="cols">
     <div class="col">
       <section class="card sec" aria-labelledby="ab">
@@ -156,6 +174,22 @@
           <p class="hint">{t('mods.noPermissions')}</p>
         {/if}
       </section>
+      {#if mod.sides.client}
+        <section class="card sec" aria-labelledby="cr">
+          <h2 id="cr"><Icon name="monitor" />{` ${t('mods.clientRequired')}`}</h2>
+          {#if mod.sides.clientRequiredLocked}
+            <p class="hint">{t('mods.clientRequiredLocked')}</p>
+          {:else}
+            <Toggle
+              checked={mod.sides.clientRequired}
+              label={mod.sides.clientRequired ? t('mods.clientRequiredOn') : t('mods.clientRequiredOff')}
+              disabled={mods.busy === `${mod.id}:clientRequired`}
+              onchange={(v) => mods.setClientRequired(mod, v)}
+            />
+            <p class="hint">{t('mods.clientRequiredHint', { value: mod.sides.clientRequiredDefault ? t('mods.clientRequiredOn') : t('mods.clientRequiredOff') })}</p>
+          {/if}
+        </section>
+      {/if}
       <section class="card sec" aria-labelledby="cm">
         <h2 id="cm">{t('mods.commands')}</h2>
         <p class="hint">{t('mods.commandsHint')}</p>
@@ -220,6 +254,7 @@
       </section>
     </div>
   </div>
+  {/if}
 </div>
 
 {#if asking}
@@ -271,6 +306,7 @@
     color: var(--warn);
     border: 1.5px dashed color-mix(in oklab, var(--warn), transparent 40%);
   }
+  .tabbar { align-self: flex-start; max-width: 100%; }
   .cols { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 16px; align-items: start; }
   .col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
   .card { background: var(--surface); border: 2px solid var(--line); border-radius: var(--r-lg); }

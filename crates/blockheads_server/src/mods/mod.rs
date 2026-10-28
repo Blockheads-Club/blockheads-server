@@ -27,6 +27,9 @@ pub mod content;
 pub mod net;
 #[cfg(feature = "mods")]
 mod server_host;
+pub mod voice;
+#[cfg(feature = "mods")]
+pub mod voice_glue;
 
 /// The 0xBC mod protocol packet type (mod-sdk `docs/protocol-0xbc.md`). Only routed when a mod host is installed.
 pub const MOD_PACKET: u8 = 0xBC;
@@ -257,6 +260,7 @@ pub fn hooks() -> Option<Rc<dyn ModHooks>> {
 pub fn install(h: Option<Rc<dyn ModHooks>>) {
     if h.is_none() {
         set_tables(ContentTables::default());
+        voice::stop();
     }
     HOOKS.with(|c| *c.borrow_mut() = h);
 }
@@ -353,6 +357,7 @@ pub fn start(save_id: Option<&str>, server: &Rc<BHServer>) {
     }
     #[cfg(feature = "mods")]
     install(server_host::load(&dir, save_id, server));
+    // The voice socket is the host's (bound while a voice mod is loaded).
     #[cfg(not(feature = "mods"))]
     let _ = (save_id, server);
 }

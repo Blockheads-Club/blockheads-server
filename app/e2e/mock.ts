@@ -19,7 +19,7 @@ export async function mockTauri(
     // ---- mods: a small fake of src-tauri/src/mods.rs ----
     type M = {
       id: string; name: string; version: string; author: string; perms: string[]; granted: string[]; enabled: boolean;
-      server: boolean; client: boolean; native?: boolean; deps?: Record<string, string>; fail?: string; budget?: boolean;
+      server: boolean; client: boolean; native?: boolean; deps?: Record<string, string>; fail?: string; budget?: boolean; required?: boolean;
       reviewed?: boolean; update?: string;
     };
     const mk = (id: string, name: string, version: string, author: string, perms: string[], extra: Partial<M> = {}): M =>
@@ -66,14 +66,31 @@ export async function mockTauri(
       return {
         id: m.id, name: { en: m.name }, description: { en: index.find((i) => i.id === m.id)?.description ?? `${m.name} for your server.` },
         version: m.version, authors: [m.author], license: 'MIT', homepage: `https://github.com/${m.author}/${m.id}`,
-        sides: { server: m.server, client: m.client, clientRequired: m.client }, runtime: m.native ? 'jvm' : 'lua', native: !!m.native,
+        sides: { server: m.server, client: m.client, clientRequired: m.client && m.required !== false, clientRequiredDefault: m.client, clientRequiredLocked: !m.client }, runtime: m.native ? 'jvm' : 'lua', native: !!m.native,
         permissions: m.perms, granted: m.granted, missing: m.perms.filter((p) => !m.granted.includes(p)), enabled: m.enabled, status, detail,
         dependencies: Object.entries(m.deps ?? {}).map(([id, req]) => ({ id, req, installed: mods.find((x) => x.id === id)?.version ?? null, ok: mods.some((x) => x.id === id && x.enabled), soft: false })),
         file: `${m.id}-${m.version}.bhmod`, packed: true, sha256: 'a'.repeat(64), size: 186000, reviewed: !!m.reviewed, update: m.update ?? null,
         faults: m.budget && s.state === 'running' ? [{ at: Date.now() - 60000, kind: 'slow', text: 'tick took 7.9 ms (budget 5 ms)', ms: 7.9 }, { at: Date.now() - 30000, kind: 'error', text: 'tick: timeout' }] : [],
         lines: s.state === 'running' ? [{ at: Date.now() - 90000, level: 'info', text: 'enabled' }, ...(m.budget ? [{ at: Date.now() - 30000, level: 'warn', text: 'tick took 7.9 ms (budget 5 ms)' }, { at: Date.now() - 1000, level: 'info', text: 'disabled: 3 faults within 60 s' }] : [])] : [],
-        slowestMs: s.state === 'running' && m.server && !m.native ? (m.budget ? 7.9 : 1.2) : null, storageBytes: s.state === 'running' ? null : 2200000
+        slowestMs: s.state === 'running' && m.server && !m.native ? (m.budget ? 7.9 : 1.2) : null, storageBytes: s.state === 'running' ? null : 2200000,
+        settings: m.id === 'better-chat' ? chatSettings.fields.filter((f) => f.scope === 'server').length : 0
       };
+    };
+    // Settings of Better Chat in mod-sdk's canonical JSON (the contract of mod_settings_get).
+    const lbl = (en: string) => ({ en });
+    const chatSettings = {
+      fields: [
+        { key: 'filter', type: 'bool', default: true, label: lbl('Filter bad words'), help: lbl('Replaces listed words with ***.'), group: 'Chat', scope: 'server', restart: false },
+        { key: 'slowmode', type: 'int', default: 0, min: 0, max: 60, step: 5, label: lbl('Slow mode (seconds)'), group: 'Chat', scope: 'server', restart: false },
+        { key: 'format', type: 'enum', default: 'name', values: ['name', 'name-color', 'tag'], label: lbl('Name style'), group: 'Chat', scope: 'server', restart: true },
+        { key: 'motd', type: 'string', default: '', max_length: 80, label: lbl('Message of the day'), group: 'Chat', scope: 'server', restart: false },
+        { key: 'colors', type: 'roles', default: ['admin'], label: lbl('Who may use colors'), group: 'Roles', scope: 'server', restart: false },
+        { key: 'commands', type: 'matrix', default: { mute: { owner: false, admin: true, mod: true, everyone: false }, clear: { owner: false, admin: false, mod: false, everyone: false }, announce: { owner: false, admin: false, mod: false, everyone: false } }, rows: ['mute', 'clear', 'announce'], cols: ['owner', 'admin', 'mod', 'everyone'], cell: 'bool', label: lbl('Commands'), group: 'Roles', scope: 'server', restart: false },
+        { key: 'channels', type: 'list', default: [], max_items: 3, label: lbl('Channels'), scope: 'server', restart: false,
+          item: [{ key: 'name', type: 'string', default: '', max_length: 12, label: lbl('Name') }, { key: 'color', type: 'enum', default: 'white', values: ['white', 'red', 'blue'], label: lbl('Color') }] },
+        { key: 'mention_sound', type: 'bool', default: true, label: lbl('Mention sound'), scope: 'client', restart: false }
+      ],
+      values: { motd: 'Welcome!' } as Record<string, unknown>
     };
     (window as any).__mods = mods;
     const log = (t: string) => {
@@ -144,6 +161,11 @@ export async function mockTauri(
               error: null, softMs: 5, hardMs: 25, hostLines: []
             };
           case 'mods_set_enabled': mods.find((m) => m.id === a.id)!.enabled = a.on; return;
+          case 'mods_set_client_required': {
+            const m = mods.find((x) => x.id === a.id)!;
+            m.required = a.on;
+            return;
+          }
           case 'mods_set_grant': {
             const m = mods.find((x) => x.id === a.id)!;
             m.granted = a.on ? [...m.granted, a.perm] : m.granted.filter((p) => p !== a.perm);
@@ -151,6 +173,12 @@ export async function mockTauri(
           }
           case 'mods_remove': mods.splice(mods.findIndex((m) => `${m.id}-${m.version}.bhmod` === a.file), 1); return;
           case 'mods_clear_data': case 'mods_open_folder': return;
+          case 'mod_settings_get': return JSON.parse(JSON.stringify(chatSettings));
+          case 'mod_settings_set': {
+            if (a.key === 'motd' && /https?:/.test(a.value)) throw { code: 'setting', detail: 'other' };
+            chatSettings.values[a.key] = a.value;
+            return;
+          }
           case 'mods_browse':
             return {
               generated: '2026-10-21T12:00:00Z', offline: false, error: null, hidden: 0,

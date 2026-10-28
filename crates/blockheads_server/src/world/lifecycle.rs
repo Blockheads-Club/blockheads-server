@@ -315,6 +315,10 @@ pub trait WorldCoreHooks, stub WorldCoreHooksStub {
     fn mods_tile_record(&self, x: i32, y: i32) -> Option<(i32, u8, [u8; 16])> {
         None
     }
+    /// Mods: the world width in tiles (`x` wraps around it); `None` without a world.
+    fn mods_world_width(&self) -> Option<i32> {
+        None
+    }
     /// Mods: sets the block type and the spare bytes of the loaded tile at `(x, y)` and sends the block to the
     /// clients (the mod API `content.place-block`). `record` makes the spare bytes for the tile's wrapped
     /// coordinates. False when the tile is not loaded.
@@ -2357,6 +2361,7 @@ mod hook_default_tests {
         let _ = WorldCoreHooksStub::dynamic_world_all_blockheads_including_net(&h);
         assert!(!WorldCoreHooksStub::mods_give_item(&h, "x", 1107, 1));
         assert!(WorldCoreHooksStub::mods_tile_record(&h, 0, 0).is_none());
+        assert!(WorldCoreHooksStub::mods_world_width(&h).is_none());
         assert!(!WorldCoreHooksStub::mods_set_tile_record(&h, 0, 0, 10, &|_, _| [0; 16]));
         WorldCoreHooksStub::dynamic_world_client_connected(&h, "x");
         WorldCoreHooksStub::dynamic_world_client_disconnected_simulate(&h, "x", false);
