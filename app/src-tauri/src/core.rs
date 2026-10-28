@@ -696,6 +696,14 @@ impl Core {
         mods::set_grant(&self.mods_dir(), id, perm, on)
     }
 
+    pub fn mod_settings_get(&self, id: &str) -> mods::MRes<crate::mod_settings::View> {
+        crate::mod_settings::backend().get(&self.mods_dir(), id)
+    }
+
+    pub fn mod_settings_set(&self, id: &str, key: &str, value: serde_json::Value) -> mods::MRes<()> {
+        crate::mod_settings::backend().set(&self.mods_dir(), id, key, value)
+    }
+
     pub fn mods_remove(&self, file: &str) -> mods::MRes<()> {
         mods::remove(&self.mods_dir(), file)
     }
@@ -1191,5 +1199,19 @@ mod tests {
         assert!(c.mods_install(&again, &|_, _, _| {}).unwrap().restart);
         c.stop().unwrap();
         assert!(!c.mods_overview().running);
+    }
+
+    #[test]
+    fn mod_settings_through_the_core() {
+        use crate::mods::tests::{spec, write_dir, Spec};
+        let d = tempfile::tempdir().unwrap();
+        let c = Core::new(d.path().join("app"));
+        c.set_data_dir(&d.path().join("data")).unwrap();
+        let extra = "[settings.radius]\ntype = \"int\"\ndefault = 8\nmax = 10\n";
+        write_dir(&c.mods_dir(), "voice", &Spec { extra, ..spec("voice") });
+        assert_eq!(c.mod_settings_get("voice").unwrap().fields[0].key, "radius");
+        c.mod_settings_set("voice", "radius", serde_json::json!(9)).unwrap();
+        assert_eq!(c.mod_settings_get("voice").unwrap().values["radius"], serde_json::json!(9));
+        assert_eq!(c.mod_settings_set("voice", "radius", serde_json::json!(11)).unwrap_err().code, "setting");
     }
 }
