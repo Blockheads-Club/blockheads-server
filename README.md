@@ -68,7 +68,10 @@ Mods get join/quit/chat/command/tick/world events, gameplay events (pre-login, b
 placement, damage, death, movement; placing, breaking and damage can be cancelled), their own `/commands` (for every
 player), a scheduler, per-world storage (`saves/<world>/mods/storage`, separate from the world database) and
 services, custom events and channels to work with each other (the SDK's `economy` and `landclaim` samples do). They run with a time budget and
-are disabled after repeated faults. Without a mods folder nothing changes: same bytes, saves and output as
+are disabled after repeated faults. Mods that declare settings get a form on their page in the host app and the
+admin commands `/mod settings <mod>` and `/mod set <mod> <key> <value>` (values live under `[<mod>.settings]` in
+`mods.toml` and apply while the server runs; any other `/mod` is still the vanilla modlist command). `client-required =
+false` under a mod lets players without that client mod join. Without a mods folder nothing changes: same bytes, saves and output as
 vanilla. Vanilla game clients can join servers with server-side mods.
 
 Mods with a client half are offered to modded clients (PC loader, Android loader installed with Patcher) over the

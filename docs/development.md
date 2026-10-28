@@ -81,6 +81,17 @@ content registry is not rebuilt). `BLOCKHEADS_MODS_WATCH=1` creates a `bhmod_cor
 there is no CLI flag because the help text is frozen. Live tests: `crates/bh_testclient/tests/mods_reload.rs`
 (port 15230/15231), part of `scripts/mods-coverage.sh`.
 
+### Mod settings
+
+`bhmod_core::ModHost` owns mod settings (mod-sdk `docs/settings.md`): `/mod settings <mod>` and
+`/mod set <mod> <key> <value>` (admins from the server's lists and the console; `Bridge::player_role`), hot reload of
+`[<id>.settings]` in `mods.toml` from `poll()` and the `<id>:settings-changed` event. `ServerMods` hands only those two
+forms to the host (`vanilla_mod` in `mods/server_host.rs`): `/mod <player>` and every other `/mod` line stay the
+built-in modlist command. The catalog honours the admin's `client-required` override
+(`bhmod_core::config::client_required`). The host app edits `mods.toml` with `toml_edit` (`mods::edit_config`,
+`bhmod_core::config::write_setting`), so comments and every mod's settings survive on/off and grant changes.
+0xBC `SETTINGS_SCHEMA` / `SETTINGS_SET` are not served yet (`TODO(mod-sdk feat/voice-api)` in `mods/net.rs`).
+
 ### The 0xBC mod protocol (server side)
 
 `crates/blockheads_server/src/mods/net.rs` implements the server side of mod-sdk `docs/protocol-0xbc.md`;

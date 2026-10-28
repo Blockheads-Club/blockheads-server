@@ -315,6 +315,15 @@ fn mods_args(line: &str) -> Option<Vec<String>> {
     split_command(line).filter(|(name, _)| name == "mods").map(|(_, args)| args)
 }
 
+/// True for a `/mod` line that is not the host's `/mod settings <mod>` or `/mod set <mod> <key> <value>`: those stay the
+/// built-in `/MOD player_name` (adds a player to the modlist), so mods never change what vanilla `/mod` does.
+fn vanilla_mod(line: &str) -> bool {
+    split_command(line).is_some_and(|(name, args)| {
+        let host = args.len() >= 2 && (args[0] == "settings" || args[0] == "set");
+        name == bhmod_core::host::MOD_COMMAND && !host
+    })
+}
+
 /// The installed host.
 struct ServerMods {
     host: RefCell<ModHost>,
@@ -443,9 +452,12 @@ impl ModHooks for ServerMods {
         })
     }
     fn owns_command(&self, line: &str) -> bool {
-        mods_args(line).is_some() || self.with(false, |h| h.owns_command(line))
+        !vanilla_mod(line) && (mods_args(line).is_some() || self.with(false, |h| h.owns_command(line)))
     }
     fn command(&self, issuer: Option<&str>, line: &str) -> bool {
+        if vanilla_mod(line) {
+            return false;
+        }
         if let Some(args) = mods_args(line) {
             self.mods_command(issuer, &args);
             return true;
@@ -790,6 +802,7 @@ mod tests {
             api: "0.3.1".into(),
             runtimes: vec!["lua".into()],
             cached: vec![],
+            features: vec![],
         });
         mods.0.net.borrow_mut().packet(&Waiting, &pid, &hello.encode(), &[]);
         assert_eq!(bridge.service_send(&call), Ok(()));
@@ -1008,7 +1021,10 @@ mod tests {
         let main = "return { on_enable = function() bh.log.info('alpha up') end }";
         write_lua_mod(mods.1.path(), "alpha", "1.0.0", main);
         let pid = h.join("Sam");
-        assert!(sm.owns_command("/MODS reload") && sm.owns_command("/mods") && !sm.owns_command("/mod"));
+        assert!(sm.owns_command("/MODS reload") && sm.owns_command("/mods"));
+        // `/mod settings <mod>` and `/mod set ...` are the host's; any other `/mod` is the built-in modlist command.
+        assert!(sm.owns_command("/mod settings alpha") && sm.owns_command("/mod set alpha k v"));
+        assert!(!sm.owns_command("/mod") && !sm.owns_command("/mod tom") && !sm.owns_command("/MOD settings"));
         // A player who is not an admin is refused and nothing happens.
         h.m.clear();
         assert!(sm.command(Some(&pid), "/mods reload"));
@@ -1034,6 +1050,54 @@ mod tests {
         assert!(sm.command(None, "/mods"));
         drop(busy);
         assert_eq!(h.d.messages()[before..], ["The mods are busy, try again."]);
+    }
+
+    #[test]
+    fn mod_settings_through_the_server() {
+        let h = Harness::new("m_settings");
+        let mods = installed(&h, false);
+        let sm = &mods.0;
+        sm.world_loaded("World", "w");
+        let d = mods.1.path().join("knobs");
+        std::fs::create_dir_all(d.join("server")).unwrap();
+        let toml = "schema = 1\nid = \"knobs\"\nversion = \"1.0.0\"\nname = { en = \"N\" }\nauthors = [\"a\"]\n\
+                    license = \"MIT\"\napi = \"^0.3.3\"\n[sides]\nserver = true\nclient = false\n[entry]\n\
+                    server = { runtime = \"lua\", path = \"server/main.luau\" }\n\
+                    [settings.radius]\ntype = \"int\"\ndefault = 32\nmin = 4\nmax = 128\nlabel = \"Radius\"\n";
+        std::fs::write(d.join("mod.toml"), toml).unwrap();
+        // The mod counts the settings-changed events it gets and shows them with the current radius.
+        let main = "local changes = 0\n\
+            return { on_enable = function()\n\
+              bh.events.on_custom('knobs:settings-changed', function() changes += 1 end)\n\
+              bh.commands.register({ name = 'radius' }, function() return bh.settings.get('radius') .. ' ' .. changes end)\n\
+            end }";
+        std::fs::write(d.join("server/main.luau"), main).unwrap();
+        assert!(sm.command(None, "/mods reload"));
+        let last = |n: usize| h.d.messages()[h.d.messages().len() - n..].to_vec();
+        assert!(sm.command(None, "/radius"));
+        assert_eq!(last(1), ["32 0"]);
+        // A player who is not an admin cannot change it; the built-in `/mod tom` is not taken over.
+        let pid = h.join("Sam");
+        h.m.clear();
+        assert!(sm.command(Some(&pid), "/mod set knobs radius 64"));
+        assert!(!h.m.packets_to(&pid).is_empty(), "the refusal reached the player");
+        assert!(!sm.command(Some(&pid), "/mod tom") && !sm.command(None, "/mod tom"));
+        assert!(sm.command(None, "/radius"));
+        assert_eq!(last(1), ["32 0"]);
+        // An admin from the server's admin list can; the mod hears about it and mods.toml keeps the value.
+        *h.srv.admin_list.borrow_mut() = Some(vec!["Sam".to_string()]);
+        assert!(sm.command(Some(&pid), "/mod set knobs radius 64"));
+        assert!(sm.command(None, "/mod settings knobs"));
+        assert_eq!(last(2), ["knobs settings:", "radius = 64"]);
+        assert!(sm.command(None, "/radius"));
+        assert_eq!(last(1), ["64 1"]);
+        let file = mods.1.path().join("mods.toml");
+        assert!(std::fs::read_to_string(&file).unwrap().contains("radius = 64"));
+        // An edit of mods.toml is picked up by the poll and reaches the mod too.
+        std::fs::write(&file, "[knobs.settings]\nradius = 100\n").unwrap();
+        sm.poll();
+        assert!(sm.command(None, "/radius"));
+        assert_eq!(last(1), ["100 2"]);
     }
 
     #[test]

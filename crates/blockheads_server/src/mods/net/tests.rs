@@ -83,6 +83,7 @@ fn hello(proto: u64) -> Vec<u8> {
         api: "0.2.0".into(),
         runtimes: vec!["lua".into()],
         cached: vec![],
+        features: vec![],
     })
     .encode()
 }

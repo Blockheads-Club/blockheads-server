@@ -168,7 +168,8 @@ pub fn from_packages(
         let id = m.id.clone();
         let loaded = server_loaded.contains(&id);
         let client = m.sides.client && m.entry.client.is_some();
-        if !admin.get(&id).enabled || entries.contains_key(&id) || !(client || loaded) {
+        let config = admin.get(&id);
+        if !config.enabled || entries.contains_key(&id) || !(client || loaded) {
             continue;
         }
         if client && m.entry.server.is_some() && !loaded {
@@ -194,7 +195,10 @@ pub fn from_packages(
                 total += size;
             }
             let sides = if m.entry.server.is_some() { vec!["server", "client"] } else { vec!["client"] };
-            Entry { info: info(m, sides, m.client_required(), sha, size), bytes: (!native).then_some(bytes) }
+            Entry {
+                info: info(m, sides, bhmod_core::config::client_required(m, &config), sha, size),
+                bytes: (!native).then_some(bytes),
+            }
         } else {
             Entry { info: info(m, vec!["server"], false, sha, size), bytes: None }
         };

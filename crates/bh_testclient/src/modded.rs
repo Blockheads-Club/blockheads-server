@@ -158,6 +158,7 @@ impl ModClient {
             api: self.opts.api.clone(),
             runtimes: self.opts.runtimes.clone(),
             cached: self.cached(),
+            features: Vec::new(),
         })
     }
 

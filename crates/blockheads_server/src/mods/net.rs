@@ -405,6 +405,9 @@ impl ModNet {
                 client_required: self.catalog.client_required,
                 count: self.catalog.entries.len() as u64,
                 players: link.players().map(|(online, capacity)| PlayerCount { online, capacity }),
+                // No optional feature yet (settings and voice ops are not served): nothing new on the wire.
+                features: Vec::new(),
+                voice_udp_port: None,
             };
             link.send(peer, Message::ServerHello(reply).encode());
             return None;
@@ -443,6 +446,9 @@ impl ModNet {
             Message::ServiceResult(r) if link.approved(peer) => return Some(Inbound::Result(r)),
             // Client CHANNEL_REGISTER (the server owns the id space), server-to-client ops, channel and service
             // traffic before approval: ignored.
+            // TODO(mod-sdk feat/voice-api): SETTINGS_SCHEMA requests / SETTINGS_SET (admins only, checked with the
+            // server's admin list) once mod-sdk ships a host-agnostic session handler; `ModHost::settings_schema_cbor`
+            // and `set_setting_cbor` already exist. Until then they are ignored like any unknown op.
             _ => {}
         }
         None
