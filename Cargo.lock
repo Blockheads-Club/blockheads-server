@@ -91,7 +91,7 @@ checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
 name = "bh_testclient"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "base64",
  "bhmod-core",
@@ -109,7 +109,7 @@ dependencies = [
 
 [[package]]
 name = "bh_tools"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "anyhow",
  "heed",
@@ -220,7 +220,7 @@ dependencies = [
 
 [[package]]
 name = "blockheads_server"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "base64",
  "bhmod-content",
