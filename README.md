@@ -1,119 +1,197 @@
 <p align="center">
-  <img width="120" height="120" src="app/static/server-icon.svg" alt="Blockheads Server logo">
-</p>
-
-<h1 align="center">Blockheads Server</h1>
-
-<p align="center">
-  Host your own <b>Blockheads</b> server for friends — on your PC, a Linux box, Docker or even your phone. 🌍
+  <a href="https://github.com/Blockheads-Club/blockheads-server/releases/latest">
+    <img src=".github/readme/hero.webp" alt="Blockheads Server: your own Blockheads server, in one click. Windows, macOS, Linux, Android and Docker." width="100%">
+  </a>
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/maintenance/yes/2026?style=for-the-badge" alt="Maintained">
-  <a href="https://github.com/Blockheads-Club/blockheads-server/releases"><img src="https://img.shields.io/github/v/release/Blockheads-Club/blockheads-server?include_prereleases&style=for-the-badge" alt="Release"></a>
-  <a href="https://github.com/Blockheads-Club/blockheads-server/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/Blockheads-Club/blockheads-server/ci.yml?branch=dev&style=for-the-badge&label=CI" alt="CI"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/Blockheads-Club/blockheads-server?style=for-the-badge" alt="License"></a>
+  <a href="https://github.com/Blockheads-Club/blockheads-server/releases/latest"><img src="https://img.shields.io/github/v/release/Blockheads-Club/blockheads-server?include_prereleases&style=for-the-badge&label=latest&color=1e7a4c" alt="Latest release"></a>
+  <a href="https://github.com/Blockheads-Club/blockheads-server/releases"><img src="https://img.shields.io/github/downloads/Blockheads-Club/blockheads-server/total?style=for-the-badge&color=6fd3a0&labelColor=1f1a17" alt="Downloads"></a>
+  <a href="https://github.com/Blockheads-Club/blockheads-server/stargazers"><img src="https://img.shields.io/github/stars/Blockheads-Club/blockheads-server?style=for-the-badge&color=6fd3a0&labelColor=1f1a17" alt="Stars"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/Blockheads-Club/blockheads-server?style=for-the-badge&color=1f1a17" alt="License"></a>
 </p>
 
----
+<h3 align="center">
+  <a href="https://github.com/Blockheads-Club/blockheads-server/releases/latest">⬇️ Download</a>
+  &nbsp;·&nbsp;
+  <a href="https://blockheads.club/docs/server">📖 Guide</a>
+  &nbsp;·&nbsp;
+  <a href="https://blockheads.club/docs/faq">❓ FAQ</a>
+  &nbsp;·&nbsp;
+  <a href="https://github.com/Blockheads-Club/blockheads-server/issues/new">🐞 Report a bug</a>
+</h3>
 
-## 🚀 Project Status
-**Current Status:** Alpha (v0.5.1 pre-release). A from-scratch rewrite of the official Blockheads 1.7.1 dedicated
-server: same network protocol, same save files, same commands. Existing game clients and worlds work unchanged.
+<br>
 
-It comes as a command-line server (like the original) and as the **Blockheads Server** app for desktop and Android,
-with a world list, start/stop, live log, connected players and a QR code for phones on your Wi-Fi.
+Play The Blockheads with your friends on **your own server**. Start it from a friendly app on your computer or your
+Android phone, or run it on a Raspberry Pi, a Linux box or Docker. Your existing worlds and every game client work
+as they are.
 
----
+> [!NOTE]
+> **Alpha (v0.5.1 pre-release).** A from-scratch rewrite of the official Blockheads 1.7.1 server: same network
+> protocol, same save files, same commands. Please [report what you find](https://github.com/Blockheads-Club/blockheads-server/issues).
 
-## 📦 Other Blockheads Club Repositories
-- [**blockheads-pc**](https://github.com/Blockheads-Club/blockheads-pc) - Play The Blockheads on your computer
-- [**blockheads-patcher**](https://github.com/Blockheads-Club/blockheads-patcher) - Fix crashes and add small improvements to the game on your phone
-- [**website**](https://github.com/Blockheads-Club/website) - The [Blockheads Club website](https://blockheads.club): downloads, guides and docs
+## ✨ What you get
 
----
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <h3>🖱️ One-click hosting</h3>
+      Pick a world and press Start. See who is online, read the live console and stop the server with one button.
+    </td>
+    <td width="50%" valign="top">
+      <h3>📱 Runs on your phone too</h3>
+      The same app runs on Android. Friends on the same Wi-Fi scan a QR code to get the address.
+    </td>
+  </tr>
+  <tr>
+    <td valign="top">
+      <h3>🌍 Your worlds, unchanged</h3>
+      Same save files as the original server. Create new worlds (size, expert mode, custom rules) or bring yours.
+    </td>
+    <td valign="top">
+      <h3>🛡️ You are the admin</h3>
+      Admins, mods, bans and whitelists from the app or with the familiar chat commands.
+    </td>
+  </tr>
+  <tr>
+    <td valign="top">
+      <h3>🧩 Mods and voice chat</h3>
+      Add mods in Lua, WASM or Java: commands, minigames, economy, land claims, even voice chat.
+      Players without mods can still join servers that only use server mods.
+    </td>
+    <td valign="top">
+      <h3>🐧 Anywhere you like</h3>
+      Windows, macOS, Linux (x86_64, arm64 and armv7 / Raspberry Pi), Android and Docker.
+    </td>
+  </tr>
+</table>
 
-## ⚡ Trying Blockheads Server
-Download from the [latest release](https://github.com/Blockheads-Club/blockheads-server/releases/latest):
+## 🚀 Host a world in 3 steps
 
-- **App (easiest):** Windows `.exe`, macOS `.dmg`, Linux `.AppImage` / `.deb` / `.rpm`, or the Android `.apk`.
-- **Command line:** the `.tar.gz` / `.zip` for your system (Linux x86_64, arm64 and armv7 / Raspberry Pi, Windows, macOS).
+<p align="center"><img src=".github/readme/steps.webp" alt="1. Install. 2. Make a world. 3. Invite friends." width="100%"></p>
+
+<p align="center">
+  <a href="https://github.com/Blockheads-Club/blockheads-server/releases/latest"><img src="https://img.shields.io/badge/Windows-download-1e7a4c?style=for-the-badge&logo=windows&logoColor=white" alt="Download for Windows"></a>
+  <a href="https://github.com/Blockheads-Club/blockheads-server/releases/latest"><img src="https://img.shields.io/badge/macOS-download-1e7a4c?style=for-the-badge&logo=apple&logoColor=white" alt="Download for macOS"></a>
+  <a href="https://github.com/Blockheads-Club/blockheads-server/releases/latest"><img src="https://img.shields.io/badge/Linux-download-1e7a4c?style=for-the-badge&logo=linux&logoColor=white" alt="Download for Linux"></a>
+  <a href="https://github.com/Blockheads-Club/blockheads-server/releases/latest"><img src="https://img.shields.io/badge/Android-download-1e7a4c?style=for-the-badge&logo=android&logoColor=white" alt="Download for Android"></a>
+</p>
+
+From the [latest release](https://github.com/Blockheads-Club/blockheads-server/releases/latest):
+
+| How you want to run it | File |
+| --- | --- |
+| 🖱️ **App** (easiest) | Windows `.exe`, macOS `.dmg`, Linux `.AppImage` / `.deb` / `.rpm`, Android `.apk` |
+| ⌨️ **Command line** | the `.tar.gz` / `.zip` for your system (Linux x86_64, arm64, armv7 / Raspberry Pi, Windows, macOS) |
+| 🐳 **Docker** | `ghcr.io/blockheads-club/blockheads-server` |
+
+<details>
+<summary><b>Command line and Docker</b></summary>
+<br>
 
 ```bash
 ./blockheads_server --new MYWORLD --port 15151
 ./blockheads_server --help      # same options as the original server
 ```
 
-- **Docker:**
-
 ```bash
 docker run -i --rm -p 15151:15151/udp -v bh-data:/data ghcr.io/blockheads-club/blockheads-server:0.5.1 --new MYWORLD
 ```
 
-Players join with Join World -> Advanced... -> Online IP/Port. On Android 10+ the game client needs the popup fix from
-the [Blockheads Patcher](https://github.com/Blockheads-Club/blockheads-patcher) before it can connect.
-Guides and docs: [blockheads.club/docs](https://blockheads.club/docs).
+Guides: [Docker](https://blockheads.club/docs/guides/docker), [Raspberry Pi](https://blockheads.club/docs/guides/raspberry-pi),
+[host on Android](https://blockheads.club/docs/guides/host-android).
+</details>
 
-### Mods (preview)
-Server-side Lua (Luau) and WASM (Rust, C, Zig, Go) mods from the [mod SDK](https://github.com/Blockheads-Club/mod-sdk): put `.bhmod` files or
-unpacked mod folders in `<data dir>/mods/` (or the folder named by `BLOCKHEADS_MODS_DIR`) and grant what they ask
-for in `mods.toml` next to them:
+**Friends join** in the game with **Join World → Advanced… → Online IP/Port**. On Android 10 and newer, the game
+needs the popup fix from [Blockheads Patcher](https://github.com/Blockheads-Club/blockheads-patcher) before it can
+connect. Playing over the internet: [open your server](https://blockheads.club/docs/guides/open-internet).
+
+## 📸 Screenshots
+
+<table>
+  <tr>
+    <td width="50%"><img src=".github/readme/shots/dashboard.webp" alt="Dashboard: status, players and the QR code"></td>
+    <td width="50%"><img src=".github/readme/shots/worlds.webp" alt="Create a world"></td>
+  </tr>
+  <tr>
+    <td><img src=".github/readme/shots/console.webp" alt="Live console"></td>
+    <td><img src=".github/readme/shots/access.webp" alt="Access lists: admins, mods, bans, whitelist"></td>
+  </tr>
+</table>
+
+<p align="center">
+  <img src=".github/readme/shots/phone-dashboard.webp" alt="The app on an Android phone: dashboard" width="260">
+  &nbsp;&nbsp;
+  <img src=".github/readme/shots/phone-worlds.webp" alt="The app on an Android phone: worlds" width="260">
+</p>
+
+## 🧩 Mods
+
+Put `.bhmod` files in the server's `mods/` folder, allow what they ask for in `mods.toml`, and restart:
 
 ```toml
 [hello-lua]
 grant = ["players:chat"]
 ```
 
-Mods get join/quit/chat/command/tick/world events, gameplay events (pre-login, block place/break/change, object
-placement, damage, death, movement; placing, breaking and damage can be cancelled), their own `/commands` (for every
-player), a scheduler, per-world storage (`saves/<world>/mods/storage`, separate from the world database) and
-services, custom events and channels to work with each other (the SDK's `economy` and `landclaim` samples do). They run with a time budget and
-are disabled after repeated faults. Mods that declare settings get a form on their page in the host app and the
-admin commands `/mods settings <mod>` and `/mods set <mod> <key> <value>` (values live under `[<mod>.settings]` in
-`mods.toml` and apply while the server runs; `/mod` stays the vanilla modlist command); admins with a modded client
-also get them in the loader's settings screen. A mod with the `voice` permission (the official voice chat mod) turns
-on voice chat for modded players: encrypted voice frames relayed over a dedicated UDP voice port (the mod's
-`udp_port` setting, else `HostConfig.voice.udp_port`, else the game port + 1, so 15152 by default; open it next to
-the game port). If that port cannot be opened the server logs it and voice chat stays off. The server never decodes
-audio. `client-required =
-false` under a mod lets players without that client mod join. Without a mods folder nothing changes: same bytes, saves and output as
-vanilla. Vanilla game clients can join servers with server-side mods.
+Players with the PC client or the Android mod loader get the client part of a mod straight from your server.
+Find mods at [blockheads.club/mods](https://blockheads.club/mods), make your own with the
+[mod SDK](https://github.com/Blockheads-Club/mod-sdk). Everything about events, permissions, voice chat and Java mods:
+[docs/mods.md](docs/mods.md).
 
-Mods with a client half are offered to modded clients (PC loader, Android loader installed with Patcher) over the
-[0xBC mod protocol](https://github.com/Blockheads-Club/mod-sdk/blob/dev/docs/protocol-0xbc.md): the client lists the
-server's mods, downloads the packages from the server (resumable, SHA-256 checked) and joins; server and client mods
-talk over channels and, since API 0.3.1, service calls: a client mod can call a service a server mod provides (and the
-other way round), asynchronously over `SERVICE_CALL` / `SERVICE_RESULT`. Only services the provider marks `remote = true` in its
-`mod.toml` are reachable, every player has a rate limit (bursts of 20 calls, 10 per second; `BLOCKHEADS_MODS_REMOTE_BURST` and
-`BLOCKHEADS_MODS_REMOTE_RATE` change it) and the provider runs under its own time budget. Vanilla clients never receive a protocol byte; when a client mod is required they are not
-let in: they get the world summary with a welcome text ("This server uses Blockheads Club mods. Install the mod loader
-with Patcher ...", shown by the game as its welcome popup) and are dropped 20 seconds later (or with their next packet)
-by a plain disconnect (no rejection text, so the popup stays the only message). A client mod that needs `native` is listed (with its SHA-256, so a server can require it) but its bytes are never sent: the player installs it from the public index and confirms it.
+## ❓ Questions
 
-**JVM mods** (Java, Kotlin, ...) are unsandboxed code, so they are off twice over: build with `--features jvm` (needs a
-JDK for the Java SDK that is compiled in; the release CLI archives and desktop app bundles already are, the Android APK and
-the docker image are not: Android has no JRE to load, and a JRE would make the distroless image several times larger) and start the server with `BLOCKHEADS_JVM=1`, which loads the machine's JRE
-(8 or newer; `BLOCKHEADS_JAVA_HOME` picks one, `BLOCKHEADS_JVM_HEAP_MB` sets the heap, default 256). The mod then needs
-`native` in its `mods.toml` grant. The desktop/Android host app has the same switch in **Settings > Java mods** (off by default, with a red warning;
-it sets `BLOCKHEADS_JVM` / `BLOCKHEADS_JAVA_HOME` for the server it starts) and only works in an app built with
-`--features jvm` (`app/src-tauri`); other builds say so under the switch. How to write one: [mod-sdk `docs/jvm.md`](https://github.com/Blockheads-Club/mod-sdk/blob/dev/docs/jvm.md).
+<details>
+<summary><b>Do players need anything special?</b></summary>
+<br>
+Only their own copy of The Blockheads. Phones on Android 10 and newer need the popup fix from
+<a href="https://github.com/Blockheads-Club/blockheads-patcher">Blockheads Patcher</a>.
+</details>
 
----
+<details>
+<summary><b>Can I use my worlds from the original server?</b></summary>
+<br>
+Yes. The save files are the same, so you can copy them over and back.
+</details>
 
-## 🛠️ Requirements
-**To host:** Linux, Windows or macOS (x86_64 or arm64; armv7 on Linux), or an Android phone. Players need their own
-copy of the game.
+<details>
+<summary><b>My friend can't connect.</b></summary>
+<br>
+Check that they use the right IP and port (UDP, 15151 by default), that your firewall allows it, and for the internet
+that the port is forwarded on your router. Step by step:
+<a href="https://blockheads.club/docs/guides/lan-play">LAN play</a> and
+<a href="https://blockheads.club/docs/guides/open-internet">open to the internet</a>.
+</details>
 
-**For contributors / development:** Rust stable ([rustup](https://rustup.rs)). For the app also [bun](https://bun.sh);
-for Android the Android SDK, NDK 27 and JDK 17 to 21.
+<details>
+<summary><b>Is this official?</b></summary>
+<br>
+No. It is an independent, free reimplementation for interoperability, not affiliated with Majic Jungle or Noodlecake.
+</details>
 
----
+## 🧱 Part of Blockheads Club
 
-## 🤝 Contributing
-Everyone can open [issues](https://github.com/Blockheads-Club/blockheads-server/issues) and pull requests. Irrelevant
-or abusive issues may be closed or removed. Commits follow [Conventional Commits](https://www.conventionalcommits.org).
+<table>
+  <tr>
+    <td align="center" width="25%"><a href="https://github.com/Blockheads-Club/blockheads-pc"><img src="https://raw.githubusercontent.com/Blockheads-Club/blockheads-pc/dev/app/static/pc-icon.svg" width="64" alt=""><br><b>Blockheads PC</b></a><br><sub>Play on your computer</sub></td>
+    <td align="center" width="25%"><a href="https://github.com/Blockheads-Club/blockheads-patcher"><img src="https://raw.githubusercontent.com/Blockheads-Club/blockheads-patcher/dev/app/static/favicon.svg" width="64" alt=""><br><b>Patcher</b></a><br><sub>Fix the game on your phone</sub></td>
+    <td align="center" width="25%"><a href="https://github.com/Blockheads-Club/world-tool"><img src="https://raw.githubusercontent.com/Blockheads-Club/world-tool/dev/app/static/wt-icon.svg" width="64" alt=""><br><b>World Tool</b></a><br><sub>Move and edit your worlds</sub></td>
+    <td align="center" width="25%"><a href="https://github.com/Blockheads-Club/mod-sdk"><img src="https://raw.githubusercontent.com/Blockheads-Club/mod-sdk/dev/.github/readme/icon.svg" width="64" alt=""><br><b>Mod SDK</b></a><br><sub>Make your own mods</sub></td>
+  </tr>
+</table>
 
-### Development Guide
+<p align="center">All apps, guides and downloads: <a href="https://blockheads.club"><b>blockheads.club</b></a></p>
+
+## 🛠️ For developers
+
+<details>
+<summary><b>Build from source</b></summary>
+<br>
+
+You need Rust stable ([rustup](https://rustup.rs)). For the app also [bun](https://bun.sh); for Android the Android
+SDK, NDK 27 and JDK 17 to 21.
+
 ```bash
 git clone https://github.com/Blockheads-Club/blockheads-server.git
 cd blockheads-server
@@ -127,12 +205,17 @@ repositories at once, see [docs/development.md](docs/development.md#developing-a
 without it: `cargo build -p blockheads_server --no-default-features --features trace-rng`.
 
 More: [docs/development.md](docs/development.md) (tests, data directory, embedding, the desktop and Android app,
-releases).
+releases) and [docs/mods.md](docs/mods.md) (the mod host).
+</details>
 
----
+Everyone can open [issues](https://github.com/Blockheads-Club/blockheads-server/issues) and pull requests. Irrelevant
+or abusive issues may be closed or removed. Commits follow [Conventional Commits](https://www.conventionalcommits.org).
 
 ## 📄 License
-Blockheads Server is licensed under **GNU GPLv3 or later** (GPL-3.0-or-later). This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version. See the [LICENSE](LICENSE) file for details.
+
+Blockheads Server is free software under the **GNU GPLv3 or later** (GPL-3.0-or-later): you can redistribute it
+and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation,
+either version 3 of the License, or (at your option) any later version. See [LICENSE](LICENSE).
 Third-party code ports are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 Unofficial, independent reimplementation for interoperability. It contains no original binaries or assets and is not
